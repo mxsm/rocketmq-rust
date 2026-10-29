@@ -78,6 +78,10 @@ pub mod topic_detail;
 
 #[path = "features/topics.rs"]
 pub mod topics;
+#[path = "features/topology.rs"]
+pub(crate) mod topology;
+#[path = "features/topology_store.rs"]
+pub(crate) mod topology_store;
 
 #[path = "features/consumer_dialogs.rs"]
 pub mod consumer_dialogs;

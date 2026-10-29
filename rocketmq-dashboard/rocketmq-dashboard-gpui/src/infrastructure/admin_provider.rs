@@ -49,6 +49,8 @@ mod message_trace;
 mod messages;
 #[path = "admin_provider/topics.rs"]
 mod topics;
+#[path = "admin_provider/topology.rs"]
+mod topology;
 
 pub(crate) use dashboard_broker::{
     SafeBrokerInfo, SafeBrokerList, SafeBrokerTarget, SafeConfigPatchOutcome, SafeConfigPatchRequest,

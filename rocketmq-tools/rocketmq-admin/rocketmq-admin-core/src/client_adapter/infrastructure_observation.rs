@@ -217,6 +217,18 @@ pub(crate) async fn query_ha_status(
     query_ha_status_from(source, controllers, request).await
 }
 
+/// Topology already captured this inventory. Reuse it so HA identities and target limits refer
+/// to the same observation, without a hidden NameServer rediscovery for every Broker group.
+#[cfg(feature = "client-adapter")]
+pub(crate) async fn query_topology_ha_status(
+    source: &DefaultMQAdminExt,
+    controllers: &[ControllerObservationTarget],
+    request: &QueryHaStatusRequest,
+    cluster: &ClusterInfo,
+) -> AdminResult<AdminQueryResult<QueryHaStatusResult>> {
+    query_ha_status_in_cluster_from(source, controllers, request, Some(cluster)).await
+}
+
 pub(crate) async fn query_controller_metadata(
     source: &DefaultMQAdminExt,
     controllers: &[ControllerObservationTarget],
@@ -238,6 +250,15 @@ async fn query_ha_status_from<S: InfrastructureObservationSource>(
     controllers: &[ControllerObservationTarget],
     request: &QueryHaStatusRequest,
 ) -> AdminResult<AdminQueryResult<QueryHaStatusResult>> {
+    query_ha_status_in_cluster_from(source, controllers, request, None).await
+}
+
+async fn query_ha_status_in_cluster_from<S: InfrastructureObservationSource>(
+    source: &S,
+    controllers: &[ControllerObservationTarget],
+    request: &QueryHaStatusRequest,
+    captured: Option<&ClusterInfo>,
+) -> AdminResult<AdminQueryResult<QueryHaStatusResult>> {
     let request = QueryHaStatusRequest::try_new(
         &request.cluster,
         request.broker_names.clone(),
@@ -249,10 +270,13 @@ async fn query_ha_status_from<S: InfrastructureObservationSource>(
     } else {
         Vec::new()
     };
-    let cluster_info = source
-        .cluster_info()
-        .await
-        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
+    let cluster_info = match captured {
+        Some(cluster) => cluster.clone(),
+        None => source
+            .cluster_info()
+            .await
+            .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?,
+    };
     let topology = resolve_ha_topology(&cluster_info, &request.cluster, &request.broker_names)?;
 
     let mut failures = topology.failures;

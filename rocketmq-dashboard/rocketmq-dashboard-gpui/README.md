@@ -409,6 +409,52 @@ failure have distinct feedback. These are NameServer Direct reads; the desktop d
 not claim Proxy forwarding support. Trace results remain in memory and are cleared
 at page, connection, environment and session boundaries.
 
+## Native topology
+
+Topology reads configuration, NameServer health, Brokers, Topic routes, Producer
+registrations, Consumer groups, and replication independently in the captured
+environment, configuration revision, and NameServer Direct scope. Proxy does not
+silently fall back to Direct reads. Failures have source-specific public codes;
+unavailable rates, backlog, roles, and replication values remain Unknown.
+
+Each refresh bounds application-level Admin reads: 16 NameServer health probes;
+one Broker catalog plus 32 runtime reads; one Topic catalog plus 128 route reads;
+one Producer catalog plus 16 Broker registration reads; and one Consumer catalog,
+16 Group-table reads, and 64 exact-Broker connection/progress pairs shared across
+all Groups. Catalog aggregation retains at most 4,096 distinct Groups, draws at
+most 50 Producers and 50 Consumers, and reports pre-display totals as lower bounds
+when target or catalog coverage is incomplete. These budgets count the Admin
+requests issued by this collection, including nested enrichment; SDK lifecycle
+traffic and transport retries are separate.
+
+Replication uses the same captured Broker catalog for at most 16 registered
+master groups and 8 Controllers. Its upper bound is one catalog, 16 config reads,
+16 HA reads, 16 Controller metadata and sync-state pairs, and 8 metadata reads.
+Configured, Controller, and Unknown election modes require explicit evidence.
+HA lag bytes, in-sync flags, transfer bytes/s, and Controller sync sets/epochs are
+displayed only when observed. A missing HA connection is Unknown, rather than a
+fabricated failure. Other independently observed layers remain available when a
+source fails.
+
+The native 2D map supports a scrollable viewport, zoom, Cluster filtering, node
+selection, entity navigation, and an equivalent searchable keyboard list. Layout,
+traffic panels, and changes are prepared before rendering, using structural node
+identities. Rendering is bounded to 320 nodes and 640 edges. Partial/failed reads
+retain previous observations for up to 120 seconds with their original UTC times;
+expiry is unconfirmed absence, while only complete current inventory can confirm
+a removal. Returning to a paused page expires old data before the next read.
+Controller metadata and each replication observation expire by their own times;
+a fresh peer cannot extend an unanswered peer's lifetime. Retained enrichment is
+also bounded to 320 records per source.
+
+Manual and 5/10/30-second refresh modes share one page-owned receiver and an
+application TaskGroup loop. Each automatic interval begins after the previous
+snapshot completes. Leaving the page or deactivating the window cancels current
+reads; resuming refreshes once. Application shutdown cancels and awaits this work.
+Environment/configuration changes and logout clear the snapshot, edges, and
+selection. The shared snapshot and selection model can support another native
+presentation without introducing a separate query implementation.
+
 ## License
 
 Apache License, Version 2.0.

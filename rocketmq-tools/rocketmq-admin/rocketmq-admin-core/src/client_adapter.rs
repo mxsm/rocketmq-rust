@@ -49,6 +49,8 @@ mod static_topic;
 mod targeted_read;
 #[cfg(feature = "client-adapter")]
 mod topic;
+#[cfg(feature = "client-adapter")]
+mod topology;
 
 #[cfg(feature = "client-adapter")]
 pub use lifecycle::AdminBuilder;

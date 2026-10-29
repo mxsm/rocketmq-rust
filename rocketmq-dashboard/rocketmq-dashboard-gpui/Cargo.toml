@@ -80,6 +80,7 @@ cfg-if  = "1.0.4"
 embed-resource = "=3.0.6"
 
 [dev-dependencies]
+tokio = { version = "1.49", features = ["test-util"] }
 # Enables GPUI's in-memory window harness for application-level lifecycle tests only.
 gpui = { version = "=0.2.2", features = ["test-support"] }
 tempfile = "3.23"

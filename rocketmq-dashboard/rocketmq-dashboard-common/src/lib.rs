@@ -42,6 +42,7 @@ pub mod producer;
 pub mod proxy;
 pub mod service;
 pub mod topic;
+pub mod topology;
 
 #[cfg(feature = "admin")]
 pub use admin::*;
@@ -68,3 +69,4 @@ pub use producer::*;
 pub use proxy::*;
 pub use service::*;
 pub use topic::*;
+pub use topology::*;

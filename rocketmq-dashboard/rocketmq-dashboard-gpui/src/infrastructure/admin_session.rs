@@ -66,6 +66,14 @@ use rocketmq_dashboard_common::ConnectionSnapshot;
 
 pub(crate) type SessionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+pub(crate) enum TopologyAdminData {
+    Brokers(rocketmq_admin_core::core::topology::TopologyRead<rocketmq_admin_core::core::topology::TopologyBrokerRow>),
+    Topics(rocketmq_admin_core::core::topology::TopologyRead<rocketmq_admin_core::core::topology::TopologyTopicRow>),
+    Producers(rocketmq_admin_core::core::topology::TopologyRead<rocketmq_admin_core::core::topology::TopologyGroupRow>),
+    Consumers(rocketmq_admin_core::core::topology::TopologyRead<rocketmq_admin_core::core::topology::TopologyGroupRow>),
+    Replication(rocketmq_admin_core::core::topology::TopologyReplicationRead),
+}
+
 /// Concurrent query capability of one started Admin session.
 pub(crate) trait DashboardQuerySession: Send + Sync {
     fn acl_documents<'a>(
@@ -79,6 +87,12 @@ pub(crate) trait DashboardQuerySession: Send + Sync {
                 "ACL capability unavailable",
             ))
         })
+    }
+    fn topology_layer(
+        &self,
+        _source: rocketmq_dashboard_common::TopologySource,
+    ) -> SessionFuture<'_, AdminResult<TopologyAdminData>> {
+        Box::pin(async { Err(unsupported_topic_session("topology")) })
     }
     fn health(&self) -> SessionFuture<'_, AdminResult<()>>;
     fn list_topics(&self) -> SessionFuture<'_, AdminResult<DashboardTopicList>>;
@@ -386,6 +400,29 @@ impl DashboardQuerySession for RealQuerySession {
         kind: rocketmq_admin_core::core::acl_workspace::AclReadKind,
     ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::acl_workspace::AclDocuments>> {
         Box::pin(async move { self.inner.acl_documents_at(address, kind).await })
+    }
+    fn topology_layer(
+        &self,
+        source: rocketmq_dashboard_common::TopologySource,
+    ) -> SessionFuture<'_, AdminResult<TopologyAdminData>> {
+        use rocketmq_admin_core::core::topology::TopologyReadAdmin as _;
+        use rocketmq_dashboard_common::TopologySource;
+        Box::pin(async move {
+            match source {
+                TopologySource::Brokers => self.inner.topology_brokers().await.map(TopologyAdminData::Brokers),
+                TopologySource::Topics => self.inner.topology_topics().await.map(TopologyAdminData::Topics),
+                TopologySource::Producers => self.inner.topology_producers().await.map(TopologyAdminData::Producers),
+                TopologySource::Consumers => self.inner.topology_consumers().await.map(TopologyAdminData::Consumers),
+                TopologySource::Replication => self
+                    .inner
+                    .topology_replication()
+                    .await
+                    .map(TopologyAdminData::Replication),
+                TopologySource::Config | TopologySource::Nameservers => {
+                    Err(unsupported_topic_session("topology_local_layer"))
+                }
+            }
+        })
     }
     fn health(&self) -> SessionFuture<'_, AdminResult<()>> {
         Box::pin(async {

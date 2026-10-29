@@ -51,6 +51,7 @@ pub mod supervised_mutation;
 pub mod supervised_operation;
 pub mod topic;
 pub mod topic_observation;
+pub mod topology;
 
 pub use self::error::AdminCompletionStatus;
 pub use self::error::AdminError;
