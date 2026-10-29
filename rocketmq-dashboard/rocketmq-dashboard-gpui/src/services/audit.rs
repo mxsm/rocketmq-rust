@@ -33,7 +33,7 @@ use super::AppServices;
 use crate::{
     infrastructure::{
         audit_store::AuditStore,
-        auth_state::DesktopAuthState,
+        auth_state::{DesktopAuthState, LocalSession},
         config_store::{ConfigStoreFailure, DesktopConfigStore},
     },
     state::{UiError, UiErrorCode},
@@ -53,6 +53,16 @@ struct FailedTerminalWrite {
     _failure: ConfigStoreFailure,
 }
 
+/// Read attribution only; every use must compare it with the live local authority.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct AuditReadAccess {
+    // Authentication-disabled mode intentionally has no operator identity requirement.
+    session: Option<LocalSession>,
+}
+
+#[cfg(test)]
+type TerminalGate = (tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>);
+
 pub(super) struct AuditService {
     store: AuditStore,
     config: Arc<DesktopConfigStore>,
@@ -66,6 +76,8 @@ pub(super) struct AuditService {
     changes: tokio::sync::watch::Sender<usize>,
     recovery_loaded: AtomicBool,
     recovered_pending: AtomicUsize,
+    #[cfg(test)]
+    terminal_gate: parking_lot::Mutex<Option<TerminalGate>>,
 }
 
 impl AuditService {
@@ -80,6 +92,8 @@ impl AuditService {
             changes,
             recovery_loaded: AtomicBool::new(false),
             recovered_pending: AtomicUsize::new(0),
+            #[cfg(test)]
+            terminal_gate: parking_lot::Mutex::new(None),
         })
     }
 
@@ -144,6 +158,14 @@ impl AuditService {
     }
 
     async fn complete(&self, write: TerminalWrite) {
+        #[cfg(test)]
+        {
+            let gate = { self.terminal_gate.lock().take() };
+            if let Some((started, release)) = gate {
+                let _ = started.send(());
+                let _ = release.await;
+            }
+        }
         let request_id = write.operation.context.request_id.clone();
         let result = self
             .store
@@ -341,6 +363,38 @@ impl AppServices {
         }
         Ok(())
     }
+    /// Reads only the canonical in-memory authentication setting and existing local session.
+    pub(crate) fn audit_read_access(&self) -> Result<AuditReadAccess, UiError> {
+        let audit = self
+            .audit
+            .as_ref()
+            .ok_or_else(|| UiError::new("Local audit is unavailable.", UiErrorCode::CapabilityUnavailable, false))?;
+        let session = if audit.config.authentication_enabled().map_err(super::config_ui_error)? {
+            let session = audit.auth.session();
+            if !session.is_authenticated() {
+                return Err(UiError::new(
+                    "Sign in to read local audit records.",
+                    UiErrorCode::Authentication,
+                    false,
+                ));
+            }
+            Some(session)
+        } else {
+            None
+        };
+        Ok(AuditReadAccess { session })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_next_audit_terminal(
+        &self,
+    ) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let (started, observed) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        *self.audit.as_ref().unwrap().terminal_gate.lock() = Some((started, wait));
+        (observed, release)
+    }
+
     pub(super) fn accept_operation(
         &self,
         revision: u64,
@@ -429,50 +483,25 @@ impl AppServices {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "The P11 query UI follows the writer delivery; this service is exercised by writer tests"
-        )
-    )]
     pub(crate) fn query_audit(&self, query: AuditQuery) -> Result<AuditPage, UiError> {
+        self.audit_read_access()?;
         let audit = self
             .audit
             .as_ref()
             .ok_or_else(|| UiError::new("Local audit is unavailable.", UiErrorCode::CapabilityUnavailable, false))?;
-        if audit.config.authentication_enabled().map_err(super::config_ui_error)?
-            && !audit.auth.session().is_authenticated()
-        {
-            return Err(UiError::new(
-                "Sign in to read local audit records.",
-                UiErrorCode::Authentication,
-                false,
-            ));
-        }
-        audit.store.query(query).map_err(super::config_ui_error)
+        audit.store.query(query).map_err(|error| {
+            super::config_ui_error_with_summary(
+                error,
+                "Local audit records could not be read. Restart the applied query if its retained page expired.",
+            )
+        })
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "The P11 query UI follows the writer delivery; unfinished requests are exercised by lifecycle tests"
-        )
-    )]
     pub(crate) fn audit_pending(&self) -> Result<Vec<AuditAcceptedOperation>, UiError> {
         let Some(audit) = &self.audit else {
             return Ok(Vec::new());
         };
-        if audit.config.authentication_enabled().map_err(super::config_ui_error)?
-            && !audit.auth.session().is_authenticated()
-        {
-            return Err(UiError::new(
-                "Sign in to read local audit records.",
-                UiErrorCode::Authentication,
-                false,
-            ));
-        }
+        self.audit_read_access()?;
         audit.store.pending().map_err(super::config_ui_error)
     }
 }

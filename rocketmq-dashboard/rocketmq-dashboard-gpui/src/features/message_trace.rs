@@ -192,6 +192,10 @@ impl MessageTraceView {
             return;
         }
         self.revision = revision;
+        self.clear_context(window, cx);
+    }
+
+    pub(crate) fn clear_context(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave(window, cx);
         self.store.clear_context();
         for input in [&self.topic, &self.identifier] {
@@ -200,6 +204,8 @@ impl MessageTraceView {
         self.trace_topic
             .update(cx, |input, cx| input.set_value(DEFAULT_TRACE_TOPIC, window, cx));
         self.validation = None;
+        self.sync_table(cx);
+        cx.notify();
     }
     pub fn leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.candidate_task = None;

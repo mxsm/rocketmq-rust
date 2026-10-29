@@ -114,6 +114,8 @@ pub enum AppRoute {
     Acl,
     /// Monitoring rules.
     Monitors,
+    /// Operations recorded by this desktop.
+    Audit,
     /// Operations settings.
     OpsSettings,
     /// Proxy settings.
@@ -137,6 +139,7 @@ pub(crate) enum PageCapability {
     MessageTrace,
     Monitors,
     DlqMessages,
+    Audit,
     OpsSettings,
     Proxy,
 }
@@ -152,6 +155,7 @@ impl AppRoute {
             Self::Consumers | Self::ConsumerDetail { .. } => PageCapability::Consumers,
             Self::Producers => PageCapability::Producers,
             Self::Monitors => PageCapability::Monitors,
+            Self::Audit => PageCapability::Audit,
             Self::OpsSettings => PageCapability::OpsSettings,
             Self::Proxy => PageCapability::Proxy,
             Self::Messages => PageCapability::Messages,
@@ -192,6 +196,7 @@ impl AppRoute {
             ["message-trace"] => Ok(Self::MessageTrace),
             ["acl"] => Ok(Self::Acl),
             ["monitors"] => Ok(Self::Monitors),
+            ["audit"] => Ok(Self::Audit),
             ["ops-settings"] => Ok(Self::OpsSettings),
             ["proxy"] => Ok(Self::Proxy),
             // Legacy input compatibility is intentionally confined to parsing.
@@ -221,6 +226,7 @@ impl AppRoute {
             Self::MessageTrace => "/message-trace".to_owned(),
             Self::Acl => "/acl".to_owned(),
             Self::Monitors => "/monitors".to_owned(),
+            Self::Audit => "/audit".to_owned(),
             Self::OpsSettings => "/ops-settings".to_owned(),
             Self::Proxy => "/proxy".to_owned(),
         }
@@ -240,6 +246,7 @@ impl AppRoute {
             Self::MessageTrace => "Message Trace",
             Self::Acl => "Access Control",
             Self::Monitors => "Monitor rules",
+            Self::Audit => "Local Audit",
             Self::OpsSettings => "Operations Settings",
             Self::Proxy => "Proxy",
         }
@@ -436,6 +443,7 @@ mod tests {
             AppRoute::MessageTrace,
             AppRoute::Acl,
             AppRoute::Monitors,
+            AppRoute::Audit,
             AppRoute::OpsSettings,
             AppRoute::Proxy,
         ];

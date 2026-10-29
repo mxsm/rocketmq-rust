@@ -1671,6 +1671,173 @@ fn sign_out_cleanup_contract_clears_sensitive_feature_cache() {
     assert_eq!(cache.entries, 0);
 }
 
+#[gpui::test]
+fn audit_production_route_environment_progress_and_signout_clear_protected_rows_and_details(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::features::audit::tests::Fixture;
+    use crate::services::ConfigMutation;
+
+    let fixture = Fixture::new(true);
+    fixture.seed(70);
+    fixture.auth.authenticate("operator", "test-password").unwrap();
+    let (sender, completion) = std::sync::mpsc::channel();
+    let app_services = fixture.services.clone().with_runtime_completion(sender);
+    cx.update(gpui_component::init);
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    assert_eq!(
+        completion.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+        "gpui-bootstrap"
+    );
+    cx.run_until_parked();
+    cx.update(|window, app| dashboard.update(app, |view, cx| view.navigate(AppRoute::Audit, window, cx)));
+    cx.run_until_parked();
+    let audit = cx.read(|app| dashboard.read(app).legacy_pages.audit.clone());
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 25);
+    cx.simulate_resize(size(px(960.), px(640.)));
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    }
+    let open = cx.debug_bounds("audit-open-0").unwrap();
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.read(|app| audit.read(app).has_detail()));
+    let (progress, mut events) = tokio::sync::mpsc::unbounded_channel();
+    fixture
+        .runtime
+        .block_on(
+            fixture
+                .services
+                .mutate_with_progress(ConfigMutation::CreateEnvironment("Audit staging".into()), progress),
+        )
+        .unwrap();
+    while let Ok(event) = events.try_recv() {
+        cx.update(|window, app| dashboard.update(app, |view, cx| view.handle_config_updated(event, window, cx)));
+    }
+    cx.run_until_parked();
+    assert_ne!(
+        fixture.services.connection_state().environments.unwrap().active_id,
+        fixture.active
+    );
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 0);
+    assert!(!cx.read(|app| audit.read(app).has_detail()));
+    assert!(!cx.update(|window, app| window.has_active_dialog(app)));
+    let (progress, mut events) = tokio::sync::mpsc::unbounded_channel();
+    fixture
+        .runtime
+        .block_on(
+            fixture
+                .services
+                .mutate_with_progress(ConfigMutation::SwitchEnvironment(fixture.active.clone()), progress),
+        )
+        .unwrap();
+    while let Ok(event) = events.try_recv() {
+        cx.update(|window, app| dashboard.update(app, |view, cx| view.handle_config_updated(event, window, cx)));
+    }
+    cx.run_until_parked();
+    assert!(cx.read(|app| audit.read(app).retained_record_count()) >= 25);
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    }
+    let next = cx.debug_bounds("audit-next").unwrap();
+    cx.simulate_click(next.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    let (query_started, query_release) = cx.update(|_, app| audit.update(app, |view, _| view.hold_next_query()));
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    }
+    let next = cx.debug_bounds("audit-next").unwrap();
+    cx.simulate_click(next.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), query_started)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 50);
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    }
+    let open = cx.debug_bounds("audit-open-0").unwrap();
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.read(|app| audit.read(app).has_detail()));
+    let (logout_started, logout_release) = fixture.services.hold_next_audit_terminal();
+    cx.update(|window, app| dashboard.update(app, |view, cx| view.request_sign_out(window, cx)));
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    let confirm = cx.debug_bounds("confirm-dialog-ok").unwrap();
+    cx.simulate_click(confirm.center(), gpui::Modifiers::default());
+    assert_eq!(
+        cx.read(|app| audit.read(app).retained_record_count()),
+        0,
+        "Confirmation must clear cached records before logout persistence completes"
+    );
+    assert!(!cx.read(|app| audit.read(app).has_detail()));
+    let _ = query_release.send(());
+    cx.run_until_parked();
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), logout_started)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    assert!(!fixture.auth.session().is_authenticated());
+    assert!(
+        completion.try_recv().is_err(),
+        "Logout must still be awaiting its held terminal write"
+    );
+    assert!(
+        !fixture
+            .persisted_events()
+            .iter()
+            .any(|event| event.operation.action == rocketmq_dashboard_common::AuditAction::LocalLogout)
+    );
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 0);
+    assert!(!cx.read(|app| audit.read(app).has_detail()));
+    logout_release.send(()).unwrap();
+    assert_eq!(
+        completion.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+        "gpui-sign-out"
+    );
+    cx.run_until_parked();
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 0);
+    assert!(!cx.read(|app| audit.read(app).has_detail()));
+    assert_eq!(
+        cx.read(|app| dashboard.read(app).history.current().clone()),
+        AppRoute::Login
+    );
+    assert_ne!(
+        cx.read(|app| dashboard.read(app).legacy_pages.audit.entity_id()),
+        audit.entity_id()
+    );
+    let persisted = fixture.persisted_events();
+    let logouts = persisted
+        .iter()
+        .filter(|event| event.operation.action == rocketmq_dashboard_common::AuditAction::LocalLogout)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        logouts.len(),
+        1,
+        "Owned logout must persist once after its waiter clears protected UI"
+    );
+    assert_eq!(
+        logouts[0].operation.context.actor,
+        rocketmq_dashboard_common::OperationActor::LocalOperator {
+            username: "operator".into()
+        }
+    );
+    assert_eq!(logouts[0].outcome, rocketmq_dashboard_common::AuditOutcome::Succeeded);
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
+}
+
 #[test]
 fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destinations() {
     let implemented = [
@@ -1685,6 +1852,7 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
         (AppRoute::Monitors, PageCapability::Monitors),
         (AppRoute::Acl, PageCapability::Acl),
         (AppRoute::DlqMessages, PageCapability::DlqMessages),
+        (AppRoute::Audit, PageCapability::Audit),
         (AppRoute::OpsSettings, PageCapability::OpsSettings),
         (AppRoute::Proxy, PageCapability::Proxy),
         (
