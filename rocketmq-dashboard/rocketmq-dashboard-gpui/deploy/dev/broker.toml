@@ -6,6 +6,7 @@ brokerIp1 = "127.0.0.1"
 namesrvAddr = "127.0.0.1:39876"
 storePathRootDir = "/var/lib/rocketmq/broker"
 autoCreateTopicEnable = false
+traceTopicEnable = true
 
 [broker.brokerIdentity]
 brokerName = "gpui-broker"

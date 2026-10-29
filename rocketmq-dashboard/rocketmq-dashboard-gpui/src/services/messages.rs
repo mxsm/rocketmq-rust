@@ -20,6 +20,9 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "messages_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "message_trace_tests.rs"]
+mod trace_tests;
 
 use super::{AppServices, ServiceFuture, audit::MutationAudit};
 use crate::{
@@ -28,8 +31,8 @@ use crate::{
 };
 use rocketmq_dashboard_common::{
     AuditAction, AuditFacts, AuditOutcome, ConnectionScope, MessageConsumeCode, MessageConsumeCommand,
-    MessageConsumeReceipt, MessageIdentity, MessagePayload, MessageSearchPage, MessageSearchQuery,
-    MessageValidationError, OperationResource,
+    MessageConsumeReceipt, MessageIdentity, MessagePayload, MessageSearchPage, MessageSearchQuery, MessageTrace,
+    MessageTraceQuery, MessageValidationError, OperationResource,
 };
 use std::{future::Future, sync::Arc};
 
@@ -40,6 +43,19 @@ pub(crate) struct MessageRequestScope {
 }
 
 pub(crate) trait MessageBackend: Send + Sync {
+    fn trace(
+        &self,
+        _scope: MessageRequestScope,
+        _query: MessageTraceQuery,
+    ) -> ServiceFuture<'_, Result<MessageTrace, UiError>> {
+        Box::pin(async {
+            Err(UiError::new(
+                "Trace reads are unavailable.",
+                UiErrorCode::CapabilityUnavailable,
+                false,
+            ))
+        })
+    }
     fn query(
         &self,
         scope: MessageRequestScope,
@@ -81,6 +97,18 @@ impl RealMessageBackend {
 }
 
 impl MessageBackend for RealMessageBackend {
+    fn trace(
+        &self,
+        scope: MessageRequestScope,
+        query: MessageTraceQuery,
+    ) -> ServiceFuture<'_, Result<MessageTrace, UiError>> {
+        Box::pin(async move {
+            self.provider()?
+                .message_trace(scope.revision, query)
+                .await
+                .map_err(trace_error)
+        })
+    }
     fn query(
         &self,
         scope: MessageRequestScope,
@@ -120,6 +148,32 @@ impl MessageBackend for RealMessageBackend {
 }
 
 impl AppServices {
+    pub(crate) async fn message_trace(
+        &self,
+        scope: MessageRequestScope,
+        query: MessageTraceQuery,
+    ) -> Result<MessageTrace, UiError> {
+        query
+            .validate()
+            .map_err(|error| UiError::new(error.summary(), UiErrorCode::Validation, false))?;
+        self.require_message_scope()?;
+        let backend = Arc::clone(&self.messages);
+        let expected = query.clone();
+        let mut trace = self
+            .run_message_query("gpui-service-message-trace", async move {
+                backend.trace(scope, query).await
+            })
+            .await?;
+        if trace.identity != expected.identity || trace.trace_topic != expected.trace_topic {
+            return Err(UiError::new(
+                "Trace response did not match the selected message and Trace Topic.",
+                UiErrorCode::Validation,
+                false,
+            ));
+        }
+        trace.order_nodes();
+        Ok(trace)
+    }
     pub(crate) async fn query_messages(
         &self,
         scope: MessageRequestScope,
@@ -232,6 +286,15 @@ pub(crate) fn validation_error(error: MessageValidationError) -> UiError {
 fn query_error(error: ProviderFailure) -> UiError {
     let retryable = error.is_retryable();
     let summary = "Unable to read messages from the selected connection.";
+    match error.into_operational() {
+        Some(source) => UiError::caused_by(summary, UiErrorCode::Connection, retryable, source),
+        None => UiError::new(summary, UiErrorCode::Connection, retryable),
+    }
+}
+
+fn trace_error(error: ProviderFailure) -> UiError {
+    let summary = "Unable to read Trace records for the selected message.";
+    let retryable = error.is_retryable();
     match error.into_operational() {
         Some(source) => UiError::caused_by(summary, UiErrorCode::Connection, retryable, source),
         None => UiError::new(summary, UiErrorCode::Connection, retryable),

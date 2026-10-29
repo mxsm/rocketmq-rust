@@ -43,6 +43,8 @@ use rocketmq_dashboard_common::{CredentialSourceKind, TransportSettings};
 use rocketmq_runtime::{ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
 
 use super::*;
+#[path = "message_trace_tests.rs"]
+mod trace_tests;
 use crate::infrastructure::{
     admin_session::{DashboardMutationSession, DashboardQuerySession, DashboardSessionFactory, SessionFuture},
     auth_state::MapEnvironment,
@@ -64,6 +66,8 @@ struct FakeControls {
     acl_inventory: std::sync::Mutex<Option<DashboardBrokerList>>,
     acl_writes: std::sync::Mutex<Vec<(String, rocketmq_admin_core::core::acl_workspace::AclExactWrite)>>,
     acl_write_errors: std::sync::Mutex<BTreeMap<String, AdminError>>,
+    trace_queries: std::sync::Mutex<Vec<rocketmq_admin_core::core::message_trace::MessageTraceLookupRequest>>,
+    trace_result: std::sync::Mutex<Option<rocketmq_admin_core::core::message_trace::MessageTraceReadResult>>,
     message_queries: std::sync::Mutex<Vec<DashboardMessageQuery>>,
     message_lookups: std::sync::Mutex<Vec<MessageLookupRequest>>,
     message_consumes: std::sync::Mutex<Vec<DirectConsumeRequest>>,
@@ -164,6 +168,20 @@ impl DashboardQuerySession for FakeQuerySession {
                 records.lock().unwrap().get(address).cloned().unwrap_or_default(),
             ),
         )))
+    }
+    fn message_trace<'a>(
+        &'a self,
+        request: &'a rocketmq_admin_core::core::message_trace::MessageTraceLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::message_trace::MessageTraceReadResult>> {
+        self.controls.trace_queries.lock().unwrap().push(request.clone());
+        Box::pin(std::future::ready(
+            self.controls
+                .trace_result
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| AdminError::unavailable("trace", "test response missing")),
+        ))
     }
     fn topic_catalog(&self) -> SessionFuture<'_, AdminResult<rocketmq_admin_core::core::topic::DetailedTopicCatalog>> {
         use rocketmq_admin_core::core::topic::{

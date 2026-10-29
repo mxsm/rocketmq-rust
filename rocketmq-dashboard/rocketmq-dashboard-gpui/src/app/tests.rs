@@ -15,7 +15,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use gpui::{AppContext as _, KeyUpEvent, Keystroke, point, px, size};
-use gpui_component::{Root, WindowExt as _, dialog::Dialog, notification::Notification, table::TableDelegate as _};
+use gpui_component::{Root, WindowExt as _, dialog::Dialog, notification::Notification};
 
 use super::{ReadyScreen, SensitiveFeatureCache, StartupRequest, StartupState};
 use crate::{
@@ -1435,7 +1435,7 @@ fn production_message_and_dlq_routes_have_no_sample_or_implicit_query_through_na
             + calls.config.len()
             + calls.patches.len()
     };
-    let before_unavailable_pages = call_count();
+    let before_message_workspaces = call_count();
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
             dashboard.navigate(AppRoute::DlqMessages, window, cx)
@@ -1450,28 +1450,26 @@ fn production_message_and_dlq_routes_have_no_sample_or_implicit_query_through_na
         );
         assert!(dashboard.read(app).legacy_pages.dlq.read(app).query_is_idle());
     });
-    {
-        let route = AppRoute::MessageTrace;
-        cx.update(|window, app| {
-            dashboard.update(app, |dashboard, cx| dashboard.navigate(route.clone(), window, cx));
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::MessageTrace, window, cx)
         });
-        cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
-        cx.run_until_parked();
-        assert!(cx.debug_bounds("unavailable-page").is_some(), "{route}");
-        cx.update(|_, app| {
-            assert_eq!(dashboard.read(app).history.current(), &route);
-            assert!(matches!(
-                dashboard.read(app).current_page_capability(),
-                PageCapability::Unavailable { .. }
-            ));
-            let table = dashboard.read(app).legacy_pages.unavailable_table.read(app);
-            assert_eq!(table.delegate().rows_count(app), 0);
-        });
-    }
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("message-trace-workspace").is_some());
+    assert!(cx.debug_bounds("trace-find").is_some());
+    cx.read(|app| {
+        assert_eq!(
+            dashboard.read(app).current_page_capability(),
+            PageCapability::MessageTrace
+        );
+        assert!(dashboard.read(app).legacy_pages.message_trace.read(app).query_is_idle());
+    });
     assert_eq!(
         call_count(),
-        before_unavailable_pages,
-        "Unavailable pages must not query the backend"
+        before_message_workspaces,
+        "Message workspace navigation must not query Dashboard or Broker resources"
     );
 }
 
@@ -1683,6 +1681,7 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
         (AppRoute::Consumers, PageCapability::Consumers),
         (AppRoute::Producers, PageCapability::Producers),
         (AppRoute::Messages, PageCapability::Messages),
+        (AppRoute::MessageTrace, PageCapability::MessageTrace),
         (AppRoute::Monitors, PageCapability::Monitors),
         (AppRoute::Acl, PageCapability::Acl),
         (AppRoute::DlqMessages, PageCapability::DlqMessages),
@@ -1714,10 +1713,6 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
     for (route, capability) in implemented {
         assert_eq!(route.page_capability(), capability);
     }
-    assert!(matches!(
-        AppRoute::MessageTrace.page_capability(),
-        PageCapability::Unavailable { .. }
-    ));
 }
 
 #[gpui::test]

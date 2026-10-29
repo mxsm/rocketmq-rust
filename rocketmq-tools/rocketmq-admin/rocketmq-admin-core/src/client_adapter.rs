@@ -34,6 +34,8 @@ mod lite;
 mod message;
 #[cfg(any(feature = "client-adapter", feature = "mutation-client-adapter"))]
 pub(crate) mod message_target;
+#[cfg(feature = "client-adapter")]
+mod message_trace;
 #[cfg(feature = "mutation-client-adapter")]
 #[path = "client_adapter/topic/producer.rs"]
 pub(crate) mod producer;

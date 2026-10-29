@@ -107,6 +107,10 @@ pub(crate) mod dlq_store;
 pub(crate) mod message_detail;
 #[path = "features/message_dialogs.rs"]
 pub(crate) mod message_dialogs;
+#[path = "features/message_trace.rs"]
+pub(crate) mod message_trace;
+#[path = "features/message_trace_store.rs"]
+pub(crate) mod message_trace_store;
 #[path = "features/messages.rs"]
 pub(crate) mod messages;
 #[path = "features/messages_store.rs"]

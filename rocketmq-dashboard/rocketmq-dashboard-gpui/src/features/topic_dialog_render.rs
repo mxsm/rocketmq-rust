@@ -252,7 +252,7 @@ impl Render for TopicDialogForm {
                         div().id("topic-send-trace-control").child(
                             Checkbox::new("topic-send-trace")
                                 .debug_selector(|| "topic-send-trace".into())
-                                .label("Trace")
+                                .label("Enable producer Trace")
                                 .checked(trace_enabled)
                                 .disabled(!matches!(self.state.submission, TopicSubmissionState::Idle))
                                 .on_click(move |checked, _, cx| {

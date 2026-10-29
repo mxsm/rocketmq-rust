@@ -85,6 +85,8 @@ pub use mq_admin_message_index_read_ext::MQAdminMessageIndexReadExt;
 pub use mq_admin_message_index_read_ext::MessageIndexQuery;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_message_index_read_ext::MessageTraceRead;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_message_index_read_ext::MessageTraceRecordsRead;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::BrokerConfigPatchResult;
 #[cfg(feature = "admin-mutation")]

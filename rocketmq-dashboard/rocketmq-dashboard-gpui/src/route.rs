@@ -120,7 +120,7 @@ pub enum AppRoute {
     Proxy,
 }
 
-/// The implemented page backing a route, or the reason it cannot be used.
+/// The implemented native page backing a route.
 ///
 /// This is the shell's single capability registry. A navigation destination alone does not imply
 /// that its queries or operations are implemented.
@@ -134,11 +134,11 @@ pub(crate) enum PageCapability {
     Consumers,
     Producers,
     Messages,
+    MessageTrace,
     Monitors,
     DlqMessages,
     OpsSettings,
     Proxy,
-    Unavailable { reason: &'static str },
 }
 
 impl AppRoute {
@@ -156,9 +156,7 @@ impl AppRoute {
             Self::Proxy => PageCapability::Proxy,
             Self::Messages => PageCapability::Messages,
             Self::DlqMessages => PageCapability::DlqMessages,
-            Self::MessageTrace => PageCapability::Unavailable {
-                reason: "Message trace lookup is not yet available in this desktop app.",
-            },
+            Self::MessageTrace => PageCapability::MessageTrace,
             Self::Acl => PageCapability::Acl,
         }
     }

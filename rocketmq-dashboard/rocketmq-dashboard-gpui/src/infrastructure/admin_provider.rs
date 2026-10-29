@@ -43,6 +43,8 @@ mod dashboard_broker;
 mod dashboard_metrics;
 #[path = "admin_provider/dlq.rs"]
 mod dlq;
+#[path = "admin_provider/message_trace.rs"]
+mod message_trace;
 #[path = "admin_provider/messages.rs"]
 mod messages;
 #[path = "admin_provider/topics.rs"]

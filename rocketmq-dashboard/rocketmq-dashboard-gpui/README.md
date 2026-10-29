@@ -50,7 +50,7 @@ changed fields are applied, preserving each Broker's other settings and attribut
 | Permission | Read, write, inheritance bits | Yes | Version-checked; at least read or write is required |
 | Ordering | Ordered / unordered | Yes | Broker state uses CAS; NameServer order entries use a preflight comparison and can fail separately |
 | Message type | Normal, FIFO, Delay, Transaction | Yes | The same types and Unspecified use supervised state CAS; unknown and internal contracts are unavailable |
-| Send Trace | Defaults to off | Active Send form | The actual checkbox value is sent with the message |
+| Producer Trace | Defaults to off | Active Send form | Enables the SDK-owned producer Trace dispatcher; Consumer tracing is independent |
 
 Full-field editing requires Brokers implementing the supervised Topic state
 protocol. Older Brokers reject it; the desktop does not fall back to an unchecked
@@ -294,7 +294,7 @@ Overview includes readable UTC times and a Copy Message ID control. Properties a
 Body load when their inspector tab opens;
 one inspector retains at most 256 KiB of body and 128 properties / 64 KiB. JSON and
 plain-text previews show truncation. Closing the inspector, navigating away, changing
-connection or signing out clears its payload. Trace remains unavailable until P07.
+connection or signing out clears its payload. Trace loads independently when its tab opens.
 Physical offsets are read through the selected Topic's advertised Broker addresses,
 including hostname aliases. Returned Topic and physical ID are verified before details
 or direct consumption; the embedded address never supplies a transport target.
@@ -367,6 +367,37 @@ CSV quotes commas, quotes and line breaks, preserves Unicode, and prefixes cells
 starting with `=`, `+`, `-`, `@`, tab, CR or LF with an apostrophe, following the Web
 policy. Cancelling the chooser performs no query or write. Accepted export work and
 its blocking file write belong to the application; write failures retain the query.
+
+## Message Trace
+
+The Message Trace workspace finds candidates by Topic + Message ID (at most one)
+or Topic + Key (at most 64). Topic discovery has a searchable picker and validated
+manual entry. A full Key result reports that more matches may exist. Selecting a
+candidate starts a separate, cancellable Trace query; editing the Topic, mode,
+identifier or Trace Topic clears obsolete nodes. The Trace Topic is explicit and
+defaults to `RMQ_SYS_TRACE_TOPIC`.
+The Broker must provide that Topic, for example with `traceTopicEnable=true`;
+the isolated [development fixture](deploy/dev/README.md) enables it explicitly.
+Enabling the producer alone does not create the reserved system Topic through the
+ordinary Topic form.
+Disabling producer tracing does not promise that no Trace records exist: Consumers
+can independently emit their own records for the same message.
+
+Trace reads verify the selected physical message within its Topic before using its
+producer-assigned ID as the trace index key. A missing producer ID is reported,
+without querying a physical offset as if it were a producer ID. Reused producer IDs
+can cover several real sends; the timeline retains their returned records and does
+not invent a causal graph or end-to-end latency. The Inspector Trace tab uses the
+same service and timeline and does not load message bodies or trigger consumption.
+
+Only real client-written records are shown, in stable timestamp order. Missing
+timestamps, statuses, groups and durations remain Unknown. Reported duration is the
+client's value for one record. Trace reads are bounded to 32 Brokers, 64 trace
+messages per Broker and 128 displayed nodes; reached preview limits and unanswered
+Brokers are visible. An empty successful read, an absent trace Topic and an RPC
+failure have distinct feedback. These are NameServer Direct reads; the desktop does
+not claim Proxy forwarding support. Trace results remain in memory and are cleared
+at page, connection, environment and session boundaries.
 
 ## License
 
