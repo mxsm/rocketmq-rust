@@ -29,16 +29,15 @@ use crate::{
         },
         topics::TopicsView,
     },
-    services::topics::{TopicCacheInvalidation, TopicMutationResult, TopicQueuePatchResult, TopicRequestScope},
+    services::topics::{TopicCacheInvalidation, TopicFieldsPatchResult, TopicMutationResult, TopicRequestScope},
     state::UiError,
 };
 
 enum TopicCommandCompletion {
     Mutation(Result<TopicMutationResult, UiError>),
     Patch {
-        result: Result<TopicQueuePatchResult, UiError>,
-        submitted_read_queue_count: u32,
-        submitted_write_queue_count: u32,
+        result: Result<TopicFieldsPatchResult, UiError>,
+        submitted_patch: rocketmq_dashboard_common::TopicConfigFieldsPatch,
     },
     Send(Result<(), UiError>),
 }
@@ -143,12 +142,10 @@ impl TopicsView {
                     TopicCommandCompletion::Mutation(services.create_topic(scope, command).await)
                 }
                 PreparedTopicCommand::Edit(command) => {
-                    let submitted_read_queue_count = command.read_queue_count.unwrap_or_default();
-                    let submitted_write_queue_count = command.write_queue_count.unwrap_or_default();
+                    let submitted_patch = command.patch;
                     TopicCommandCompletion::Patch {
-                        result: services.patch_topic_queue_counts(scope, command).await,
-                        submitted_read_queue_count,
-                        submitted_write_queue_count,
+                        result: services.patch_topic_fields(scope, command).await,
+                        submitted_patch,
                     }
                 }
                 PreparedTopicCommand::DeleteTopic(command) => {
@@ -182,7 +179,12 @@ impl TopicsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !form.read(cx).state.accepts(token, self.revision) {
+        if !form.read(cx).state.accepts(token, self.revision)
+            || self
+                .dialog_form
+                .as_ref()
+                .is_none_or(|active| active.entity_id() != form.entity_id())
+        {
             return;
         }
         match completion {
@@ -209,69 +211,34 @@ impl TopicsView {
                 });
             }
             TopicCommandCompletion::Patch {
-                result: Ok(result),
-                submitted_read_queue_count,
-                submitted_write_queue_count,
+                result: Ok(mut result),
+                submitted_patch,
             } => {
-                match result {
-                    TopicQueuePatchResult::Applied {
-                        configuration,
-                        inventory,
-                        invalidations,
-                        previous_version,
-                        version,
-                    } => {
-                        self.store.replace_inventory(inventory);
-                        self.sync_table(cx);
-                        self.sync_detail_stale(cx);
-                        if let Some(detail) = &self.detail {
-                            detail.update(cx, |detail, cx| {
-                                detail.apply_mutation_reload(&invalidations, Some(*configuration), None, None, cx)
-                            });
-                        }
-                        form.update(cx, |form, cx| {
-                        form.state.submission = TopicSubmissionState::Succeeded;
-                        form.set_status(
-                            format!("Applied version {previous_version} → {version}; authoritative configuration loaded."),
-                            cx,
-                        );
-                    });
-                    }
-                    TopicQueuePatchResult::AppliedReloadFailed {
-                        previous_version,
-                        version,
-                        invalidations,
-                        error,
-                    } => {
-                        let summary = error.summary().to_owned();
-                        self.apply_failed_invalidations(&invalidations, &error, cx);
-                        form.update(cx, |form, cx| {
-                        form.state.submission = TopicSubmissionState::PatchAppliedReloadFailed {
-                            previous_version,
-                            version,
-                            error,
-                        };
-                        form.set_status(
-                            format!("Applied version {previous_version} → {version}, but reload failed: {summary}. This command cannot be resubmitted."),
-                            cx,
-                        );
-                    });
-                    }
-                    TopicQueuePatchResult::VersionConflict {
-                        actual_version, latest, ..
-                    } => {
-                        form.update(cx, |form, cx| {
-                            form.reconcile_conflict(
-                                actual_version,
-                                submitted_read_queue_count,
-                                submitted_write_queue_count,
-                                latest.read_queue_nums,
-                                latest.write_queue_nums,
-                                cx,
-                            );
-                        });
-                    }
+                if let Some(inventory) = result.inventory.take() {
+                    self.store.replace_inventory(inventory);
+                    self.sync_table(cx);
+                    self.sync_detail_stale(cx);
                 }
+                if let Some(detail) = &self.detail {
+                    detail.update(cx, |detail, cx| {
+                        detail.apply_mutation_reload(&result.invalidations, result.configuration.take(), None, None, cx)
+                    });
+                }
+                if let Some(error) = &result.reload_error {
+                    self.apply_failed_invalidations(&result.invalidations, error, cx);
+                }
+                let summary = format!(
+                    "{} Broker/stage(s) applied, {} failed. Conflicts preserve all changed draft fields. Applied or unknown targets cannot be automatically retried.",
+                    result.edit.outcome.applied_count(),
+                    result.edit.outcome.failed_count()
+                );
+                form.update(cx, |form, cx| {
+                    form.state.submission = TopicSubmissionState::FieldsCompleted {
+                        result,
+                        submitted_patch,
+                    };
+                    form.set_status(summary, cx);
+                });
             }
         }
         cx.notify();

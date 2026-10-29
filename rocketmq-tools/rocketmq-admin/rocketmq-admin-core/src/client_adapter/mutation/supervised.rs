@@ -1400,7 +1400,7 @@ fn map_expected_state_to_client(state: ExpectedState) -> ClientExpectedState {
     }
 }
 
-fn map_client_topic_config(config: ClientTopicConfig) -> TopicReplacement {
+pub(super) fn map_client_topic_config(config: ClientTopicConfig) -> TopicReplacement {
     TopicReplacement {
         read_queue_nums: config.read_queue_nums,
         write_queue_nums: config.write_queue_nums,
@@ -1416,7 +1416,7 @@ fn map_client_topic_config(config: ClientTopicConfig) -> TopicReplacement {
     }
 }
 
-fn map_topic_replacement_to_client(config: &TopicReplacement) -> ClientTopicConfig {
+pub(super) fn map_topic_replacement_to_client(config: &TopicReplacement) -> ClientTopicConfig {
     ClientTopicConfig {
         read_queue_nums: config.read_queue_nums,
         write_queue_nums: config.write_queue_nums,
@@ -1486,7 +1486,7 @@ fn map_client_request_mode(mode: ClientMessageRequestMode) -> RequestModeValue {
     }
 }
 
-fn map_client_persistence(state: ClientMutationPersistenceState) -> MutationPersistenceState {
+pub(super) fn map_client_persistence(state: ClientMutationPersistenceState) -> MutationPersistenceState {
     match state {
         ClientMutationPersistenceState::NotRequired => MutationPersistenceState::NotRequired,
         ClientMutationPersistenceState::Persisted => MutationPersistenceState::Persisted,

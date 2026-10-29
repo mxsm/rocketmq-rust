@@ -27,6 +27,9 @@ use rocketmq_dashboard_common::{
 };
 use rocketmq_runtime::{ChildServiceContext, ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
 
+#[path = "audit_topic_fields_tests.rs"]
+mod topic_fields;
+
 use super::*;
 use crate::{
     infrastructure::{

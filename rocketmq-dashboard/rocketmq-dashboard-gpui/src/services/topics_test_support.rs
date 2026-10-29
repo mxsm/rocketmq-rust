@@ -17,13 +17,14 @@
 use std::{collections::VecDeque, sync::Mutex};
 
 use rocketmq_dashboard_common::{
-    TopicConfigView, TopicConsumersView, TopicIdentity, TopicInventory, TopicMessageType, TopicPartialOutcome,
-    TopicPermission, TopicRouteView, TopicStatsView, TopicTargetIdentity,
+    TopicConfigEditOutcome, TopicConfigFieldsPatch, TopicConfigTargetView, TopicConfigView, TopicConsumersView,
+    TopicIdentity, TopicInventory, TopicMessageType, TopicPartialOutcome, TopicPermission, TopicRouteView,
+    TopicStatsView, TopicTargetIdentity,
 };
 
 use super::{
-    BackendTopicQueuePatchResult, ServiceFuture, TopicBackend, TopicCreateCommand, TopicDeleteBrokerCommand,
-    TopicDeleteCommand, TopicOffsetCommand, TopicQueuePatchCommand, TopicRequestScope, TopicSendCommand,
+    ServiceFuture, TopicBackend, TopicCreateCommand, TopicDeleteBrokerCommand, TopicDeleteCommand,
+    TopicFieldsPatchCommand, TopicOffsetCommand, TopicRequestScope, TopicSendCommand,
 };
 use crate::state::{UiError, UiErrorCode};
 
@@ -40,13 +41,11 @@ pub(crate) struct TopicCreateCall {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TopicPatchCall {
+pub(crate) struct TopicFieldsCall {
     pub scope: TopicRequestScope,
     pub topic: TopicIdentity,
-    pub target: TopicTargetIdentity,
-    pub expected_version: u64,
-    pub read_queue_count: Option<u32>,
-    pub write_queue_count: Option<u32>,
+    pub targets: Vec<TopicConfigTargetView>,
+    pub patch: TopicConfigFieldsPatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,7 +76,7 @@ pub(crate) struct TopicCalls {
     pub config: Vec<(TopicRequestScope, TopicIdentity)>,
     pub consumers: Vec<(TopicRequestScope, TopicIdentity)>,
     pub create: Vec<TopicCreateCall>,
-    pub patch: Vec<TopicPatchCall>,
+    pub fields: Vec<TopicFieldsCall>,
     pub delete: Vec<(TopicRequestScope, TopicIdentity, Vec<String>)>,
     pub delete_broker: Vec<(TopicRequestScope, TopicIdentity, TopicTargetIdentity)>,
     pub send: Vec<TopicSendCall>,
@@ -93,7 +92,7 @@ struct Queues {
     config: VecDeque<Result<TopicConfigView, UiError>>,
     consumers: VecDeque<Result<TopicConsumersView, UiError>>,
     create: VecDeque<Result<TopicPartialOutcome, UiError>>,
-    patch: VecDeque<Result<BackendTopicQueuePatchResult, UiError>>,
+    fields: VecDeque<FieldResponse>,
     delete: VecDeque<Result<TopicPartialOutcome, UiError>>,
     delete_broker: VecDeque<Result<TopicPartialOutcome, UiError>>,
     send: VecDeque<Result<(), UiError>>,
@@ -101,10 +100,16 @@ struct Queues {
     skip: VecDeque<Result<TopicPartialOutcome, UiError>>,
 }
 
+enum FieldResponse {
+    Ready(Result<TopicConfigEditOutcome, UiError>),
+    Pending(tokio::sync::oneshot::Receiver<Result<TopicConfigEditOutcome, UiError>>),
+}
+
 #[derive(Default)]
 pub(crate) struct FakeTopicBackend {
     queues: Mutex<Queues>,
     calls: Mutex<TopicCalls>,
+    next_fields_start: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 macro_rules! queue_method {
@@ -120,18 +125,41 @@ macro_rules! queue_method {
 }
 
 impl FakeTopicBackend {
+    pub fn observe_next_fields(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (started, observed) = tokio::sync::oneshot::channel();
+        *self.next_fields_start.lock().expect("Topic fields observer") = Some(started);
+        observed
+    }
+
     queue_method!(queue_inventory, inventory, TopicInventory);
     queue_method!(queue_route, route, TopicRouteView);
     queue_method!(queue_stats, stats, TopicStatsView);
     queue_method!(queue_config, config, TopicConfigView);
     queue_method!(queue_consumers, consumers, TopicConsumersView);
     queue_method!(queue_create, create, TopicPartialOutcome);
-    queue_method!(queue_patch, patch, BackendTopicQueuePatchResult);
     queue_method!(queue_delete, delete, TopicPartialOutcome);
     queue_method!(queue_delete_broker, delete_broker, TopicPartialOutcome);
     queue_method!(queue_send, send, ());
     queue_method!(queue_reset, reset, TopicPartialOutcome);
     queue_method!(queue_skip, skip, TopicPartialOutcome);
+
+    pub fn queue_fields(&self, result: Result<TopicConfigEditOutcome, UiError>) {
+        self.queues
+            .lock()
+            .expect("Topic fake queues")
+            .fields
+            .push_back(FieldResponse::Ready(result));
+    }
+
+    pub fn queue_pending_fields(&self) -> tokio::sync::oneshot::Sender<Result<TopicConfigEditOutcome, UiError>> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.queues
+            .lock()
+            .expect("Topic fake queues")
+            .fields
+            .push_back(FieldResponse::Pending(receiver));
+        sender
+    }
 
     pub fn calls(&self) -> TopicCalls {
         self.calls.lock().expect("Topic fake calls").clone()
@@ -151,6 +179,35 @@ macro_rules! pop_result {
 }
 
 impl TopicBackend for FakeTopicBackend {
+    fn patch_fields(
+        &self,
+        scope: TopicRequestScope,
+        command: TopicFieldsPatchCommand,
+    ) -> ServiceFuture<'_, Result<TopicConfigEditOutcome, UiError>> {
+        self.calls
+            .lock()
+            .expect("Topic fake calls")
+            .fields
+            .push(TopicFieldsCall {
+                scope,
+                topic: command.topic,
+                targets: command.targets,
+                patch: command.patch,
+            });
+        let response = self.queues.lock().expect("Topic fake queues").fields.pop_front();
+        if let Some(started) = self.next_fields_start.lock().expect("Topic fields observer").take() {
+            let _ = started.send(());
+        }
+        Box::pin(async move {
+            match response {
+                Some(FieldResponse::Ready(result)) => result,
+                Some(FieldResponse::Pending(receiver)) => receiver
+                    .await
+                    .unwrap_or_else(|_| Err(unexpected_call("field response dropped"))),
+                None => Err(unexpected_call("field patch")),
+            }
+        })
+    }
     fn inventory(&self, scope: TopicRequestScope) -> ServiceFuture<'_, Result<TopicInventory, UiError>> {
         self.calls.lock().expect("Topic fake calls").inventory.push(scope);
         Box::pin(std::future::ready(pop_result!(self, inventory, "inventory")))
@@ -216,22 +273,6 @@ impl TopicBackend for FakeTopicBackend {
                 message_type: command.message_type,
             });
         Box::pin(std::future::ready(pop_result!(self, create, "create")))
-    }
-
-    fn patch_queue_counts(
-        &self,
-        scope: TopicRequestScope,
-        command: TopicQueuePatchCommand,
-    ) -> ServiceFuture<'_, Result<BackendTopicQueuePatchResult, UiError>> {
-        self.calls.lock().expect("Topic fake calls").patch.push(TopicPatchCall {
-            scope,
-            topic: command.topic,
-            target: command.target,
-            expected_version: command.expected_version,
-            read_queue_count: command.read_queue_count,
-            write_queue_count: command.write_queue_count,
-        });
-        Box::pin(std::future::ready(pop_result!(self, patch, "queue patch")))
     }
 
     fn delete(

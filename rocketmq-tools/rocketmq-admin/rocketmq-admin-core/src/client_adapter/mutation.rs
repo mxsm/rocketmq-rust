@@ -17,6 +17,8 @@
 mod operation;
 #[path = "mutation/supervised.rs"]
 mod supervised;
+#[path = "mutation/topic_fields.rs"]
+mod topic_fields;
 
 use std::collections::HashMap;
 use std::collections::HashSet;

@@ -47,8 +47,8 @@ pub(crate) use dashboard_broker::{
 };
 pub(crate) use dashboard_metrics::SafeTopicRate;
 pub(crate) use topics::{
-    SafeTopicCreateRequest, SafeTopicDeleteBrokerRequest, SafeTopicDeleteRequest, SafeTopicOffsetRequest,
-    SafeTopicPatchOutcome, SafeTopicQueuePatchRequest, SafeTopicSendRequest,
+    SafeTopicCreateRequest, SafeTopicDeleteBrokerRequest, SafeTopicDeleteRequest, SafeTopicFieldsPatchRequest,
+    SafeTopicOffsetRequest, SafeTopicSendRequest,
 };
 
 struct CancelOnDrop(CancellationToken);

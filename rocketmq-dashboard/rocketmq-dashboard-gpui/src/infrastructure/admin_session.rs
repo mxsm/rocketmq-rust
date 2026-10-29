@@ -46,12 +46,11 @@ use rocketmq_admin_core::{
         security::AdminCredentials,
         topic::{
             DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicConfig, DetailedTopicConsumers,
-            DetailedTopicStats, GetTopicRouteRequest, PatchTopicConfigRequest, QueryTopicConfigCasRequest,
-            TopicBatchDeleteAdmin, TopicBatchDeleteReport, TopicBatchDeleteRequest, TopicBatchMutationAdmin,
-            TopicBatchMutationReport, TopicBatchUpsertRequest, TopicConfigCasState, TopicConfigPatchResult,
-            TopicInspectionAdmin, TopicMutationAdmin, TopicMutationPreflightAdmin, TopicMutationSummary,
-            TopicOffsetMutationAdmin, TopicOffsetMutationReport, TopicOffsetMutationRequest, TopicRoute,
-            TopicSendRequest, TopicSendResult,
+            DetailedTopicStats, GetTopicRouteRequest, TopicBatchDeleteAdmin, TopicBatchDeleteReport,
+            TopicBatchDeleteRequest, TopicBatchMutationAdmin, TopicBatchMutationReport, TopicBatchUpsertRequest,
+            TopicConfigFieldsMutationAdmin, TopicConfigFieldsPatchReport, TopicConfigFieldsPatchRequest,
+            TopicInspectionAdmin, TopicMutationAdmin, TopicMutationSummary, TopicOffsetMutationAdmin,
+            TopicOffsetMutationReport, TopicOffsetMutationRequest, TopicRoute, TopicSendRequest, TopicSendResult,
         },
     },
     mutation_client_adapter::{MutationAdminBuilder, MutationAdminSession},
@@ -155,6 +154,12 @@ pub(crate) trait DashboardQuerySession: Send + Sync {
 
 /// Serialized generation-aware Broker mutation capability.
 pub(crate) trait DashboardMutationSession: Send {
+    fn patch_topic_fields<'a>(
+        &'a mut self,
+        _request: &'a TopicConfigFieldsPatchRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicConfigFieldsPatchReport>> {
+        Box::pin(async { Err(unsupported_topic_session("patch_topic_fields")) })
+    }
     fn query_config_generation<'a>(
         &'a mut self,
         request: &'a QueryBrokerConfigGenerationRequest,
@@ -163,18 +168,6 @@ pub(crate) trait DashboardMutationSession: Send {
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
     ) -> SessionFuture<'a, AdminResult<BrokerConfigPatchResult>>;
-    fn topic_config_cas_state<'a>(
-        &'a mut self,
-        _request: &'a QueryTopicConfigCasRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicConfigCasState>> {
-        Box::pin(async { Err(unsupported_topic_session("topic_config_cas_state")) })
-    }
-    fn patch_topic_config<'a>(
-        &'a mut self,
-        _request: &'a PatchTopicConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicConfigPatchResult>> {
-        Box::pin(async { Err(unsupported_topic_session("patch_topic_config")) })
-    }
     fn upsert_topic_batch<'a>(
         &'a mut self,
         _request: &'a TopicBatchUpsertRequest,
@@ -510,18 +503,11 @@ impl DashboardMutationSession for RealMutationSession {
         BrokerMutationAdmin::patch_config_if_generation(&mut self.inner, request)
     }
 
-    fn topic_config_cas_state<'a>(
+    fn patch_topic_fields<'a>(
         &'a mut self,
-        request: &'a QueryTopicConfigCasRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicConfigCasState>> {
-        TopicMutationPreflightAdmin::query_config_cas_state(&mut self.inner, request)
-    }
-
-    fn patch_topic_config<'a>(
-        &'a mut self,
-        request: &'a PatchTopicConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicConfigPatchResult>> {
-        TopicMutationAdmin::patch_config_if_version(&mut self.inner, request)
+        request: &'a TopicConfigFieldsPatchRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicConfigFieldsPatchReport>> {
+        TopicConfigFieldsMutationAdmin::patch_topic_config_fields(&mut self.inner, request)
     }
 
     fn upsert_topic_batch<'a>(

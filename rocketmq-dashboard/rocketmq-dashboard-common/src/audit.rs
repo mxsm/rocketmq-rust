@@ -14,6 +14,8 @@
 
 //! Local desktop audit contracts, independent of HTTP and the storage backend.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{EnvironmentId, OperationActor, OperationContext};
@@ -77,6 +79,17 @@ pub enum AuditFailureCode {
     Unknown,
 }
 
+/// A reviewed Topic field name, without its previous or requested configuration value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditTopicField {
+    ReadQueueCount,
+    WriteQueueCount,
+    Permission,
+    Ordered,
+    MessageType,
+}
+
 /// Bounded facts that cannot contain message bodies, diagnostics, secrets, or configuration values.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -117,6 +130,10 @@ pub struct AuditAcceptedOperation {
     pub context: OperationContext,
     pub action: AuditAction,
     pub accepted_at_epoch_ms: u64,
+    /// Requested field intent survives pending-operation recovery and terminal-write retries.
+    /// The closed enum bounds this set to five names; older records deserialize as an empty set.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub topic_fields: BTreeSet<AuditTopicField>,
 }
 
 /// One immutable terminal event per accepted request ID in the retained local journal.
@@ -267,4 +284,42 @@ impl AuditAcceptedOperation {
 
 fn valid_identity(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_audit_records_round_trip_and_topic_intent_accepts_only_field_names() {
+        let legacy = serde_json::json!({
+            "eventId": 41,
+            "operation": {
+                "context": {
+                    "environmentId": "env-legacy",
+                    "configurationRevision": 7,
+                    "requestId": "request-legacy",
+                    "actor": {"kind": "local_desktop"},
+                    "resource": {"kind": "topic", "identity": "orders"}
+                },
+                "action": "topic_updated",
+                "acceptedAtEpochMs": 100
+            },
+            "outcome": "succeeded",
+            "timestampEpochMs": 101,
+            "facts": {"appliedTargets": 1, "unconfirmedTargets": 0, "refreshFailed": false, "failureCode": null}
+        });
+        let mut event: AuditEvent = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(event.operation.topic_fields.is_empty());
+        assert_eq!(serde_json::to_value(&event).unwrap(), legacy);
+        event.operation.topic_fields = BTreeSet::from([AuditTopicField::ReadQueueCount, AuditTopicField::Ordered]);
+        let mut encoded = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            encoded["operation"]["topicFields"],
+            serde_json::json!(["read_queue_count", "ordered"])
+        );
+        assert_eq!(serde_json::from_value::<AuditEvent>(encoded.clone()).unwrap(), event);
+        encoded["operation"]["topicFields"] = serde_json::json!(["message_body"]);
+        assert!(serde_json::from_value::<AuditEvent>(encoded).is_err());
+    }
 }
