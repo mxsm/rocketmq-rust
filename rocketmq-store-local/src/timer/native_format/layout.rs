@@ -238,11 +238,11 @@ pub fn native_lane(real_topic: &str, real_queue_id: i32, lane_count: u16) -> u16
     (hash % u64::from(lane_count.max(1))) as u16
 }
 
-/// The hash a recall and the timer it cancels share: of the recall key, `<real topic>_<unique
-/// key>` as the Timer topic's `TIMER_DEL_UNIQKEY` carries it. A match is confirmed against the
-/// full key before a timer is cancelled.
-pub fn native_key_hash(recall_key: &[u8]) -> u64 {
-    fnv1a64(recall_key.iter().copied())
+/// The hash an index entry carries for recalls to find its timer: of the timer's unique key.
+/// Every form of recall key names that unique key, and a match is confirmed against the full
+/// recall key and the generation before a timer is cancelled.
+pub fn native_key_hash(unique_key: &[u8]) -> u64 {
+    fnv1a64(unique_key.iter().copied())
 }
 
 #[cfg(test)]

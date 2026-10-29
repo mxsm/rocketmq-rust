@@ -13,33 +13,30 @@
 // limitations under the License.
 
 use super::checked_body;
-use super::layout::native_key_hash;
 use super::push_checksum;
 use super::FieldReader;
 use super::NativeFormatError;
 
 const CANCEL_HEADER_SIZE: usize = 30;
 
-/// One recall in the cancel log: the deadline of the timer it cancels, which names that
-/// timer's buckets, and its recall key.
+/// One recall in the cancel log: the deadline of the timer it cancels, which scopes it to that
+/// timer's hour, its recall key and its generation.
 ///
-/// Encoded as its total length, `due_ms`, `tombstone_cq_offset`, the key hash, the key length
+/// Encoded as its total length, `due_ms`, `tombstone_cq_offset`, `generation`, the key length
 /// and the key, then a CRC32C of all of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeCancelRecord {
     pub due_ms: i64,
     /// The Timer CQ offset of the tombstone that carried the recall.
     pub tombstone_cq_offset: i64,
-    /// `<real topic>_<unique key>`, as `TIMER_DEL_UNIQKEY` carries it.
+    /// The generation of the timer the recall cancels.
+    pub generation: u64,
+    /// The recall key as `TIMER_DEL_UNIQKEY` carries it: the unique key alone,
+    /// `<real topic>_<unique key>`, or the topic-aware canonical form.
     pub key: Vec<u8>,
 }
 
 impl NativeCancelRecord {
-    /// The hash a cancelled timer's index entry carries.
-    pub fn key_hash(&self) -> u64 {
-        native_key_hash(&self.key)
-    }
-
     /// Appends the encoded record to `output`.
     ///
     /// # Errors
@@ -60,7 +57,7 @@ impl NativeCancelRecord {
         output.extend_from_slice(&length.to_be_bytes());
         output.extend_from_slice(&self.due_ms.to_be_bytes());
         output.extend_from_slice(&self.tombstone_cq_offset.to_be_bytes());
-        output.extend_from_slice(&self.key_hash().to_be_bytes());
+        output.extend_from_slice(&self.generation.to_be_bytes());
         output.extend_from_slice(&key_len.to_be_bytes());
         output.extend_from_slice(&self.key);
         let mut record = output.split_off(start);
@@ -74,7 +71,7 @@ impl NativeCancelRecord {
     /// # Errors
     ///
     /// Returns [`NativeFormatError`] when the record is cut short or corrupt, or its key does
-    /// not match its hash or length.
+    /// not fill its length.
     pub fn decode(bytes: &[u8]) -> Result<(Self, usize), NativeFormatError> {
         let record = "cancel record";
         let mut reader = FieldReader::new(record, bytes);
@@ -91,21 +88,21 @@ impl NativeCancelRecord {
         checked_body(record, bytes)?;
         let due_ms = reader.i64()?;
         let tombstone_cq_offset = reader.i64()?;
-        let key_hash = reader.u64()?;
+        let generation = reader.u64()?;
         let key_len = usize::from(reader.u16()?);
         if CANCEL_HEADER_SIZE + key_len + 4 != length {
             return Err(invalid("key length"));
         }
         let key = reader.take(key_len)?.to_vec();
-        let cancel = Self {
-            due_ms,
-            tombstone_cq_offset,
-            key,
-        };
-        if cancel.key_hash() != key_hash {
-            return Err(invalid("key hash"));
-        }
-        Ok((cancel, length))
+        Ok((
+            Self {
+                due_ms,
+                tombstone_cq_offset,
+                generation,
+                key,
+            },
+            length,
+        ))
     }
 }
 
@@ -117,6 +114,7 @@ mod tests {
         NativeCancelRecord {
             due_ms: 1_800_000_000_000,
             tombstone_cq_offset: 512,
+            generation: 2,
             key: key.to_vec(),
         }
     }
@@ -124,18 +122,18 @@ mod tests {
     #[test]
     fn cancel_records_follow_each_other_in_the_log() {
         let first = cancel(b"TopicA_7F0000010001");
-        let second = cancel(b"TopicB_7F0000010002");
+        let second = cancel(b"7F0000010002");
         let mut log = Vec::new();
         first.encode_into(&mut log).unwrap();
         let first_length = log.len();
         second.encode_into(&mut log).unwrap();
         assert_eq!(first_length, CANCEL_HEADER_SIZE + first.key.len() + 4);
+        assert_eq!(&log[20..28], &2u64.to_be_bytes());
 
         let (decoded, length) = NativeCancelRecord::decode(&log).unwrap();
         assert_eq!((decoded, length), (first.clone(), first_length));
         let (decoded, _) = NativeCancelRecord::decode(&log[length..]).unwrap();
         assert_eq!(decoded, second);
-        assert_eq!(first.key_hash(), native_key_hash(b"TopicA_7F0000010001"));
     }
 
     #[test]

@@ -56,6 +56,7 @@ fn cancel(key: &str) -> NativeCancelRecord {
     NativeCancelRecord {
         due_ms: NOW_MS + 5_000,
         tombstone_cq_offset: 9,
+        generation: 0,
         key: key.as_bytes().to_vec(),
     }
 }
