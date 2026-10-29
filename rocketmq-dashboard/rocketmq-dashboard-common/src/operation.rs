@@ -51,6 +51,8 @@ impl fmt::Debug for OperationActor {
 pub enum OperationResource {
     /// Local configuration and connection profiles.
     Configuration,
+    /// The local desktop authentication session; never its password or token.
+    LocalSession,
     /// A consumer group rule.
     Monitor(String),
     /// A Topic.

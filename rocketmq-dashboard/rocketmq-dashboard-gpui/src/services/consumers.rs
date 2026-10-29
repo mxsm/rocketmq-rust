@@ -21,10 +21,10 @@ pub(crate) mod test_support;
 use std::{future::Future, sync::Arc};
 
 use rocketmq_dashboard_common::{
-    ConsumerClients, ConsumerConfigPatchCommand, ConsumerConfigPatchOutcome, ConsumerConfiguration,
+    AuditAction, ConsumerClients, ConsumerConfigPatchCommand, ConsumerConfigPatchOutcome, ConsumerConfiguration,
     ConsumerCreateCommand, ConsumerDeleteCommand, ConsumerDiagnosticPayload, ConsumerDiagnosticRequest,
     ConsumerIdentity, ConsumerInventory, ConsumerObservation, ConsumerObservationState, ConsumerPartialOutcome,
-    ConsumerProgress, ProducerConnectionQuery, ProducerConnections, ProducerInventory,
+    ConsumerProgress, OperationResource, ProducerConnectionQuery, ProducerConnections, ProducerInventory,
 };
 
 use super::{AppServices, ServiceFuture};
@@ -367,7 +367,12 @@ impl AppServices {
     ) -> Result<ConsumerMutationResult, UiError> {
         let backend = Arc::clone(&self.consumers);
         let group = command.group.clone();
-        self.run_consumer("gpui-service-consumer-create", async move {
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::ConsumerCreated,
+            OperationResource::ConsumerGroup(group.as_str().to_owned()),
+        )?;
+        self.run_mutation("gpui-service-consumer-create", operation, async move {
             let mut outcome = backend.create(scope, command).await?;
             if outcome.applied_count() == 0 {
                 return Ok(ConsumerMutationResult::Rejected(outcome));
@@ -409,7 +414,12 @@ impl AppServices {
     ) -> Result<ConsumerConfigMutationResult, UiError> {
         let backend = Arc::clone(&self.consumers);
         let group = command.snapshot.identity.group.clone();
-        self.run_consumer("gpui-service-consumer-config-patch", async move {
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::ConsumerUpdated,
+            OperationResource::ConsumerGroup(group.as_str().to_owned()),
+        )?;
+        self.run_mutation("gpui-service-consumer-config-patch", operation, async move {
             match backend.patch_configuration(scope, command).await? {
                 ConsumerConfigPatchOutcome::GenerationConflict {
                     expected_generation,
@@ -462,7 +472,12 @@ impl AppServices {
     ) -> Result<ConsumerMutationResult, UiError> {
         let backend = Arc::clone(&self.consumers);
         let group = command.group.clone();
-        self.run_consumer("gpui-service-consumer-delete", async move {
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::ConsumerDeleted,
+            OperationResource::ConsumerGroup(group.as_str().to_owned()),
+        )?;
+        self.run_mutation("gpui-service-consumer-delete", operation, async move {
             let mut outcome = backend.delete(scope, command).await?;
             if outcome.applied_count() == 0 {
                 return Ok(ConsumerMutationResult::Rejected(outcome));

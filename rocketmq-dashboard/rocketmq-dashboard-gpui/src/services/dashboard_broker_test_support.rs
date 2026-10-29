@@ -57,9 +57,17 @@ struct Queues {
 pub(crate) struct FakeDashboardBrokerOperations {
     queues: Mutex<Queues>,
     calls: Mutex<DashboardBrokerCalls>,
+    next_patch: Mutex<Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>>,
 }
 
 impl FakeDashboardBrokerOperations {
+    pub fn hold_next_patch(&self) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let (started, observed) = tokio::sync::oneshot::channel();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        *self.next_patch.lock().expect("Broker patch gate") = Some((started, gate));
+        (observed, release)
+    }
+
     pub fn queue_topic_current(&self, result: Result<Vec<TopicCurrentMetric>, UiError>) {
         self.queues
             .lock()
@@ -293,7 +301,14 @@ impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
             .patches
             .pop_front()
             .unwrap_or_else(|| Err(unexpected_call("Broker config mutation")));
-        Box::pin(std::future::ready(result))
+        let gate = self.next_patch.lock().expect("Broker patch gate").take();
+        Box::pin(async move {
+            if let Some((started, gate)) = gate {
+                let _ = started.send(());
+                gate.await.map_err(|_| unexpected_call("cancelled Broker patch gate"))?;
+            }
+            result
+        })
     }
 }
 

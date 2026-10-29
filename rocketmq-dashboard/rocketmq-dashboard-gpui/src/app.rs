@@ -14,6 +14,8 @@
 
 //! Root application entity, startup lifecycle, shell composition, and page cache ownership.
 
+mod audit;
+
 #[path = "app/consumers.rs"]
 mod consumers;
 #[path = "app/dashboard_broker.rs"]
@@ -203,6 +205,8 @@ pub struct RocketmqDashboard {
     startup_task: Option<Task<()>>,
     session_task: Option<Task<()>>,
     intent_task: Option<Task<()>>,
+    audit_task: Option<Task<()>>,
+    audit_retry_task: Option<Task<()>>,
     subscriptions: Vec<Subscription>,
     startup_epoch: RequestEpoch,
     login_epoch: RequestEpoch,
@@ -266,6 +270,8 @@ impl RocketmqDashboard {
             startup_task: None,
             session_task: None,
             intent_task: None,
+            audit_task: None,
+            audit_retry_task: None,
             subscriptions,
             startup_epoch: RequestEpoch::initial(),
             login_epoch: RequestEpoch::initial(),
@@ -283,6 +289,7 @@ impl RocketmqDashboard {
             last_intent: None,
             last_service_error: None,
         };
+        dashboard.subscribe_audit(cx);
         dashboard.start_bootstrap(window, cx);
         let dashboard_entity = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -1376,18 +1383,24 @@ impl Render for RocketmqDashboard {
                     }))
                     .child(Button::new("dirty-confirmation-reopen").tab_stop(false).ghost()),
             )
-            .child(content)
-            .when(
-                !matches!(self.startup_state, StartupState::Ready(ReadyScreen::MainShell)),
-                |root| {
-                    root.child(
-                        div()
-                            .absolute()
-                            .top_3()
-                            .right_3()
-                            .child(self.render_fullscreen_button(window, cx)),
-                    )
-                },
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(self.render_audit_warning(cx))
+                    .child(div().relative().flex_1().min_h_0().child(content).when(
+                        !matches!(self.startup_state, StartupState::Ready(ReadyScreen::MainShell)),
+                        |body| {
+                            body.child(
+                                div()
+                                    .absolute()
+                                    .top_3()
+                                    .right_3()
+                                    .child(self.render_fullscreen_button(window, cx)),
+                            )
+                        },
+                    )),
             )
             .children(sheet_layer)
             .children(notification_layer)

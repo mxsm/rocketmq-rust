@@ -71,10 +71,10 @@ TLS, or VIP settings preserves its persistent identity. History and Monitor
 rules belong to that identity, while the configuration revision identifies a
 particular connection generation.
 
-The version 2 configuration document holds profiles, global settings, Monitor
-rules, and local operation records in one atomic replacement. Metric samples
+The version 3 configuration document holds profiles, global settings, Monitor
+rules, local operation records, and the desktop audit journal in one atomic replacement. Metric samples
 remain in the separately versioned `history.json`. Version 1 configuration and
-history files and legacy Monitor arrays are migrated on startup. Legacy points
+history files, version 2 profile documents, and legacy Monitor arrays are migrated on startup. Legacy points
 and rules without environment evidence remain unassigned and are excluded from
 the selected environment. Legacy rules also require thresholds before they can
 be evaluated; the Monitor lifecycle still performs no evaluation. The original
@@ -87,7 +87,32 @@ an OS file lock. A second instance using that directory must wait until the firs
 closes. An interrupted write leaves either the previous complete document or the
 new complete document; unfinished candidate files are not treated as committed
 state. Configuration and Monitor changes carry their operation record in the
-same commit, providing the local transaction boundary for subsequent audit work.
+same commit as their terminal audit event.
+
+Accepted Broker, Topic, Consumer, and configuration changes belong to the application,
+so closing a Sheet or signing out only drops the old view's result receiver. External
+changes first save an accepted-operation record and then save one terminal outcome;
+these two writes do not provide a transaction with RocketMQ. Shutdown drains owned
+work for the existing five-second budget while local storage and the provider remain
+available. Interrupted requests stay pending for authoritative verification after restart,
+and are never automatically replayed. Local login and logout also record safe outcomes.
+
+Audit events contain trusted local actor and environment metadata, controlled resource
+identities, and bounded result facts. They exclude message bodies, diagnostics,
+credentials, and configuration values. A failed terminal audit write preserves the
+business result and displays an application warning; **Retry audit write** only retries
+persistence. The journal retains at most 10,000 terminal events within 31 days and
+128 pending requests. Service queries support bounded filtering and stable cursors;
+the Audit query page and future Message, DLQ, ACL, and Monitor editor hooks are later
+deliveries. These records describe this desktop's operations and are not a tamper-proof
+or organization-wide audit log.
+
+Login events preserve their initiating actor and include the verified operator as a
+separate terminal fact after successful authentication. Failed form usernames are not
+retained. Exhausting the terminal-write recovery queue still permits local sign out;
+one reserved logout fact remains visible and retryable without retaining a command.
+Cursor continuation expires after journal retention evicts rows, including partial
+eviction of unread results.
 
 Authentication has two separate settings in the configuration:
 

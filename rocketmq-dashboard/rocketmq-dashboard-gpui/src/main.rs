@@ -185,7 +185,8 @@ fn run() -> Result<(), AppError> {
         }
     };
     let auth = DesktopAuthState::from_process_environment();
-    let config_store = match DesktopConfigStore::from_environment(runtime.component("config-store")) {
+    // Storage stays available while application mutation jobs drain during shutdown.
+    let config_store = match DesktopConfigStore::from_environment(runtime.provider_component("config-store")) {
         Ok(store) => store,
         Err(failure) => {
             let mut error = match failure.into_operational() {

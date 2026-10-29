@@ -20,6 +20,7 @@
 #[cfg(feature = "admin")]
 pub mod admin;
 pub mod api;
+pub mod audit;
 pub mod cluster;
 pub mod connection;
 pub mod consumer;
@@ -39,6 +40,7 @@ pub mod topic;
 #[cfg(feature = "admin")]
 pub use admin::*;
 pub use api::*;
+pub use audit::*;
 pub use cluster::*;
 pub use connection::*;
 pub use consumer::*;

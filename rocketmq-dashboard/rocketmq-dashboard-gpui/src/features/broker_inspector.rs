@@ -205,6 +205,18 @@ impl BrokerInspector {
         self.mutation_task = task;
     }
 
+    #[cfg(test)]
+    pub(super) fn submit_value_for_test(
+        &mut self,
+        key: &str,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.store.set_draft_value(key, value).expect("editable test value");
+        self.submit_config(window, cx);
+    }
+
     pub(super) fn clear_for_environment(&mut self, revision: u64, cx: &mut Context<Self>) {
         self.revision = revision;
         self.overview_task = None;
