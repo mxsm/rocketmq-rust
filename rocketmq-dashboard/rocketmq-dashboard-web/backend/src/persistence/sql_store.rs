@@ -1412,6 +1412,54 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_network_databases_do_not_fall_back_to_file_storage() {
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        owner.block_on(async {
+            // A retained ephemeral listener accepts no SQL handshake. This
+            // exercises both real driver connection paths without a fixed port,
+            // live database, sleep, or race with another process claiming it.
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("reserve local connection endpoint");
+            let address = listener.local_addr().expect("reserved local address");
+            for (backend, scheme) in [(StorageEngine::MySql, "mysql"), (StorageEngine::Postgres, "postgres")] {
+                let config = StorageConfig {
+                    backend,
+                    data_path: directory.path().join(scheme),
+                    database_url: Some(format!("{scheme}://test-user:test-password@{address}/unavailable")),
+                    pool: SqlPoolConfig {
+                        min_connections: 1,
+                        max_connections: 1,
+                        connect_timeout_ms: 100,
+                        acquire_timeout_ms: 100,
+                        ..SqlPoolConfig::default()
+                    },
+                };
+                let error = match crate::persistence::DashboardPersistence::initialize(
+                    &config,
+                    owner.root_context().component("unavailable-selected-sql"),
+                )
+                .await
+                {
+                    Ok(_) => panic!("an unavailable selected SQL engine must not initialize"),
+                    Err(error) => error,
+                };
+                assert!(matches!(error, PersistenceError::Timeout));
+                assert!(
+                    !config.data_path.exists(),
+                    "SQL failure must not initialize fallback File data"
+                );
+                let message = error.to_string();
+                assert!(!message.contains("test-password"));
+                assert!(!message.contains(&address.to_string()));
+            }
+            drop(listener);
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
     fn closed_sqlite_pool_reports_storage_as_unavailable() {
         let directory = tempfile::tempdir().expect("temp dir");
         let owner = RuntimeOwner::new().expect("runtime owner");
