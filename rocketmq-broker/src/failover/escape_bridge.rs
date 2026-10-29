@@ -72,8 +72,6 @@ pub(crate) enum EscapeDispatchError {
     Target(#[from] EscapeTargetError),
     #[error("the selected escape broker has no publish address")]
     BrokerAddressUnavailable,
-    #[error("remote escape is not authorized for the current broker role")]
-    RemoteEscapeUnauthorized,
     #[error("the controller role epoch changed before remote dispatch")]
     StaleRoleEpoch,
     #[error(transparent)]
@@ -463,21 +461,6 @@ where
         }
     }
 
-    pub(crate) async fn put_message_to_remote_broker(
-        &self,
-        message_ext: MessageExtBrokerInner,
-        broker_name_to_send: Option<CheetahString>,
-    ) -> Result<SendResult, EscapeDispatchError> {
-        let policy = self.policy_state.snapshot();
-        let authority = policy
-            .remote_escape_authority()
-            .ok_or(EscapeDispatchError::RemoteEscapeUnauthorized)?;
-        let preference = broker_name_to_send
-            .as_ref()
-            .map_or(EscapeTargetPreference::Any, EscapeTargetPreference::Broker);
-        self.dispatch_remote_message(message_ext, preference, authority).await
-    }
-
     fn get_producer_group(&self, message_ext: &MessageExtBrokerInner) -> CheetahString {
         let producer_group =
             message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
@@ -567,7 +550,7 @@ where
     async fn dispatch_remote_message(
         &self,
         message_ext: MessageExtBrokerInner,
-        preference: EscapeTargetPreference<'_>,
+        preference: EscapeTargetPreference,
         authority: EscapeRemoteAuthority,
     ) -> Result<SendResult, EscapeDispatchError> {
         let is_trans_half_message = TransactionalMessageUtil::build_half_topic() == message_ext.get_topic();
