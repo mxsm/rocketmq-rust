@@ -43,6 +43,11 @@ an independent container's loopback address refers to that container instead.
 The configuration checks for Broker and Proxy share the NameServer namespace,
 which is why the commands start the parsed NameServer first.
 
+An [optional local governance profile](README.governance.md) reuses the existing
+Web Backend with File, SQLite, MySQL, or PostgreSQL storage. It provides server
+Sessions, Audit, and sanitized storage status; native GPUI remains independent
+and retains its own local data.
+
 ## Endpoints
 
 | Purpose | Host address |
