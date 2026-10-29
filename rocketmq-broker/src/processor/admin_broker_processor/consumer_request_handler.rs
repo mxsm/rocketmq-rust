@@ -525,19 +525,13 @@ impl ConsumerRequestHandler {
             ));
         };
 
+        // Java encodes the manager even when it holds no modes, so an empty map is a successful
+        // answer; slaves rely on it to clear modes the master no longer has.
         let message_request_mode_map = query_assignment_processor
             .message_request_mode_manager()
             .message_request_mode_map()
             .lock()
             .clone();
-        if message_request_mode_map.is_empty() {
-            return Ok(Some(
-                response
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("No message request mode in this broker"),
-            ));
-        }
-
         let body = MessageRequestModeSerializeWrapper::from_inner(message_request_mode_map);
         Ok(Some(
             RemotingCommand::create_success_response_command().set_body(body.encode()?),
@@ -1163,6 +1157,34 @@ mod tests {
             .get(&CheetahString::from_static_str("topic-a"))
             .and_then(|group_map| group_map.get(&CheetahString::from_static_str("group-a")))
             .is_some());
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_all_message_request_mode_returns_empty_modes_as_success() {
+        let mut runtime = new_test_runtime("message-mode-empty").await;
+        let _ = runtime.init_processor_checked().expect("initialize request processors");
+        let admin = runtime.admin_runtime_for_test();
+
+        let handler = ConsumerRequestHandler::new();
+        let mut request =
+            RemotingCommand::create_request_command(RequestCode::GetAllMessageRequestMode, EmptyHeader {});
+        let mut response = handler
+            .get_all_message_request_mode(&admin, RequestCode::GetAllMessageRequestMode, &mut request)
+            .await
+            .expect("get all message request mode should succeed")
+            .expect("get all message request mode should return response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = MessageRequestModeSerializeWrapper::decode(
+            response
+                .take_body()
+                .expect("empty message request mode response should contain body")
+                .as_ref(),
+        )
+        .expect("decode empty message request mode body");
+        assert!(body.message_request_mode_map().is_empty());
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
