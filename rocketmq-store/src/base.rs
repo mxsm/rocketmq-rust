@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod allocate_mapped_file_service;
+pub mod append_hold;
 pub mod append_message_callback;
 pub(crate) mod backend_ops;
 pub mod commit_log_dispatcher;

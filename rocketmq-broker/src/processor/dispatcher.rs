@@ -570,7 +570,7 @@ where
                     .map_err(|error| crate::broker_error::internal("broker-fast-failure", error));
             }
         };
-        let run = match admission
+        let mut run = match admission
             .await_run(fast_failure_dispatch::FastFailureControl::from(request.control()))
             .await
         {
@@ -587,7 +587,13 @@ where
                 ));
             }
         };
-        let result = processor.process(request).await;
+        let result = if queue_kind == crate::latency::broker_fast_failure::FastFailureQueueKind::Send {
+            // A send permit stands for one of Java's send threads, which `asyncPutMessage` frees
+            // once the message is appended. Waiting for the flush or replicas holds no permit.
+            rocketmq_store::hold_until_appended(run.take_permit(), processor.process(request)).await
+        } else {
+            processor.process(request).await
+        };
         run.finish();
         match result {
             Ok(outcome) => Ok(outcome),

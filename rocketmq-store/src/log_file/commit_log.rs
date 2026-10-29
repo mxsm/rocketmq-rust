@@ -1340,6 +1340,8 @@ impl CommitLog {
         need_handle_ha: bool,
         requested_lease: Option<WriteLeaseToken>,
     ) -> PutMessageResult {
+        // The message is in the CommitLog; what remains is waiting for flush and replicas.
+        crate::base::append_hold::release_held_until_appended();
         #[cfg(test)]
         {
             let after_append = self.after_append.lock().take();
@@ -3317,6 +3319,57 @@ mod tests {
         let result = store.get_commit_log().put_message(message).await;
 
         assert_eq!(result.put_message_status(), PutMessageStatus::FlushSlaveTimeout);
+    }
+
+    #[tokio::test]
+    async fn appended_write_releases_its_hold_before_waiting_for_durability() {
+        for batch in [false, true] {
+            let directory = tempfile::TempDir::new().unwrap();
+            let mut store = new_test_message_store_with_config(
+                directory.path(),
+                MessageStoreConfig {
+                    mapped_file_size_commit_log: 4096,
+                    ha_listen_port: 0,
+                    ..Default::default()
+                },
+                BrokerRole::AsyncMaster,
+                false,
+            );
+            store.init().await.unwrap();
+            let log = store.get_commit_log();
+            let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+            let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+            assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
+
+            let held = Arc::new(());
+            let held_probe = Arc::downgrade(&held);
+            let released_after_append = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let released = Arc::clone(&released_after_append);
+            *log.after_append.lock() = Some(Box::new(move || {
+                released.store(held_probe.strong_count() == 0, std::sync::atomic::Ordering::SeqCst);
+            }));
+            let write = async {
+                if batch {
+                    let mut item = rocketmq_model::common::message::message_single::Message::default();
+                    item.set_body(Some(Bytes::from_static(b"held")));
+                    let mut message = append_test_message("hold-topic", b"unused");
+                    message.set_body(rocketmq_protocol::common::message::message_decoder::encode_messages(&[
+                        item,
+                    ]));
+                    log.put_messages(MessageExtBatch {
+                        message_ext_broker_inner: message,
+                        ..Default::default()
+                    })
+                    .await
+                } else {
+                    log.put_message(append_test_message("hold-topic", b"held")).await
+                }
+            };
+            let result = crate::hold_until_appended(held, write).await;
+
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+            assert!(released_after_append.load(std::sync::atomic::Ordering::SeqCst));
+        }
     }
 
     #[tokio::test]

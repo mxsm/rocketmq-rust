@@ -15,6 +15,9 @@
 //! Intentional public capabilities, DTOs, builders, and errors.
 
 pub use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+pub use crate::base::append_hold::hold_until_appended;
+#[doc(hidden)]
+pub use crate::base::append_hold::release_held_until_appended;
 pub use crate::base::backend_ops::MessageStoreShutdownReport;
 pub use crate::base::backend_ops::PutMessagePreflight;
 pub use crate::base::backend_ops::StateMachineVersionView;
