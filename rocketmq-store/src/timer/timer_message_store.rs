@@ -183,8 +183,10 @@ enum SlotEntryAction {
 /// whether the slot can move past it. Preparing has no side effects, so a batch is prepared on
 /// several threads.
 enum PreparedSlotEntry {
-    /// The CommitLog no longer holds the payload.
+    /// The CommitLog cannot return the payload, although it should still hold it.
     MissingPayload { queue_offset: i64 },
+    /// CommitLog cleanup deleted the payload.
+    CleanedUp,
     /// Not due yet; `message` is `None` when it cannot be written back.
     Roll {
         source_offset: i64,
@@ -503,6 +505,11 @@ impl TimerStoreContext {
         let result = self.commit_log.get_message(commit_log_offset, size)?;
         let mut bytes = result.get_bytes()?;
         MessageDecoder::decode(&mut bytes, true, false, false, false, false)
+    }
+
+    /// Whether CommitLog cleanup has deleted the file that held `commit_log_offset`.
+    fn is_cleaned_up(&self, commit_log_offset: i64) -> bool {
+        commit_log_offset < self.commit_log.get_min_offset()
     }
 
     async fn put_message(&self, message: MessageExtBrokerInner) -> crate::base::message_result::PutMessageResult {
@@ -1329,6 +1336,15 @@ impl TimerMessageStore {
         self.store_context
             .as_ref()
             .and_then(|context| context.look_message_by_offset_with_size(commit_log_offset, size))
+    }
+
+    /// Whether CommitLog cleanup has deleted the payload at `commit_log_offset`. Apache RocketMQ
+    /// drops such a timer or recall whatever `timerSkipUnknownError` says, since nothing can
+    /// bring the payload back; any other unreadable payload stays under the switch.
+    fn is_cleaned_up(&self, commit_log_offset: i64) -> bool {
+        self.store_context
+            .as_ref()
+            .is_some_and(|context| context.is_cleaned_up(commit_log_offset))
     }
 
     async fn put_store_message(&self, message: MessageExtBrokerInner) -> PutMessageResult {
@@ -2213,14 +2229,34 @@ impl TimerMessageStore {
         let dequeue_cursor = self.ensure_dequeue_cursor(now_ms);
         let overdue_bound = self.overdue_bound(overdue, wall_time_ms, dequeue_cursor);
         let enqueue_reference_time_ms = dequeue_cursor.max(now_ms);
-        let max_offset = consume_queue.read().get_max_offset_in_queue();
+        let (min_offset, max_offset) = {
+            let queue = consume_queue.read();
+            (queue.get_min_offset_in_queue(), queue.get_max_offset_in_queue())
+        };
         let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
+        // Timers CommitLog cleanup deleted are skipped, as in Apache RocketMQ; that includes the
+        // Timer CQ entries cleanup removed with them.
+        let mut cleaned_up = 0usize;
+        let mut next_queue_offset = None;
+        if queue_offset < min_offset {
+            cleaned_up = usize::try_from(min_offset - queue_offset).unwrap_or(usize::MAX);
+            queue_offset = min_offset;
+            next_queue_offset = Some(min_offset);
+        }
         let mut batch = Vec::with_capacity(limit.min(1_024));
         let mut batch_bytes = 0usize;
-        while queue_offset < max_offset && batch.len() < limit {
+        while queue_offset < max_offset && batch.len().saturating_add(cleaned_up) < limit {
             let Some(cq_unit) = consume_queue.read().get(queue_offset) else {
                 break;
             };
+            // Timer CQ entries follow the CommitLog, so cleaned ones lead the batch. They are not
+            // read: offset 0 of a cleaned CommitLog reads the oldest file left.
+            if batch.is_empty() && self.is_cleaned_up(cq_unit.pos) {
+                cleaned_up += 1;
+                queue_offset = cq_unit.queue_offset + 1;
+                next_queue_offset = Some(queue_offset);
+                continue;
+            }
             let Ok(size) = usize::try_from(cq_unit.size) else {
                 break;
             };
@@ -2254,7 +2290,6 @@ impl TimerMessageStore {
             None => None,
         };
         let mut owned_elsewhere = 0usize;
-        let mut next_queue_offset = None;
         let mut overdue_timers = Vec::new();
 
         for (cq_unit, frame) in batch.into_iter().zip(frames) {
@@ -2401,12 +2436,15 @@ impl TimerMessageStore {
             }
         }
         self.enqueue_tps_counter.record(indexed, current_millis() as i64);
+        if cleaned_up > 0 {
+            warn!(cleaned_up, "skip timer sources whose CommitLog payload was cleaned up");
+        }
         if let Some(queue_offset) = next_queue_offset {
             self.curr_queue_offset.store(queue_offset, Ordering::Relaxed);
         }
 
         SourceBatch {
-            processed: indexed + owned_elsewhere,
+            processed: indexed + owned_elsewhere + cleaned_up,
             overdue: overdue_timers,
         }
     }
@@ -2799,82 +2837,98 @@ impl TimerMessageStore {
     /// It stops at a message that is not due yet and at a roll after the delivery epoch moved
     /// on. A timer that cannot be handled (a missing or unsupported payload, an invalid
     /// deadline) is quarantined here; it stops the slot too unless `timerSkipUnknownError` lets
-    /// planning go past it.
+    /// planning go past it. A timer whose payload CommitLog cleanup deleted is skipped.
     fn plan_prepared_chunk(
         &self,
         chunk: Vec<PreparedSlotEntry>,
         actions: &mut VecDeque<SlotEntryAction>,
         delivery_epoch: u64,
     ) -> bool {
-        for entry in chunk {
-            match entry {
-                PreparedSlotEntry::MissingPayload { queue_offset } => {
-                    if !self.quarantine_slot_entry(queue_offset, CorruptionReason::MissingPayload, None, actions) {
-                        warn!("timer delivery is blocked by a missing persisted payload");
-                        return false;
+        let mut cleaned_up = 0usize;
+        let goes_on = 'chunk: {
+            for entry in chunk {
+                match entry {
+                    PreparedSlotEntry::MissingPayload { queue_offset } => {
+                        if !self.quarantine_slot_entry(queue_offset, CorruptionReason::MissingPayload, None, actions) {
+                            warn!("timer delivery is blocked by a missing persisted payload");
+                            break 'chunk false;
+                        }
                     }
-                }
-                PreparedSlotEntry::Roll {
-                    source_offset,
-                    message,
-                    real_topic,
-                } => {
-                    if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
-                        warn!("reject a stale timer roll batch");
-                        return false;
+                    PreparedSlotEntry::Roll {
+                        source_offset,
+                        message,
+                        real_topic,
+                    } => {
+                        if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
+                            warn!("reject a stale timer roll batch");
+                            break 'chunk false;
+                        }
+                        let Some(message) = message else {
+                            if !self.quarantine_slot_entry(
+                                source_offset,
+                                CorruptionReason::UnsupportedRecord,
+                                real_topic,
+                                actions,
+                            ) {
+                                break 'chunk false;
+                            }
+                            continue;
+                        };
+                        actions.push_back(SlotEntryAction::Roll {
+                            source_offset,
+                            message,
+                            real_topic,
+                        });
                     }
-                    let Some(message) = message else {
+                    PreparedSlotEntry::Skip { cancelled_topic } => {
+                        actions.push_back(SlotEntryAction::Skip { cancelled_topic });
+                    }
+                    PreparedSlotEntry::InvalidDeadline {
+                        source_offset,
+                        real_topic,
+                    } => {
                         if !self.quarantine_slot_entry(
                             source_offset,
                             CorruptionReason::UnsupportedRecord,
                             real_topic,
                             actions,
                         ) {
-                            return false;
+                            warn!("delay delivery blocked because the original timer deadline is invalid");
+                            break 'chunk false;
                         }
-                        continue;
-                    };
-                    actions.push_back(SlotEntryAction::Roll {
+                    }
+                    PreparedSlotEntry::CleanedUp => {
+                        cleaned_up += 1;
+                        actions.push_back(SlotEntryAction::Skip { cancelled_topic: None });
+                    }
+                    PreparedSlotEntry::NotDue => break 'chunk false,
+                    PreparedSlotEntry::Unsupported { source_offset } => {
+                        if !self.quarantine_slot_entry(
+                            source_offset,
+                            CorruptionReason::UnsupportedRecord,
+                            None,
+                            actions,
+                        ) {
+                            break 'chunk false;
+                        }
+                    }
+                    PreparedSlotEntry::Deliver {
                         source_offset,
                         message,
-                        real_topic,
-                    });
-                }
-                PreparedSlotEntry::Skip { cancelled_topic } => {
-                    actions.push_back(SlotEntryAction::Skip { cancelled_topic });
-                }
-                PreparedSlotEntry::InvalidDeadline {
-                    source_offset,
-                    real_topic,
-                } => {
-                    if !self.quarantine_slot_entry(
+                        original_deliver_ms,
+                    } => actions.push_back(SlotEntryAction::Deliver {
                         source_offset,
-                        CorruptionReason::UnsupportedRecord,
-                        real_topic,
-                        actions,
-                    ) {
-                        warn!("delay delivery blocked because the original timer deadline is invalid");
-                        return false;
-                    }
+                        message,
+                        original_deliver_ms,
+                    }),
                 }
-                PreparedSlotEntry::NotDue => return false,
-                PreparedSlotEntry::Unsupported { source_offset } => {
-                    if !self.quarantine_slot_entry(source_offset, CorruptionReason::UnsupportedRecord, None, actions) {
-                        return false;
-                    }
-                }
-                PreparedSlotEntry::Deliver {
-                    source_offset,
-                    message,
-                    original_deliver_ms,
-                } => actions.push_back(SlotEntryAction::Deliver {
-                    source_offset,
-                    message,
-                    original_deliver_ms,
-                }),
             }
+            true
+        };
+        if cleaned_up > 0 {
+            warn!(cleaned_up, "skip timers whose CommitLog payload was cleaned up");
         }
-        true
+        goes_on
     }
 
     /// Quarantines a slot entry that cannot be handled and returns whether the slot can move
@@ -2906,6 +2960,10 @@ impl TimerMessageStore {
         slot_time_ms: i64,
         clock: PrepareClock,
     ) -> PreparedSlotEntry {
+        // Checked before the read: offset 0 of a cleaned CommitLog reads the oldest file left.
+        if context.is_some_and(|context| context.is_cleaned_up(entry.record.commit_log_offset)) {
+            return PreparedSlotEntry::CleanedUp;
+        }
         let Some(message) = context.and_then(|context| {
             context.look_message_by_offset_with_size(entry.record.commit_log_offset, entry.record.size)
         }) else {
@@ -3153,6 +3211,7 @@ impl TimerMessageStore {
         )?;
         let storage = track.storage;
         let mut delete_keys = HashSet::new();
+        let mut cleaned_up_recalls = 0usize;
         let processed = storage.walk_slot(slot, processed, |position, record, generation| {
             builder.push_reverse(TimerLogEntry {
                 position,
@@ -3160,23 +3219,37 @@ impl TimerMessageStore {
                 generation,
             })?;
             if record.magic & MAGIC_DELETE != 0 {
-                let message = self
-                    .look_store_message(record.commit_log_offset, record.size)
-                    .ok_or_else(|| {
-                        std::io::Error::new(
+                // As in Apache RocketMQ, a recall whose payload is gone cancels nothing. Checked
+                // before the read: offset 0 of a cleaned CommitLog reads the oldest file left.
+                if self.is_cleaned_up(record.commit_log_offset) {
+                    cleaned_up_recalls += 1;
+                    return Ok(());
+                }
+                match self.look_store_message(record.commit_log_offset, record.size) {
+                    Some(message) => {
+                        if let Some(identity) = extract_delete_timer_identity(&message) {
+                            delete_keys.insert(identity);
+                        }
+                    }
+                    None => {
+                        return Err(std::io::Error::new(
                             std::io::ErrorKind::NotFound,
                             format!(
                                 "recall scan cannot read commitlog {}:{} at timer log {}",
                                 record.commit_log_offset, record.size, position
                             ),
-                        )
-                    })?;
-                if let Some(identity) = extract_delete_timer_identity(&message) {
-                    delete_keys.insert(identity);
+                        ));
+                    }
                 }
             }
             Ok(())
         })?;
+        if cleaned_up_recalls > 0 {
+            warn!(
+                cleaned_up_recalls,
+                "skip timer recalls whose CommitLog payload was cleaned up"
+            );
+        }
         let mut plan = builder.finish()?;
         if let Some(declared) = storage.exact_chain_len(slot, processed) {
             if plan.remaining() != declared {

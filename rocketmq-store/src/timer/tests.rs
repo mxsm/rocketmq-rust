@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod cleaned_up_payloads;
 mod failure_switches;
 mod java_file_format;
 mod overdue_timers;
