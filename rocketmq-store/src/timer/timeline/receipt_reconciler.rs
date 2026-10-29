@@ -673,7 +673,7 @@ mod tests {
 
     use super::FeedEntry;
     use super::TimelineCompletionFeed;
-    use crate::base::backend_ops::BackendOps;
+    use crate::base::backend_ops::MessageStoreEngine;
     use crate::base::commit_log_dispatcher::CommitLogDispatcher;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::config::store_runtime_config::StoreRuntimeConfig;

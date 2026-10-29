@@ -35,7 +35,7 @@ use super::support::timer_message;
 use super::support::with_property;
 use super::support::ManualClock;
 use super::support::REAL_TOPIC;
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::timer::timer_message_store::build_delete_key;
 
 #[tokio::test]

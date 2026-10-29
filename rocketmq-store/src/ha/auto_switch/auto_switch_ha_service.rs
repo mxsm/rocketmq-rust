@@ -485,7 +485,7 @@ mod tests {
     use rocketmq_runtime::common::time_utils::current_millis;
 
     use super::*;
-    use crate::base::backend_ops::BackendOps;
+    use crate::base::backend_ops::MessageStoreEngine;
     use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::ha_client::HAClient;
     use crate::ha::test_support::append_replicated_messages;

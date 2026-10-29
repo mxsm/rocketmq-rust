@@ -37,7 +37,7 @@ use rocketmq_store_local::timer::java_format::JavaTimerLogRecord;
 use rocketmq_store_local::timer::java_format::JAVA_TIMER_LOG_UNIT_SIZE;
 use tempfile::tempdir;
 
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::message_store_reader::MessageStoreReader;
 use crate::store_path_config_helper::get_timer_log_path;
 use crate::store_path_config_helper::get_timer_wheel_path;

@@ -38,7 +38,7 @@ use super::support::timer_message;
 use super::support::with_property;
 use super::support::ManualClock;
 use super::support::REAL_TOPIC;
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::timer::timer_message_store::build_delete_key;

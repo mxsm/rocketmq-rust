@@ -26,7 +26,7 @@ use super::support::process_until_idle;
 use super::support::put_all;
 use super::support::timer_message;
 use super::support::with_property;
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::MessageStoreConfig;
 
 /// Delivers `m0`, `bad` and `m1`, all due, and returns the keys delivered and the number of

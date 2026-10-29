@@ -48,7 +48,7 @@ use rocketmq_store_rocksdb::message_store::RocksDbTimeBoundary;
 use tracing::warn;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
@@ -610,7 +610,7 @@ fn legacy_get_status(status: ApiGetStatus) -> GetMessageStatus {
 
 mod read;
 
-impl BackendOps for RocksDBMessageStore {
+impl MessageStoreEngine for RocksDBMessageStore {
     async fn load(&mut self) -> bool {
         if !self.local_file_store.load().await {
             return false;
@@ -973,11 +973,14 @@ impl BackendOps for RocksDBMessageStore {
         self.local_file_store.increase_offset(msg, message_num);
     }
 
-    fn get_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
+    fn get_master_store_in_process<M: MessageStoreEngine + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
         self.local_file_store.get_master_store_in_process::<M>()
     }
 
-    fn set_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
+    fn set_master_store_in_process<M: MessageStoreEngine + Send + Sync + 'static>(
+        &self,
+        master_store_in_process: Arc<M>,
+    ) {
         self.local_file_store
             .set_master_store_in_process(master_store_in_process);
     }
