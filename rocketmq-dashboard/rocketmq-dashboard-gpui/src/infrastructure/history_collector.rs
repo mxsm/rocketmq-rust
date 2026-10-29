@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::state::UiError;
 
-use super::{config_store::ConfigStoreFailure, history_store::HistoryStore};
+use super::{config_store::ConfigStoreFailure, history_health::CollectionSide, history_store::HistoryStore};
 
 /// Boxed sampling operation implemented by the Dashboard service boundary.
 pub type HistorySampleFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<HistoryPoint>, UiError>> + Send + 'a>>;
@@ -30,6 +30,7 @@ pub type HistorySampleFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<Histor
 pub struct EnvironmentHistorySample {
     pub environment_id: Option<EnvironmentId>,
     pub points: Vec<HistoryPoint>,
+    pub failed_resources: usize,
 }
 
 pub type EnvironmentHistorySampleFuture<'a> =
@@ -46,6 +47,7 @@ pub trait HistorySampler: Send + Sync {
     fn sample_topics_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
         Box::pin(async {
             self.sample_topics().await.map(|points| EnvironmentHistorySample {
+                failed_resources: 0,
                 environment_id: None,
                 points,
             })
@@ -55,6 +57,7 @@ pub trait HistorySampler: Send + Sync {
     fn sample_brokers_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
         Box::pin(async {
             self.sample_brokers().await.map(|points| EnvironmentHistorySample {
+                failed_resources: 0,
                 environment_id: None,
                 points,
             })
@@ -147,29 +150,44 @@ impl Drop for HistoryLifecycle {
 
 async fn collect_once(store: &HistoryStore, sampler: &dyn HistorySampler, retention: HistoryRetention) {
     tokio::join!(
-        sample_and_persist(store, "topic", sampler.sample_topics_scoped(), retention),
-        sample_and_persist(store, "broker", sampler.sample_brokers_scoped(), retention),
+        sample_and_persist(store, CollectionSide::Topics, sampler.sample_topics_scoped(), retention),
+        sample_and_persist(
+            store,
+            CollectionSide::Brokers,
+            sampler.sample_brokers_scoped(),
+            retention
+        ),
     );
 }
 
 async fn sample_and_persist(
     store: &HistoryStore,
-    side: &'static str,
+    side: CollectionSide,
     sample: EnvironmentHistorySampleFuture<'_>,
     retention: HistoryRetention,
 ) {
-    persist_side(store, side, sample.await, retention).await;
+    let environment = store
+        .environment_snapshot()
+        .ok()
+        .flatten()
+        .map(|snapshot| snapshot.environment_id);
+    persist_side(store, side, environment, sample.await, retention).await;
 }
 
 async fn persist_side(
     store: &HistoryStore,
-    side: &'static str,
+    side: CollectionSide,
+    environment: Option<EnvironmentId>,
     result: Result<EnvironmentHistorySample, UiError>,
     retention: HistoryRetention,
 ) {
     match result {
-        Ok(sample) if sample.points.is_empty() => {}
+        Ok(sample) if sample.points.is_empty() => {
+            store.record_collection(sample.environment_id, side, epoch_ms(), sample.failed_resources, false);
+        }
         Ok(sample) => {
+            let sample_environment = sample.environment_id.clone();
+            let failed_resources = sample.failed_resources;
             let result = match sample.environment_id {
                 Some(environment_id) => {
                     store
@@ -178,22 +196,32 @@ async fn persist_side(
                 }
                 None => store.append_sample(sample.points, retention).await,
             };
+            store.record_collection(sample_environment, side, epoch_ms(), failed_resources, result.is_ok());
             if result.is_err() {
                 tracing::warn!(
-                    history_side = side,
+                    history_side = side.label(),
                     outcome = "persist_failed",
                     "History sample was not persisted"
                 );
             }
         }
         Err(_) => {
+            store.record_collection(environment, side, epoch_ms(), 1, false);
             tracing::warn!(
-                history_side = side,
+                history_side = side.label(),
                 outcome = "sample_failed",
                 "History sample was unavailable"
             );
         }
     }
+}
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -228,6 +256,7 @@ mod tests {
                 self.entered.notify_one();
                 self.release.notified().await;
                 Ok(EnvironmentHistorySample {
+                    failed_resources: 0,
                     environment_id: Some(snapshot.environment_id),
                     points: vec![HistoryPoint {
                         metric: HistoryMetricKind::TopicMessages,
@@ -405,6 +434,23 @@ mod tests {
         );
         runtime.block_on(collect_once(&store, &BrokerOnlySampler, retention(10)));
         assert_eq!(runtime.block_on(store.points()).expect("broker points").len(), 1);
+        let mut health = store.collection_health().unwrap();
+        assert!(health.topics.failed);
+        assert!(health.topics.last_success_epoch_ms.is_none());
+        assert!(health.brokers.last_success_epoch_ms.is_some());
+        health.enabled = true;
+        let latest = health.latest_success().unwrap();
+        assert_eq!(
+            health.status(latest),
+            super::super::history_health::CollectionStatus::Partial
+        );
+        runtime.block_on(collect_once(&store, &FailedSampler, retention(10)));
+        assert_eq!(store.collection_health().unwrap().latest_success(), Some(latest));
+        assert_eq!(runtime.block_on(store.points()).unwrap().len(), 1);
+        assert_eq!(
+            health.status(latest + 180_001),
+            super::super::history_health::CollectionStatus::Stale
+        );
         runtime.shutdown_runtime_blocking().expect("shutdown");
     }
 

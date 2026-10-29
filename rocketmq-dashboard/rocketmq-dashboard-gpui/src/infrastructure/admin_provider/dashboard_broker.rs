@@ -20,11 +20,13 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(test)]
+use rocketmq_admin_core::core::dashboard::{DashboardConsumerList, DashboardTopicStats};
 use rocketmq_admin_core::core::{
     broker::{BrokerConfigPatchResult, PatchBrokerConfigRequest, QueryBrokerConfigGenerationRequest},
     dashboard::{
         DashboardBrokerConfig, DashboardBrokerInfo, DashboardBrokerList, DashboardBrokerRuntime, DashboardBrokerTarget,
-        DashboardConsumerList, DashboardProducerInfo, DashboardTopicInfo, DashboardTopicList, DashboardTopicStats,
+        DashboardProducerInfo, DashboardTopicInfo, DashboardTopicList,
     },
 };
 use rocketmq_dashboard_common::{EndpointAvailability, RuntimeEntry, redact_sensitive_entries, runtime_entries};
@@ -35,6 +37,7 @@ use super::{GpuiAdminProvider, ProviderFailure, mutation_for_revision, query_for
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct SafeTopicList {
     pub topics: Vec<String>,
+    pub application_topics: Vec<String>,
 }
 
 impl fmt::Debug for SafeTopicList {
@@ -47,6 +50,7 @@ impl fmt::Debug for SafeTopicList {
 }
 
 /// Offset fields required to calculate one Topic's current message count.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SafeTopicStats {
     pub topic: String,
@@ -54,6 +58,7 @@ pub(crate) struct SafeTopicStats {
     pub total_max_offset: i64,
 }
 
+#[cfg(test)]
 impl fmt::Debug for SafeTopicStats {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -66,6 +71,7 @@ impl fmt::Debug for SafeTopicStats {
 }
 
 /// Consumer evidence required by Overview.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SafeConsumerList {
     pub group_count: usize,
@@ -217,6 +223,7 @@ impl GpuiAdminProvider {
     }
 
     /// Loads the allowlisted offsets for one Topic.
+    #[cfg(test)]
     pub async fn topic_stats(
         self: &Arc<Self>,
         revision: u64,
@@ -234,6 +241,7 @@ impl GpuiAdminProvider {
     }
 
     /// Counts Consumer groups without retaining raw group metadata.
+    #[cfg(test)]
     pub async fn list_consumers(self: &Arc<Self>, revision: u64) -> Result<SafeConsumerList, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-dashboard-consumers", move |cancellation| async move {
@@ -361,7 +369,13 @@ impl GpuiAdminProvider {
 
 fn sanitize_topics(response: DashboardTopicList) -> SafeTopicList {
     let DashboardTopicList { items } = response;
+    let application_topics = items
+        .iter()
+        .filter(|item| rocketmq_admin_core::core::dashboard_metrics::is_dashboard_application_topic(&item.topic))
+        .map(|item| item.topic.clone())
+        .collect();
     SafeTopicList {
+        application_topics,
         topics: items
             .into_iter()
             .map(|DashboardTopicInfo { topic, .. }| topic)
@@ -369,6 +383,7 @@ fn sanitize_topics(response: DashboardTopicList) -> SafeTopicList {
     }
 }
 
+#[cfg(test)]
 fn sanitize_topic_stats(response: DashboardTopicStats) -> SafeTopicStats {
     let DashboardTopicStats {
         topic,
@@ -383,6 +398,7 @@ fn sanitize_topic_stats(response: DashboardTopicStats) -> SafeTopicStats {
     }
 }
 
+#[cfg(test)]
 fn sanitize_consumers(response: DashboardConsumerList) -> SafeConsumerList {
     let DashboardConsumerList { items } = response;
     SafeConsumerList {

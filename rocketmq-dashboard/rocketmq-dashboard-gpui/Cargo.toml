@@ -67,6 +67,7 @@ rand               = "0.9.3"
 num_cpus           = "1.17"
 
 config = "0.15.19"
+chrono = "0.4.45"
 
 parking_lot   = "0.12"
 dirs          = "7.0"

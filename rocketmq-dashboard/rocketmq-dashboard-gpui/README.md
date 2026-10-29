@@ -131,6 +131,34 @@ The application closes this runtime when the GPUI event loop exits.
 
 ## Development
 
+### Dashboard metrics and local history
+
+Topic Current keeps fractional rates and distinguishes observed zeroes from unavailable
+offsets or rates. It excludes system, retry and DLQ Topics. Each refresh reads rates for
+up to 200 application Topics in name order, with a 2,000 RPC budget; it selects at most
+20 by 24-hour production, then current production rate, then name. Those selected
+Topics receive offset-statistics queries and are ranked by stored message count.
+Incomplete or omitted coverage is shown as a partial ranking; this bounded window
+does not claim to find the busiest Topic outside its coverage. One Topic failure keeps
+the other observations available.
+
+Backlog requires complete Consumer-group discovery and a successful consumption
+observation from every discovered master target. Missing targets remain unknown;
+negative lag keeps its observed meaning.
+
+History uses an explicitly selected UTC calendar day. All topics shows registered
+Topic count, while a specific Topic shows its stored messages. Broker history offers
+registered Broker count and per-Broker production or consumption rates. Each query
+returns at most the latest 1,440 real observations, with UTC time labels, units and
+paged exact values. Refresh errors retain the previous successful page and its time.
+
+The collector is disabled by default. Set `settings.foundations.historyEnabled` to `true` in
+`config.json`, with a positive `settings.foundations.historyIntervalSeconds`, then reload configuration.
+The page shows disabled, warming, normal, partial or stale collection and the latest
+successful collection time for the active environment in this process. A sample is
+stale after three collection intervals. Existing retention limits and environment
+attribution apply to both count and resource series; missing samples are not filled.
+
 From this directory, select the checks relevant to a change:
 
 ```bash

@@ -51,9 +51,11 @@ use crate::core::AdminError;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
 
+mod dashboard_metrics;
 mod mutation;
 mod query;
 mod workspace;
+pub(super) use dashboard_metrics::dashboard_consumer_summary;
 
 use self::mutation::consumer_internal_topics;
 use self::mutation::resolve_consumer_target_broker_names;

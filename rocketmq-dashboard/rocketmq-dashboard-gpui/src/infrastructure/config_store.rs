@@ -640,6 +640,14 @@ impl DesktopConfigStore {
         self.document.read().as_ref().map(DesktopDocument::catalog)
     }
 
+    pub fn history_settings(&self) -> Option<FoundationFlags> {
+        self.document
+            .read()
+            .as_ref()
+            .and_then(|document| document.config().ok())
+            .map(|config| config.foundations)
+    }
+
     pub fn environment_snapshot(&self) -> Result<EnvironmentConnectionSnapshot, ConfigStoreFailure> {
         let document = self.document.read();
         let document = document

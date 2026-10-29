@@ -31,6 +31,7 @@ pub mod consumer_observation;
 pub mod consumer_runtime;
 pub mod consumer_workspace;
 pub mod dashboard;
+pub mod dashboard_metrics;
 pub mod error;
 pub mod error_view;
 pub mod infrastructure_observation;

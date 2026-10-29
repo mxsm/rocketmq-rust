@@ -37,12 +37,15 @@ use super::{
 mod consumers;
 #[path = "admin_provider/dashboard_broker.rs"]
 mod dashboard_broker;
+#[path = "admin_provider/dashboard_metrics.rs"]
+mod dashboard_metrics;
 #[path = "admin_provider/topics.rs"]
 mod topics;
 
 pub(crate) use dashboard_broker::{
     SafeBrokerInfo, SafeBrokerList, SafeBrokerTarget, SafeConfigPatchOutcome, SafeConfigPatchRequest,
 };
+pub(crate) use dashboard_metrics::SafeTopicRate;
 pub(crate) use topics::{
     SafeTopicCreateRequest, SafeTopicDeleteBrokerRequest, SafeTopicDeleteRequest, SafeTopicOffsetRequest,
     SafeTopicPatchOutcome, SafeTopicQueuePatchRequest, SafeTopicSendRequest,

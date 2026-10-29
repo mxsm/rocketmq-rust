@@ -552,14 +552,14 @@ fn merge_producer_inventory_clients(
     }
 }
 
-struct GroupDiscovery {
-    groups: BTreeMap<String, ConsumerGroupMeta>,
+pub(super) struct GroupDiscovery {
+    pub(super) groups: BTreeMap<String, ConsumerGroupMeta>,
     successful_target_count: usize,
     target_count: usize,
-    failures: Vec<WorkspaceTargetFailure>,
+    pub(super) failures: Vec<WorkspaceTargetFailure>,
 }
 
-async fn discover_groups(
+pub(super) async fn discover_groups(
     admin: &rocketmq_client_rust::DefaultMQAdminExt,
     cluster_info: &ClusterInfo,
 ) -> GroupDiscovery {

@@ -16,6 +16,8 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
+#[cfg(test)]
+use rocketmq_admin_core::core::dashboard::{DashboardConsumerList, DashboardTopicStats};
 use rocketmq_admin_core::{
     client_adapter::{AdminBuilder, AdminSession, ClientRuntime},
     core::{
@@ -38,8 +40,9 @@ use rocketmq_admin_core::{
         },
         dashboard::{
             DashboardAdmin, DashboardBrokerConfig, DashboardBrokerList, DashboardBrokerRuntime, DashboardBrokerTarget,
-            DashboardConsumerList, DashboardProducerInfo, DashboardTopicList, DashboardTopicStats,
+            DashboardProducerInfo, DashboardTopicList,
         },
+        dashboard_metrics::{DashboardConsumerSummary, DashboardMetricsAdmin, DashboardTopicRates},
         security::AdminCredentials,
         topic::{
             DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicConfig, DetailedTopicConsumers,
@@ -61,7 +64,15 @@ pub(crate) type SessionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + '
 pub(crate) trait DashboardQuerySession: Send + Sync {
     fn health(&self) -> SessionFuture<'_, AdminResult<()>>;
     fn list_topics(&self) -> SessionFuture<'_, AdminResult<DashboardTopicList>>;
+    #[cfg(test)]
     fn topic_stats<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<DashboardTopicStats>>;
+    fn topic_rates<'a>(&'a self, _topics: &'a [String]) -> SessionFuture<'a, AdminResult<Vec<DashboardTopicRates>>> {
+        Box::pin(async { Err(unsupported_topic_session("topic_rates")) })
+    }
+    fn consumer_summary(&self) -> SessionFuture<'_, AdminResult<DashboardConsumerSummary>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_summary")) })
+    }
+    #[cfg(test)]
     fn list_consumers(&self) -> SessionFuture<'_, AdminResult<DashboardConsumerList>>;
     fn list_producers(&self) -> SessionFuture<'_, AdminResult<Vec<DashboardProducerInfo>>>;
     fn list_brokers(&self) -> SessionFuture<'_, AdminResult<DashboardBrokerList>>;
@@ -315,17 +326,54 @@ struct RealQuerySession {
 
 impl DashboardQuerySession for RealQuerySession {
     fn health(&self) -> SessionFuture<'_, AdminResult<()>> {
-        Box::pin(async { DashboardAdmin::dashboard_list_topics(&self.inner).await.map(|_| ()) })
+        Box::pin(async {
+            DashboardMetricsAdmin::dashboard_topic_names(&self.inner)
+                .await
+                .map(|_| ())
+        })
     }
 
     fn list_topics(&self) -> SessionFuture<'_, AdminResult<DashboardTopicList>> {
-        DashboardAdmin::dashboard_list_topics(&self.inner)
+        Box::pin(async move {
+            let names = DashboardMetricsAdmin::dashboard_topic_names(&self.inner).await?;
+            Ok(DashboardTopicList {
+                items: names
+                    .into_iter()
+                    .map(|topic| {
+                        let category =
+                            if rocketmq_admin_core::core::dashboard_metrics::is_dashboard_application_topic(&topic) {
+                                "NORMAL"
+                            } else {
+                                "SYSTEM"
+                            };
+                        rocketmq_admin_core::core::dashboard::DashboardTopicInfo {
+                            topic,
+                            category: category.into(),
+                            broker_name: None,
+                            read_queue_count: 0,
+                            write_queue_count: 0,
+                            perm: 0,
+                        }
+                    })
+                    .collect(),
+            })
+        })
     }
 
+    fn topic_rates<'a>(&'a self, topics: &'a [String]) -> SessionFuture<'a, AdminResult<Vec<DashboardTopicRates>>> {
+        DashboardMetricsAdmin::dashboard_topic_rates(&self.inner, topics)
+    }
+
+    fn consumer_summary(&self) -> SessionFuture<'_, AdminResult<DashboardConsumerSummary>> {
+        DashboardMetricsAdmin::dashboard_consumer_summary(&self.inner)
+    }
+
+    #[cfg(test)]
     fn topic_stats<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<DashboardTopicStats>> {
         DashboardAdmin::dashboard_topic_stats(&self.inner, topic)
     }
 
+    #[cfg(test)]
     fn list_consumers(&self) -> SessionFuture<'_, AdminResult<DashboardConsumerList>> {
         DashboardAdmin::dashboard_list_consumers(&self.inner)
     }
