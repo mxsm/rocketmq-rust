@@ -45,8 +45,8 @@ use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
+use crate::producer::message_producer::MessageProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
-use crate::producer::producer_backend::ProducerBackend;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
@@ -459,11 +459,11 @@ impl DefaultMQProducer {
     }
 
     pub async fn start(&mut self) -> crate::ClientResult<()> {
-        <Self as ProducerBackend>::start(self).await
+        <Self as MessageProducer>::start(self).await
     }
 
     pub async fn shutdown(&mut self) {
-        <Self as ProducerBackend>::shutdown(self).await;
+        <Self as MessageProducer>::shutdown(self).await;
     }
 
     /// Stops producer-owned work without shutting down the shared Client factory.
@@ -477,7 +477,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn fetch_publish_message_queues(&mut self, topic: &str) -> crate::ClientResult<Vec<MessageQueue>> {
-        <Self as ProducerBackend>::fetch_publish_message_queues(self, topic).await
+        <Self as MessageProducer>::fetch_publish_message_queues(self, topic).await
     }
 
     pub async fn create_topic(
@@ -487,7 +487,7 @@ impl DefaultMQProducer {
         queue_num: i32,
         attributes: HashMap<String, String>,
     ) -> crate::ClientResult<()> {
-        <Self as ProducerBackend>::create_topic(self, key, new_topic, queue_num, attributes).await
+        <Self as MessageProducer>::create_topic(self, key, new_topic, queue_num, attributes).await
     }
 
     pub async fn create_topic_with_flag(
@@ -498,24 +498,24 @@ impl DefaultMQProducer {
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
     ) -> crate::ClientResult<()> {
-        <Self as ProducerBackend>::create_topic_with_flag(self, key, new_topic, queue_num, topic_sys_flag, attributes)
+        <Self as MessageProducer>::create_topic_with_flag(self, key, new_topic, queue_num, topic_sys_flag, attributes)
             .await
     }
 
     pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> crate::ClientResult<i64> {
-        <Self as ProducerBackend>::search_offset(self, mq, timestamp).await
+        <Self as MessageProducer>::search_offset(self, mq, timestamp).await
     }
 
     pub async fn max_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
-        <Self as ProducerBackend>::max_offset(self, mq).await
+        <Self as MessageProducer>::max_offset(self, mq).await
     }
 
     pub async fn min_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
-        <Self as ProducerBackend>::min_offset(self, mq).await
+        <Self as MessageProducer>::min_offset(self, mq).await
     }
 
     pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
-        <Self as ProducerBackend>::earliest_msg_store_time(self, mq).await
+        <Self as MessageProducer>::earliest_msg_store_time(self, mq).await
     }
 
     pub async fn query_message(
@@ -526,25 +526,25 @@ impl DefaultMQProducer {
         begin: u64,
         end: u64,
     ) -> crate::ClientResult<QueryResult> {
-        <Self as ProducerBackend>::query_message(self, topic, key, max_num, begin, end).await
+        <Self as MessageProducer>::query_message(self, topic, key, max_num, begin, end).await
     }
 
     pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> crate::ClientResult<MessageExt> {
-        <Self as ProducerBackend>::view_message(self, topic, msg_id).await
+        <Self as MessageProducer>::view_message(self, topic, msg_id).await
     }
 
     pub async fn send<M>(&self, msg: M) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send(self, msg).await
+        <Self as MessageProducer>::send(self, msg).await
     }
 
     pub async fn send_with_timeout<M>(&self, msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_with_timeout(self, msg, timeout).await
+        <Self as MessageProducer>::send_with_timeout(self, msg, timeout).await
     }
 
     pub async fn send_with_callback<M, F>(&self, msg: M, send_callback: F) -> crate::ClientResult<()>
@@ -552,7 +552,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_with_callback(self, msg, send_callback).await
+        <Self as MessageProducer>::send_with_callback(self, msg, send_callback).await
     }
 
     pub async fn send_with_callback_timeout<F, M>(
@@ -565,21 +565,21 @@ impl DefaultMQProducer {
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_with_callback_timeout(self, msg, send_callback, timeout).await
+        <Self as MessageProducer>::send_with_callback_timeout(self, msg, send_callback, timeout).await
     }
 
     pub async fn send_oneway<M>(&self, msg: M) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_oneway(self, msg).await
+        <Self as MessageProducer>::send_oneway(self, msg).await
     }
 
     pub async fn send_to_queue<M>(&self, msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_to_queue(self, msg, mq).await
+        <Self as MessageProducer>::send_to_queue(self, msg, mq).await
     }
 
     pub async fn send_to_queue_with_timeout<M>(
@@ -591,7 +591,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_to_queue_with_timeout(self, msg, mq, timeout).await
+        <Self as MessageProducer>::send_to_queue_with_timeout(self, msg, mq, timeout).await
     }
 
     pub async fn send_to_queue_with_callback<M, F>(
@@ -604,7 +604,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_to_queue_with_callback(self, msg, mq, send_callback).await
+        <Self as MessageProducer>::send_to_queue_with_callback(self, msg, mq, send_callback).await
     }
 
     pub async fn send_to_queue_with_callback_timeout<M, F>(
@@ -618,14 +618,14 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_to_queue_with_callback_timeout(self, msg, mq, send_callback, timeout).await
+        <Self as MessageProducer>::send_to_queue_with_callback_timeout(self, msg, mq, send_callback, timeout).await
     }
 
     pub async fn send_oneway_to_queue<M>(&self, msg: M, mq: MessageQueue) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_oneway_to_queue(self, msg, mq).await
+        <Self as MessageProducer>::send_oneway_to_queue(self, msg, mq).await
     }
 
     pub async fn send_with_selector<M, S, T>(
@@ -639,7 +639,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
         T: Send + Sync,
     {
-        <Self as ProducerBackend>::send_with_selector(self, msg, selector, arg).await
+        <Self as MessageProducer>::send_with_selector(self, msg, selector, arg).await
     }
 
     pub async fn send_with_selector_timeout<M, S, T>(
@@ -654,7 +654,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
         T: Send + Sync,
     {
-        <Self as ProducerBackend>::send_with_selector_timeout(self, msg, selector, arg, timeout).await
+        <Self as MessageProducer>::send_with_selector_timeout(self, msg, selector, arg, timeout).await
     }
 
     pub async fn send_with_selector_callback<M, S, T>(
@@ -669,7 +669,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
         T: Send + Sync,
     {
-        <Self as ProducerBackend>::send_with_selector_callback(self, msg, selector, arg, send_callback).await
+        <Self as MessageProducer>::send_with_selector_callback(self, msg, selector, arg, send_callback).await
     }
 
     pub async fn send_with_selector_callback_timeout<M, S, T>(
@@ -685,7 +685,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_with_selector_callback_timeout(self, msg, selector, arg, send_callback, timeout)
+        <Self as MessageProducer>::send_with_selector_callback_timeout(self, msg, selector, arg, send_callback, timeout)
             .await
     }
 
@@ -695,7 +695,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_oneway_with_selector(self, msg, selector, arg).await
+        <Self as MessageProducer>::send_oneway_with_selector(self, msg, selector, arg).await
     }
 
     pub async fn send_message_in_transaction<T, M>(
@@ -707,28 +707,28 @@ impl DefaultMQProducer {
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_message_in_transaction(self, msg, arg).await
+        <Self as MessageProducer>::send_message_in_transaction(self, msg, arg).await
     }
 
     pub async fn send_batch<M>(&self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_batch(self, msgs).await
+        <Self as MessageProducer>::send_batch(self, msgs).await
     }
 
     pub async fn send_batch_with_timeout<M>(&self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_batch_with_timeout(self, msgs, timeout).await
+        <Self as MessageProducer>::send_batch_with_timeout(self, msgs, timeout).await
     }
 
     pub async fn send_batch_to_queue<M>(&self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_batch_to_queue(self, msgs, mq).await
+        <Self as MessageProducer>::send_batch_to_queue(self, msgs, mq).await
     }
 
     pub async fn send_batch_to_queue_with_timeout<M>(
@@ -740,7 +740,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_batch_to_queue_with_timeout(self, msgs, mq, timeout).await
+        <Self as MessageProducer>::send_batch_to_queue_with_timeout(self, msgs, mq, timeout).await
     }
 
     pub async fn send_batch_with_callback<M, F>(&self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
@@ -748,7 +748,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_batch_with_callback(self, msgs, f).await
+        <Self as MessageProducer>::send_batch_with_callback(self, msgs, f).await
     }
 
     pub async fn send_batch_with_callback_timeout<M, F>(
@@ -761,7 +761,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_batch_with_callback_timeout(self, msgs, f, timeout).await
+        <Self as MessageProducer>::send_batch_with_callback_timeout(self, msgs, f, timeout).await
     }
 
     pub async fn send_batch_to_queue_with_callback<M, F>(
@@ -774,7 +774,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_batch_to_queue_with_callback(self, msgs, mq, f).await
+        <Self as MessageProducer>::send_batch_to_queue_with_callback(self, msgs, mq, f).await
     }
 
     pub async fn send_batch_to_queue_with_callback_timeout<M, F>(
@@ -788,14 +788,14 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::send_batch_to_queue_with_callback_timeout(self, msgs, mq, f, timeout).await
+        <Self as MessageProducer>::send_batch_to_queue_with_callback_timeout(self, msgs, mq, f, timeout).await
     }
 
     pub async fn request<M>(&self, msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::request(self, msg, timeout).await
+        <Self as MessageProducer>::request(self, msg, timeout).await
     }
 
     pub async fn request_with_callback<F, M>(
@@ -808,7 +808,7 @@ impl DefaultMQProducer {
         F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::request_with_callback(self, msg, request_callback, timeout).await
+        <Self as MessageProducer>::request_with_callback(self, msg, request_callback, timeout).await
     }
 
     pub async fn request_with_selector<M, S, T>(
@@ -823,7 +823,7 @@ impl DefaultMQProducer {
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::request_with_selector(self, msg, selector, arg, timeout).await
+        <Self as MessageProducer>::request_with_selector(self, msg, selector, arg, timeout).await
     }
 
     pub async fn request_with_selector_callback<M, S, T, F>(
@@ -840,7 +840,7 @@ impl DefaultMQProducer {
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::request_with_selector_callback(self, msg, selector, arg, request_callback, timeout)
+        <Self as MessageProducer>::request_with_selector_callback(self, msg, selector, arg, request_callback, timeout)
             .await
     }
 
@@ -853,7 +853,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::request_to_queue(self, msg, mq, timeout).await
+        <Self as MessageProducer>::request_to_queue(self, msg, mq, timeout).await
     }
 
     pub async fn request_to_queue_with_callback<M, F>(
@@ -867,7 +867,7 @@ impl DefaultMQProducer {
         F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::request_to_queue_with_callback(self, msg, mq, request_callback, timeout).await
+        <Self as MessageProducer>::request_to_queue_with_callback(self, msg, mq, request_callback, timeout).await
     }
 
     pub async fn recall_message(
@@ -875,7 +875,7 @@ impl DefaultMQProducer {
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
     ) -> crate::ClientResult<String> {
-        <Self as ProducerBackend>::recall_message(self, topic, recall_handle).await
+        <Self as MessageProducer>::recall_message(self, topic, recall_handle).await
     }
 
     #[inline]
@@ -1682,7 +1682,7 @@ impl DefaultMQProducer {
     }
 }
 
-impl ProducerBackend for DefaultMQProducer {
+impl MessageProducer for DefaultMQProducer {
     async fn start(&mut self) -> crate::ClientResult<()> {
         let producer_group_clone = self.producer_config.snapshot().producer_group.clone();
         let producer_group = self.with_namespace(&producer_group_clone);
@@ -2418,7 +2418,7 @@ mod facade_tests {
     use super::ProducerConfig;
     use super::StableConfig;
     use crate::base::client_config::ClientConfig;
-    use crate::producer::producer_backend::ProducerBackend;
+    use crate::producer::message_producer::MessageProducer;
     use crate::producer::send_result::SendResult;
 
     fn test_runtime() -> Arc<crate::runtime::ClientRuntime> {
@@ -2559,7 +2559,7 @@ mod facade_tests {
     fn assert_shared_borrow_contract_rejects<T>(result: ClientResult<T>) {
         assert!(
             result.is_err(),
-            "expected shared-borrow ProducerBackend method to reject an unstarted producer"
+            "expected shared-borrow MessageProducer method to reject an unstarted producer"
         );
     }
 
@@ -2590,27 +2590,27 @@ mod facade_tests {
     }
 
     #[tokio::test]
-    async fn default_mq_producer_satisfies_shared_borrow_producer_backend_send_contract() {
+    async fn default_mq_producer_satisfies_shared_borrow_message_producer_send_contract() {
         let producer = unstarted_producer();
 
-        assert_shared_borrow_contract_rejects(ProducerBackend::send(&producer, message()).await);
-        assert_shared_borrow_contract_rejects(ProducerBackend::send_with_timeout(&producer, message(), 1000).await);
+        assert_shared_borrow_contract_rejects(MessageProducer::send(&producer, message()).await);
+        assert_shared_borrow_contract_rejects(MessageProducer::send_with_timeout(&producer, message(), 1000).await);
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_with_callback(&producer, message(), test_send_callback).await,
+            MessageProducer::send_with_callback(&producer, message(), test_send_callback).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_with_callback_timeout(&producer, message(), test_send_callback, 1000).await,
+            MessageProducer::send_with_callback_timeout(&producer, message(), test_send_callback, 1000).await,
         );
-        assert_shared_borrow_contract_rejects(ProducerBackend::send_oneway(&producer, message()).await);
-        assert_shared_borrow_contract_rejects(ProducerBackend::send_to_queue(&producer, message(), queue()).await);
+        assert_shared_borrow_contract_rejects(MessageProducer::send_oneway(&producer, message()).await);
+        assert_shared_borrow_contract_rejects(MessageProducer::send_to_queue(&producer, message(), queue()).await);
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_to_queue_with_timeout(&producer, message(), queue(), 1000).await,
-        );
-        assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_to_queue_with_callback(&producer, message(), queue(), test_send_callback).await,
+            MessageProducer::send_to_queue_with_timeout(&producer, message(), queue(), 1000).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_to_queue_with_callback_timeout(
+            MessageProducer::send_to_queue_with_callback(&producer, message(), queue(), test_send_callback).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            MessageProducer::send_to_queue_with_callback_timeout(
                 &producer,
                 message(),
                 queue(),
@@ -2620,13 +2620,13 @@ mod facade_tests {
             .await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_with_selector(&producer, message(), test_selector, 1).await,
+            MessageProducer::send_with_selector(&producer, message(), test_selector, 1).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_with_selector_timeout(&producer, message(), test_selector, 1, 1000).await,
+            MessageProducer::send_with_selector_timeout(&producer, message(), test_selector, 1, 1000).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_with_selector_callback(
+            MessageProducer::send_with_selector_callback(
                 &producer,
                 message(),
                 test_selector,
@@ -2636,7 +2636,7 @@ mod facade_tests {
             .await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_with_selector_callback_timeout(
+            MessageProducer::send_with_selector_callback_timeout(
                 &producer,
                 message(),
                 test_selector,
@@ -2646,29 +2646,29 @@ mod facade_tests {
             )
             .await,
         );
-        assert_shared_borrow_contract_rejects(ProducerBackend::send_batch(&producer, vec![message()]).await);
+        assert_shared_borrow_contract_rejects(MessageProducer::send_batch(&producer, vec![message()]).await);
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_batch_with_timeout(&producer, vec![message()], 1000).await,
+            MessageProducer::send_batch_with_timeout(&producer, vec![message()], 1000).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_batch_with_callback(&producer, vec![message()], test_send_callback).await,
+            MessageProducer::send_batch_with_callback(&producer, vec![message()], test_send_callback).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_batch_with_callback_timeout(&producer, vec![message()], test_send_callback, 1000)
+            MessageProducer::send_batch_with_callback_timeout(&producer, vec![message()], test_send_callback, 1000)
                 .await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_batch_to_queue(&producer, vec![message()], queue()).await,
+            MessageProducer::send_batch_to_queue(&producer, vec![message()], queue()).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_batch_to_queue_with_timeout(&producer, vec![message()], queue(), 1000).await,
+            MessageProducer::send_batch_to_queue_with_timeout(&producer, vec![message()], queue(), 1000).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_batch_to_queue_with_callback(&producer, vec![message()], queue(), test_send_callback)
+            MessageProducer::send_batch_to_queue_with_callback(&producer, vec![message()], queue(), test_send_callback)
                 .await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::send_batch_to_queue_with_callback_timeout(
+            MessageProducer::send_batch_to_queue_with_callback_timeout(
                 &producer,
                 vec![message()],
                 queue(),
@@ -2678,23 +2678,23 @@ mod facade_tests {
             .await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::recall_message(&producer, "test-topic", "recall-handle-123").await,
+            MessageProducer::recall_message(&producer, "test-topic", "recall-handle-123").await,
         );
     }
 
     #[tokio::test]
-    async fn default_mq_producer_satisfies_shared_borrow_producer_backend_request_contract() {
+    async fn default_mq_producer_satisfies_shared_borrow_message_producer_request_contract() {
         let producer = unstarted_producer();
 
-        assert_shared_borrow_contract_rejects(ProducerBackend::request(&producer, message(), 1000).await);
+        assert_shared_borrow_contract_rejects(MessageProducer::request(&producer, message(), 1000).await);
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::request_with_callback(&producer, message(), test_request_callback, 1000).await,
+            MessageProducer::request_with_callback(&producer, message(), test_request_callback, 1000).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::request_with_selector(&producer, message(), test_selector, 1, 1000).await,
+            MessageProducer::request_with_selector(&producer, message(), test_selector, 1, 1000).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::request_with_selector_callback(
+            MessageProducer::request_with_selector_callback(
                 &producer,
                 message(),
                 test_selector,
@@ -2705,10 +2705,10 @@ mod facade_tests {
             .await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::request_to_queue(&producer, message(), queue(), 1000).await,
+            MessageProducer::request_to_queue(&producer, message(), queue(), 1000).await,
         );
         assert_shared_borrow_contract_rejects(
-            ProducerBackend::request_to_queue_with_callback(&producer, message(), queue(), test_request_callback, 1000)
+            MessageProducer::request_to_queue_with_callback(&producer, message(), queue(), test_request_callback, 1000)
                 .await,
         );
     }

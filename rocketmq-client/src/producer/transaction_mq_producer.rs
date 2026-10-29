@@ -24,7 +24,7 @@ use rocketmq_model::common::message::MessageTrait;
 
 use crate::base::query_result::QueryResult;
 use crate::producer::default_mq_producer::DefaultMQProducer;
-use crate::producer::producer_backend::ProducerBackend;
+use crate::producer::message_producer::MessageProducer;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_listener::ArcTransactionListener;
@@ -106,11 +106,11 @@ impl TransactionMQProducer {
     }
 
     pub async fn start(&mut self) -> crate::ClientResult<()> {
-        <Self as ProducerBackend>::start(self).await
+        <Self as MessageProducer>::start(self).await
     }
 
     pub async fn shutdown(&mut self) {
-        <Self as ProducerBackend>::shutdown(self).await;
+        <Self as MessageProducer>::shutdown(self).await;
     }
 
     pub async fn send_message_in_transaction<T, M>(
@@ -122,7 +122,7 @@ impl TransactionMQProducer {
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
     {
-        <Self as ProducerBackend>::send_message_in_transaction(self, msg, arg).await
+        <Self as MessageProducer>::send_message_in_transaction(self, msg, arg).await
     }
 
     pub fn set_transaction_listener(&mut self, transaction_listener: impl TransactionListener) {
@@ -215,7 +215,7 @@ impl ClientSessionProvider for TransactionMQProducer {
     }
 }
 
-impl ProducerBackend for TransactionMQProducer {
+impl MessageProducer for TransactionMQProducer {
     async fn start(&mut self) -> crate::ClientResult<()> {
         let transaction_listener = self.transaction_producer_config.transaction_listener.clone();
         let default_mqproducer_impl = self
