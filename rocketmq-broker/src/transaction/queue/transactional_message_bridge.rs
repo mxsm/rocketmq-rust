@@ -347,6 +347,14 @@ where
         result.put_message_status() == PutMessageStatus::PutOk
     }
 
+    /// Returns whether the live store role is `Slave`, including roles the controller assigned
+    /// after startup.
+    pub(crate) fn is_message_store_slave(&self) -> bool {
+        self.escape_bridge
+            .upgrade()
+            .is_some_and(|escape_bridge| escape_bridge.is_message_store_slave())
+    }
+
     pub async fn escape_message(&self, message_inner: MessageExtBrokerInner) -> bool {
         let Some(escape_bridge) = self.escape_bridge.upgrade() else {
             return false;
