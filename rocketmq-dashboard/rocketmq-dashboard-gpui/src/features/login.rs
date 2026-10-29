@@ -17,8 +17,8 @@
 use std::fmt;
 
 use gpui::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _,
+    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Styled as _, Window,
+    div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
     Disableable as _,
@@ -246,6 +246,7 @@ impl LoginForm {
             })
             .child(
                 Button::new("login-submit")
+                    .debug_selector(|| "login-submit".to_owned())
                     .label(if self.is_submitting() {
                         "Signing in…"
                     } else {

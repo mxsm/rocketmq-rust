@@ -83,7 +83,7 @@ pub enum ConsumerTab {
     OffsetActions,
 }
 
-/// Every route exposed by Delivery 01.
+/// Every navigation destination, including pages that are not yet available.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AppRoute {
     /// Authentication form.
@@ -120,7 +120,53 @@ pub enum AppRoute {
     Proxy,
 }
 
+/// The implemented page backing a route, or the reason it cannot be used.
+///
+/// This is the shell's single capability registry. A navigation destination alone does not imply
+/// that its queries or operations are implemented.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageCapability {
+    Login,
+    Dashboard,
+    Brokers,
+    Topics,
+    Consumers,
+    Producers,
+    OpsSettings,
+    Proxy,
+    Unavailable { reason: &'static str },
+}
+
 impl AppRoute {
+    /// Selects only pages backed by the current production implementation.
+    pub(crate) const fn page_capability(&self) -> PageCapability {
+        match self {
+            Self::Login => PageCapability::Login,
+            Self::Dashboard => PageCapability::Dashboard,
+            Self::Brokers | Self::BrokerDetail { .. } => PageCapability::Brokers,
+            Self::Topics | Self::TopicDetail { .. } => PageCapability::Topics,
+            Self::Consumers | Self::ConsumerDetail { .. } => PageCapability::Consumers,
+            Self::Producers => PageCapability::Producers,
+            Self::OpsSettings => PageCapability::OpsSettings,
+            Self::Proxy => PageCapability::Proxy,
+            Self::Messages => PageCapability::Unavailable {
+                reason: "Message search and message details are not yet available in this desktop app.",
+            },
+            Self::DlqMessages => PageCapability::Unavailable {
+                reason: "Dead-letter message search and recovery are not yet available in this desktop app.",
+            },
+            Self::MessageTrace => PageCapability::Unavailable {
+                reason: "Message trace lookup is not yet available in this desktop app.",
+            },
+            Self::Acl => PageCapability::Unavailable {
+                reason: "Access-control management is not yet available in this desktop app.",
+            },
+            Self::Monitors => PageCapability::Unavailable {
+                reason: "Monitoring rule management and evaluation are not yet available in this desktop app.",
+            },
+        }
+    }
+
     /// Parses a path. Compatibility aliases are accepted only at this boundary.
     pub fn parse(path: &str) -> Result<Self, RouteRejection> {
         let path = path.split_once('?').map_or(path, |(path, _)| path);
