@@ -1930,7 +1930,7 @@ where
             msg_ext.msg_id.clone()
         };
         MessageAccessor::set_origin_message_id(&mut msg_inner, origin_msg_id);
-        msg_inner.properties_string = message_properties_to_string(msg_ext.get_properties());
+        msg_inner.properties_string = message_properties_to_string(msg_inner.get_properties());
 
         let inner_topic = msg_inner.get_topic().clone();
         let mut response = self.context.command_factory.create_success_response_command();
