@@ -587,7 +587,13 @@ impl AppServices {
         let monitor_store = MonitorStore::with_config_store(Arc::clone(&store));
         let dashboard = admin_provider
             .as_ref()
-            .map(|provider| dashboard::DashboardService::new(Arc::clone(provider), Arc::clone(&history_store)))
+            .map(|provider| {
+                dashboard::DashboardService::new(
+                    Arc::clone(provider),
+                    Arc::clone(&history_store),
+                    history_context.clone(),
+                )
+            })
             .unwrap_or_else(dashboard::DashboardService::unavailable);
         let brokers = admin_provider
             .as_ref()
