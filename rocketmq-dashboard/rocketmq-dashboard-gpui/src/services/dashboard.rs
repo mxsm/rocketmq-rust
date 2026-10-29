@@ -21,6 +21,9 @@ use rocketmq_dashboard_common::{
     HistoryMetricKind, HistoryPoint, Observed, TopicCurrentMetric, broker_history_series_identity,
     project_dashboard_overview, rank_brokers, rank_topics, topic_current_from_offsets,
 };
+use rocketmq_runtime::ChildServiceContext;
+
+use super::RuntimeBridge;
 
 use crate::{
     infrastructure::{
@@ -37,6 +40,7 @@ use crate::{
 pub struct DashboardService {
     provider: Option<Arc<GpuiAdminProvider>>,
     history: Option<Arc<HistoryStore>>,
+    history_runtime: Option<RuntimeBridge>,
 }
 
 /// Overview data plus a low-cardinality partial-failure warning count.
@@ -53,10 +57,19 @@ impl DashboardOverviewLoad {
 }
 
 impl DashboardService {
-    pub(crate) fn new(provider: Arc<GpuiAdminProvider>, history: Arc<HistoryStore>) -> Arc<Self> {
+    pub(crate) fn new(
+        provider: Arc<GpuiAdminProvider>,
+        history: Arc<HistoryStore>,
+        history_context: ChildServiceContext,
+    ) -> Arc<Self> {
         Arc::new(Self {
             provider: Some(provider),
             history: Some(history),
+            history_runtime: Some(RuntimeBridge {
+                context: history_context,
+                #[cfg(test)]
+                completion: None,
+            }),
         })
     }
 
@@ -64,6 +77,7 @@ impl DashboardService {
         Arc::new(Self {
             provider: None,
             history: None,
+            history_runtime: None,
         })
     }
 
@@ -158,28 +172,14 @@ impl DashboardService {
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
-        let history = self.history()?;
-        let snapshot = history.environment_snapshot().map_err(history_error)?;
-        validate_history_revision(snapshot.as_ref(), revision)?;
-        match snapshot {
-            Some(snapshot) => {
-                history
-                    .query_environment(
-                        snapshot.environment_id,
-                        HistoryMetricKind::TopicMessages,
-                        topic,
-                        start_epoch_ms,
-                        end_epoch_ms,
-                    )
-                    .await
-            }
-            None => {
-                history
-                    .query(HistoryMetricKind::TopicMessages, topic, start_epoch_ms, end_epoch_ms)
-                    .await
-            }
-        }
-        .map_err(history_error)
+        self.query_history(
+            revision,
+            HistoryMetricKind::TopicMessages,
+            topic,
+            start_epoch_ms,
+            end_epoch_ms,
+        )
+        .await
     }
 
     /// Reads only persisted real points for a complete Broker identity.
@@ -201,19 +201,48 @@ impl DashboardService {
                 false,
             ));
         }
-        let history = self.history()?;
         let series = broker_history_series_identity(&identity);
+        self.query_history(revision, metric, series, start_epoch_ms, end_epoch_ms)
+            .await
+    }
+
+    async fn query_history(
+        &self,
+        revision: u64,
+        metric: HistoryMetricKind,
+        series: String,
+        start_epoch_ms: u64,
+        end_epoch_ms: u64,
+    ) -> Result<Vec<HistoryPoint>, UiError> {
+        let history = Arc::clone(self.history()?);
+        // Capture attribution before runtime admission: a queued read must never follow a new profile.
         let snapshot = history.environment_snapshot().map_err(history_error)?;
         validate_history_revision(snapshot.as_ref(), revision)?;
-        match snapshot {
-            Some(snapshot) => {
-                history
-                    .query_environment(snapshot.environment_id, metric, series, start_epoch_ms, end_epoch_ms)
-                    .await
-            }
-            None => history.query(metric, series, start_epoch_ms, end_epoch_ms).await,
+        let environment_id = snapshot.as_ref().map(|snapshot| snapshot.environment_id.clone());
+        let query_history = Arc::clone(&history);
+        let runtime = self.history_runtime.as_ref().ok_or_else(capability_unavailable)?;
+        // Storage executor waits require Tokio's timer driver; GPUI only polls the bridge receiver.
+        let points = runtime
+            .run("gpui-history-query", async move {
+                match environment_id {
+                    Some(environment_id) => {
+                        query_history
+                            .query_environment(environment_id, metric, series, start_epoch_ms, end_epoch_ms)
+                            .await
+                    }
+                    None => query_history.query(metric, series, start_epoch_ms, end_epoch_ms).await,
+                }
+                .map_err(history_error)
+            })
+            .await?;
+        if history.environment_snapshot().map_err(history_error)? != snapshot {
+            return Err(UiError::new(
+                "The connection changed while History was queried.",
+                UiErrorCode::Connection,
+                true,
+            ));
         }
-        .map_err(history_error)
+        Ok(points)
     }
 
     fn provider(&self) -> Result<&Arc<GpuiAdminProvider>, UiError> {
@@ -441,6 +470,10 @@ fn history_error(source: crate::infrastructure::config_store::ConfigStoreFailure
 }
 
 #[cfg(test)]
+#[path = "dashboard_history_tests.rs"]
+mod history_runtime_tests;
+
+#[cfg(test)]
 mod tests {
     use rocketmq_dashboard_common::EndpointAvailability;
 
@@ -463,12 +496,16 @@ mod tests {
         let configuration = DesktopConfigStore::new(directory.path().join("config.json"), context.clone());
         let history = HistoryStore::with_config_store(
             directory.path().join("history.json"),
-            context,
+            context.clone(),
             Arc::clone(&configuration),
         );
         let service = DashboardService {
             provider: None,
             history: Some(Arc::clone(&history)),
+            history_runtime: Some(RuntimeBridge {
+                context,
+                completion: None,
+            }),
         };
         runtime.block_on(async {
             let first = configuration.load().await.unwrap();

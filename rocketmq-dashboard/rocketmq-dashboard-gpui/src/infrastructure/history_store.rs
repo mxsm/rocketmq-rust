@@ -59,6 +59,11 @@ pub struct HistoryStore {
 }
 
 impl HistoryStore {
+    #[cfg(test)]
+    pub(crate) async fn pause_queries(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.gate.lock().await
+    }
+
     pub fn environment_snapshot(
         &self,
     ) -> Result<Option<rocketmq_dashboard_common::EnvironmentConnectionSnapshot>, ConfigStoreFailure> {
