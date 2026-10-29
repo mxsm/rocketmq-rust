@@ -42,7 +42,10 @@ use super::{
 };
 
 /// Current on-disk schema understood by this delivery.
-pub const CONFIG_SCHEMA_VERSION: u32 = 3;
+pub const CONFIG_SCHEMA_VERSION: u32 = 4;
+
+#[path = "monitor_commit.rs"]
+mod monitor_commit;
 /// Environment override used by tests, packaged builds, and portable deployments.
 pub const CONFIG_PATH_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH";
 
@@ -752,10 +755,7 @@ impl DesktopConfigStore {
     }
 
     /// Commits a Monitor edit and its operation record under the configuration writer lock.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "P01 retains atomic Monitor commits for the P09 rule editor")
-    )]
+    #[cfg(test)]
     pub async fn save_monitor(
         &self,
         rule: Option<StoredMonitorRule>,

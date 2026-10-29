@@ -60,6 +60,32 @@ choice to keep or adopt authoritative values. Only conflicted Brokers remain
 selected after rebasing, so an already applied or unknown write is not replayed.
 Message bodies are omitted from summaries and cleared when the Send dialog closes.
 
+## Monitor rule configuration
+
+The Monitor rules page lists and searches consumer-group threshold configurations
+for the selected environment. Min Count is a nonnegative consumer count (up to
+2,147,483,647); Max Diff Total is a nonnegative backlog message count (up to
+9,223,372,036,854,775,807). This page configures rules only: it does not evaluate
+metrics, produce alerts, or send notifications.
+
+Rule identity is Environment ID plus Consumer Group. Creating requires revision
+zero; editing and deleting require the observed positive rule revision. Conflicts
+show the authoritative state, preserve the open draft, and require an explicit
+revision reconfirmation followed by another submission. A deleted rule cannot be
+silently removed again, and recreated rules receive fresh revisions. Rule write
+times are displayed in UTC.
+
+Legacy entries retain their original ID, Group, and enabled setting. They remain
+marked as needing thresholds, or environment assignment and thresholds, until
+the user explicitly completes them. Empty legacy thresholds and unknown write
+times are never replaced by valid-looking defaults. An unassigned entry can be
+assigned explicitly to the selected environment from its completion dialog.
+
+Accepted changes remain application-owned when a dialog closes. Rule state,
+its local operation record, and its terminal P11 audit event share one canonical
+atomic file replacement; configuration revision checks also prevent writes after
+the connection or environment changes.
+
 ## Architecture and configuration
 
 [src/main.rs](src/main.rs) initializes the GPUI component library and application
@@ -96,10 +122,12 @@ TLS, or VIP settings preserves its persistent identity. History and Monitor
 rules belong to that identity, while the configuration revision identifies a
 particular connection generation.
 
-The version 3 configuration document holds profiles, global settings, Monitor
+The version 4 configuration document holds profiles, global settings, Monitor
 rules, local operation records, and the desktop audit journal in one atomic replacement. Metric samples
 remain in the separately versioned `history.json`. Version 1 configuration and
-history files, version 2 profile documents, and legacy Monitor arrays are migrated on startup. Legacy points
+history files, version 2/3 profile documents, and legacy Monitor arrays are migrated on startup. The nested
+Monitor document is version 2. Migration uses the same atomic candidate replacement;
+newer unsupported versions and failed replacements preserve their source. Legacy points
 and rules without environment evidence remain unassigned and are excluded from
 the selected environment. Legacy rules also require thresholds before they can
 be evaluated; the Monitor lifecycle still performs no evaluation. The original
@@ -114,7 +142,7 @@ new complete document; unfinished candidate files are not treated as committed
 state. Configuration and Monitor changes carry their operation record in the
 same commit as their terminal audit event.
 
-Accepted Broker, Topic, Consumer, and configuration changes belong to the application,
+Accepted Broker, Topic, Consumer, Monitor, and configuration changes belong to the application,
 so closing a Sheet or signing out only drops the old view's result receiver. External
 changes first save an accepted-operation record and then save one terminal outcome;
 these two writes do not provide a transaction with RocketMQ. Shutdown drains owned
@@ -131,7 +159,7 @@ separate result facts. A failed terminal audit write preserves the
 business result and displays an application warning; **Retry audit write** only retries
 persistence. The journal retains at most 10,000 terminal events within 31 days and
 128 pending requests. Service queries support bounded filtering and stable cursors;
-the Audit query page and future Message, DLQ, ACL, and Monitor editor hooks are later
+the Audit query page and future DLQ and ACL editor hooks are later
 deliveries. These records describe this desktop's operations and are not a tamper-proof
 or organization-wide audit log.
 

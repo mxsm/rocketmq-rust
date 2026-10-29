@@ -76,7 +76,7 @@ fn legacy_config_and_rules_migrate_without_attributing_the_rules() {
     );
     let document: DesktopDocument = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(document.schema_version, CONFIG_SCHEMA_VERSION);
-    assert_eq!(document.monitors.schema_version, 1);
+    assert_eq!(document.monitors.schema_version, 2);
     assert!(document.monitors.rules[0].environment_id.is_none());
     runtime.shutdown_runtime_blocking().unwrap();
 }

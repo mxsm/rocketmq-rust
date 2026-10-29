@@ -101,7 +101,7 @@ pub fn navigation_groups() -> Vec<SidebarGroup> {
                 },
                 SidebarItem {
                     route: AppRoute::Monitors,
-                    label: "Monitors",
+                    label: "Monitor rules",
                     icon: IconName::Bell,
                 },
                 SidebarItem {

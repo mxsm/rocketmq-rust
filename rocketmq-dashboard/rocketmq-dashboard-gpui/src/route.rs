@@ -133,6 +133,7 @@ pub(crate) enum PageCapability {
     Consumers,
     Producers,
     Messages,
+    Monitors,
     OpsSettings,
     Proxy,
     Unavailable { reason: &'static str },
@@ -148,6 +149,7 @@ impl AppRoute {
             Self::Topics | Self::TopicDetail { .. } => PageCapability::Topics,
             Self::Consumers | Self::ConsumerDetail { .. } => PageCapability::Consumers,
             Self::Producers => PageCapability::Producers,
+            Self::Monitors => PageCapability::Monitors,
             Self::OpsSettings => PageCapability::OpsSettings,
             Self::Proxy => PageCapability::Proxy,
             Self::Messages => PageCapability::Messages,
@@ -159,9 +161,6 @@ impl AppRoute {
             },
             Self::Acl => PageCapability::Unavailable {
                 reason: "Access-control management is not yet available in this desktop app.",
-            },
-            Self::Monitors => PageCapability::Unavailable {
-                reason: "Monitoring rule management and evaluation are not yet available in this desktop app.",
             },
         }
     }
@@ -244,7 +243,7 @@ impl AppRoute {
             Self::DlqMessages => "DLQ Messages",
             Self::MessageTrace => "Message Trace",
             Self::Acl => "Access Control",
-            Self::Monitors => "Monitors",
+            Self::Monitors => "Monitor rules",
             Self::OpsSettings => "Operations Settings",
             Self::Proxy => "Proxy",
         }

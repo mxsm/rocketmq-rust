@@ -140,6 +140,7 @@ impl SensitiveFeatureCache {
 
 /// Legacy content entities constructed once and reused on route changes.
 struct LegacyPageCache {
+    monitors: Entity<crate::features::monitors::MonitorsView>,
     dashboard: Entity<DashboardView>,
     brokers: Entity<BrokersView>,
     topics: Entity<TopicsView>,
@@ -154,6 +155,7 @@ struct LegacyPageCache {
 impl LegacyPageCache {
     fn new(window: &mut Window, services: &AppServices, cx: &mut Context<RocketmqDashboard>) -> Self {
         Self {
+            monitors: cx.new(|cx| crate::features::monitors::MonitorsView::new(window, services.clone(), 0, cx)),
             dashboard: cx.new(|cx| DashboardView::new(window, services.clone(), 0, cx)),
             brokers: cx.new(|cx| BrokersView::new(window, services.clone(), 0, cx)),
             topics: cx.new(|cx| TopicsView::new(window, services.clone(), 0, cx)),
@@ -171,8 +173,9 @@ impl LegacyPageCache {
     }
 
     #[cfg(test)]
-    fn entity_ids(&self) -> [gpui::EntityId; 9] {
+    fn entity_ids(&self) -> [gpui::EntityId; 10] {
         [
+            self.monitors.entity_id(),
             self.dashboard.entity_id(),
             self.brokers.entity_id(),
             self.topics.entity_id(),
@@ -391,6 +394,9 @@ impl RocketmqDashboard {
                 self.legacy_pages.messages.update(cx, |view, cx| {
                     view.set_revision(snapshot.configuration_revision, window, cx)
                 });
+                self.legacy_pages
+                    .monitors
+                    .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
                 self.session = if snapshot.has_valid_session {
                     SessionState::restored()
                 } else {
@@ -451,6 +457,7 @@ impl RocketmqDashboard {
         self.sync_broker_route(window, cx);
         self.sync_topic_route(window, cx);
         self.sync_consumer_route(window, cx);
+        self.sync_monitor_route(window, cx);
         cx.notify();
     }
 
@@ -466,6 +473,7 @@ impl RocketmqDashboard {
             self.sync_broker_route(window, cx);
             self.sync_topic_route(window, cx);
             self.sync_consumer_route(window, cx);
+            self.sync_monitor_route(window, cx);
             cx.notify();
         }
     }
@@ -482,6 +490,7 @@ impl RocketmqDashboard {
             self.sync_broker_route(window, cx);
             self.sync_topic_route(window, cx);
             self.sync_consumer_route(window, cx);
+            self.sync_monitor_route(window, cx);
             cx.notify();
         }
     }
@@ -557,6 +566,7 @@ impl RocketmqDashboard {
                             dashboard.sync_broker_route(window, cx);
                             dashboard.sync_topic_route(window, cx);
                             dashboard.sync_consumer_route(window, cx);
+                            dashboard.sync_monitor_route(window, cx);
                             cx.notify();
                         }
                         PendingDiscardAction::Forward => {
@@ -565,6 +575,7 @@ impl RocketmqDashboard {
                             dashboard.sync_broker_route(window, cx);
                             dashboard.sync_topic_route(window, cx);
                             dashboard.sync_consumer_route(window, cx);
+                            dashboard.sync_monitor_route(window, cx);
                             cx.notify();
                         }
                         PendingDiscardAction::CloseWindow => window.remove_window(),
@@ -661,6 +672,9 @@ impl RocketmqDashboard {
             self.legacy_pages
                 .messages
                 .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
+            self.legacy_pages
+                .monitors
+                .update(cx, |view, cx| view.set_revision(event.revision, cx));
             window.close_all_dialogs(cx);
             window.clear_notifications(cx);
         }
@@ -735,6 +749,9 @@ impl RocketmqDashboard {
         self.legacy_pages
             .messages
             .update(cx, |view, cx| view.set_revision(revision, window, cx));
+        self.legacy_pages
+            .monitors
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
         self.legacy_pages
             .ops
             .update(cx, |view, cx| view.clear_environment_drafts(window, cx));
@@ -1304,6 +1321,13 @@ impl RocketmqDashboard {
             .child(self.render_fullscreen_button(window, cx))
     }
 
+    fn sync_monitor_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active = matches!(self.history.current(), AppRoute::Monitors);
+        self.legacy_pages
+            .monitors
+            .update(cx, |view, cx| view.set_active(active, window, cx));
+    }
+
     fn render_page_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = cx.theme();
         let route = self.history.current().clone();
@@ -1331,6 +1355,10 @@ impl RocketmqDashboard {
             PageCapability::Messages => (
                 "Search real messages, inspect bounded details, and confirm a direct-consume attempt.",
                 div().size_full().child(self.legacy_pages.messages.clone()),
+            ),
+            PageCapability::Monitors => (
+                "Configure persisted consumer-group thresholds. Evaluation and notifications are not implemented.",
+                div().size_full().child(self.legacy_pages.monitors.clone()),
             ),
             PageCapability::OpsSettings => (
                 "Manage NameServers, transport security, sessions, and local storage.",
