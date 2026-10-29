@@ -28,12 +28,16 @@ use crate::producer::transaction_send_result::TransactionSendResult;
 
 fn unsupported_mq_admin_operation(operation: &'static str) -> crate::ClientError {
     crate::ClientError::illegal_argument(format!(
-        "{operation} is not supported by this ProducerBackend implementation"
+        "{operation} is not supported by this MessageProducer implementation"
     ))
 }
 
+/// Internal contract shared by ordinary and transaction message producers.
+///
+/// Defines lifecycle, messaging, query, and administration operations for the
+/// producer facades and public capability implementations.
 #[allow(async_fn_in_trait)]
-pub(crate) trait ProducerBackend {
+pub(crate) trait MessageProducer {
     /// Starts the producer.
     ///
     /// # Returns
@@ -58,8 +62,7 @@ pub(crate) trait ProducerBackend {
 
     /// Creates a topic through the producer's admin facade.
     ///
-    /// Java's `ProducerBackend` extends `MQAdmin`; Rust keeps these admin operations async because all
-    /// broker I/O in this client is async.
+    /// Producer administration is asynchronous because it uses this client's asynchronous broker I/O.
     async fn create_topic(
         &mut self,
         _key: &str,

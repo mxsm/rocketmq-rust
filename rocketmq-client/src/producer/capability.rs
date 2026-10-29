@@ -26,7 +26,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageTrait;
 
-use super::producer_backend::ProducerBackend;
+use super::message_producer::MessageProducer;
 use super::request_callback::RequestCallbackFn;
 use super::send_callback::ArcSendCallback;
 use super::DefaultMQProducer;
@@ -390,11 +390,11 @@ pub trait ProducerTopicAdmin {
 
 impl ProducerLifecycle for DefaultMQProducer {
     async fn start_producer(&mut self) -> crate::ClientResult<()> {
-        <Self as ProducerBackend>::start(self).await
+        <Self as MessageProducer>::start(self).await
     }
 
     async fn shutdown_producer(&mut self) {
-        <Self as ProducerBackend>::shutdown(self).await;
+        <Self as MessageProducer>::shutdown(self).await;
     }
 }
 
@@ -405,23 +405,23 @@ impl MessageSend for DefaultMQProducer {
     {
         match (request.destination, request.mode, request.timeout_millis) {
             (SendDestination::Automatic, SendMode::AwaitResult, None) => {
-                <Self as ProducerBackend>::send(self, request.message).await
+                <Self as MessageProducer>::send(self, request.message).await
             }
             (SendDestination::Automatic, SendMode::AwaitResult, Some(timeout)) => {
-                <Self as ProducerBackend>::send_with_timeout(self, request.message, timeout).await
+                <Self as MessageProducer>::send_with_timeout(self, request.message, timeout).await
             }
             (SendDestination::Queue(queue), SendMode::AwaitResult, None) => {
-                <Self as ProducerBackend>::send_to_queue(self, request.message, queue).await
+                <Self as MessageProducer>::send_to_queue(self, request.message, queue).await
             }
             (SendDestination::Queue(queue), SendMode::AwaitResult, Some(timeout)) => {
-                <Self as ProducerBackend>::send_to_queue_with_timeout(self, request.message, queue, timeout).await
+                <Self as MessageProducer>::send_to_queue_with_timeout(self, request.message, queue, timeout).await
             }
             (SendDestination::Automatic, SendMode::Oneway, _) => {
-                <Self as ProducerBackend>::send_oneway(self, request.message).await?;
+                <Self as MessageProducer>::send_oneway(self, request.message).await?;
                 Ok(None)
             }
             (SendDestination::Queue(queue), SendMode::Oneway, _) => {
-                <Self as ProducerBackend>::send_oneway_to_queue(self, request.message, queue).await?;
+                <Self as MessageProducer>::send_oneway_to_queue(self, request.message, queue).await?;
                 Ok(None)
             }
         }
@@ -432,15 +432,15 @@ impl MessageSend for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         match (request.destination, request.timeout_millis) {
-            (SendDestination::Automatic, None) => <Self as ProducerBackend>::send_batch(self, request.messages).await,
+            (SendDestination::Automatic, None) => <Self as MessageProducer>::send_batch(self, request.messages).await,
             (SendDestination::Automatic, Some(timeout)) => {
-                <Self as ProducerBackend>::send_batch_with_timeout(self, request.messages, timeout).await
+                <Self as MessageProducer>::send_batch_with_timeout(self, request.messages, timeout).await
             }
             (SendDestination::Queue(queue), None) => {
-                <Self as ProducerBackend>::send_batch_to_queue(self, request.messages, queue).await
+                <Self as MessageProducer>::send_batch_to_queue(self, request.messages, queue).await
             }
             (SendDestination::Queue(queue), Some(timeout)) => {
-                <Self as ProducerBackend>::send_batch_to_queue_with_timeout(self, request.messages, queue, timeout)
+                <Self as MessageProducer>::send_batch_to_queue_with_timeout(self, request.messages, queue, timeout)
                     .await
             }
         }
@@ -460,16 +460,16 @@ impl MessageSend for DefaultMQProducer {
         };
         match (request.destination, request.timeout_millis) {
             (SendDestination::Automatic, None) => {
-                <Self as ProducerBackend>::send_with_callback(self, request.message, callback_fn).await
+                <Self as MessageProducer>::send_with_callback(self, request.message, callback_fn).await
             }
             (SendDestination::Automatic, Some(timeout)) => {
-                <Self as ProducerBackend>::send_with_callback_timeout(self, request.message, callback_fn, timeout).await
+                <Self as MessageProducer>::send_with_callback_timeout(self, request.message, callback_fn, timeout).await
             }
             (SendDestination::Queue(queue), None) => {
-                <Self as ProducerBackend>::send_to_queue_with_callback(self, request.message, queue, callback_fn).await
+                <Self as MessageProducer>::send_to_queue_with_callback(self, request.message, queue, callback_fn).await
             }
             (SendDestination::Queue(queue), Some(timeout)) => {
-                <Self as ProducerBackend>::send_to_queue_with_callback_timeout(
+                <Self as MessageProducer>::send_to_queue_with_callback_timeout(
                     self,
                     request.message,
                     queue,
@@ -492,11 +492,11 @@ impl MessageSend for DefaultMQProducer {
     {
         match (request.mode, request.timeout_millis) {
             (SendMode::AwaitResult, None) => {
-                <Self as ProducerBackend>::send_with_selector(self, request.message, request.selector, request.argument)
+                <Self as MessageProducer>::send_with_selector(self, request.message, request.selector, request.argument)
                     .await
             }
             (SendMode::AwaitResult, Some(timeout)) => {
-                <Self as ProducerBackend>::send_with_selector_timeout(
+                <Self as MessageProducer>::send_with_selector_timeout(
                     self,
                     request.message,
                     request.selector,
@@ -506,7 +506,7 @@ impl MessageSend for DefaultMQProducer {
                 .await
             }
             (SendMode::Oneway, _) => {
-                <Self as ProducerBackend>::send_oneway_with_selector(
+                <Self as MessageProducer>::send_oneway_with_selector(
                     self,
                     request.message,
                     request.selector,
@@ -529,7 +529,7 @@ impl MessageSend for DefaultMQProducer {
     {
         match request.timeout_millis {
             Some(timeout) => {
-                <Self as ProducerBackend>::send_with_selector_callback_timeout(
+                <Self as MessageProducer>::send_with_selector_callback_timeout(
                     self,
                     request.message,
                     request.selector,
@@ -540,7 +540,7 @@ impl MessageSend for DefaultMQProducer {
                 .await
             }
             None => {
-                <Self as ProducerBackend>::send_with_selector_callback(
+                <Self as MessageProducer>::send_with_selector_callback(
                     self,
                     request.message,
                     request.selector,
@@ -569,10 +569,10 @@ impl MessageSend for DefaultMQProducer {
         };
         match (request.destination, request.timeout_millis) {
             (SendDestination::Automatic, None) => {
-                <Self as ProducerBackend>::send_batch_with_callback(self, request.messages, callback_fn).await
+                <Self as MessageProducer>::send_batch_with_callback(self, request.messages, callback_fn).await
             }
             (SendDestination::Automatic, Some(timeout)) => {
-                <Self as ProducerBackend>::send_batch_with_callback_timeout(
+                <Self as MessageProducer>::send_batch_with_callback_timeout(
                     self,
                     request.messages,
                     callback_fn,
@@ -581,11 +581,11 @@ impl MessageSend for DefaultMQProducer {
                 .await
             }
             (SendDestination::Queue(queue), None) => {
-                <Self as ProducerBackend>::send_batch_to_queue_with_callback(self, request.messages, queue, callback_fn)
+                <Self as MessageProducer>::send_batch_to_queue_with_callback(self, request.messages, queue, callback_fn)
                     .await
             }
             (SendDestination::Queue(queue), Some(timeout)) => {
-                <Self as ProducerBackend>::send_batch_to_queue_with_callback_timeout(
+                <Self as MessageProducer>::send_batch_to_queue_with_callback_timeout(
                     self,
                     request.messages,
                     queue,
@@ -600,7 +600,7 @@ impl MessageSend for DefaultMQProducer {
 
 impl MessageRecall for DefaultMQProducer {
     async fn recall(&mut self, request: RecallRequest) -> crate::ClientResult<String> {
-        <Self as ProducerBackend>::recall_message(self, request.topic, request.recall_handle).await
+        <Self as MessageProducer>::recall_message(self, request.topic, request.recall_handle).await
     }
 }
 
@@ -614,10 +614,10 @@ impl RequestReply for DefaultMQProducer {
     {
         match request.destination {
             SendDestination::Automatic => {
-                <Self as ProducerBackend>::request(self, request.message, request.timeout_millis).await
+                <Self as MessageProducer>::request(self, request.message, request.timeout_millis).await
             }
             SendDestination::Queue(queue) => {
-                <Self as ProducerBackend>::request_to_queue(self, request.message, queue, request.timeout_millis).await
+                <Self as MessageProducer>::request_to_queue(self, request.message, queue, request.timeout_millis).await
             }
         }
     }
@@ -635,7 +635,7 @@ impl RequestReply for DefaultMQProducer {
         };
         match request.destination {
             SendDestination::Automatic => {
-                <Self as ProducerBackend>::request_with_callback(
+                <Self as MessageProducer>::request_with_callback(
                     self,
                     request.message,
                     callback_fn,
@@ -644,7 +644,7 @@ impl RequestReply for DefaultMQProducer {
                 .await
             }
             SendDestination::Queue(queue) => {
-                <Self as ProducerBackend>::request_to_queue_with_callback(
+                <Self as MessageProducer>::request_to_queue_with_callback(
                     self,
                     request.message,
                     queue,
@@ -665,7 +665,7 @@ impl RequestReply for DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
     {
-        <Self as ProducerBackend>::request_with_selector(
+        <Self as MessageProducer>::request_with_selector(
             self,
             request.message,
             request.selector,
@@ -685,7 +685,7 @@ impl RequestReply for DefaultMQProducer {
         T: Send + Sync + 'static,
     {
         let callback = request.callback;
-        <Self as ProducerBackend>::request_with_selector_callback(
+        <Self as MessageProducer>::request_with_selector_callback(
             self,
             request.message,
             request.selector,
@@ -701,19 +701,19 @@ impl MessageQuery for DefaultMQProducer {
     async fn query(&mut self, request: ProducerQueryRequest) -> crate::ClientResult<ProducerQueryResponse> {
         let response = match request {
             ProducerQueryRequest::FetchPublishQueues { topic } => ProducerQueryResponse::Queues(
-                <Self as ProducerBackend>::fetch_publish_message_queues(self, &topic).await?,
+                <Self as MessageProducer>::fetch_publish_message_queues(self, &topic).await?,
             ),
             ProducerQueryRequest::SearchOffset { queue, timestamp } => {
-                ProducerQueryResponse::Offset(<Self as ProducerBackend>::search_offset(self, &queue, timestamp).await?)
+                ProducerQueryResponse::Offset(<Self as MessageProducer>::search_offset(self, &queue, timestamp).await?)
             }
             ProducerQueryRequest::MaxOffset { queue } => {
-                ProducerQueryResponse::Offset(<Self as ProducerBackend>::max_offset(self, &queue).await?)
+                ProducerQueryResponse::Offset(<Self as MessageProducer>::max_offset(self, &queue).await?)
             }
             ProducerQueryRequest::MinOffset { queue } => {
-                ProducerQueryResponse::Offset(<Self as ProducerBackend>::min_offset(self, &queue).await?)
+                ProducerQueryResponse::Offset(<Self as MessageProducer>::min_offset(self, &queue).await?)
             }
             ProducerQueryRequest::EarliestStoreTime { queue } => ProducerQueryResponse::Timestamp(
-                <Self as ProducerBackend>::earliest_msg_store_time(self, &queue).await?,
+                <Self as MessageProducer>::earliest_msg_store_time(self, &queue).await?,
             ),
             ProducerQueryRequest::QueryMessages {
                 topic,
@@ -722,11 +722,11 @@ impl MessageQuery for DefaultMQProducer {
                 begin_timestamp,
                 end_timestamp,
             } => ProducerQueryResponse::Query(
-                <Self as ProducerBackend>::query_message(self, &topic, &key, max_count, begin_timestamp, end_timestamp)
+                <Self as MessageProducer>::query_message(self, &topic, &key, max_count, begin_timestamp, end_timestamp)
                     .await?,
             ),
             ProducerQueryRequest::ViewMessage { topic, message_id } => ProducerQueryResponse::Message(Box::new(
-                <Self as ProducerBackend>::view_message(self, &topic, &message_id).await?,
+                <Self as MessageProducer>::view_message(self, &topic, &message_id).await?,
             )),
         };
         Ok(response)
@@ -737,7 +737,7 @@ impl ProducerTopicAdmin for DefaultMQProducer {
     async fn create_topic_request(&mut self, request: TopicCreateRequest) -> crate::ClientResult<()> {
         match request.system_flag {
             Some(system_flag) => {
-                <Self as ProducerBackend>::create_topic_with_flag(
+                <Self as MessageProducer>::create_topic_with_flag(
                     self,
                     &request.key,
                     &request.topic,
@@ -748,7 +748,7 @@ impl ProducerTopicAdmin for DefaultMQProducer {
                 .await
             }
             None => {
-                <Self as ProducerBackend>::create_topic(
+                <Self as MessageProducer>::create_topic(
                     self,
                     &request.key,
                     &request.topic,
@@ -763,11 +763,11 @@ impl ProducerTopicAdmin for DefaultMQProducer {
 
 impl ProducerLifecycle for TransactionMQProducer {
     async fn start_producer(&mut self) -> crate::ClientResult<()> {
-        <Self as ProducerBackend>::start(self).await
+        <Self as MessageProducer>::start(self).await
     }
 
     async fn shutdown_producer(&mut self) {
-        <Self as ProducerBackend>::shutdown(self).await;
+        <Self as MessageProducer>::shutdown(self).await;
     }
 }
 
@@ -905,7 +905,7 @@ impl TransactionSend for TransactionMQProducer {
         M: MessageTrait + Send + Sync,
         T: Any + Send + Sync,
     {
-        <Self as ProducerBackend>::send_message_in_transaction(self, request.message, request.argument).await
+        <Self as MessageProducer>::send_message_in_transaction(self, request.message, request.argument).await
     }
 }
 

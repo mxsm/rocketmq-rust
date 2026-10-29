@@ -46,7 +46,7 @@ const ADMIN_TOPIC: &str = include_str!("../src/admin/default_mq_admin_ext_impl/t
 
 const PRODUCER_FACADE: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl.rs");
 const PRODUCER_CAPABILITIES: &str = include_str!("../src/producer/capability.rs");
-const PRODUCER_BACKEND: &str = include_str!("../src/producer/producer_backend.rs");
+const MESSAGE_PRODUCER: &str = include_str!("../src/producer/message_producer.rs");
 const PRODUCER_HOOKS: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/hooks.rs");
 const PRODUCER_LIFECYCLE: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/lifecycle.rs");
 const PRODUCER_RETRY: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/retry.rs");
@@ -136,7 +136,7 @@ fn client_god_traits_cannot_reappear() {
             ADMIN_CAPABILITIES,
             LITE_PULL_CAPABILITIES,
             PRODUCER_CAPABILITIES,
-            PRODUCER_BACKEND,
+            MESSAGE_PRODUCER,
         ] {
             let contains_identifier = source
                 .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
