@@ -22,6 +22,7 @@ use rocketmq_dashboard_common::{
 use serde::{Deserialize, Serialize};
 
 use super::{
+    audit_store::AuditJournal,
     config_store::{AuthConfig, CONFIG_SCHEMA_VERSION, ConfigStoreFailure, DesktopConfig, FoundationFlags},
     monitor_store::MonitorRule,
 };
@@ -146,6 +147,7 @@ pub(super) struct DesktopDocument {
     pub profiles: Vec<EnvironmentProfile>,
     pub monitors: MonitorDocument,
     pub local_operations: Vec<LocalOperationRecord>,
+    pub audit: AuditJournal,
 }
 
 impl DesktopDocument {
@@ -173,6 +175,7 @@ impl DesktopDocument {
                     .collect(),
             },
             local_operations: Vec::new(),
+            audit: AuditJournal::default(),
         })
     }
 
@@ -234,6 +237,7 @@ impl DesktopDocument {
             profile.project(&self.settings).normalize()?;
         }
         self.active_profile()?;
+        self.audit.validate()?;
         Ok(())
     }
 }
@@ -274,6 +278,31 @@ pub(super) fn load_document(path: &Path) -> Result<(DesktopDocument, bool), Conf
             let config = config.normalize()?;
             let monitors = load_legacy_monitors(&path.with_file_name("monitors.json"))?;
             DesktopDocument::from_legacy(config, monitors).map(|document| (document, true))
+        }
+        2 => {
+            let mut value = value;
+            if let Some(object) = value.as_object_mut() {
+                object
+                    .entry("audit")
+                    .or_insert(serde_json::to_value(AuditJournal::default()).map_err(ConfigStoreFailure::validation)?);
+            }
+            let mut document: DesktopDocument = serde_json::from_value(value)
+                .map_err(|source| ConfigStoreFailure::invalid_document(path.to_path_buf(), source))?;
+            document.schema_version = CONFIG_SCHEMA_VERSION;
+            for record in &document.local_operations {
+                let action = match record.kind {
+                    LocalOperationKind::ConfigurationSaved => {
+                        rocketmq_dashboard_common::AuditAction::ConfigurationSaved
+                    }
+                    LocalOperationKind::MonitorSaved => rocketmq_dashboard_common::AuditAction::MonitorSaved,
+                    LocalOperationKind::MonitorDeleted => rocketmq_dashboard_common::AuditAction::MonitorDeleted,
+                };
+                document
+                    .audit
+                    .finish_local(record.context.clone(), action, record.committed_at_epoch_ms)?;
+            }
+            document.validate()?;
+            Ok((document, true))
         }
         version if version == u64::from(CONFIG_SCHEMA_VERSION) => {
             let document: DesktopDocument = serde_json::from_value(value)

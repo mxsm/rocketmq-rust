@@ -19,6 +19,7 @@ pub mod admin_provider;
 /// Real query/mutation Admin session adapters hidden behind the provider.
 pub mod admin_session;
 mod atomic_file;
+pub(crate) mod audit_store;
 #[path = "infrastructure/auth_state.rs"]
 pub mod auth_state;
 #[path = "infrastructure/client_runtime.rs"]

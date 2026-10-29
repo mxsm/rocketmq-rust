@@ -42,7 +42,7 @@ use super::{
 };
 
 /// Current on-disk schema understood by this delivery.
-pub const CONFIG_SCHEMA_VERSION: u32 = 2;
+pub const CONFIG_SCHEMA_VERSION: u32 = 3;
 /// Environment override used by tests, packaged builds, and portable deployments.
 pub const CONFIG_PATH_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH";
 
@@ -492,6 +492,51 @@ impl DesktopConfigStore {
         &self.path
     }
 
+    pub(crate) fn authentication_enabled(&self) -> Result<bool, ConfigStoreFailure> {
+        self.document
+            .read()
+            .as_ref()
+            .map(|document| document.settings.authentication_enabled)
+            .ok_or_else(|| ConfigStoreFailure::validation(EnvironmentValidation::MissingProfile))
+    }
+
+    pub(super) fn audit_snapshot(&self) -> Result<super::audit_store::AuditJournal, ConfigStoreFailure> {
+        self.document
+            .read()
+            .as_ref()
+            .map(|document| document.audit.clone())
+            .ok_or_else(|| ConfigStoreFailure::validation(EnvironmentValidation::MissingProfile))
+    }
+
+    pub(super) async fn update_audit(
+        &self,
+        name: &'static str,
+        update: impl FnOnce(&mut super::audit_store::AuditJournal) -> Result<(), ConfigStoreFailure> + Send + 'static,
+    ) -> Result<(), ConfigStoreFailure> {
+        let _guard = self.io_gate.lock().await;
+        if self.protected_original.load(Ordering::Acquire) || self.document.read().is_none() {
+            return Err(ConfigStoreFailure::writer_unavailable());
+        }
+        let path = self.path.clone();
+        let document = self
+            .context
+            .storage_io()
+            .spawn_io(name, move || {
+                let (mut document, _) = load_document(&path)?;
+                let before = document.audit.clone();
+                update(&mut document.audit)?;
+                document.validate()?;
+                if document.audit != before {
+                    write_json_atomically(&path, &document)?;
+                }
+                Ok::<_, ConfigStoreFailure>(document)
+            })
+            .await
+            .map_err(ConfigStoreFailure::runtime)??;
+        *self.document.write() = Some(document);
+        Ok(())
+    }
+
     /// Loads, parses, validates, and records the on-disk revision.
     pub async fn load(&self) -> Result<DesktopConfig, ConfigStoreFailure> {
         let _guard = self.io_gate.lock().await;
@@ -761,10 +806,21 @@ fn persist_local_document(
     let committed_at_epoch_ms =
         u64::try_from(committed_at_epoch_ms.as_millis()).map_err(ConfigStoreFailure::validation)?;
     document.local_operations.push(LocalOperationRecord {
-        context,
+        context: context.clone(),
         kind,
         committed_at_epoch_ms,
     });
+    let action = match kind {
+        LocalOperationKind::ConfigurationSaved => rocketmq_dashboard_common::AuditAction::ConfigurationSaved,
+        LocalOperationKind::MonitorSaved => rocketmq_dashboard_common::AuditAction::MonitorSaved,
+        LocalOperationKind::MonitorDeleted => rocketmq_dashboard_common::AuditAction::MonitorDeleted,
+    };
+    document.audit.finish_local(context, action, committed_at_epoch_ms)?;
+    if document.local_operations.len() > 10_000 {
+        document
+            .local_operations
+            .drain(..document.local_operations.len() - 10_000);
+    }
     document.validate()?;
     write_json_atomically(path, &document)?;
     Ok(document)

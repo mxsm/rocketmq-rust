@@ -22,8 +22,9 @@ use std::{fmt, future::Future, sync::Arc};
 
 use rocketmq_admin_core::core::topic::TopicConfigCasState;
 use rocketmq_dashboard_common::{
-    TopicConfigView, TopicConsumersView, TopicIdentity, TopicInventory, TopicMessageType, TopicPartialOutcome,
-    TopicPermission, TopicRouteView, TopicStatsView, TopicTargetIdentity,
+    AuditAcceptedOperation, AuditAction, OperationResource, TopicConfigView, TopicConsumersView, TopicIdentity,
+    TopicInventory, TopicMessageType, TopicPartialOutcome, TopicPermission, TopicRouteView, TopicStatsView,
+    TopicTargetIdentity,
 };
 
 use crate::{
@@ -661,9 +662,18 @@ impl AppServices {
         command: TopicCreateCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic_mutation("gpui-service-topic-create", backend, scope, async move |backend| {
-            backend.create(scope, command).await
-        })
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicCreated,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_topic_mutation(
+            "gpui-service-topic-create",
+            operation,
+            backend,
+            scope,
+            async move |backend| backend.create(scope, command).await,
+        )
         .await
     }
 
@@ -673,9 +683,18 @@ impl AppServices {
         command: TopicDeleteCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic_mutation("gpui-service-topic-delete", backend, scope, async move |backend| {
-            backend.delete(scope, command).await
-        })
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicDeleted,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_topic_mutation(
+            "gpui-service-topic-delete",
+            operation,
+            backend,
+            scope,
+            async move |backend| backend.delete(scope, command).await,
+        )
         .await
     }
 
@@ -685,8 +704,14 @@ impl AppServices {
         command: TopicDeleteBrokerCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicBrokerDeleted,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
         self.run_topic_mutation(
             "gpui-service-topic-delete-broker",
+            operation,
             backend,
             scope,
             async move |backend| backend.delete_broker(scope, command).await,
@@ -702,7 +727,12 @@ impl AppServices {
         let backend = Arc::clone(&self.topics);
         let topic = command.topic.clone();
         let invalidations = mutation_invalidations(rocketmq_dashboard_common::TopicMutationKind::Edit, topic.clone());
-        self.run_topic("gpui-service-topic-edit", async move {
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicUpdated,
+            OperationResource::Topic(topic.as_str().to_owned()),
+        )?;
+        self.run_mutation("gpui-service-topic-edit", operation, async move {
             match backend.patch_queue_counts(scope, command).await? {
                 BackendTopicQueuePatchResult::Applied {
                     previous_version,
@@ -742,10 +772,14 @@ impl AppServices {
 
     pub async fn send_topic_message(&self, scope: TopicRequestScope, command: TopicSendCommand) -> Result<(), UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic(
-            "gpui-service-topic-send",
-            async move { backend.send(scope, command).await },
-        )
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicMessageSent,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_mutation("gpui-service-topic-send", operation, async move {
+            backend.send(scope, command).await
+        })
         .await
     }
 
@@ -755,9 +789,18 @@ impl AppServices {
         command: TopicOffsetCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic_mutation("gpui-service-topic-reset", backend, scope, async move |backend| {
-            backend.reset(scope, command).await
-        })
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::ConsumerOffsetReset,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_topic_mutation(
+            "gpui-service-topic-reset",
+            operation,
+            backend,
+            scope,
+            async move |backend| backend.reset(scope, command).await,
+        )
         .await
     }
 
@@ -767,9 +810,18 @@ impl AppServices {
         command: TopicOffsetCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic_mutation("gpui-service-topic-skip", backend, scope, async move |backend| {
-            backend.skip(scope, command).await
-        })
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::ConsumerBacklogSkipped,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_topic_mutation(
+            "gpui-service-topic-skip",
+            operation,
+            backend,
+            scope,
+            async move |backend| backend.skip(scope, command).await,
+        )
         .await
     }
 
@@ -790,6 +842,7 @@ impl AppServices {
     async fn run_topic_mutation<F, Fut>(
         &self,
         name: &'static str,
+        operation: Option<AuditAcceptedOperation>,
         backend: Arc<dyn TopicBackend>,
         scope: TopicRequestScope,
         mutate: F,
@@ -798,7 +851,7 @@ impl AppServices {
         F: FnOnce(Arc<dyn TopicBackend>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<TopicPartialOutcome, UiError>> + Send + 'static,
     {
-        self.run_topic(name, async move {
+        self.run_mutation(name, operation, async move {
             let outcome = mutate(Arc::clone(&backend)).await?;
             if outcome.applied_count() == 0 {
                 return Ok(TopicMutationResult::Rejected(outcome));

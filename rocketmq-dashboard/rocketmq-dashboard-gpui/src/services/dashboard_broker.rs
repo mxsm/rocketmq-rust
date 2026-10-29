@@ -21,8 +21,9 @@ pub(crate) mod test_support;
 use std::sync::Arc;
 
 use rocketmq_dashboard_common::{
-    BrokerConfigPatch, BrokerConfigSnapshot, BrokerCurrentMetric, BrokerIdentity, BrokerInventoryItem,
-    HistoryMetricKind, HistoryPoint, RuntimeEntry, TopicCurrentMetric,
+    AuditAction, BrokerConfigPatch, BrokerConfigSnapshot, BrokerCurrentMetric, BrokerIdentity, BrokerInventoryItem,
+    HistoryMetricKind, HistoryPoint, OperationResource, RuntimeEntry, TopicCurrentMetric,
+    broker_history_series_identity,
 };
 
 use super::{
@@ -231,7 +232,16 @@ impl AppServices {
         revision: u64,
         patch: BrokerConfigPatch,
     ) -> Result<BrokerConfigMutationResult, UiError> {
-        self.dashboard_broker.patch_broker_config(revision, patch).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        let operation = self.accept_operation(
+            revision,
+            AuditAction::BrokerUpdated,
+            OperationResource::Broker(broker_history_series_identity(&patch.identity)),
+        )?;
+        self.run_mutation("gpui-service-broker-patch", operation, async move {
+            backend.patch_broker_config(revision, patch).await
+        })
+        .await
     }
 
     #[cfg(test)]
