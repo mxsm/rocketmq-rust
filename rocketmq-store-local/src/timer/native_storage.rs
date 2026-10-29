@@ -85,7 +85,8 @@ pub enum NativeStorageError {
     CheckpointAheadOfFiles { sequence: u64 },
 }
 
-/// The lengths [`NativeTimerStorage::sync`] made durable, for the next checkpoint.
+/// Lengths of the bucket files and the cancel log: what [`NativeTimerStorage::sync`] made
+/// durable, or what [`NativeTimerStorage::written_lengths`] found written.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NativeSyncedLengths {
     pub buckets: Vec<NativeBucketLength>,
@@ -239,15 +240,25 @@ impl NativeTimerStorage {
 
     /// Every bucket file with its written length.
     pub fn buckets(&self) -> Vec<NativeBucketLength> {
-        self.state
-            .lock()
-            .buckets
-            .iter()
-            .map(|(bucket, file)| NativeBucketLength {
-                bucket: *bucket,
-                durable_length: file.length,
-            })
-            .collect()
+        self.written_lengths().buckets
+    }
+
+    /// How much of every bucket file and of the cancel log is written. A writer that knows
+    /// which sources these bytes hold takes them, syncs, and checkpoints exactly them; the
+    /// lengths are no larger than what the sync then makes durable.
+    pub fn written_lengths(&self) -> NativeSyncedLengths {
+        let state = self.state.lock();
+        NativeSyncedLengths {
+            buckets: state
+                .buckets
+                .iter()
+                .map(|(bucket, file)| NativeBucketLength {
+                    bucket: *bucket,
+                    durable_length: file.length,
+                })
+                .collect(),
+            cancel_log_length: state.cancel.length,
+        }
     }
 
     /// Appends `entries` to `bucket`, creating its file when it has none, and returns the new
