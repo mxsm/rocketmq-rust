@@ -135,6 +135,7 @@ pub(crate) enum PageCapability {
     Producers,
     Messages,
     Monitors,
+    DlqMessages,
     OpsSettings,
     Proxy,
     Unavailable { reason: &'static str },
@@ -154,9 +155,7 @@ impl AppRoute {
             Self::OpsSettings => PageCapability::OpsSettings,
             Self::Proxy => PageCapability::Proxy,
             Self::Messages => PageCapability::Messages,
-            Self::DlqMessages => PageCapability::Unavailable {
-                reason: "Dead-letter message search and recovery are not yet available in this desktop app.",
-            },
+            Self::DlqMessages => PageCapability::DlqMessages,
             Self::MessageTrace => PageCapability::Unavailable {
                 reason: "Message trace lookup is not yet available in this desktop app.",
             },

@@ -97,6 +97,12 @@ mod topics_product_tests;
 #[path = "features/consumers_product_tests.rs"]
 mod consumers_product_tests;
 
+#[path = "features/dlq.rs"]
+pub(crate) mod dlq;
+#[path = "features/dlq_dialogs.rs"]
+pub(crate) mod dlq_dialogs;
+#[path = "features/dlq_store.rs"]
+pub(crate) mod dlq_store;
 #[path = "features/message_detail.rs"]
 pub(crate) mod message_detail;
 #[path = "features/message_dialogs.rs"]

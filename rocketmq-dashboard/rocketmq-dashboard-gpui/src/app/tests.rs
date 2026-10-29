@@ -1215,6 +1215,118 @@ fn sign_out_clears_history_sensitive_state_and_rebuilds_page_entities(cx: &mut g
 }
 
 #[gpui::test]
+fn dlq_route_and_manual_group_reload_never_query_proxy_and_resume_in_nameserver_scope(cx: &mut gpui::TestAppContext) {
+    use crate::services::{
+        ConfigMutation, consumers::test_support::FakeConsumerBackend, dlq::test_support::group_inventory,
+    };
+    use rocketmq_dashboard_common::{ConnectionScope, ConsumerQueryScope};
+    use std::time::Duration;
+    cx.update(gpui_component::init);
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&DesktopConfig {
+            schema_version: 1,
+            nameservers: vec!["one:9876".into()],
+            current_nameserver: Some("one:9876".into()),
+            proxies: vec!["proxy:8080".into()],
+            current_proxy: Some("proxy:8080".into()),
+            scope: ConnectionScope::Proxy,
+            ..DesktopConfig::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("dlq-route-scope", 1))
+        .unwrap()
+        .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).unwrap())
+        .build()
+        .unwrap();
+    let consumers = Arc::new(FakeConsumerBackend::default());
+    let services = AppServices::desktop_with_fake_provider(
+        DesktopConfigStore::new(config_path, runtime.root_context().component("storage")),
+        DesktopAuthState::new(Arc::new(MapEnvironment::new([]))),
+        runtime.root_context().component("application"),
+        runtime.root_context().component("history"),
+        runtime.root_context().component("monitor"),
+    )
+    .with_consumer_backend(consumers.clone());
+    let (completion, completed) = std::sync::mpsc::channel();
+    let view_services = services.clone().with_runtime_completion(completion);
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, view_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    assert_eq!(
+        completed.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "gpui-bootstrap"
+    );
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::DlqMessages, window, cx)
+        })
+    });
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    }
+    assert!(cx.debug_bounds("dlq-groups-status").is_some());
+    assert!(
+        consumers.calls().inventory.is_empty(),
+        "route entry must not discover through Proxy"
+    );
+    let refresh = cx.debug_bounds("dlq-groups-refresh").unwrap();
+    cx.simulate_click(refresh.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        consumers.calls().inventory.is_empty(),
+        "manual refresh must not discover through Proxy"
+    );
+    let (progress, mut events) = tokio::sync::mpsc::unbounded_channel();
+    runtime
+        .block_on(services.mutate_with_progress(
+            ConfigMutation::RemoveProxy {
+                address: "proxy:8080".into(),
+                replacement: None,
+                fallback_to_nameserver: true,
+            },
+            progress,
+        ))
+        .unwrap();
+    assert_eq!(services.connection_state().config.scope, ConnectionScope::NameServer);
+    consumers.queue_inventory(Ok(group_inventory()));
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            while let Ok(event) = events.try_recv() {
+                dashboard.handle_config_updated(event, window, cx);
+            }
+            dashboard.navigate(AppRoute::Dashboard, window, cx);
+            dashboard.navigate(AppRoute::DlqMessages, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        completed.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "gpui-service-consumer-inventory"
+    );
+    assert_eq!(consumers.calls().inventory.len(), 1);
+    assert_eq!(
+        consumers.calls().inventory[0].query_scope,
+        ConsumerQueryScope::Configured
+    );
+    assert_eq!(
+        consumers.calls().inventory[0].revision,
+        services.connection_state().config.revision
+    );
+    assert!(runtime.shutdown_runtime_blocking().unwrap().is_healthy());
+}
+#[gpui::test]
 fn app_route_mapping_uses_current_page_capabilities(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let app_services = services(
@@ -1241,7 +1353,7 @@ fn app_route_mapping_uses_current_page_capabilities(cx: &mut gpui::TestAppContex
 }
 
 #[gpui::test]
-fn production_messages_route_has_no_sample_or_implicit_query_through_navigation_and_relogin(
+fn production_message_and_dlq_routes_have_no_sample_or_implicit_query_through_navigation_and_relogin(
     cx: &mut gpui::TestAppContext,
 ) {
     cx.update(gpui_component::init);
@@ -1324,7 +1436,22 @@ fn production_messages_route_has_no_sample_or_implicit_query_through_navigation_
             + calls.patches.len()
     };
     let before_unavailable_pages = call_count();
-    for route in [AppRoute::DlqMessages, AppRoute::MessageTrace] {
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::DlqMessages, window, cx)
+        })
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    assert!(cx.debug_bounds("dlq-workspace").is_some());
+    cx.read(|app| {
+        assert_eq!(
+            dashboard.read(app).current_page_capability(),
+            PageCapability::DlqMessages
+        );
+        assert!(dashboard.read(app).legacy_pages.dlq.read(app).query_is_idle());
+    });
+    {
+        let route = AppRoute::MessageTrace;
         cx.update(|window, app| {
             dashboard.update(app, |dashboard, cx| dashboard.navigate(route.clone(), window, cx));
         });
@@ -1558,6 +1685,7 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
         (AppRoute::Messages, PageCapability::Messages),
         (AppRoute::Monitors, PageCapability::Monitors),
         (AppRoute::Acl, PageCapability::Acl),
+        (AppRoute::DlqMessages, PageCapability::DlqMessages),
         (AppRoute::OpsSettings, PageCapability::OpsSettings),
         (AppRoute::Proxy, PageCapability::Proxy),
         (
@@ -1586,9 +1714,10 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
     for (route, capability) in implemented {
         assert_eq!(route.page_capability(), capability);
     }
-    for route in [AppRoute::DlqMessages, AppRoute::MessageTrace] {
-        assert!(matches!(route.page_capability(), PageCapability::Unavailable { .. }));
-    }
+    assert!(matches!(
+        AppRoute::MessageTrace.page_capability(),
+        PageCapability::Unavailable { .. }
+    ));
 }
 
 #[gpui::test]

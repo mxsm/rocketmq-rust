@@ -16,6 +16,8 @@
 
 #[path = "acl_tests.rs"]
 mod acl_tests;
+#[path = "dlq_tests.rs"]
+mod dlq_tests;
 
 use std::{
     collections::BTreeMap,
@@ -66,7 +68,9 @@ struct FakeControls {
     message_lookups: std::sync::Mutex<Vec<MessageLookupRequest>>,
     message_consumes: std::sync::Mutex<Vec<DirectConsumeRequest>>,
     message_results: std::sync::Mutex<Option<DashboardMessageList>>,
+    message_scan_records: std::sync::Mutex<Option<Vec<DashboardMessage>>>,
     message_record: std::sync::Mutex<Option<MessageRecord>>,
+    message_records: std::sync::Mutex<std::collections::VecDeque<MessageRecord>>,
     message_consume_result: std::sync::Mutex<Option<DirectConsumeResult>>,
     dashboard_consumer_summary:
         std::sync::Mutex<Option<rocketmq_admin_core::core::dashboard_metrics::DashboardConsumerSummary>>,
@@ -194,6 +198,26 @@ impl DashboardQuerySession for FakeQuerySession {
         request: &'a DashboardMessageQuery,
     ) -> SessionFuture<'a, AdminResult<DashboardMessageList>> {
         self.controls.message_queries.lock().unwrap().push(request.clone());
+        if let Some(records) = self.controls.message_scan_records.lock().unwrap().as_ref() {
+            // A source-backed page exercises the provider's inclusive Topic-query contract rather
+            // than supplying a response that is independent of the requested window and page.
+            let size = request.page_size.unwrap_or(20) as usize;
+            let items = records
+                .iter()
+                .filter(|record| {
+                    request.topic.as_ref() == Some(&record.topic)
+                        && request.begin.is_none_or(|begin| record.store_timestamp >= begin)
+                        && request.end.is_none_or(|end| record.store_timestamp <= end)
+                })
+                .skip(request.page_num.unwrap_or(1).saturating_sub(1) as usize * size)
+                .take(size)
+                .cloned()
+                .collect::<Vec<_>>();
+            return Box::pin(std::future::ready(Ok(DashboardMessageList {
+                total: items.len(),
+                items,
+            })));
+        }
         Box::pin(std::future::ready(Ok(self
             .controls
             .message_results
@@ -209,10 +233,11 @@ impl DashboardQuerySession for FakeQuerySession {
         self.controls.message_lookups.lock().unwrap().push(request.clone());
         Box::pin(std::future::ready(
             self.controls
-                .message_record
+                .message_records
                 .lock()
                 .unwrap()
-                .clone()
+                .pop_front()
+                .or_else(|| self.controls.message_record.lock().unwrap().clone())
                 .ok_or_else(|| AdminError::not_found("message", "missing test response")),
         ))
     }

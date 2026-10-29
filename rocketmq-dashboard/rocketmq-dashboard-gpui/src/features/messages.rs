@@ -714,7 +714,7 @@ impl Render for MessagesView {
 fn validation(summary: &'static str) -> UiError {
     UiError::new(summary, UiErrorCode::Validation, false)
 }
-fn parse_time(value: &str) -> Result<i64, UiError> {
+pub(super) fn parse_time(value: &str) -> Result<i64, UiError> {
     chrono::NaiveDateTime::parse_from_str(value.trim(), "%Y-%m-%d %H:%M:%S")
         .map(|time| time.and_utc().timestamp_millis())
         .map_err(|_| validation("Use YYYY-MM-DD HH:MM:SS for UTC timestamps."))

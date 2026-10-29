@@ -63,6 +63,7 @@ pub(crate) struct FakeConsumerBackend {
     calls: Mutex<ConsumerCalls>,
     next_create_completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     next_inventory_completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    next_inventory_started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     next_producer_completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     next_patch_result: Mutex<Option<tokio::sync::oneshot::Receiver<Result<ConsumerConfigPatchOutcome, UiError>>>>,
     next_patch_started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -95,6 +96,11 @@ impl FakeConsumerBackend {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         *self.next_inventory_completion.lock().expect("inventory completion") = Some(receiver);
         sender
+    }
+    pub fn observe_next_inventory(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_inventory_started.lock().expect("inventory started") = Some(sender);
+        receiver
     }
     pub fn hold_next_producer_connections(&self) -> tokio::sync::oneshot::Sender<()> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -143,6 +149,9 @@ macro_rules! pop_result {
 impl ConsumerBackend for FakeConsumerBackend {
     fn inventory(&self, scope: ConsumerRequestScope) -> ServiceFuture<'_, Result<ConsumerInventory, UiError>> {
         self.calls.lock().expect("Consumer fake calls").inventory.push(scope);
+        if let Some(started) = self.next_inventory_started.lock().expect("inventory started").take() {
+            let _ = started.send(());
+        }
         let result = pop_result!(self, inventory, "inventory");
         let completion = self
             .next_inventory_completion
