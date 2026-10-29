@@ -91,14 +91,16 @@ Batch validation and the transaction producer reject delayed/timer combinations 
 
 The standard timer keeps its index in the Apache RocketMQ 5.x `timerlog`, `timerwheel` and `config/timercheck` files by default (`timerFileFormat = "java"`). A Rust Broker and a Java 5.x Broker can therefore take over the same store directory without losing pending timers. `timerFileFormat = "rust_v2"` selects the segmented Rust files instead. After the setting changes, timers still held in the previous format are delivered from it.
 
-Two `[store]` keys decide what happens to a timer that cannot be delivered. They keep the names of their Apache RocketMQ counterparts, but the Rust defaults never drop a timer:
+Two `[store]` keys decide what happens to a timer that cannot be delivered. They keep the names of their Apache RocketMQ counterparts, but the Rust defaults never drop a timer whose payload is still in the CommitLog:
 
 | Key | Rust default | Java default | Effect |
 | --- | --- | --- | --- |
-| `timerSkipUnknownError` | `false` | `false` | `true` quarantines and skips such a timer: one whose record cannot be read or routed, whose payload has left the CommitLog, or whose write the Store rejects. With `false` it is quarantined and the timers behind it wait for an operator. |
+| `timerSkipUnknownError` | `false` | `false` | `true` quarantines and skips such a timer: one whose record cannot be read or routed, or whose write the Store rejects. With `false` it is quarantined and the timers behind it wait for an operator. |
 | `timerEnableRetryUntilSuccess` | `true` | `false` | `false` drops and logs a delivery whose write has failed three times for a transient reason, as Java does by default. With `true` the write is retried until it succeeds. |
 
-With `timerSkipUnknownError = false`, Java still drops a missing payload or a rejected message; Rust keeps it. Quarantined timers are recorded in `timer-v2/quarantine.jsonl` under the store root.
+A timer or recall whose payload CommitLog cleanup has deleted, for example under disk pressure, is skipped with a warning whatever these keys say, as in Java: nothing can bring the payload back, and waiting for it would hold back every later timer. A skipped recall no longer cancels its timer.
+
+With `timerSkipUnknownError = false`, Java also drops a payload it cannot read and a rejected message; Rust keeps them. Quarantined timers are recorded in `timer-v2/quarantine.jsonl` under the store root.
 
 ## Example and validation scope
 

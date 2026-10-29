@@ -68,7 +68,8 @@ impl OverdueTimers {
 /// One Source batch.
 #[derive(Default)]
 pub(super) struct SourceBatch {
-    /// Sources indexed, or left to the Extended timeline.
+    /// Sources indexed, left to the Extended timeline, or skipped because CommitLog cleanup
+    /// deleted them.
     pub(super) processed: usize,
     /// The overdue timers that follow them, in Timer CQ order. The enqueue cursor stays in front
     /// of each one until it is written.
