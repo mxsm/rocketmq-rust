@@ -62,6 +62,9 @@ pub mod topic_detail;
 #[path = "features/topics.rs"]
 pub mod topics;
 
+#[path = "features/consumer_dialogs.rs"]
+pub mod consumer_dialogs;
+
 #[path = "features/consumers_store.rs"]
 pub mod consumers_store;
 

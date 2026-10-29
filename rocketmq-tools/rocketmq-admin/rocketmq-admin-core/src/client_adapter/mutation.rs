@@ -13,6 +13,9 @@
 
 //! Mutation-only public adapter over the explicit client mutation capability.
 
+#[path = "mutation/consumer_configuration.rs"]
+mod consumer_configuration;
+
 #[path = "mutation/operation.rs"]
 mod operation;
 #[path = "mutation/supervised.rs"]

@@ -27,6 +27,9 @@ use rocketmq_dashboard_common::{
 };
 use rocketmq_runtime::{ChildServiceContext, ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
 
+#[path = "audit_consumer_fields_tests.rs"]
+mod consumer_fields;
+
 #[path = "audit_topic_fields_tests.rs"]
 mod topic_fields;
 
@@ -277,6 +280,8 @@ fn audit_topic_send_and_consumer_partial_use_real_service_hooks_and_never_persis
     consumers.queue_inventory(Ok(ConsumerInventory {
         groups: Vec::new(),
         targets: vec![target.clone()],
+        target_observation: ConsumerObservationState::Complete,
+        group_observation: ConsumerObservationState::Complete,
         observation: ConsumerObservationState::Complete,
         failures: Vec::new(),
         capabilities: rocketmq_dashboard_common::ConsumerCapabilities::for_scope(
@@ -306,7 +311,11 @@ fn audit_topic_send_and_consumer_partial_use_real_service_hooks_and_never_persis
         let result = fixture
             .services
             .create_consumer(
-                ConsumerRequestScope { revision: 0, epoch: 1 },
+                ConsumerRequestScope {
+                    revision: 0,
+                    epoch: 1,
+                    query_scope: Default::default(),
+                },
                 ConsumerCreateCommand {
                     group,
                     targets: vec![target],
@@ -314,6 +323,7 @@ fn audit_topic_send_and_consumer_partial_use_real_service_hooks_and_never_persis
                         retry_max_times: 16,
                         retry_queue_nums: 1,
                         consume_timeout_minutes: 15,
+                        ..ConsumerConfigEntries::default()
                     },
                     authorization: ConsumerAclClassification::Authorized,
                 },

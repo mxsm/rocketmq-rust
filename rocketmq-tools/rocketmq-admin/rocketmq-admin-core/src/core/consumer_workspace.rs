@@ -19,17 +19,18 @@ use serde::{Deserialize, Serialize};
 use crate::core::{
     consumer::{
         DashboardConsumerConfigAttribute, DashboardConsumerConnection, DashboardConsumerProgress,
-        DashboardConsumerRunningInfo, DashboardConsumerRunningInfoRequest, SubscriptionGroupConfigCasState,
+        DashboardConsumerRunningInfo, DashboardConsumerRunningInfoRequest,
     },
     dashboard::DashboardProducerConnections,
     AdminFuture,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceObservationState {
     Complete,
     Partial,
+    #[default]
     Unknown,
 }
 
@@ -143,6 +144,14 @@ pub struct ConsumerInventoryItem {
 pub struct ConsumerInventoryResult {
     pub items: Vec<ConsumerInventoryItem>,
     pub targets: Vec<ConsumerWorkspaceTarget>,
+    /// NameServer Broker target discovery, independent of Group Clients/Progress reads.
+    /// This does not establish whether a Group is absent on any selected target.
+    #[serde(default)]
+    pub target_observation: WorkspaceObservationState,
+    /// Subscription-group membership discovery across all Broker targets, before
+    /// per-Group Clients/Progress observations are added to the overall state.
+    #[serde(default)]
+    pub group_observation: WorkspaceObservationState,
     pub observation: WorkspaceObservationState,
     pub failures: Vec<WorkspaceTargetFailure>,
 }
@@ -167,7 +176,9 @@ pub struct ConsumerProgressResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumerConfigTarget {
     pub target: ConsumerWorkspaceTarget,
-    pub observation: WorkspaceObservation<SubscriptionGroupConfigCasState>,
+    pub observation: WorkspaceObservation<super::consumer_configuration::ConsumerConfigValue>,
+    #[serde(default)]
+    pub details: super::consumer_configuration::ConsumerConfigDetails,
     /// Safe display-only configuration entries. Sensitive attributes are omitted.
     pub entries: Vec<DashboardConsumerConfigAttribute>,
 }
@@ -291,6 +302,18 @@ mod tests {
         };
         assert_eq!(observation.state(), WorkspaceObservationState::Unknown);
         assert_eq!(observation.value(), None);
+    }
+
+    #[test]
+    fn legacy_consumer_inventory_does_not_imply_trusted_target_discovery() {
+        let inventory: ConsumerInventoryResult = serde_json::from_str(
+            r#"{"items":[],"targets":[{"cluster_name":"c","broker_name":"b","broker_address":"b:10911"}],"observation":"complete","failures":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(inventory.target_observation, WorkspaceObservationState::Unknown);
+        assert_eq!(inventory.group_observation, WorkspaceObservationState::Unknown);
+        assert_eq!(inventory.observation, WorkspaceObservationState::Complete);
+        assert_eq!(inventory.targets.len(), 1);
     }
 
     #[test]

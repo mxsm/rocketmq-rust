@@ -90,6 +90,30 @@ pub enum AuditTopicField {
     MessageType,
 }
 
+/// Reviewed Consumer field intent; values, credentials and diagnostics are never represented here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditConsumerField {
+    RetryMaxTimes,
+    RetryQueueNums,
+    ConsumeTimeoutMinutes,
+    ConsumeEnable,
+    ConsumeFromMinEnable,
+    ConsumeBroadcastEnable,
+    ConsumeMessageOrderly,
+    BrokerId,
+    WhichBrokerWhenConsumeSlowly,
+}
+
+/// Consumer internal-topic cleanup results, measured in steps rather than Broker targets.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AuditConsumerCleanupFacts {
+    pub applied_steps: u32,
+    pub failed_steps: u32,
+    pub unconfirmed_steps: u32,
+}
+
 /// Bounded facts that cannot contain message bodies, diagnostics, secrets, or configuration values.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -98,6 +122,10 @@ pub struct AuditFacts {
     pub unconfirmed_targets: u32,
     pub refresh_failed: bool,
     pub failure_code: Option<AuditFailureCode>,
+    /// Internal-topic cleanup uses step units, independently of Broker mutation targets.
+    /// Older events retain their original facts and omit this optional projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumer_cleanup: Option<AuditConsumerCleanupFacts>,
     /// Identity returned by successful local authentication, independently of the actor that
     /// initiated the login. The authentication service supplies this fact after verification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,6 +162,9 @@ pub struct AuditAcceptedOperation {
     /// The closed enum bounds this set to five names; older records deserialize as an empty set.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub topic_fields: BTreeSet<AuditTopicField>,
+    /// The closed set remains empty for older records and non-Consumer operations.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub consumer_fields: BTreeSet<AuditConsumerField>,
 }
 
 /// One immutable terminal event per accepted request ID in the retained local journal.
@@ -311,7 +342,18 @@ mod tests {
         });
         let mut event: AuditEvent = serde_json::from_value(legacy.clone()).unwrap();
         assert!(event.operation.topic_fields.is_empty());
+        assert!(event.operation.consumer_fields.is_empty());
+        assert!(event.facts.consumer_cleanup.is_none());
         assert_eq!(serde_json::to_value(&event).unwrap(), legacy);
+        let mut historical_consumer = legacy.clone();
+        historical_consumer["operation"]["action"] = serde_json::json!("consumer_deleted");
+        historical_consumer["operation"]["context"]["resource"] =
+            serde_json::json!({"kind":"consumer_group","identity":"orders"});
+        historical_consumer["facts"]["appliedTargets"] = serde_json::json!(3);
+        let historical: AuditEvent = serde_json::from_value(historical_consumer.clone()).unwrap();
+        assert_eq!(historical.facts.applied_targets, 3);
+        assert!(historical.facts.consumer_cleanup.is_none());
+        assert_eq!(serde_json::to_value(&historical).unwrap(), historical_consumer);
         event.operation.topic_fields = BTreeSet::from([AuditTopicField::ReadQueueCount, AuditTopicField::Ordered]);
         let mut encoded = serde_json::to_value(&event).unwrap();
         assert_eq!(
@@ -321,5 +363,25 @@ mod tests {
         assert_eq!(serde_json::from_value::<AuditEvent>(encoded.clone()).unwrap(), event);
         encoded["operation"]["topicFields"] = serde_json::json!(["message_body"]);
         assert!(serde_json::from_value::<AuditEvent>(encoded).is_err());
+    }
+    #[test]
+    fn legacy_consumer_audit_intent_round_trips_without_config_values() {
+        let legacy = serde_json::json!({"context":{"environmentId":"env-legacy","configurationRevision":2,"requestId":"request-c","actor":{"kind":"local_desktop"},"resource":{"kind":"consumer_group","identity":"orders"}},"action":"consumer_updated","acceptedAtEpochMs":100});
+        let mut operation: AuditAcceptedOperation = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(operation.consumer_fields.is_empty());
+        assert_eq!(serde_json::to_value(&operation).unwrap(), legacy);
+        operation.consumer_fields =
+            BTreeSet::from([AuditConsumerField::RetryMaxTimes, AuditConsumerField::ConsumeEnable]);
+        let mut value = serde_json::to_value(&operation).unwrap();
+        assert_eq!(
+            value["consumerFields"],
+            serde_json::json!(["retry_max_times", "consume_enable"])
+        );
+        assert_eq!(
+            serde_json::from_value::<AuditAcceptedOperation>(value.clone()).unwrap(),
+            operation
+        );
+        value["consumerFields"] = serde_json::json!(["jstack"]);
+        assert!(serde_json::from_value::<AuditAcceptedOperation>(value).is_err());
     }
 }

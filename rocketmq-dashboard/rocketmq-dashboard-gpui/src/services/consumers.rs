@@ -21,10 +21,11 @@ pub(crate) mod test_support;
 use std::{future::Future, sync::Arc};
 
 use rocketmq_dashboard_common::{
-    AuditAction, ConsumerClients, ConsumerConfigPatchCommand, ConsumerConfigPatchOutcome, ConsumerConfiguration,
-    ConsumerCreateCommand, ConsumerDeleteCommand, ConsumerDiagnosticPayload, ConsumerDiagnosticRequest,
-    ConsumerIdentity, ConsumerInventory, ConsumerObservation, ConsumerObservationState, ConsumerPartialOutcome,
-    ConsumerProgress, OperationResource, ProducerConnectionQuery, ProducerConnections, ProducerInventory,
+    AuditAction, AuditConsumerField, ConsumerClients, ConsumerConfigPatchCommand, ConsumerConfigPatchOutcome,
+    ConsumerConfiguration, ConsumerCreateCommand, ConsumerDeleteCommand, ConsumerDiagnosticPayload,
+    ConsumerDiagnosticRequest, ConsumerIdentity, ConsumerInventory, ConsumerObservation, ConsumerObservationState,
+    ConsumerPartialOutcome, ConsumerProgress, OperationResource, ProducerConnectionQuery, ProducerConnections,
+    ProducerInventory,
 };
 
 use super::{AppServices, ServiceFuture};
@@ -37,6 +38,7 @@ use crate::{
 pub struct ConsumerRequestScope {
     pub revision: u64,
     pub epoch: u64,
+    pub query_scope: rocketmq_dashboard_common::ConsumerQueryScope,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +81,14 @@ pub enum ConsumerConfigMutationResult {
     GenerationConflict {
         expected_generation: u64,
         actual_generation: u64,
+    },
+    PersistenceIncomplete {
+        /// Whether this command was confirmed applied in memory, independently of durability.
+        applied: bool,
+        previous_generation: u64,
+        generation: u64,
+        persistence: rocketmq_dashboard_common::ConsumerConfigPersistence,
+        invalidations: Vec<ConsumerCacheInvalidation>,
     },
 }
 
@@ -157,7 +167,7 @@ impl ConsumerBackend for RealConsumerBackend {
     fn inventory(&self, scope: ConsumerRequestScope) -> ServiceFuture<'_, Result<ConsumerInventory, UiError>> {
         Box::pin(async move {
             self.provider()?
-                .consumer_inventory(scope.revision)
+                .consumer_inventory(scope.revision, scope.query_scope)
                 .await
                 .map_err(query_error)
         })
@@ -170,7 +180,7 @@ impl ConsumerBackend for RealConsumerBackend {
     ) -> ServiceFuture<'_, Result<ConsumerObservation<ConsumerClients>, UiError>> {
         Box::pin(async move {
             self.provider()?
-                .consumer_clients(scope.revision, group)
+                .consumer_clients(scope.revision, scope.query_scope, group)
                 .await
                 .map_err(query_error)
         })
@@ -183,7 +193,7 @@ impl ConsumerBackend for RealConsumerBackend {
     ) -> ServiceFuture<'_, Result<ConsumerObservation<ConsumerProgress>, UiError>> {
         Box::pin(async move {
             self.provider()?
-                .consumer_progress(scope.revision, group)
+                .consumer_progress(scope.revision, scope.query_scope, group)
                 .await
                 .map_err(query_error)
         })
@@ -367,19 +377,34 @@ impl AppServices {
     ) -> Result<ConsumerMutationResult, UiError> {
         let backend = Arc::clone(&self.consumers);
         let group = command.group.clone();
-        let operation = self.accept_operation(
+        let mut operation = self.accept_operation(
             scope.revision,
             AuditAction::ConsumerCreated,
             OperationResource::ConsumerGroup(group.as_str().to_owned()),
         )?;
+        if let Some(operation) = &mut operation {
+            operation.consumer_fields = [
+                AuditConsumerField::RetryMaxTimes,
+                AuditConsumerField::RetryQueueNums,
+                AuditConsumerField::ConsumeTimeoutMinutes,
+                AuditConsumerField::ConsumeEnable,
+                AuditConsumerField::ConsumeFromMinEnable,
+                AuditConsumerField::ConsumeBroadcastEnable,
+                AuditConsumerField::ConsumeMessageOrderly,
+                AuditConsumerField::BrokerId,
+                AuditConsumerField::WhichBrokerWhenConsumeSlowly,
+            ]
+            .into_iter()
+            .collect();
+        }
         self.run_mutation("gpui-service-consumer-create", operation, async move {
             let mut outcome = backend.create(scope, command).await?;
-            if outcome.applied_count() == 0 {
+            if !outcome.has_applied_effects() {
                 return Ok(ConsumerMutationResult::Rejected(outcome));
             }
             let invalidations = consumer_invalidations(group);
             match backend.inventory(scope).await {
-                Ok(inventory) if inventory.observation == ConsumerObservationState::Complete => {
+                Ok(inventory) if inventory.group_observation == ConsumerObservationState::Complete => {
                     Ok(ConsumerMutationResult::Applied {
                         outcome,
                         inventory,
@@ -414,13 +439,65 @@ impl AppServices {
     ) -> Result<ConsumerConfigMutationResult, UiError> {
         let backend = Arc::clone(&self.consumers);
         let group = command.snapshot.identity.group.clone();
-        let operation = self.accept_operation(
+        let mut operation = self.accept_operation(
             scope.revision,
             AuditAction::ConsumerUpdated,
             OperationResource::ConsumerGroup(group.as_str().to_owned()),
         )?;
+        if let Some(operation) = &mut operation {
+            operation.consumer_fields = [
+                (
+                    command.patch.retry_max_times.is_some(),
+                    AuditConsumerField::RetryMaxTimes,
+                ),
+                (
+                    command.patch.retry_queue_nums.is_some(),
+                    AuditConsumerField::RetryQueueNums,
+                ),
+                (
+                    command.patch.consume_timeout_minutes.is_some(),
+                    AuditConsumerField::ConsumeTimeoutMinutes,
+                ),
+                (
+                    command.patch.consume_enable.is_some(),
+                    AuditConsumerField::ConsumeEnable,
+                ),
+                (
+                    command.patch.consume_from_min_enable.is_some(),
+                    AuditConsumerField::ConsumeFromMinEnable,
+                ),
+                (
+                    command.patch.consume_broadcast_enable.is_some(),
+                    AuditConsumerField::ConsumeBroadcastEnable,
+                ),
+                (
+                    command.patch.consume_message_orderly.is_some(),
+                    AuditConsumerField::ConsumeMessageOrderly,
+                ),
+                (command.patch.broker_id.is_some(), AuditConsumerField::BrokerId),
+                (
+                    command.patch.which_broker_when_consume_slowly.is_some(),
+                    AuditConsumerField::WhichBrokerWhenConsumeSlowly,
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(present, field)| present.then_some(field))
+            .collect();
+        }
         self.run_mutation("gpui-service-consumer-config-patch", operation, async move {
             match backend.patch_configuration(scope, command).await? {
+                ConsumerConfigPatchOutcome::PersistenceIncomplete {
+                    applied,
+                    previous_generation,
+                    generation,
+                    persistence,
+                } => Ok(ConsumerConfigMutationResult::PersistenceIncomplete {
+                    applied,
+                    previous_generation,
+                    generation,
+                    persistence,
+                    invalidations: consumer_invalidations(group),
+                }),
                 ConsumerConfigPatchOutcome::GenerationConflict {
                     expected_generation,
                     actual_generation,
@@ -436,7 +513,7 @@ impl AppServices {
                     let reload = match backend.configuration(scope, group).await {
                         Ok(configuration) if configuration.observation == ConsumerObservationState::Complete => {
                             backend.inventory(scope).await.and_then(|inventory| {
-                                (inventory.observation == ConsumerObservationState::Complete)
+                                (inventory.group_observation == ConsumerObservationState::Complete)
                                     .then_some((configuration, inventory))
                                     .ok_or_else(incomplete_reload_error)
                             })
@@ -479,12 +556,12 @@ impl AppServices {
         )?;
         self.run_mutation("gpui-service-consumer-delete", operation, async move {
             let mut outcome = backend.delete(scope, command).await?;
-            if outcome.applied_count() == 0 {
+            if !outcome.has_applied_effects() {
                 return Ok(ConsumerMutationResult::Rejected(outcome));
             }
             let invalidations = consumer_invalidations(group);
             match backend.inventory(scope).await {
-                Ok(inventory) if inventory.observation == ConsumerObservationState::Complete => {
+                Ok(inventory) if inventory.group_observation == ConsumerObservationState::Complete => {
                     Ok(ConsumerMutationResult::Applied {
                         outcome,
                         inventory,
@@ -627,6 +704,8 @@ mod tests {
         rocketmq_dashboard_common::ConsumerInventory {
             groups: Vec::new(),
             targets: vec![target()],
+            target_observation: rocketmq_dashboard_common::ConsumerObservationState::Complete,
+            group_observation: observation,
             observation,
             failures: vec![rocketmq_dashboard_common::ConsumerTargetFailure {
                 target: "broker-a".into(),
@@ -636,6 +715,151 @@ mod tests {
             }],
             capabilities: ConsumerCapabilities::for_scope(ConnectionScope::NameServer),
         }
+    }
+
+    #[test]
+    fn consumer_mutations_reload_complete_group_catalog_without_hiding_partial_diagnostics() {
+        use rocketmq_dashboard_common::{
+            ConsumerCategory, ConsumerGroupObservation, ConsumerObservation, ConsumerObservationState,
+            ConsumerUnknownReason,
+        };
+        let row = ConsumerGroupObservation {
+            identity: group(),
+            category: ConsumerCategory::Application,
+            connection_state: ConsumerObservation::Unknown {
+                reason: ConsumerUnknownReason::Unavailable,
+            },
+            client_count: ConsumerObservation::Unknown {
+                reason: ConsumerUnknownReason::Unavailable,
+            },
+            lag: ConsumerObservation::Unknown {
+                reason: ConsumerUnknownReason::Unavailable,
+            },
+            consume_type: ConsumerObservation::Unknown {
+                reason: ConsumerUnknownReason::Unavailable,
+            },
+            message_model: ConsumerObservation::Unknown {
+                reason: ConsumerUnknownReason::Unavailable,
+            },
+            targets: vec![target()],
+        };
+        let mut unrelated = row.clone();
+        unrelated.identity = rocketmq_dashboard_common::ConsumerIdentity::parse("unrelated-offline-group").unwrap();
+        let mut catalog = incomplete_inventory(ConsumerObservationState::Partial);
+        catalog.groups = vec![row, unrelated];
+        catalog.group_observation = ConsumerObservationState::Complete;
+        catalog.failures = [ConsumerFailureStage::Clients, ConsumerFailureStage::Progress]
+            .into_iter()
+            .map(|stage| rocketmq_dashboard_common::ConsumerTargetFailure {
+                target: "unrelated-offline-group".into(),
+                stage,
+                code: ConsumerFailureCode::Unavailable,
+                retryable: true,
+            })
+            .collect();
+        let snapshot = ConsumerConfigSnapshot {
+            identity: ConsumerConfigIdentity {
+                group: group(),
+                target: target(),
+            },
+            generation: 7,
+            entries: ConsumerConfigEntries::default(),
+            read_only: Default::default(),
+        };
+        let fake = Arc::new(FakeConsumerBackend::default());
+        fake.queue_create(Ok(outcome(ConsumerMutationKind::Create)));
+        fake.queue_inventory(Ok(catalog.clone()));
+        fake.queue_patch(Ok(rocketmq_dashboard_common::ConsumerConfigPatchOutcome::Applied {
+            previous_generation: 7,
+            generation: 8,
+        }));
+        let mut updated = snapshot.clone();
+        updated.generation = 8;
+        updated.entries.retry_max_times = 2;
+        fake.queue_configuration(Ok(rocketmq_dashboard_common::ConsumerConfiguration {
+            group: group(),
+            snapshots: vec![updated],
+            observation: ConsumerObservationState::Complete,
+            failures: Vec::new(),
+        }));
+        fake.queue_inventory(Ok(catalog.clone()));
+        catalog.groups.retain(|row| row.identity != group());
+        fake.queue_delete(Ok(outcome(ConsumerMutationKind::Delete)));
+        fake.queue_inventory(Ok(catalog));
+        let services = AppServices::default().with_consumer_backend(fake.clone());
+        let scope = ConsumerRequestScope {
+            revision: 1,
+            epoch: 1,
+            query_scope: Default::default(),
+        };
+        let assert_partial = |inventory: &rocketmq_dashboard_common::ConsumerInventory| {
+            assert_eq!(inventory.group_observation, ConsumerObservationState::Complete);
+            assert_eq!(inventory.observation, ConsumerObservationState::Partial);
+            assert_eq!(inventory.failures.len(), 2);
+            assert!(
+                inventory
+                    .groups
+                    .iter()
+                    .all(|row| matches!(row.client_count, ConsumerObservation::Unknown { .. })
+                        && matches!(row.lag, ConsumerObservation::Unknown { .. }))
+            );
+        };
+        let create = ready(services.create_consumer(
+            scope,
+            rocketmq_dashboard_common::ConsumerCreateCommand {
+                group: group(),
+                targets: vec![target()],
+                entries: ConsumerConfigEntries::default(),
+                authorization: ConsumerAclClassification::Authorized,
+            },
+        ))
+        .unwrap();
+        let ConsumerMutationResult::Applied { outcome, inventory, .. } = create else {
+            panic!("complete Group catalog must reload after create")
+        };
+        assert!(!outcome.reload_failed);
+        assert_partial(&inventory);
+        assert!(inventory.groups.iter().any(|row| row.identity == group()));
+        let edit = ready(services.patch_consumer_config(
+            scope,
+            rocketmq_dashboard_common::ConsumerConfigPatchCommand {
+                snapshot,
+                patch: ConsumerConfigPatch {
+                    retry_max_times: Some(2),
+                    ..Default::default()
+                },
+                authorization: ConsumerAclClassification::Authorized,
+            },
+        ))
+        .unwrap();
+        let ConsumerConfigMutationResult::Applied {
+            configuration,
+            inventory,
+            ..
+        } = edit
+        else {
+            panic!("complete configuration and Group catalog must reload after edit")
+        };
+        assert_eq!(configuration.snapshots[0].entries.retry_max_times, 2);
+        assert_partial(&inventory);
+        let delete = ready(services.delete_consumer(
+            scope,
+            rocketmq_dashboard_common::ConsumerDeleteCommand {
+                group: group(),
+                selected_targets: vec![target()],
+                authoritative_targets: vec![target()],
+                authorization: ConsumerAclClassification::Authorized,
+            },
+        ))
+        .unwrap();
+        let ConsumerMutationResult::Applied { outcome, inventory, .. } = delete else {
+            panic!("complete Group catalog must reload after delete")
+        };
+        assert!(!outcome.reload_failed);
+        assert_partial(&inventory);
+        assert!(!inventory.groups.iter().any(|row| row.identity == group()));
+        let calls = fake.calls();
+        assert_eq!((calls.create.len(), calls.patch.len(), calls.delete.len()), (1, 1, 1));
     }
 
     #[test]
@@ -660,7 +884,11 @@ mod tests {
             failures: Vec::new(),
         }));
         let services = AppServices::default().with_consumer_backend(fake);
-        let scope = ConsumerRequestScope { revision: 1, epoch: 1 };
+        let scope = ConsumerRequestScope {
+            revision: 1,
+            epoch: 1,
+            query_scope: Default::default(),
+        };
 
         let create = ready(services.create_consumer(
             scope,
@@ -671,6 +899,7 @@ mod tests {
                     retry_max_times: 16,
                     retry_queue_nums: 1,
                     consume_timeout_minutes: 15,
+                    ..ConsumerConfigEntries::default()
                 },
                 authorization: ConsumerAclClassification::Authorized,
             },
@@ -709,7 +938,9 @@ mod tests {
                         retry_max_times: 16,
                         retry_queue_nums: 1,
                         consume_timeout_minutes: 15,
+                        ..ConsumerConfigEntries::default()
                     },
+                    read_only: Default::default(),
                 },
                 patch: ConsumerConfigPatch {
                     retry_max_times: Some(15),

@@ -15,7 +15,7 @@
 //! Explicit business-result projections; authoritative reload failures remain separate facts.
 
 use rocketmq_dashboard_common::{
-    AuditFacts, AuditFailureCode, AuditOutcome, ConsumerFailureCode, ConsumerFailureStage, TopicFailureCode,
+    AuditConsumerCleanupFacts, AuditFacts, AuditFailureCode, AuditOutcome, ConsumerFailureCode, TopicFailureCode,
     TopicFailureStage,
 };
 
@@ -54,19 +54,49 @@ impl MutationAudit for ConsumerMutationResult {
                 outcome
             }
         };
-        let (mut result, facts) =
-            target_outcome(outcome.applied_count(), outcome.failed_count(), outcome.reload_failed);
-        let may_have_executed = outcome.targets.iter().any(|target| {
-            !target.applied
-                && matches!(
-                    target.stage,
-                    ConsumerFailureStage::Mutation | ConsumerFailureStage::Cleanup
-                )
-                && matches!(target.failure, Some(ConsumerFailureCode::Unavailable) | None)
-        });
-        if outcome.applied_count() == 0 && !may_have_executed {
-            result = AuditOutcome::Rejected;
-        }
+        let counts = outcome.counts();
+        let unconfirmed = counts.broker_targets.unconfirmed + counts.cleanup_steps.unconfirmed;
+        let not_applied = counts.broker_targets.not_applied + counts.cleanup_steps.not_applied;
+        let result = if outcome.has_applied_effects() {
+            if unconfirmed + not_applied > 0 {
+                AuditOutcome::Partial
+            } else {
+                AuditOutcome::Succeeded
+            }
+        } else if unconfirmed > 0 {
+            AuditOutcome::Unknown
+        } else {
+            AuditOutcome::Rejected
+        };
+        let facts = AuditFacts {
+            applied_targets: u32::try_from(counts.broker_targets.applied).unwrap_or(u32::MAX),
+            unconfirmed_targets: u32::try_from(counts.broker_targets.unconfirmed).unwrap_or(u32::MAX),
+            refresh_failed: outcome.reload_failed,
+            consumer_cleanup: (counts.cleanup_steps.total() > 0).then(|| AuditConsumerCleanupFacts {
+                applied_steps: u32::try_from(counts.cleanup_steps.applied).unwrap_or(u32::MAX),
+                failed_steps: u32::try_from(counts.cleanup_steps.not_applied).unwrap_or(u32::MAX),
+                unconfirmed_steps: u32::try_from(counts.cleanup_steps.unconfirmed).unwrap_or(u32::MAX),
+            }),
+            failure_code: if unconfirmed > 0 {
+                Some(AuditFailureCode::Unknown)
+            } else {
+                outcome
+                    .targets
+                    .iter()
+                    .filter(|target| !target.applied)
+                    .find_map(|target| match target.failure {
+                        Some(ConsumerFailureCode::NotFound | ConsumerFailureCode::InvalidData) => {
+                            Some(AuditFailureCode::Validation)
+                        }
+                        Some(ConsumerFailureCode::Unsupported) => Some(AuditFailureCode::CapabilityUnavailable),
+                        Some(ConsumerFailureCode::Conflict) => Some(AuditFailureCode::Conflict),
+                        Some(ConsumerFailureCode::Authorization) => Some(AuditFailureCode::Authentication),
+                        Some(ConsumerFailureCode::Unavailable) => Some(AuditFailureCode::Connection),
+                        Some(ConsumerFailureCode::NotApplied) | None => None,
+                    })
+            },
+            ..Default::default()
+        };
         (result, facts)
     }
 }
@@ -133,6 +163,34 @@ impl MutationAudit for TopicFieldsPatchResult {
 impl MutationAudit for ConsumerConfigMutationResult {
     fn audit(&self) -> (AuditOutcome, AuditFacts) {
         match self {
+            Self::PersistenceIncomplete {
+                applied, persistence, ..
+            } => {
+                use rocketmq_dashboard_common::ConsumerConfigPersistence;
+                let (outcome, failure_code, unconfirmed_targets) = match (applied, persistence) {
+                    (true, ConsumerConfigPersistence::Failed) => {
+                        (AuditOutcome::Partial, AuditFailureCode::Connection, 0)
+                    }
+                    (false, ConsumerConfigPersistence::Failed) => {
+                        (AuditOutcome::Failed, AuditFailureCode::Connection, 0)
+                    }
+                    (true, ConsumerConfigPersistence::Unconfirmed) => {
+                        (AuditOutcome::Partial, AuditFailureCode::Unknown, 1)
+                    }
+                    (false, ConsumerConfigPersistence::Unconfirmed) => {
+                        (AuditOutcome::Unknown, AuditFailureCode::Unknown, 1)
+                    }
+                };
+                (
+                    outcome,
+                    AuditFacts {
+                        applied_targets: u32::from(*applied),
+                        unconfirmed_targets,
+                        failure_code: Some(failure_code),
+                        ..Default::default()
+                    },
+                )
+            }
             Self::GenerationConflict { .. } => rejected_conflict(),
             Self::Applied { .. } => target_outcome(1, 0, false),
             Self::AppliedReloadFailed { .. } => target_outcome(1, 0, true),

@@ -14,12 +14,14 @@
 
 //! Reusable page heading composition.
 
-use gpui::{Div, Hsla, ParentElement as _, Styled as _, div};
+use gpui::{Div, Hsla, InteractiveElement as _, ParentElement as _, Styled as _, div};
 use gpui_component::StyledExt as _;
 
 /// Renders a page title with a short scoped description.
 pub fn render(title: &str, description: &str, foreground: Hsla, muted_foreground: Hsla) -> Div {
     div()
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap_1()
@@ -32,6 +34,10 @@ pub fn render(title: &str, description: &str, foreground: Hsla, muted_foreground
         )
         .child(
             div()
+                .debug_selector(|| "page-description".to_owned())
+                .w_full()
+                .min_w_0()
+                .whitespace_normal()
                 .text_sm()
                 .text_color(muted_foreground)
                 .child(description.to_owned()),

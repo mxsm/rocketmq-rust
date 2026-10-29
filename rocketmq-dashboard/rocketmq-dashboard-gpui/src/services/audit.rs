@@ -130,6 +130,7 @@ impl AuditService {
             action,
             accepted_at_epoch_ms: now_epoch_ms()?,
             topic_fields: Default::default(),
+            consumer_fields: Default::default(),
         };
         operation.validate().map_err(|source| {
             UiError::caused_by(
@@ -287,6 +288,7 @@ pub(super) fn target_outcome(applied: usize, unconfirmed: usize, refresh_failed:
             unconfirmed_targets: u32::try_from(unconfirmed).unwrap_or(u32::MAX),
             refresh_failed,
             failure_code: None,
+            consumer_cleanup: None,
             authenticated_actor: None,
         },
     )

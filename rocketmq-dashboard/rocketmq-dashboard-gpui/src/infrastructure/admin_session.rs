@@ -28,9 +28,11 @@ use rocketmq_admin_core::{
         },
         consumer::{
             ConsumerExactBatchDeleteRequest, ConsumerExactBatchMutationAdmin, ConsumerExactBatchUpsertMutationAdmin,
-            ConsumerExactBatchUpsertRequest, ConsumerMutationAdmin, DashboardConsumerBatchResult,
-            DashboardConsumerRunningInfo, DashboardConsumerRunningInfoRequest, PatchSubscriptionGroupConfigRequest,
-            SubscriptionGroupConfigPatchResult,
+            ConsumerExactBatchUpsertRequest, DashboardConsumerBatchResult, DashboardConsumerRunningInfo,
+            DashboardConsumerRunningInfoRequest,
+        },
+        consumer_configuration::{
+            ConsumerWorkspaceConfigPatchResult, ConsumerWorkspaceMutationAdmin, PatchConsumerWorkspaceConfigRequest,
         },
         consumer_workspace::{
             ConsumerClientsResult, ConsumerConfigPresenceResult, ConsumerConfigurationResult,
@@ -234,8 +236,8 @@ pub(crate) trait DashboardMutationSession: Send {
     }
     fn patch_consumer_config<'a>(
         &'a mut self,
-        _request: &'a PatchSubscriptionGroupConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<SubscriptionGroupConfigPatchResult>> {
+        _request: &'a PatchConsumerWorkspaceConfigRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerWorkspaceConfigPatchResult>> {
         Box::pin(async { Err(unsupported_consumer_session("patch_consumer_config")) })
     }
     fn consume_message_directly<'a>(
@@ -609,9 +611,9 @@ impl DashboardMutationSession for RealMutationSession {
 
     fn patch_consumer_config<'a>(
         &'a mut self,
-        request: &'a PatchSubscriptionGroupConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<SubscriptionGroupConfigPatchResult>> {
-        ConsumerMutationAdmin::patch_config_if_version(&mut self.inner, request)
+        request: &'a PatchConsumerWorkspaceConfigRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerWorkspaceConfigPatchResult>> {
+        ConsumerWorkspaceMutationAdmin::patch_consumer_workspace_config(&mut self.inner, request)
     }
 
     fn consume_message_directly<'a>(
