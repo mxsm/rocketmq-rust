@@ -34,6 +34,8 @@ pub(crate) mod messages;
 pub(crate) mod monitors;
 #[path = "services/topics.rs"]
 pub(crate) mod topics;
+#[path = "services/topology.rs"]
+pub(crate) mod topology;
 
 use std::{
     fmt,
@@ -566,6 +568,7 @@ pub struct AppServices {
     messages: Arc<dyn messages::MessageBackend>,
     acl: Arc<dyn acl::AclBackend>,
     dlq: Arc<dyn dlq::DlqBackend>,
+    topology: Arc<dyn topology::TopologyBackend>,
 }
 
 impl AppServices {
@@ -590,6 +593,7 @@ impl AppServices {
             messages: messages::RealMessageBackend::unavailable(),
             acl: acl::RealAclBackend::unavailable(),
             dlq: dlq::RealDlqBackend::unavailable(),
+            topology: topology::RealTopologyBackend::unavailable(),
         }
     }
 
@@ -662,8 +666,13 @@ impl AppServices {
             .map(acl::RealAclBackend::new)
             .unwrap_or_else(acl::RealAclBackend::unavailable);
         let dlq = admin_provider
+            .as_ref()
+            .cloned()
             .map(dlq::RealDlqBackend::new)
             .unwrap_or_else(dlq::RealDlqBackend::unavailable);
+        let topology = admin_provider
+            .map(topology::RealTopologyBackend::new)
+            .unwrap_or_else(topology::RealTopologyBackend::unavailable);
         let history_sampler: Arc<dyn HistorySampler> = dashboard.clone();
         let dashboard_broker = dashboard_broker::RealDashboardBrokerOperations::new(dashboard, brokers);
         let audit = audit::AuditService::new(Arc::clone(&store), Arc::clone(&auth));
@@ -696,6 +705,7 @@ impl AppServices {
             messages,
             acl,
             dlq,
+            topology,
         }
     }
 

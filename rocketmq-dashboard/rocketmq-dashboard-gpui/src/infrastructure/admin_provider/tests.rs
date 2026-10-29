@@ -18,6 +18,8 @@
 mod acl_tests;
 #[path = "dlq_tests.rs"]
 mod dlq_tests;
+#[path = "topology_tests.rs"]
+mod topology_tests;
 
 use std::{
     collections::BTreeMap,
@@ -60,6 +62,9 @@ impl HealthClock for FixedClock {
 
 #[derive(Default)]
 struct FakeControls {
+    topology_reads: std::sync::Mutex<Vec<rocketmq_dashboard_common::TopologySource>>,
+    topology_replies:
+        std::sync::Mutex<std::collections::VecDeque<crate::infrastructure::admin_session::TopologyAdminData>>,
     acl_reads: std::sync::Mutex<Vec<(String, bool)>>,
     acl_users: std::sync::Mutex<BTreeMap<String, Vec<serde_json::Value>>>,
     acl_policies: std::sync::Mutex<BTreeMap<String, Vec<serde_json::Value>>>,
@@ -151,6 +156,20 @@ impl FakeQuerySession {
 }
 
 impl DashboardQuerySession for FakeQuerySession {
+    fn topology_layer(
+        &self,
+        source: rocketmq_dashboard_common::TopologySource,
+    ) -> SessionFuture<'_, AdminResult<crate::infrastructure::admin_session::TopologyAdminData>> {
+        self.controls.topology_reads.lock().unwrap().push(source);
+        let result = self
+            .controls
+            .topology_replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| AdminError::operation_failed("topology", "unexpected topology read"));
+        Box::pin(std::future::ready(result))
+    }
     fn acl_documents<'a>(
         &'a self,
         address: &'a str,

@@ -30,6 +30,19 @@ const CONTROLLER_B: &str = "10.0.0.2:9878";
 
 type TopologyEntry<'a> = (&'a str, &'a str, &'a [(u64, &'a str)]);
 
+#[tokio::test]
+async fn topology_ha_uses_captured_identity_without_hidden_nameserver_rediscovery() {
+    let source = FakeSource::default();
+    let captured = topology(&[(CLUSTER, "broker-a", &[(0, ADDRESS_A)])]);
+    let request = QueryHaStatusRequest::try_new(CLUSTER, ["broker-a".to_string()], false, Vec::new()).unwrap();
+    let result = query_ha_status_in_cluster_from(&source, &[], &request, Some(&captured))
+        .await
+        .unwrap();
+    assert_eq!(result.data.brokers.len(), 1);
+    assert_eq!(*source.cluster_calls.lock().unwrap(), 0);
+    assert_eq!(*source.ha_calls.lock().unwrap(), vec![ADDRESS_A.to_string()]);
+}
+
 #[derive(Default)]
 struct FakeSource {
     cluster_info: ClusterInfo,

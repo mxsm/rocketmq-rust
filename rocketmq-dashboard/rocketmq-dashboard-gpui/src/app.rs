@@ -22,6 +22,8 @@ mod consumers;
 mod dashboard_broker;
 #[path = "app/topics.rs"]
 mod topics;
+#[path = "app/topology.rs"]
+mod topology;
 
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, Render,
@@ -144,6 +146,7 @@ impl SensitiveFeatureCache {
 struct LegacyPageCache {
     acl: Entity<crate::features::acl::AclView>,
     audit: Entity<crate::features::audit::AuditView>,
+    topology: Entity<crate::features::topology::TopologyView>,
     monitors: Entity<crate::features::monitors::MonitorsView>,
     dashboard: Entity<DashboardView>,
     brokers: Entity<BrokersView>,
@@ -162,6 +165,7 @@ impl LegacyPageCache {
         Self {
             acl: cx.new(|cx| crate::features::acl::AclView::new(window, services.clone(), 0, cx)),
             audit: cx.new(|cx| crate::features::audit::AuditView::new(window, services.clone(), cx)),
+            topology: cx.new(|cx| crate::features::topology::TopologyView::new(window, services.clone(), cx)),
             monitors: cx.new(|cx| crate::features::monitors::MonitorsView::new(window, services.clone(), 0, cx)),
             dashboard: cx.new(|cx| DashboardView::new(window, services.clone(), 0, cx)),
             brokers: cx.new(|cx| BrokersView::new(window, services.clone(), 0, cx)),
@@ -177,10 +181,11 @@ impl LegacyPageCache {
     }
 
     #[cfg(test)]
-    fn entity_ids(&self) -> [gpui::EntityId; 13] {
+    fn entity_ids(&self) -> [gpui::EntityId; 14] {
         [
             self.acl.entity_id(),
             self.audit.entity_id(),
+            self.topology.entity_id(),
             self.monitors.entity_id(),
             self.dashboard.entity_id(),
             self.brokers.entity_id(),
@@ -278,6 +283,7 @@ impl RocketmqDashboard {
         subscriptions.extend(Self::dashboard_broker_subscriptions(&legacy_pages, window, cx));
         subscriptions.extend(Self::topic_subscriptions(&legacy_pages, window, cx));
         subscriptions.extend(Self::consumer_subscriptions(&legacy_pages, window, cx));
+        subscriptions.push(Self::topology_subscription(&legacy_pages, window, cx));
         let mut dashboard = Self {
             services,
             startup_state: StartupState::Booting,
@@ -413,6 +419,9 @@ impl RocketmqDashboard {
                 self.legacy_pages.dlq.update(cx, |view, cx| {
                     view.set_revision(snapshot.configuration_revision, window, cx)
                 });
+                self.legacy_pages
+                    .topology
+                    .update(cx, |view, cx| view.clear_for_context(window, cx));
                 self.session = if snapshot.has_valid_session {
                     SessionState::restored()
                 } else {
@@ -703,6 +712,9 @@ impl RocketmqDashboard {
             self.legacy_pages
                 .dlq
                 .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
+            self.legacy_pages
+                .topology
+                .update(cx, |view, cx| view.clear_for_context(window, cx));
             window.close_all_dialogs(cx);
             window.clear_notifications(cx);
         }
@@ -735,6 +747,7 @@ impl RocketmqDashboard {
                     self.startup_state = StartupState::Ready(ReadyScreen::Login);
                 }
             }
+            self.sync_message_route(window, cx);
         }
         self.legacy_pages.ops.update(cx, |view, cx| view.sync_from_services(cx));
         self.legacy_pages
@@ -750,6 +763,10 @@ impl RocketmqDashboard {
     }
 
     fn sync_message_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let topology_visible = matches!(self.history.current(), AppRoute::Topology);
+        self.legacy_pages
+            .topology
+            .update(cx, |view, cx| view.set_visible(topology_visible, window, cx));
         self.legacy_pages.messages.update(cx, |view, cx| {
             if matches!(self.history.current(), AppRoute::Messages) {
                 view.ensure_topics(window, cx);
@@ -777,6 +794,9 @@ impl RocketmqDashboard {
         self.legacy_pages
             .audit
             .update(cx, |view, cx| view.clear_context(window, cx));
+        self.legacy_pages
+            .topology
+            .update(cx, |view, cx| view.clear_for_context(window, cx));
         let _ = self.startup_epoch.advance();
         self.sensitive_feature_cache.clear();
         self.pending_discard = None;
@@ -867,6 +887,9 @@ impl RocketmqDashboard {
         self.legacy_pages
             .audit
             .update(cx, |view, cx| view.clear_context(window, cx));
+        self.legacy_pages
+            .topology
+            .update(cx, |view, cx| view.clear_for_context(window, cx));
         self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages.dlq.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages
@@ -906,6 +929,7 @@ impl RocketmqDashboard {
         subscriptions.extend(Self::dashboard_broker_subscriptions(&pages, window, cx));
         subscriptions.extend(Self::topic_subscriptions(&pages, window, cx));
         subscriptions.extend(Self::consumer_subscriptions(&pages, window, cx));
+        subscriptions.push(Self::topology_subscription(&pages, window, cx));
         self.subscriptions = subscriptions;
         self.legacy_pages = pages;
     }
@@ -986,6 +1010,9 @@ impl RocketmqDashboard {
         self.legacy_pages
             .audit
             .update(cx, |view, cx| view.clear_context(window, cx));
+        self.legacy_pages
+            .topology
+            .update(cx, |view, cx| view.clear_for_context(window, cx));
         self.legacy_pages.acl.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages.dlq.update(cx, |view, cx| view.leave(window, cx));
@@ -1436,6 +1463,10 @@ impl RocketmqDashboard {
             PageCapability::Brokers => (
                 "Filter real Broker inventory and inspect runtime or generation-aware configuration.",
                 div().size_full().child(self.legacy_pages.brokers.clone()),
+            ),
+            PageCapability::Topology => (
+                "Read independently observed topology layers and replication evidence in the selected environment.",
+                div().size_full().child(self.legacy_pages.topology.clone()),
             ),
             PageCapability::Topics => (
                 "Filter real Topic inventory and inspect independently loaded lifecycle resources.",

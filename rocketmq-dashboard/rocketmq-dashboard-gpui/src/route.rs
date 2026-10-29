@@ -90,6 +90,8 @@ pub enum AppRoute {
     Login,
     /// Dashboard landing page.
     Dashboard,
+    /// Layered read-only topology and replication observations.
+    Topology,
     /// Broker list.
     Brokers,
     /// A broker detail page.
@@ -131,6 +133,7 @@ pub(crate) enum PageCapability {
     Acl,
     Login,
     Dashboard,
+    Topology,
     Brokers,
     Topics,
     Consumers,
@@ -150,6 +153,7 @@ impl AppRoute {
         match self {
             Self::Login => PageCapability::Login,
             Self::Dashboard => PageCapability::Dashboard,
+            Self::Topology => PageCapability::Topology,
             Self::Brokers | Self::BrokerDetail { .. } => PageCapability::Brokers,
             Self::Topics | Self::TopicDetail { .. } => PageCapability::Topics,
             Self::Consumers | Self::ConsumerDetail { .. } => PageCapability::Consumers,
@@ -174,6 +178,7 @@ impl AppRoute {
             [] => Ok(Self::Dashboard),
             ["login"] => Ok(Self::Login),
             ["dashboard"] => Ok(Self::Dashboard),
+            ["topology"] => Ok(Self::Topology),
             ["nameservers"] => Ok(Self::OpsSettings),
             ["brokers"] => Ok(Self::Brokers),
             ["brokers", broker, tab] => Ok(Self::BrokerDetail {
@@ -212,6 +217,7 @@ impl AppRoute {
         match self {
             Self::Login => "/login".to_owned(),
             Self::Dashboard => "/dashboard".to_owned(),
+            Self::Topology => "/topology".to_owned(),
             Self::Brokers => "/brokers".to_owned(),
             Self::BrokerDetail { broker, tab } => {
                 format!("/brokers/{}/{tab}", broker.as_str())
@@ -237,6 +243,7 @@ impl AppRoute {
         match self {
             Self::Login => "Sign in",
             Self::Dashboard => "Dashboard",
+            Self::Topology => "Topology",
             Self::Brokers | Self::BrokerDetail { .. } => "Brokers",
             Self::Topics | Self::TopicDetail { .. } => "Topics",
             Self::Consumers | Self::ConsumerDetail { .. } => "Consumers",
@@ -422,6 +429,7 @@ mod tests {
         let routes = [
             AppRoute::Login,
             AppRoute::Dashboard,
+            AppRoute::Topology,
             AppRoute::Brokers,
             AppRoute::BrokerDetail {
                 broker: RouteKey::parse("broker-a").expect("valid broker key"),

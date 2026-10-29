@@ -253,6 +253,14 @@ impl ProducersView {
         cx.notify();
     }
 
+    pub(crate) fn select_topology_group(&mut self, group: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.connections_task = None;
+        self.store.connections.clear();
+        self.store.applied_query = None;
+        self.close_owned_sheet(window, cx);
+        self.use_group(group, window, cx);
+    }
+
     fn apply_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let query = match self.store.apply_query() {
             Ok(query) => query,
