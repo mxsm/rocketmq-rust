@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove the unused internal consumer session expiry helper; manager-owned expiry and transport retirement are unchanged ([#11995](https://github.com/mxsm/rocketmq-rust/issues/11995)).
 - **refactor(broker):** Remove the unused internal named-broker escape path; active remote escape selection, authorization, and epoch fencing are unchanged ([#11976](https://github.com/mxsm/rocketmq-rust/issues/11976)).
 - **refactor(broker):** Remove the unused deferred-generation arrival adapter; canonical route admission and shutdown accounting are unchanged ([#11975](https://github.com/mxsm/rocketmq-rust/issues/11975)).
 - **refactor(store):** Remove the unused HA read buffer and manual offset parser; acknowledgement decoding continues through `OffsetDecoder` ([#11974](https://github.com/mxsm/rocketmq-rust/issues/11974)).

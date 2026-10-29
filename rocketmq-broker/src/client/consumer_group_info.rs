@@ -188,25 +188,6 @@ impl ConsumerGroupInfo {
         }
     }
 
-    pub(crate) fn remove_expired_sessions(&self, now: u64, timeout: u64) -> Vec<ClientSessionInfo> {
-        let expired = self
-            .session_info_table
-            .iter()
-            .filter(|entry| now.saturating_sub(entry.last_update_timestamp()) > timeout)
-            .map(|entry| entry.session_id())
-            .collect::<Vec<_>>();
-        expired
-            .into_iter()
-            .filter_map(|session_id| {
-                self.session_info_table
-                    .remove_if(&session_id, |_, info| {
-                        now.saturating_sub(info.last_update_timestamp()) > timeout
-                    })
-                    .map(|(_, info)| info)
-            })
-            .collect()
-    }
-
     pub fn update_subscription(&mut self, sub_list: &HashSet<SubscriptionData>) -> bool {
         let mut updated = false;
         let mut topic_set = HashSet::new();
