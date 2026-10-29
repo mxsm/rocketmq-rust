@@ -308,6 +308,38 @@ Only `CR_SUCCESS` confirms success; other results and unconfirmed calls remain
 distinct. Consumer remarks are represented by presence, without displaying arbitrary
 private content. No new Message ID is promised.
 
+## ACL workspace
+
+ACL starts with real Broker inventory. Select a Cluster and optionally one Broker,
+then choose **Confirm scope** before any ACL user or policy reads. Scope changes
+discard previous records, requests, forms, and password display. Users and Policies
+have independent search, pagination, and request epochs. Proxy scope does not expose
+ACL administration; access denial and unavailable Broker capabilities remain explicit.
+
+User creation submits username, password, type, and status together. Editing leaves
+the password unchanged unless **Change password** is selected and a value is entered.
+Passwords are masked by default. Display can reveal only a password actually returned
+by the Broker; no one-time secret is generated. Opening or closing a form, changing
+tabs or scope, leaving the page, and signing out clear retained secret displays. Secret
+Input states and entities are recreated so Undo cannot restore a previous draft.
+
+Policy forms select Subject, Policy Type, Resource, Actions, Source IPs (including CIDRs,
+wildcards, and ranges), and Decision. Subjects require `User:name` and resources require
+`Topic:name`, `Group:name`, `Cluster:name`, or `*`, matching the Broker's canonical identity
+before preflight. The response-only `Any` action is not writable. Editing fixes the
+subject/type/resource identity and merges only the selected
+entry; deleting removes only that resource in that policy type. Other entries are not
+round-tripped through a generic JSON editor. Unknown fields, enum values, and unsupported
+response shapes are read-only so their Broker data is preserved.
+
+Confirmation lists the exact target identities. The provider revalidates the frozen
+selection against inventory and performs each target once. ACL RPCs do not provide CAS
+or a multi-Broker transaction: per-target applied, rejected, and unknown outcomes remain
+distinct, and an attempted form cannot replay the command. Bulk target notices scroll
+within a bounded area so records and pagination remain reachable. Admitted writes stay owned
+by the application after the form closes. P11 records the trusted actor, environment,
+subject, action, and bounded outcome counts without passwords or policy payloads.
+
 ## License
 
 Apache License, Version 2.0.

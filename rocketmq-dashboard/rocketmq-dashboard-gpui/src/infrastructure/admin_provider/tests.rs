@@ -14,6 +14,9 @@
 
 //! Provider lifecycle, concurrency, redaction, and revision tests.
 
+#[path = "acl_tests.rs"]
+mod acl_tests;
+
 use std::{
     collections::BTreeMap,
     sync::atomic::{AtomicUsize, Ordering},
@@ -53,6 +56,12 @@ impl HealthClock for FixedClock {
 
 #[derive(Default)]
 struct FakeControls {
+    acl_reads: std::sync::Mutex<Vec<(String, bool)>>,
+    acl_users: std::sync::Mutex<BTreeMap<String, Vec<serde_json::Value>>>,
+    acl_policies: std::sync::Mutex<BTreeMap<String, Vec<serde_json::Value>>>,
+    acl_inventory: std::sync::Mutex<Option<DashboardBrokerList>>,
+    acl_writes: std::sync::Mutex<Vec<(String, rocketmq_admin_core::core::acl_workspace::AclExactWrite)>>,
+    acl_write_errors: std::sync::Mutex<BTreeMap<String, AdminError>>,
     message_queries: std::sync::Mutex<Vec<DashboardMessageQuery>>,
     message_lookups: std::sync::Mutex<Vec<MessageLookupRequest>>,
     message_consumes: std::sync::Mutex<Vec<DirectConsumeRequest>>,
@@ -134,6 +143,24 @@ impl FakeQuerySession {
 }
 
 impl DashboardQuerySession for FakeQuerySession {
+    fn acl_documents<'a>(
+        &'a self,
+        address: &'a str,
+        kind: rocketmq_admin_core::core::acl_workspace::AclReadKind,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::acl_workspace::AclDocuments>> {
+        let users = matches!(kind, rocketmq_admin_core::core::acl_workspace::AclReadKind::Users);
+        self.controls.acl_reads.lock().unwrap().push((address.into(), users));
+        let records = if users {
+            &self.controls.acl_users
+        } else {
+            &self.controls.acl_policies
+        };
+        Box::pin(std::future::ready(Ok(
+            rocketmq_admin_core::core::acl_workspace::AclDocuments::new(
+                records.lock().unwrap().get(address).cloned().unwrap_or_default(),
+            ),
+        )))
+    }
     fn topic_catalog(&self) -> SessionFuture<'_, AdminResult<rocketmq_admin_core::core::topic::DetailedTopicCatalog>> {
         use rocketmq_admin_core::core::topic::{
             DetailedTopicCatalog, DetailedTopicCatalogItem, TopicBrokerTarget, TopicInspectionCompleteness,
@@ -324,6 +351,9 @@ impl DashboardQuerySession for FakeQuerySession {
     }
 
     fn list_brokers(&self) -> SessionFuture<'_, AdminResult<DashboardBrokerList>> {
+        if let Some(list) = self.controls.acl_inventory.lock().unwrap().clone() {
+            return Box::pin(std::future::ready(Ok(list)));
+        }
         Box::pin(std::future::ready(Ok(DashboardBrokerList {
             clusters: vec!["cluster-a".into()],
             items: vec![DashboardBrokerInfo {
@@ -395,6 +425,26 @@ impl FakeMutationSession {
 }
 
 impl DashboardMutationSession for FakeMutationSession {
+    fn apply_acl<'a>(
+        &'a mut self,
+        address: &'a str,
+        request: &'a rocketmq_admin_core::core::acl_workspace::AclExactWrite,
+    ) -> SessionFuture<'a, AdminResult<()>> {
+        self.controls
+            .acl_writes
+            .lock()
+            .unwrap()
+            .push((address.into(), request.clone()));
+        Box::pin(std::future::ready(
+            self.controls
+                .acl_write_errors
+                .lock()
+                .unwrap()
+                .get(address)
+                .cloned()
+                .map_or(Ok(()), Err),
+        ))
+    }
     fn send_topic_message<'a>(
         &'a mut self,
         request: &'a rocketmq_admin_core::core::topic::TopicSendRequest,

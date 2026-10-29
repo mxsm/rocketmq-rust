@@ -126,6 +126,7 @@ pub enum AppRoute {
 /// that its queries or operations are implemented.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PageCapability {
+    Acl,
     Login,
     Dashboard,
     Brokers,
@@ -159,9 +160,7 @@ impl AppRoute {
             Self::MessageTrace => PageCapability::Unavailable {
                 reason: "Message trace lookup is not yet available in this desktop app.",
             },
-            Self::Acl => PageCapability::Unavailable {
-                reason: "Access-control management is not yet available in this desktop app.",
-            },
+            Self::Acl => PageCapability::Acl,
         }
     }
 

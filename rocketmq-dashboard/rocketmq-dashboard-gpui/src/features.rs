@@ -14,6 +14,15 @@
 
 //! Feature-local state for the first dashboard delivery.
 
+#[path = "features/acl.rs"]
+pub mod acl;
+#[path = "features/acl_policy_dialog.rs"]
+pub mod acl_policy_dialog;
+#[path = "features/acl_store.rs"]
+pub mod acl_store;
+#[path = "features/acl_user_dialog.rs"]
+pub mod acl_user_dialog;
+
 #[path = "features/login.rs"]
 pub mod login;
 

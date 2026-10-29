@@ -15,6 +15,9 @@
 //! RocketMQ client-backed implementations of the admin-owned contracts.
 
 #[cfg(feature = "client-adapter")]
+mod acl_workspace;
+
+#[cfg(feature = "client-adapter")]
 mod broker;
 #[cfg(feature = "client-adapter")]
 mod connection;
