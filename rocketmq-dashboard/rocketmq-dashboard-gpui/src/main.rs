@@ -228,7 +228,7 @@ fn run() -> Result<(), AppError> {
 
         if let Err(error) = cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                window_bounds: Some(WindowBounds::Fullscreen(Bounds {
                     origin: Point {
                         x: px(100.0),
                         y: px(100.0),

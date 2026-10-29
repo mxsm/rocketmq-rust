@@ -75,6 +75,9 @@ trait-variant = "0.1.2"
 mockall = "0.14.0"
 cfg-if  = "1.0.4"
 
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "=3.0.6"
+
 [dev-dependencies]
 # Enables GPUI's in-memory window harness for application-level lifecycle tests only.
 gpui = { version = "=0.2.2", features = ["test-support"] }
