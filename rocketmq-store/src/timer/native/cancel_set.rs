@@ -1,0 +1,187 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::HashMap;
+
+use rocketmq_store_local::timer::native_format::native_key_hash;
+use rocketmq_store_local::timer::native_format::NativeBucketId;
+use rocketmq_store_local::timer::native_format::NativeBucketKind;
+use rocketmq_store_local::timer::native_format::NativeCancelRecord;
+use rocketmq_store_local::timer::native_format::NativeIndexEntry;
+
+/// A recall that may cancel a timer. Its key and generation are checked against the timer's
+/// message once delivery has read it, as the Java-compatible engine checks a slot's recalls.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct NativeRecall {
+    pub(crate) key: Vec<u8>,
+    pub(crate) generation: u64,
+}
+
+/// Recalls by the hash of each unique key they may name, scoped to the hour of the deadline
+/// they carry. A recall carries the deadline of the timer it cancels, so it can only cancel a
+/// timer due in that hour.
+#[derive(Default)]
+pub(crate) struct CancelSet {
+    recalls: HashMap<(u64, i64), Vec<NativeRecall>>,
+    len: usize,
+}
+
+impl CancelSet {
+    /// Adds a recall; adding the same recall again changes nothing.
+    pub(crate) fn insert(&mut self, record: &NativeCancelRecord) {
+        let Ok(hour) = NativeBucketId::containing(NativeBucketKind::Hour, record.due_ms) else {
+            return;
+        };
+        let recall = NativeRecall {
+            key: record.key.clone(),
+            generation: record.generation,
+        };
+        let mut added = false;
+        for unique_key in named_unique_keys(&record.key) {
+            let recalls = self
+                .recalls
+                .entry((native_key_hash(unique_key), hour.start_ms()))
+                .or_default();
+            if !recalls.contains(&recall) {
+                recalls.push(recall.clone());
+                added = true;
+            }
+        }
+        if added {
+            self.len += 1;
+        }
+    }
+
+    /// The recalls that may cancel the timer of `entry`.
+    pub(crate) fn candidates(&self, entry: &NativeIndexEntry) -> Vec<NativeRecall> {
+        let Ok(hour) = NativeBucketId::containing(NativeBucketKind::Hour, entry.due_ms) else {
+            return Vec::new();
+        };
+        self.recalls
+            .get(&(entry.key_hash, hour.start_ms()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Recalls added.
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+}
+
+/// The unique keys a recall key may name. A recall key is the unique key alone, as Java writes
+/// it; `<real topic>_<unique key>`; or `T:<topic length>:<topic><unique key>`. A topic may hold
+/// `_`, so every suffix after a `_` is a candidate; the full check at delivery rules out the
+/// wrong ones.
+fn named_unique_keys(recall_key: &[u8]) -> Vec<&[u8]> {
+    let mut keys = vec![recall_key];
+    if let Some(unique_key) = canonical_unique_key(recall_key) {
+        keys.push(unique_key);
+    }
+    keys.extend(
+        recall_key
+            .iter()
+            .enumerate()
+            .filter(|(_, byte)| **byte == b'_')
+            .map(|(at, _)| &recall_key[at + 1..])
+            .filter(|suffix| !suffix.is_empty()),
+    );
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// The unique key of a `T:<topic length>:<topic><unique key>` recall key.
+fn canonical_unique_key(recall_key: &[u8]) -> Option<&[u8]> {
+    let rest = recall_key.strip_prefix(b"T:")?;
+    let colon = rest.iter().position(|byte| *byte == b':')?;
+    let topic_len: usize = std::str::from_utf8(&rest[..colon]).ok()?.parse().ok()?;
+    rest.get(colon + 1..)?.get(topic_len..).filter(|key| !key.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_store_local::timer::native_format::NativeLocator;
+
+    use super::*;
+    use crate::timer::timer_message_store::build_canonical_delete_key;
+    use crate::timer::timer_message_store::build_delete_key;
+
+    const DUE_MS: i64 = 1_700_000_000_000;
+    const UNIQUE_KEY: &str = "7F00000100002A9F0000ABCD";
+
+    fn timer(unique_key: &str, due_ms: i64) -> NativeIndexEntry {
+        NativeIndexEntry {
+            due_ms,
+            cq_offset: 1,
+            locator: NativeLocator::CommitLog { offset: 0 },
+            generation: 0,
+            key_hash: native_key_hash(unique_key.as_bytes()),
+            size: 10,
+            lane: 0,
+        }
+    }
+
+    fn recall(key: &str, due_ms: i64) -> NativeCancelRecord {
+        NativeCancelRecord {
+            due_ms,
+            tombstone_cq_offset: 9,
+            generation: 0,
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn every_recall_key_form_finds_its_timer() {
+        for key in [
+            UNIQUE_KEY.to_owned(),
+            build_delete_key("Topic_A", UNIQUE_KEY).to_string(),
+            build_canonical_delete_key("Topic_A", UNIQUE_KEY, true).to_string(),
+        ] {
+            let mut cancels = CancelSet::default();
+            cancels.insert(&recall(&key, DUE_MS));
+            let candidates = cancels.candidates(&timer(UNIQUE_KEY, DUE_MS + 1));
+            assert_eq!(candidates.len(), 1, "{key}");
+            assert_eq!(candidates[0].key, key.as_bytes());
+        }
+    }
+
+    #[test]
+    fn a_recall_only_reaches_timers_due_in_its_hour() {
+        let mut cancels = CancelSet::default();
+        cancels.insert(&recall(UNIQUE_KEY, DUE_MS));
+        let hour = NativeBucketId::containing(NativeBucketKind::Hour, DUE_MS).unwrap();
+        assert!(cancels.candidates(&timer(UNIQUE_KEY, hour.end_ms())).is_empty());
+        assert!(cancels.candidates(&timer("another-key", DUE_MS)).is_empty());
+        assert_eq!(cancels.candidates(&timer(UNIQUE_KEY, hour.start_ms())).len(), 1);
+    }
+
+    #[test]
+    fn the_same_recall_twice_is_one_recall() {
+        let mut cancels = CancelSet::default();
+        let key = build_delete_key("TopicA", UNIQUE_KEY).to_string();
+        cancels.insert(&recall(&key, DUE_MS));
+        cancels.insert(&recall(&key, DUE_MS));
+        assert_eq!(cancels.len(), 1);
+        assert_eq!(cancels.candidates(&timer(UNIQUE_KEY, DUE_MS)).len(), 1);
+    }
+
+    #[test]
+    fn a_canonical_key_names_what_follows_its_topic() {
+        assert_eq!(canonical_unique_key(b"T:7:Topic_Akey"), Some(&b"key"[..]));
+        assert_eq!(canonical_unique_key(b"T:9:Topic_Akey"), Some(&b"y"[..]));
+        assert_eq!(canonical_unique_key(b"T:20:short"), None);
+        assert_eq!(canonical_unique_key(b"Topic_key"), None);
+    }
+}
