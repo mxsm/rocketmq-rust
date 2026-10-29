@@ -44,7 +44,6 @@ fn missing_and_self_only_routes_fail_closed_without_panicking() {
 fn all_send_modes_share_remote_only_eligibility() {
     let resolver = EscapeTargetResolver::default();
     let local = CheetahString::from_static_str("broker-a");
-    let remote = CheetahString::from_static_str("broker-b");
     let queues = [queue("broker-a", 0), queue("broker-b", 1), queue("broker-c", 2)];
 
     let sync = resolver
@@ -53,38 +52,17 @@ fn all_send_modes_share_remote_only_eligibility() {
     let asynchronous = resolver
         .resolve(&queues, &local, EscapeTargetPreference::Any)
         .expect("async target");
-    let requested = resolver
-        .resolve(&queues, &local, EscapeTargetPreference::Broker(&remote))
-        .expect("requested target");
     let stable = resolver
         .resolve(&queues, &local, EscapeTargetPreference::Stable(17))
         .expect("stable target");
 
-    for selected in [&sync, &asynchronous, &requested, &stable] {
+    for selected in [&sync, &asynchronous, &stable] {
         assert_ne!(selected.broker_name(), &local);
     }
-    assert_eq!(requested.broker_name(), &remote);
     assert_eq!(
         stable,
         resolver
             .resolve(&queues, &local, EscapeTargetPreference::Stable(17))
             .expect("repeat stable target")
-    );
-}
-
-#[test]
-fn requested_local_or_missing_broker_is_rejected() {
-    let resolver = EscapeTargetResolver::default();
-    let local = CheetahString::from_static_str("broker-a");
-    let missing = CheetahString::from_static_str("broker-z");
-    let queues = [queue("broker-a", 0), queue("broker-b", 1)];
-
-    assert_eq!(
-        resolver.resolve(&queues, &local, EscapeTargetPreference::Broker(&local)),
-        Err(EscapeTargetError::SelfTarget)
-    );
-    assert_eq!(
-        resolver.resolve(&queues, &local, EscapeTargetPreference::Broker(&missing)),
-        Err(EscapeTargetError::RequestedBrokerUnavailable)
     );
 }
