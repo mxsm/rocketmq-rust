@@ -43,6 +43,8 @@ use crate::timer::positional_io::write_all_at;
 
 const UNIT_SIZE: u64 = JAVA_TIMER_LOG_UNIT_SIZE as u64;
 const SCAN_CHUNK_UNITS: u64 = 1_024;
+/// Bytes a [`JavaTimerLogChainReader`] reads at once: 315 units.
+const CHAIN_READ_BYTES: u64 = 16 * 1_024;
 const HANDLE_LIMIT: usize = 32;
 
 /// How [`JavaTimerLog::recover`] treats the units it scans (`checkTimerLog` in Java's
@@ -294,27 +296,18 @@ impl JavaTimerLog {
     /// a valid unit, and [`JavaTimerLogError::Io`] when the file cannot be read.
     pub fn read_unit(&self, offset: u64) -> Result<JavaTimerLogUnit, JavaTimerLogError> {
         let mut state = self.state.lock();
-        let start = offset - offset % self.file_size;
-        let min = state.files.first().copied().unwrap_or_default();
-        if !state.files.contains(&start)
-            || offset % self.file_size + UNIT_SIZE > self.file_size
-            || offset + UNIT_SIZE > state.end
-        {
-            return Err(JavaTimerLogError::OffsetOutOfRange {
-                offset,
-                min,
-                end: state.end,
-            });
-        }
+        let start = self.unit_file(&state, offset)?;
         let mut bytes = [0u8; JAVA_TIMER_LOG_UNIT_SIZE];
         read_exact_at(self.handle(&mut state, start)?, &mut bytes, offset - start)?;
-        match JavaTimerLogRecord::decode(&bytes) {
-            Ok(JavaTimerLogRecord::Unit(unit)) => Ok(unit),
-            Ok(JavaTimerLogRecord::Blank { .. }) => Err(JavaTimerLogError::NotAUnit { offset, source: None }),
-            Err(error) => Err(JavaTimerLogError::NotAUnit {
-                offset,
-                source: Some(error),
-            }),
+        decode_unit(offset, &bytes)
+    }
+
+    /// Returns a reader for the units of one slot chain.
+    pub fn chain_reader(&self) -> JavaTimerLogChainReader<'_> {
+        JavaTimerLogChainReader {
+            log: self,
+            start: 0,
+            bytes: Vec::new(),
         }
     }
 
@@ -513,6 +506,23 @@ impl JavaTimerLog {
         Ok(start)
     }
 
+    /// First offset of the file holding a whole unit at `offset` that ends before the end of
+    /// the log.
+    fn unit_file(&self, state: &JavaTimerLogState, offset: u64) -> Result<u64, JavaTimerLogError> {
+        let start = offset - offset % self.file_size;
+        if !state.files.contains(&start)
+            || offset % self.file_size + UNIT_SIZE > self.file_size
+            || offset + UNIT_SIZE > state.end
+        {
+            return Err(JavaTimerLogError::OffsetOutOfRange {
+                offset,
+                min: state.files.first().copied().unwrap_or_default(),
+                end: state.end,
+            });
+        }
+        Ok(start)
+    }
+
     fn handle<'a>(&self, state: &'a mut JavaTimerLogState, start: u64) -> Result<&'a File, JavaTimerLogError> {
         if !state.handles.contains_key(&start) {
             let file = OpenOptions::new().read(true).write(true).open(self.file_path(start))?;
@@ -555,6 +565,59 @@ impl JavaTimerLog {
 
     fn file_path(&self, start: u64) -> PathBuf {
         self.directory.join(format!("{start:020}"))
+    }
+}
+
+/// Reads the units of one slot chain, which links each unit to an earlier one.
+///
+/// Units of a slot that filled up quickly lie next to each other, so the reader reads up to
+/// 16 KiB of the file ending with the unit asked for and takes the next units of the chain
+/// from those bytes. It keeps the bytes it read last, so one reader serves one walk:
+/// a unit it already holds is not checked against the log again.
+pub struct JavaTimerLogChainReader<'a> {
+    log: &'a JavaTimerLog,
+    /// Log offset of the first byte in `bytes`.
+    start: u64,
+    bytes: Vec<u8>,
+}
+
+impl JavaTimerLogChainReader<'_> {
+    /// Reads the unit at `offset`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`JavaTimerLog::read_unit`].
+    pub fn read_unit(&mut self, offset: u64) -> Result<JavaTimerLogUnit, JavaTimerLogError> {
+        if let Some(bytes) = offset
+            .checked_sub(self.start)
+            .and_then(|at| usize::try_from(at).ok())
+            .and_then(|at| self.bytes.get(at..at.checked_add(JAVA_TIMER_LOG_UNIT_SIZE)?))
+        {
+            return decode_unit(offset, bytes);
+        }
+        self.bytes.clear();
+        let mut state = self.log.state.lock();
+        let start = self.log.unit_file(&state, offset)?;
+        let unit_end = offset - start + UNIT_SIZE;
+        let first = unit_end.saturating_sub(CHAIN_READ_BYTES);
+        let mut bytes = vec![0u8; (unit_end - first) as usize];
+        read_exact_at(self.log.handle(&mut state, start)?, &mut bytes, first)?;
+        drop(state);
+        let unit = decode_unit(offset, &bytes[bytes.len() - JAVA_TIMER_LOG_UNIT_SIZE..]);
+        self.start = start + first;
+        self.bytes = bytes;
+        unit
+    }
+}
+
+fn decode_unit(offset: u64, bytes: &[u8]) -> Result<JavaTimerLogUnit, JavaTimerLogError> {
+    match JavaTimerLogRecord::decode(bytes) {
+        Ok(JavaTimerLogRecord::Unit(unit)) => Ok(unit),
+        Ok(JavaTimerLogRecord::Blank { .. }) => Err(JavaTimerLogError::NotAUnit { offset, source: None }),
+        Err(error) => Err(JavaTimerLogError::NotAUnit {
+            offset,
+            source: Some(error),
+        }),
     }
 }
 
@@ -602,6 +665,29 @@ mod tests {
             .recover(begin, scan, |offset, unit| units.push((offset, unit.commit_log_offset)))
             .unwrap();
         (end, units)
+    }
+
+    #[test]
+    fn a_chain_reader_reads_the_units_read_unit_reads_across_files() {
+        let directory = tempdir().unwrap();
+        let log = opened(directory.path());
+        let units: Vec<_> = (0..5).map(|index| unit(index * 100)).collect();
+        let offsets = log.append_batch(&units).unwrap();
+
+        // A chain runs from later units to earlier ones, and here from one file into the other.
+        let mut reader = log.chain_reader();
+        for (offset, unit) in offsets.iter().zip(&units).rev() {
+            assert_eq!(reader.read_unit(*offset).unwrap(), *unit);
+        }
+        assert!(matches!(
+            reader.read_unit(304),
+            Err(JavaTimerLogError::OffsetOutOfRange { offset: 304, .. })
+        ));
+        assert!(matches!(
+            reader.read_unit(156),
+            Err(JavaTimerLogError::OffsetOutOfRange { offset: 156, .. })
+        ));
+        assert_eq!(reader.read_unit(52).unwrap(), units[1]);
     }
 
     #[test]
