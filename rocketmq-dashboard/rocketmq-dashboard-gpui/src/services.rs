@@ -26,6 +26,8 @@ pub mod dashboard;
 pub(crate) mod dashboard_broker;
 #[path = "services/messages.rs"]
 pub(crate) mod messages;
+#[path = "services/monitors.rs"]
+pub(crate) mod monitors;
 #[path = "services/topics.rs"]
 pub(crate) mod topics;
 
@@ -553,6 +555,7 @@ pub struct AppServices {
     backend: Arc<dyn ApplicationBackend>,
     runtime_bridge: Option<RuntimeBridge>,
     audit: Option<Arc<audit::AuditService>>,
+    monitors: Option<Arc<MonitorStore>>,
     dashboard_broker: Arc<dyn dashboard_broker::DashboardBrokerOperations>,
     consumers: Arc<dyn consumers::ConsumerBackend>,
     topics: Arc<dyn topics::TopicBackend>,
@@ -571,6 +574,7 @@ impl AppServices {
             backend: Arc::new(InjectedBackend { startup, config, auth }),
             runtime_bridge: None,
             audit: None,
+            monitors: None,
             dashboard_broker: dashboard_broker::RealDashboardBrokerOperations::new(
                 dashboard::DashboardService::unavailable(),
                 brokers::BrokerService::unavailable(),
@@ -657,7 +661,7 @@ impl AppServices {
                 host_context,
                 history_store,
                 history_sampler,
-                monitor_store,
+                monitor_store: Arc::clone(&monitor_store),
                 history_lifecycle: parking_lot::Mutex::new(None),
                 monitor_lifecycle: parking_lot::Mutex::new(None),
             }),
@@ -667,6 +671,7 @@ impl AppServices {
                 completion: None,
             }),
             audit: Some(audit),
+            monitors: Some(monitor_store),
             dashboard_broker,
             consumers,
             topics,
@@ -900,7 +905,8 @@ impl DesktopBackend {
         if foundations.monitor_enabled {
             let needs_start = self.monitor_lifecycle.lock().is_none();
             if needs_start {
-                self.monitor_store.list().await.map_err(config_ui_error)?;
+                let scope = self.store.environment_snapshot().map_err(config_ui_error)?;
+                self.monitor_store.snapshot(scope).await.map_err(config_ui_error)?;
                 let lifecycle = MonitorLifecycle::start(&self.monitor_context, true).map_err(config_ui_error)?;
                 if !lifecycle.is_started() {
                     return Err(UiError::new(

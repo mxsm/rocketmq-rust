@@ -20,6 +20,12 @@ pub mod login;
 #[path = "features/ops.rs"]
 pub mod ops;
 
+#[path = "features/monitor_dialog.rs"]
+pub mod monitor_dialog;
+#[path = "features/monitors.rs"]
+pub mod monitors;
+#[path = "features/monitors_store.rs"]
+pub mod monitors_store;
 #[path = "features/proxy.rs"]
 pub mod proxy;
 

@@ -1284,12 +1284,7 @@ fn production_messages_route_has_no_sample_or_implicit_query_through_navigation_
             + calls.patches.len()
     };
     let before_unavailable_pages = call_count();
-    for route in [
-        AppRoute::DlqMessages,
-        AppRoute::MessageTrace,
-        AppRoute::Acl,
-        AppRoute::Monitors,
-    ] {
+    for route in [AppRoute::DlqMessages, AppRoute::MessageTrace, AppRoute::Acl] {
         cx.update(|window, app| {
             dashboard.update(app, |dashboard, cx| dashboard.navigate(route.clone(), window, cx));
         });
@@ -1521,6 +1516,7 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
         (AppRoute::Consumers, PageCapability::Consumers),
         (AppRoute::Producers, PageCapability::Producers),
         (AppRoute::Messages, PageCapability::Messages),
+        (AppRoute::Monitors, PageCapability::Monitors),
         (AppRoute::OpsSettings, PageCapability::OpsSettings),
         (AppRoute::Proxy, PageCapability::Proxy),
         (
@@ -1549,12 +1545,7 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
     for (route, capability) in implemented {
         assert_eq!(route.page_capability(), capability);
     }
-    for route in [
-        AppRoute::DlqMessages,
-        AppRoute::MessageTrace,
-        AppRoute::Acl,
-        AppRoute::Monitors,
-    ] {
+    for route in [AppRoute::DlqMessages, AppRoute::MessageTrace, AppRoute::Acl] {
         assert!(matches!(route.page_capability(), PageCapability::Unavailable { .. }));
     }
 }

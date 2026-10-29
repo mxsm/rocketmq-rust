@@ -12,32 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Monitor CRUD and lifecycle foundation without metric evaluation or UI.
+//! Canonical Monitor persistence and an owned no-op lifecycle; evaluation is not implemented.
 
 #[cfg(test)]
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use rocketmq_dashboard_common::{
+    EnvironmentConnectionSnapshot, MonitorMutationOutcome, MonitorRuleMutation, MonitorRulesSnapshot, OperationContext,
+};
+#[cfg(test)]
 use rocketmq_dashboard_common::{OperationActor, OperationResource};
 
 use rocketmq_runtime::{ChildServiceContext, TaskGroup, TaskId};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use super::{
-    config_store::{ConfigStoreFailure, DesktopConfigStore},
-    environment_store::{MonitorMigrationState, StoredMonitorRule},
-};
+use super::config_store::{ConfigStoreFailure, DesktopConfigStore};
+#[cfg(test)]
+use super::environment_store::{MonitorMigrationState, StoredMonitorRule};
 
+#[cfg(test)]
 #[derive(Debug, thiserror::Error)]
 #[error("Monitor id and consumer group must not be empty")]
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "P01 retains Monitor write validation for the P09 rule editor")
-)]
 struct InvalidMonitorRule;
 
-/// Persisted Monitor rule contract for later Delivery 07 evaluation.
+/// Original rule payload retained during migration; thresholds live in the versioned envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MonitorRule {
@@ -52,9 +52,68 @@ pub struct MonitorRule {
 /// Monitor facade over the canonical configuration/rule/operation document.
 pub struct MonitorStore {
     store: Arc<DesktopConfigStore>,
+    #[cfg(test)]
+    next_commit: parking_lot::Mutex<Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>>,
 }
 
 impl MonitorStore {
+    #[cfg(test)]
+    pub(crate) fn hold_next_commit(&self) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let (started, observed) = tokio::sync::oneshot::channel();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        *self.next_commit.lock() = Some((started, gate));
+        (observed, release)
+    }
+    pub fn scope(&self, revision: u64) -> Result<EnvironmentConnectionSnapshot, ConfigStoreFailure> {
+        let snapshot = self.store.environment_snapshot()?;
+        if snapshot.connection.revision != revision {
+            return Err(ConfigStoreFailure::stale_revision());
+        }
+        Ok(snapshot)
+    }
+
+    pub async fn snapshot(
+        &self,
+        scope: EnvironmentConnectionSnapshot,
+    ) -> Result<MonitorRulesSnapshot, ConfigStoreFailure> {
+        let rules = self.store.monitor_rules().await?;
+        if self.store.environment_snapshot()? != scope {
+            return Err(ConfigStoreFailure::stale_revision());
+        }
+        let mut current = Vec::new();
+        let mut unassigned = Vec::new();
+        for rule in rules {
+            if rule.environment_id.as_ref() == Some(&scope.environment_id) {
+                current.push(rule.view());
+            } else if rule.environment_id.is_none() {
+                unassigned.push(rule.view());
+            }
+        }
+        current.sort_by(|left, right| left.consumer_group.cmp(&right.consumer_group));
+        unassigned.sort_by(|left, right| left.consumer_group.cmp(&right.consumer_group));
+        Ok(MonitorRulesSnapshot {
+            environment_id: scope.environment_id,
+            configuration_revision: scope.connection.revision,
+            rules: current,
+            unassigned,
+        })
+    }
+
+    pub async fn commit(
+        &self,
+        request: MonitorRuleMutation,
+        context: OperationContext,
+    ) -> Result<MonitorMutationOutcome, ConfigStoreFailure> {
+        #[cfg(test)]
+        {
+            let pending = self.next_commit.lock().take();
+            if let Some((started, gate)) = pending {
+                let _ = started.send(());
+                let _ = gate.await;
+            }
+        }
+        self.store.commit_monitor_rule(request, context).await
+    }
     /// Creates an isolated store without a separately composed configuration owner.
     #[cfg(test)]
     pub fn new(path: PathBuf, context: ChildServiceContext) -> Arc<Self> {
@@ -62,9 +121,14 @@ impl MonitorStore {
     }
 
     pub fn with_config_store(store: Arc<DesktopConfigStore>) -> Arc<Self> {
-        Arc::new(Self { store })
+        Arc::new(Self {
+            store,
+            #[cfg(test)]
+            next_commit: parking_lot::Mutex::new(None),
+        })
     }
 
+    #[cfg(test)]
     async fn ensure_loaded(&self) -> Result<(), ConfigStoreFailure> {
         if self.store.environments().is_none() {
             self.store.load().await?;
@@ -73,6 +137,7 @@ impl MonitorStore {
     }
 
     /// Lists only the current environment. Incomplete legacy rules are separately recoverable.
+    #[cfg(test)]
     pub async fn list(&self) -> Result<Vec<MonitorRule>, ConfigStoreFailure> {
         self.ensure_loaded().await?;
         let environment = self.store.environment_snapshot()?.environment_id;
@@ -99,13 +164,7 @@ impl MonitorStore {
     }
 
     /// Persists a scoped rule as incomplete; P09 supplies thresholds before evaluation.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "P01 retains durable Monitor mutation APIs for the P09 rule editor"
-        )
-    )]
+    #[cfg(test)]
     pub async fn upsert(&self, rule: MonitorRule) -> Result<(), ConfigStoreFailure> {
         if rule.id.trim().is_empty() || rule.consumer_group.trim().is_empty() {
             return Err(ConfigStoreFailure::validation(InvalidMonitorRule));
@@ -124,6 +183,9 @@ impl MonitorStore {
                     environment_id: Some(snapshot.environment_id),
                     rule,
                     migration_state: MonitorMigrationState::NeedsThresholds,
+                    thresholds: None,
+                    revision: 1,
+                    updated_at_epoch_ms: None,
                 }),
                 id,
                 context,
@@ -133,13 +195,7 @@ impl MonitorStore {
     }
 
     /// Deletes only from the current environment, with its operation record in the same commit.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "P01 retains durable Monitor mutation APIs for the P09 rule editor"
-        )
-    )]
+    #[cfg(test)]
     pub async fn delete(&self, id: String) -> Result<bool, ConfigStoreFailure> {
         self.ensure_loaded().await?;
         let snapshot = self.store.environment_snapshot()?;
