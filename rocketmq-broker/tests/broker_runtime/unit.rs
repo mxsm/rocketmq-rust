@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 
+#[path = "send_back_identity.rs"]
+mod send_back_identity;
 #[path = "send_policy.rs"]
 mod send_policy;
 #[path = "shutdown_events.rs"]
