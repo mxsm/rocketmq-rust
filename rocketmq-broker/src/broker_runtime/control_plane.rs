@@ -532,7 +532,9 @@ impl BrokerRuntime {
             && !message_store_config.duplication_enable
             && !message_store_config.enable_controller_mode
         {
-            if BrokerRole::Slave == broker_config.broker_role {
+            // The replica role lives only in the store config (`[store].brokerRole`), as in Java,
+            // whose BrokerConfig has no role.
+            if BrokerRole::Slave == message_store_config.broker_role {
                 info!("Broker is Slave, start replicas manager");
                 let ha_master_address = message_store_config.ha_master_address.as_ref();
                 if let Some(ha_master_address) = ha_master_address {

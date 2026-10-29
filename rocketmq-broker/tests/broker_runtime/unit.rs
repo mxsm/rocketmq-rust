@@ -1172,6 +1172,44 @@ async fn initial_rpc_hooks_rejects_malformed_inner_client_credentials() {
 }
 
 #[tokio::test]
+async fn store_only_slave_role_takes_slave_replication_path() {
+    // Same layout as distribution/config/broker/1m-1s-async-one-machine/broker-slave.toml:
+    // `brokerRole` appears only under `[store]`.
+    let temp = tempfile::tempdir().expect("slave role test directory should be created");
+    let root = temp.path().to_string_lossy().into_owned();
+    let raw = crate::config::raw::RawBrokerConfig::from_serde_value(serde_json::json!({
+        "broker": {
+            "storePathRootDir": root,
+            "authConfigPath": temp.path().join("auth.json").to_string_lossy(),
+            "namesrvAddr": null,
+            "brokerIdentity": { "brokerId": 1 },
+        },
+        "store": {
+            "brokerRole": "SLAVE",
+            "storePathRootDir": root,
+        },
+    }))
+    .expect("store-only slave role config should deserialize");
+    let (broker_config, message_store_config, _, _) = raw.into_normalized_parts();
+    assert_eq!(message_store_config.broker_role, BrokerRole::Slave);
+    let mut runtime = BrokerRuntime::new(Arc::new(broker_config), Arc::new(message_store_config));
+    assert!(!runtime.composition.state.update_master_haserver_addr_periodically());
+
+    runtime.initialize_scheduled_tasks().await;
+
+    // Without `haMasterAddress`, only the slave path learns the HA master from name server
+    // registration; a master never sets this flag.
+    assert!(
+        runtime.composition.state.update_master_haserver_addr_periodically(),
+        "a slave configured only through [store].brokerRole must start replica synchronization"
+    );
+    let report = runtime
+        .shutdown_scheduled_tasks_with_timeout(Duration::from_secs(5))
+        .await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
 async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
     struct DropMarker(Arc<AtomicBool>);
 

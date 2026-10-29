@@ -1180,6 +1180,12 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::pop_ck_stay_buffer_time")]
     pub pop_ck_stay_buffer_time: u64,
 
+    /// Retained for configuration compatibility only.
+    ///
+    /// The Broker never reads this value. The replica role is
+    /// [`MessageStoreConfig::broker_role`](rocketmq_store::MessageStoreConfig::broker_role),
+    /// configured as `[store].brokerRole`, as in Java, whose `BrokerConfig` has no role.
+    /// The field stays so that configurations that also set `[broker].brokerRole` still load.
     #[serde(default = "defaults::broker_role")]
     pub broker_role: BrokerRole,
 
