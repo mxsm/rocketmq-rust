@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod overdue;
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -117,6 +119,9 @@ use crate::timer::timer_log::TimerLog;
 use crate::timer::timer_metrics::TimerMetrics;
 use crate::timer::timer_metrics::TimerMetricsSerializeWrapper;
 use crate::timer::timer_wheel::TimerWheel;
+use overdue::OverdueTimers;
+use overdue::SourceBatch;
+use overdue::SourceFrame;
 
 pub const TIMER_TOPIC: &str = concat!("rmq_sys_", "wheel_timer");
 pub const TIMER_OUT_MS: &str = MessageConst::PROPERTY_TIMER_OUT_MS;
@@ -247,6 +252,23 @@ struct SlotEntryDone {
     counted_topic: Option<CheetahString>,
     /// Whether the entry left the timer through a write.
     dequeued: bool,
+}
+
+/// Where a timer write goes.
+enum TimerWriteTarget {
+    /// Back to the Timer topic, for the timer's next round.
+    NextRound,
+    /// To the timer's real topic, and to its real queue when it names one.
+    Real {
+        topic: CheetahString,
+        queue_id: Option<i32>,
+    },
+}
+
+/// Why a due timer cannot be written to its real topic.
+enum InvalidRealTarget {
+    MissingTopic,
+    InvalidQueue,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1984,10 +2006,14 @@ impl TimerMessageStore {
         let _guard = self.process_lock.lock().await;
         let delivery_epoch = self.role_state.capture_delivery_epoch();
         let recall_visibility_watermark = delivery_epoch.and_then(|_| self.timer_queue_high_watermark());
-        let mut indexed = self.process_enqueue_stage(self.enqueue_batch_limit());
+        let mut indexed = self
+            .process_source_stage(self.enqueue_batch_limit(), delivery_epoch)
+            .await;
         let recall_visible = if let Some(watermark) = recall_visibility_watermark {
             while self.curr_queue_offset.load(Ordering::Acquire) < watermark {
-                let indexed_now = self.process_enqueue_stage(self.enqueue_batch_limit());
+                let indexed_now = self
+                    .process_source_stage(self.enqueue_batch_limit(), delivery_epoch)
+                    .await;
                 if indexed_now == 0 {
                     break;
                 }
@@ -2013,38 +2039,45 @@ impl TimerMessageStore {
         self.pipeline.lock().as_ref().map(|pipeline| pipeline.snapshot())
     }
 
-    pub(crate) fn process_enqueue_stage(&self, limit: usize) -> usize {
-        match self.process_enqueue_stage_with_durability(limit) {
-            Ok((messages, _)) => messages,
-            Err(_error) => {
-                error!(source_present = true, "commit timer source stage failed");
-                0
-            }
+    /// Runs one Source batch and commits it. Holding a delivery epoch, the batch writes the
+    /// overdue timers it reads straight to their topics.
+    async fn process_source_stage(&self, limit: usize, delivery_epoch: Option<u64>) -> usize {
+        let batch = self.index_source_batch(limit, OverdueTimers::with_epoch(delivery_epoch));
+        let mut processed = batch.processed;
+        if let Some(epoch) = delivery_epoch {
+            processed += self.deliver_overdue_timers(batch.overdue, epoch).await;
         }
+        self.commit_source_stage(processed)
     }
 
-    pub(crate) fn process_enqueue_stage_with_durability(&self, limit: usize) -> std::io::Result<(usize, bool)> {
-        let indexed = self.index_source_batch(limit);
-        let durable = if self.pending_progress.load(Ordering::Acquire) {
-            self.commit_durable_progress()?
-        } else {
-            true
-        };
-        Ok((indexed, durable))
+    /// Indexes and commits one Source batch, overdue timers included.
+    #[cfg(test)]
+    pub(crate) fn process_enqueue_stage(&self, limit: usize) -> usize {
+        let indexed = self.index_source_batch(limit, OverdueTimers::Index).processed;
+        self.commit_source_stage(indexed)
+    }
+
+    /// Commits a Source batch; a failed commit reports the batch as having done nothing.
+    fn commit_source_stage(&self, processed: usize) -> usize {
+        if self.pending_progress.load(Ordering::Acquire) && self.commit_durable_progress().is_err() {
+            error!(source_present = true, "commit timer source stage failed");
+            return 0;
+        }
+        processed
     }
 
     /// Indexes one Source batch without committing it.
-    fn index_source_batch(&self, limit: usize) -> usize {
+    fn index_source_batch(&self, limit: usize, overdue: OverdueTimers) -> SourceBatch {
         let _stage_guard = self.enqueue_stage_lock.lock();
-        let indexed = {
+        let batch = {
             let _mutation = AtomicActivityGuard::new(&self.active_source_mutations, &self.persistence_gate);
-            self.enqueue_from_timer_topic(limit.max(1))
+            self.enqueue_from_timer_topic(limit.max(1), overdue)
         };
         self.advance_source_visibility();
-        if indexed > 0 {
+        if batch.processed > 0 {
             self.pending_progress.store(true, Ordering::Release);
         }
-        indexed
+        batch
     }
 
     pub(crate) async fn process_due_stage(&self, limit: usize, delivery_epoch: u64) -> usize {
@@ -2091,21 +2124,30 @@ impl TimerMessageStore {
         delivered
     }
 
-    /// Runs one pipeline Source batch. Its changes become durable with the next pipeline
-    /// checkpoint, so the batch reports itself as not durable.
+    /// Runs one pipeline Source batch, writing its overdue timers like `process_once` does. Its
+    /// changes become durable with the next pipeline checkpoint, so the batch reports itself as
+    /// not durable.
     pub(crate) async fn process_pipeline_enqueue_stage(
         self: &Arc<Self>,
         limit: usize,
     ) -> std::io::Result<(usize, bool)> {
         let _pipeline_guard = self.process_lock.lock().await;
+        let delivery_epoch = self.capture_delivery_epoch();
+        let overdue = OverdueTimers::with_epoch(delivery_epoch);
         let store = Arc::clone(self);
-        let indexed = self
+        let batch = self
             .runtime_scope
             .storage_io()
-            .spawn_io("timer-source-materialization", move || store.index_source_batch(limit))
+            .spawn_io("timer-source-materialization", move || {
+                store.index_source_batch(limit, overdue)
+            })
             .await
             .map_err(|error| std::io::Error::other(format!("timer source materialization task failed: {error}")))?;
-        Ok((indexed, false))
+        let mut processed = batch.processed;
+        if let Some(epoch) = delivery_epoch {
+            processed += self.deliver_overdue_timers(batch.overdue, epoch).await;
+        }
+        Ok((processed, false))
     }
 
     /// Runs one pipeline Due batch; like a Source batch, it is committed by the next pipeline
@@ -2154,17 +2196,22 @@ impl TimerMessageStore {
         self.quarantine_manifest.snapshot().len()
     }
 
-    fn enqueue_from_timer_topic(&self, limit: usize) -> usize {
+    /// Indexes the next Timer CQ entries. With `OverdueTimers::Deliver`, a run of overdue timers
+    /// ends the batch instead: they are returned for the caller to write, and the enqueue cursor
+    /// stays in front of them.
+    fn enqueue_from_timer_topic(&self, limit: usize, overdue: OverdueTimers) -> SourceBatch {
         if !self.should_running_enqueue() {
-            return 0;
+            return SourceBatch::default();
         }
         let timer_topic = CheetahString::from_static_str(TIMER_TOPIC);
         let Some(consume_queue) = self.find_store_consume_queue(&timer_topic, 0) else {
-            return 0;
+            return SourceBatch::default();
         };
 
-        let now_ms = self.floor_time_ms(self.clock.read().wall_time_ms());
+        let wall_time_ms = self.clock.read().wall_time_ms();
+        let now_ms = self.floor_time_ms(wall_time_ms);
         let dequeue_cursor = self.ensure_dequeue_cursor(now_ms);
+        let overdue_bound = self.overdue_bound(overdue, wall_time_ms, dequeue_cursor);
         let enqueue_reference_time_ms = dequeue_cursor.max(now_ms);
         let max_offset = consume_queue.read().get_max_offset_in_queue();
         let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
@@ -2187,10 +2234,10 @@ impl TimerMessageStore {
             batch.push(cq_unit);
         }
         let Some(storage) = self.timer_storage() else {
-            return 0;
+            return SourceBatch::default();
         };
         let Some(log_end) = storage.log_end().ok().and_then(|end| i64::try_from(end).ok()) else {
-            return 0;
+            return SourceBatch::default();
         };
         let locators: Vec<_> = batch.iter().map(|unit| (unit.pos, unit.size)).collect();
         let frames = self.read_source_frames(&locators, self.message_store_config.timer_pipeline_queue_bytes);
@@ -2200,7 +2247,7 @@ impl TimerMessageStore {
         let mut draining_plan = match draining.as_deref() {
             Some(draining) => {
                 let Some(end) = draining.storage.log_end().ok().and_then(|end| i64::try_from(end).ok()) else {
-                    return 0;
+                    return SourceBatch::default();
                 };
                 Some(TimerIndexPlan::new(end, draining.storage.layout()))
             }
@@ -2208,8 +2255,22 @@ impl TimerMessageStore {
         };
         let mut owned_elsewhere = 0usize;
         let mut next_queue_offset = None;
+        let mut overdue_timers = Vec::new();
 
         for (cq_unit, frame) in batch.into_iter().zip(frames) {
+            let frame = match overdue_bound {
+                Some(bound) => match self.check_overdue(frame, cq_unit.queue_offset, bound) {
+                    SourceFrame::Overdue(timer) => {
+                        overdue_timers.push(timer);
+                        continue;
+                    }
+                    // The overdue run ends the batch, so the enqueue cursor can pass each of its
+                    // timers once that timer is written.
+                    SourceFrame::Index(_) if !overdue_timers.is_empty() => break,
+                    SourceFrame::Index(frame) => frame,
+                },
+                None => frame,
+            };
             let message = match frame {
                 TimerSourceRead::Frame { message, .. } => message,
                 reason => {
@@ -2312,17 +2373,17 @@ impl TimerMessageStore {
                     source_present = true,
                     "index a recall into the draining timer file format failed"
                 );
-                return 0;
+                return SourceBatch::default();
             }
         }
         // Nothing of the batch is visible before this commit; a failed commit keeps the cursor so
-        // the whole batch is planned again.
+        // the whole batch, its overdue run included, is planned again.
         if let Err(_error) = Self::commit_timer_index_plan(&storage, &plan) {
             error!(
                 source_present = true,
                 "index a timer payload batch into the wheel failed"
             );
-            return 0;
+            return SourceBatch::default();
         }
         let indexed = plan.records.len();
         for source in plan.sources {
@@ -2344,7 +2405,10 @@ impl TimerMessageStore {
             self.curr_queue_offset.store(queue_offset, Ordering::Relaxed);
         }
 
-        indexed + owned_elsewhere
+        SourceBatch {
+            processed: indexed + owned_elsewhere,
+            overdue: overdue_timers,
+        }
     }
 
     fn quarantine_source(&self, source_offset: i64, reason: CorruptionReason) {
@@ -2890,6 +2954,16 @@ impl TimerMessageStore {
         let Some(mut message) = Self::convert_timer_message(message, false) else {
             return PreparedSlotEntry::Unsupported { source_offset };
         };
+        Self::ensure_delivery_token(&mut message, source_offset, generation);
+        PreparedSlotEntry::Deliver {
+            source_offset,
+            message,
+            original_deliver_ms,
+        }
+    }
+
+    /// Gives a converted timer a delivery token when it was admitted without one.
+    fn ensure_delivery_token(message: &mut MessageExtBrokerInner, source_offset: i64, generation: u64) {
         let properties = message.message_ext_inner.message.properties_mut().as_map_mut();
         if !properties.contains_key(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN) {
             // V1 records predate admission-time tokens. The fallback is deterministic for
@@ -2899,11 +2973,6 @@ impl TimerMessageStore {
                 stable_delivery_token(source_offset, generation),
             );
             message.properties_string = MessageDecoder::message_properties_to_string(message.get_properties());
-        }
-        PreparedSlotEntry::Deliver {
-            source_offset,
-            message,
-            original_deliver_ms,
         }
     }
 
@@ -3146,12 +3215,34 @@ impl TimerMessageStore {
     }
 
     /// Builds the write for one slot entry: the timer message again for its next round when
-    /// `need_roll`, otherwise the original message for its real topic.
+    /// `need_roll`, otherwise the original message for its real topic. Returns `None` when the
+    /// message names no real topic or a real queue that is not a number.
+    fn convert_timer_message(message: MessageExt, need_roll: bool) -> Option<MessageExtBrokerInner> {
+        let target = if need_roll {
+            TimerWriteTarget::NextRound
+        } else {
+            match real_write_target(&message) {
+                Ok(target) => target,
+                Err(InvalidRealTarget::MissingTopic) => {
+                    warn!("drop timer message because REAL_TOPIC is missing");
+                    return None;
+                }
+                Err(InvalidRealTarget::InvalidQueue) => {
+                    warn!("drop timer message because REAL_QID is invalid");
+                    return None;
+                }
+            }
+        };
+        Some(Self::timer_write(message, target))
+    }
+
+    /// Builds a timer write for `target`.
     ///
     /// Properties are edited in the map and encoded once at the end. The property setters of
     /// `MessageExtBrokerInner` re-encode the whole properties string on every call, which made
     /// this conversion the largest per-message cost of a slot drain.
-    fn convert_timer_message(message: MessageExt, need_roll: bool) -> Option<MessageExtBrokerInner> {
+    fn timer_write(message: MessageExt, target: TimerWriteTarget) -> MessageExtBrokerInner {
+        let need_roll = matches!(target, TimerWriteTarget::NextRound);
         let mut inner = MessageExtBrokerInner::default();
         let sys_flag = message.sys_flag();
         let born_timestamp = message.born_timestamp();
@@ -3203,51 +3294,41 @@ impl TimerMessageStore {
         inner.message_ext_inner.reconsume_times = reconsume_times;
         inner.set_wait_store_msg_ok(false);
 
-        if need_roll {
-            inner.set_topic(timer_topic);
-            inner.message_ext_inner.queue_id = timer_queue_id;
-        } else {
-            let Some(topic) = inner.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)) else {
-                warn!("drop timer message because REAL_TOPIC is missing");
-                return None;
-            };
-            inner.set_topic(topic);
-            let queue_id = inner.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID));
-            if let Some(queue_id) = queue_id {
-                match queue_id.parse::<i32>() {
-                    Ok(queue_id) => {
-                        inner.message_ext_inner.queue_id = queue_id;
-                    }
-                    Err(_error) => {
-                        warn!("drop timer message because REAL_QID is invalid");
-                        return None;
-                    }
-                }
+        match target {
+            TimerWriteTarget::NextRound => {
+                inner.set_topic(timer_topic);
+                inner.message_ext_inner.queue_id = timer_queue_id;
             }
-            let properties = inner.message_ext_inner.message.properties_mut().as_map_mut();
-            for property in [
-                MessageConst::PROPERTY_REAL_TOPIC,
-                MessageConst::PROPERTY_REAL_QUEUE_ID,
-                MessageConst::PROPERTY_TIMER_OUT_MS,
-                MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
-                MessageConst::PROPERTY_TIMER_DELAY_SEC,
-                MessageConst::PROPERTY_TIMER_DELAY_MS,
-                MessageConst::PROPERTY_TIMER_DELIVER_MS,
-                MessageConst::PROPERTY_TIMER_ENQUEUE_MS,
-                MessageConst::PROPERTY_TIMER_DEQUEUE_MS,
-                MessageConst::PROPERTY_TIMER_ROLL_TIMES,
-                MessageConst::PROPERTY_TIMER_ROLL_LABEL,
-                MessageConst::PROPERTY_TIMER_DEL_UNIQKEY,
-                MessageConst::PROPERTY_TIMER_GENERATION,
-                MessageConst::TIMER_ENGINE_TYPE,
-                MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
-                MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
-            ] {
-                properties.remove(property);
+            TimerWriteTarget::Real { topic, queue_id } => {
+                inner.set_topic(topic);
+                if let Some(queue_id) = queue_id {
+                    inner.message_ext_inner.queue_id = queue_id;
+                }
+                let properties = inner.message_ext_inner.message.properties_mut().as_map_mut();
+                for property in [
+                    MessageConst::PROPERTY_REAL_TOPIC,
+                    MessageConst::PROPERTY_REAL_QUEUE_ID,
+                    MessageConst::PROPERTY_TIMER_OUT_MS,
+                    MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
+                    MessageConst::PROPERTY_TIMER_DELAY_SEC,
+                    MessageConst::PROPERTY_TIMER_DELAY_MS,
+                    MessageConst::PROPERTY_TIMER_DELIVER_MS,
+                    MessageConst::PROPERTY_TIMER_ENQUEUE_MS,
+                    MessageConst::PROPERTY_TIMER_DEQUEUE_MS,
+                    MessageConst::PROPERTY_TIMER_ROLL_TIMES,
+                    MessageConst::PROPERTY_TIMER_ROLL_LABEL,
+                    MessageConst::PROPERTY_TIMER_DEL_UNIQKEY,
+                    MessageConst::PROPERTY_TIMER_GENERATION,
+                    MessageConst::TIMER_ENGINE_TYPE,
+                    MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+                    MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
+                ] {
+                    properties.remove(property);
+                }
             }
         }
         inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
-        Some(inner)
+        inner
     }
 
     fn ensure_dequeue_cursor(&self, fallback_time_ms: i64) -> i64 {
@@ -3437,6 +3518,18 @@ fn observe_backlog_message(backlog: &mut TimerBacklogMetrics, message: &MessageE
         .map(|topic| topic.to_string())
         .unwrap_or_else(|| message.topic().to_string());
     backlog.observe(topic, deliver_time_ms, now_ms, is_delete_timer_message(message));
+}
+
+fn real_write_target(message: &MessageExt) -> Result<TimerWriteTarget, InvalidRealTarget> {
+    let topic = message
+        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+        .ok_or(InvalidRealTarget::MissingTopic)?;
+    let queue_id = message
+        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+        .map(|queue_id| queue_id.parse::<i32>())
+        .transpose()
+        .map_err(|_error| InvalidRealTarget::InvalidQueue)?;
+    Ok(TimerWriteTarget::Real { topic, queue_id })
 }
 
 fn parse_deliver_time_ms(message: &MessageExt) -> Option<i64> {
