@@ -1,0 +1,33 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+[broker]
+listenPort = 30911
+brokerIp1 = "127.0.0.1"
+namesrvAddr = "127.0.0.1:39876"
+storePathRootDir = "/var/lib/rocketmq/broker"
+autoCreateTopicEnable = false
+
+[broker.brokerIdentity]
+brokerName = "gpui-broker"
+brokerClusterName = "GpuiParityCluster"
+brokerId = 0
+
+[broker.brokerServerConfig]
+bindAddress = "0.0.0.0"
+
+[store]
+storePathRootDir = "/var/lib/rocketmq/broker"
+storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity"
+brokerRole = "ASYNC_MASTER"
+flushDiskType = "ASYNC_FLUSH"
+haListenAddress = "0.0.0.0"
+haListenPort = 30912
+totalReplicas = 1
+inSyncReplicas = 1
+minInSyncReplicas = 1
+mappedFileSizeCommitLog = 67108864
+mappedFileSizeConsumeQueue = 6000
+mappedFileSizeConsumeQueueExt = 65536
+maxHashSlotNum = 1000
+maxIndexNum = 4000
+timerWheelEnable = false
