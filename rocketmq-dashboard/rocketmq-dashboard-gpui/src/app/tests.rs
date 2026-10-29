@@ -159,6 +159,8 @@ fn environment_profile_controls_create_switch_and_clear_previous_resource_state(
                         targets: Vec::new(),
                     }],
                     targets: Vec::new(),
+                    target_observation: ConsumerObservationState::Unknown,
+                    group_observation: ConsumerObservationState::Complete,
                     observation: ConsumerObservationState::Complete,
                     failures: Vec::new(),
                     capabilities: ConsumerCapabilities::for_scope(ConnectionScope::NameServer),
@@ -335,6 +337,44 @@ fn assert_topbar_layout(cx: &mut gpui::VisualTestContext, full_status: bool) {
         assert!(cx.debug_bounds("topbar-compact-status").is_none());
     } else {
         assert!(cx.debug_bounds("topbar-compact-status").is_some());
+    }
+}
+
+#[gpui::test]
+fn consumer_page_description_stays_inside_narrow_content(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let app_services = services(
+        StartupSnapshot {
+            configuration_revision: 7,
+            login_required: false,
+            has_valid_session: false,
+        },
+        FakeAuthService::authenticated(),
+    );
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    cx.run_until_parked();
+    let dashboard = capture.borrow_mut().take().unwrap();
+    cx.update(|window, app| dashboard.update(app, |dashboard, cx| dashboard.navigate(AppRoute::Consumers, window, cx)));
+    for width in [930., 580.] {
+        cx.simulate_resize(size(px(width), px(620.)));
+        cx.draw(point(px(0.), px(0.)), size(px(width), px(620.)), |_, _| root.clone());
+        cx.draw(point(px(0.), px(0.)), size(px(width), px(620.)), |_, _| root.clone());
+        let content = cx.debug_bounds("page-content").unwrap();
+        let description = cx.debug_bounds("page-description").unwrap();
+        assert!(description.origin.x >= content.origin.x);
+        assert!(description.origin.x + description.size.width <= content.origin.x + content.size.width);
+        if width == 580. {
+            assert!(
+                description.size.height > px(24.),
+                "the complete description should wrap at the narrow width"
+            );
+        }
     }
 }
 

@@ -17,19 +17,23 @@
 #[path = "consumer_detail_mutations.rs"]
 mod mutations;
 
+#[path = "consumer_detail_render.rs"]
+mod render;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Context, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Task,
-    Window, div,
+    ClipboardItem, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Styled as _, Task, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
+    scroll::ScrollableElement as _,
 };
 use rocketmq_dashboard_common::{
-    CONSUMER_DIAGNOSTIC_MAX_BYTES, ConsumerCapabilities, ConsumerConfigPatch, ConsumerConfigPatchCommand,
-    ConsumerDiagnosticKind, ConsumerDiagnosticRequest, ConsumerIdentity, ConsumerInventory, ConsumerObservation,
-    ConsumerPartialOutcome, ConsumerTargetIdentity,
+    CONSUMER_DIAGNOSTIC_MAX_BYTES, ConsumerCapabilities, ConsumerConfigPatchCommand, ConsumerDiagnosticKind,
+    ConsumerDiagnosticRequest, ConsumerIdentity, ConsumerInventory, ConsumerObservation, ConsumerPartialOutcome,
+    ConsumerTargetIdentity,
 };
 
 use crate::{
@@ -39,9 +43,14 @@ use crate::{
     state::Loadable,
 };
 
+pub(super) const CONSUMER_SHEET_WIDTH: gpui::Pixels = gpui::px(800.);
+// The pinned Sheet has a 26px small close button and 8px padding above and below it.
+const SHEET_TITLE_ROW_HEIGHT: gpui::Pixels = gpui::px(42.);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConsumerDetailIntent {
     ReplaceRoute(AppRoute),
+    QueryScopeChanged(rocketmq_dashboard_common::ConsumerQueryScope),
     InventoryReloaded(ConsumerInventory),
     Deleted(ConsumerInventory),
 }
@@ -61,6 +70,8 @@ pub struct ConsumerDetail {
     mutation_outcome: Option<ConsumerPartialOutcome>,
     mutation_replay_blocked: bool,
     offset_dialog: Option<Entity<TopicDialogForm>>,
+    mutation_dialog: Option<Entity<crate::features::consumer_dialogs::ConsumerDialogForm>>,
+    query_scope: rocketmq_dashboard_common::ConsumerQueryScope,
 }
 
 impl EventEmitter<ConsumerDetailIntent> for ConsumerDetail {}
@@ -73,6 +84,7 @@ impl ConsumerDetail {
         tab: ConsumerTab,
         targets: Vec<ConsumerTargetIdentity>,
         capabilities: ConsumerCapabilities,
+        query_scope: rocketmq_dashboard_common::ConsumerQueryScope,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut detail = Self {
@@ -90,6 +102,8 @@ impl ConsumerDetail {
             mutation_outcome: None,
             mutation_replay_blocked: false,
             offset_dialog: None,
+            mutation_dialog: None,
+            query_scope,
         };
         detail.refresh_active(cx);
         detail
@@ -98,6 +112,13 @@ impl ConsumerDetail {
     #[cfg(test)]
     pub(crate) fn mutation_status_for_test(&self) -> Option<&str> {
         self.mutation_status.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutation_dialog_for_test(
+        &self,
+    ) -> Option<Entity<crate::features::consumer_dialogs::ConsumerDialogForm>> {
+        self.mutation_dialog.clone()
     }
 
     #[cfg(test)]
@@ -150,6 +171,7 @@ impl ConsumerDetail {
     pub(super) fn clear_for_environment(&mut self, revision: u64, window: &mut gpui::Window, cx: &mut Context<Self>) {
         self.revision = revision;
         self.resource_task = None;
+        self.mutation_dialog = None;
         self.diagnostic_task = None;
         self.store.clear_diagnostic();
         self.store.overview.clear();
@@ -167,8 +189,16 @@ impl ConsumerDetail {
         cx.notify();
     }
 
+    pub(super) fn discard_queries(&mut self, cx: &mut Context<Self>) {
+        self.resource_task = None;
+        self.diagnostic_task = None;
+        self.store.clear_diagnostic();
+        cx.notify();
+    }
+
     pub fn set_tab(&mut self, tab: ConsumerTab, cx: &mut Context<Self>) {
         if tab != self.store.active_tab {
+            self.diagnostic_task = None;
             self.store.clear_diagnostic();
             self.store.set_tab(tab);
             self.refresh_active(cx);
@@ -197,9 +227,10 @@ impl ConsumerDetail {
         if !self.store.active_is_idle() {
             return;
         }
-        let Some(request) = self.store.begin_active(self.revision) else {
+        let Some(mut request) = self.store.begin_active(self.revision) else {
             return;
         };
+        request.scope.query_scope = self.query_scope;
         let services = self.services.clone();
         let group = self.store.group.clone();
         let tab = self.store.active_tab;
@@ -248,9 +279,13 @@ impl ConsumerDetail {
         kind: ConsumerDiagnosticKind,
         cx: &mut Context<Self>,
     ) {
-        let Some(load) = self.store.begin_diagnostic(self.revision, client.clone(), kind) else {
+        if self.capabilities.diagnostics != rocketmq_dashboard_common::CapabilityAvailability::Available {
+            return;
+        }
+        let Some(mut load) = self.store.begin_diagnostic(self.revision, client.clone(), kind) else {
             return;
         };
+        load.scope.query_scope = self.query_scope;
         let request = ConsumerDiagnosticRequest {
             group: self.store.group.clone(),
             client,
@@ -294,7 +329,7 @@ impl ConsumerDetail {
             ConsumerTab::Overview => self.render_overview(window, cx),
             ConsumerTab::Clients => self.render_clients(cx),
             ConsumerTab::Progress => self.render_progress(false, cx),
-            ConsumerTab::Configuration => self.render_configuration(cx),
+            ConsumerTab::Configuration => self.render_configuration(window, cx),
             ConsumerTab::OffsetActions => self.render_progress(true, cx),
         };
         let refresh_failure = match self.store.active_tab {
@@ -304,6 +339,9 @@ impl ConsumerDetail {
             ConsumerTab::Configuration => retained_failure(&self.store.configuration.state),
         };
         div()
+            .w_full()
+            .min_w_0()
+            .whitespace_normal()
             .flex()
             .flex_col()
             .gap_3()
@@ -357,292 +395,6 @@ impl ConsumerDetail {
         }
     }
 
-    fn render_clients(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let mut body = div().flex().flex_col().gap_2();
-        if let Some(observation) = self.store.clients.state.value() {
-            body = body.child(observation_state_label(observation));
-            if let Some(clients) = observation.value() {
-                for (index, client) in clients.clients.iter().enumerate() {
-                    let running_client = client.identity.clone();
-                    let jstack_client = client.identity.clone();
-                    body = body.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(format!(
-                                "{} · {} · {}",
-                                client.identity.as_str(),
-                                client.language,
-                                client.version_description
-                            ))
-                            .child(
-                                Button::new(("running-info", index))
-                                    .label("Running Info")
-                                    .small()
-                                    .outline()
-                                    .on_click(cx.listener(move |detail, _, _, cx| {
-                                        detail.load_diagnostic(
-                                            running_client.clone(),
-                                            ConsumerDiagnosticKind::RunningInfo,
-                                            cx,
-                                        );
-                                    })),
-                            )
-                            .child(
-                                Button::new(("jstack", index))
-                                    .label("JStack")
-                                    .small()
-                                    .outline()
-                                    .on_click(cx.listener(move |detail, _, _, cx| {
-                                        detail.load_diagnostic(
-                                            jstack_client.clone(),
-                                            ConsumerDiagnosticKind::Jstack,
-                                            cx,
-                                        );
-                                    })),
-                            ),
-                    );
-                }
-            }
-        } else {
-            body = body.child("Loading clients…");
-        }
-        if let Some(payload) = self.store.diagnostic.state.value() {
-            body = body.child(
-                div()
-                    .id("consumer-diagnostic")
-                    .mt_3()
-                    .p_3()
-                    .rounded_md()
-                    .bg(cx.theme().muted)
-                    .child(if payload.truncated() {
-                        "Diagnostic output (truncated)"
-                    } else {
-                        "Diagnostic output"
-                    })
-                    .children(
-                        payload
-                            .properties()
-                            .iter()
-                            .map(|(key, value)| div().child(format!("{key}: {value}"))),
-                    )
-                    .when_some(payload.text(), |this, text| this.child(div().child(text.to_owned()))),
-            );
-        }
-        body
-    }
-
-    fn render_progress(&self, actions: bool, cx: &mut Context<Self>) -> gpui::Div {
-        let observation = if actions {
-            self.store.offset_actions.state.value()
-        } else {
-            self.store.progress.state.value()
-        };
-        match observation {
-            Some(observation) => {
-                let mut body = div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(observation_state_label(observation));
-                if let Some(progress) = observation.value() {
-                    body = body.child(format!("Signed total delta: {}", progress.total_delta));
-                    for (index, row) in progress.rows.iter().enumerate() {
-                        let mut item = div().flex().flex_col().gap_1().child(format!(
-                            "{} / {} / queue {} · broker={} consumer={} delta={}",
-                            row.topic, row.broker_name, row.queue_id, row.broker_offset, row.consumer_offset, row.delta
-                        ));
-                        if actions
-                            && self.capabilities.offset_actions
-                                == rocketmq_dashboard_common::CapabilityAvailability::Available
-                            && let Some(cluster_name) = self.exact_cluster_for_broker(&row.broker_name)
-                        {
-                            let reset_topic = row.topic.clone();
-                            let reset_cluster = cluster_name.clone();
-                            let skip_topic = row.topic.clone();
-                            item = item.child(
-                                div()
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        Button::new(("consumer-reset-offset", index))
-                                            .debug_selector(move || format!("consumer-reset-offset-{index}"))
-                                            .label("Reset offset")
-                                            .small()
-                                            .outline()
-                                            .on_click(cx.listener(move |detail, _, window, cx| {
-                                                detail.request_offset_action(
-                                                    reset_topic.clone(),
-                                                    reset_cluster.clone(),
-                                                    false,
-                                                    window,
-                                                    cx,
-                                                );
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new(("consumer-skip-offset", index))
-                                            .debug_selector(move || format!("consumer-skip-offset-{index}"))
-                                            .label("Skip accumulated")
-                                            .small()
-                                            .outline()
-                                            .on_click(cx.listener(move |detail, _, window, cx| {
-                                                detail.request_offset_action(
-                                                    skip_topic.clone(),
-                                                    cluster_name.clone(),
-                                                    true,
-                                                    window,
-                                                    cx,
-                                                );
-                                            })),
-                                    ),
-                            );
-                        }
-                        body = body.child(item);
-                    }
-                }
-                if actions {
-                    body = body.child(
-                        "Each action reuses the D4 exact Topic/group/one-cluster coordinator; detailed broker/queue outcomes remain partial and are never broadly replayed.",
-                    );
-                }
-                body
-            }
-            None => div().child("Loading progress…"),
-        }
-    }
-
-    fn render_configuration(&self, cx: &mut Context<Self>) -> gpui::Div {
-        match self.store.configuration.state.value() {
-            Some(configuration) => {
-                let mut body = div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(format!("Observation: {:?}", configuration.observation));
-                for (index, snapshot) in configuration.snapshots.iter().enumerate() {
-                    let retry_snapshot = snapshot.clone();
-                    let queue_snapshot = snapshot.clone();
-                    let timeout_snapshot = snapshot.clone();
-                    body = body.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(format!(
-                                "{} / {} · version={} · retry_max_times={} · retry_queue_nums={} · consume_timeout_minutes={}",
-                                snapshot.identity.target.cluster_name(),
-                                snapshot.identity.target.broker_name(),
-                                snapshot.generation,
-                                snapshot.entries.retry_max_times,
-                                snapshot.entries.retry_queue_nums,
-                                snapshot.entries.consume_timeout_minutes
-                            ))
-                            .when(
-                                self.capabilities.edit
-                                    == rocketmq_dashboard_common::CapabilityAvailability::Available,
-                                |this| {
-                                    this.child(
-                                        div()
-                                            .flex()
-                                            .gap_2()
-                                            .child(
-                                                Button::new(("draft-retry-max", index))
-                                                    .debug_selector(move || format!("draft-retry-max-{index}"))
-                                                    .label("Draft retry max +1")
-                                                    .small()
-                                                    .outline()
-                                                    .on_click(cx.listener(move |detail, _, _, cx| {
-                                                        detail.draft_config_patch(
-                                                            retry_snapshot.clone(),
-                                                            ConsumerConfigPatch {
-                                                                retry_max_times: Some(
-                                                                    retry_snapshot
-                                                                        .entries
-                                                                        .retry_max_times
-                                                                        .saturating_add(1)
-                                                                        .min(16),
-                                                                ),
-                                                                ..ConsumerConfigPatch::default()
-                                                            },
-                                                            cx,
-                                                        );
-                                                    })),
-                                            )
-                                            .child(
-                                                Button::new(("draft-retry-queues", index))
-                                                    .label("Draft retry queues +1")
-                                                    .small()
-                                                    .outline()
-                                                    .on_click(cx.listener(move |detail, _, _, cx| {
-                                                        detail.draft_config_patch(
-                                                            queue_snapshot.clone(),
-                                                            ConsumerConfigPatch {
-                                                                retry_queue_nums: Some(
-                                                                    queue_snapshot
-                                                                        .entries
-                                                                        .retry_queue_nums
-                                                                        .saturating_add(1)
-                                                                        .min(8),
-                                                                ),
-                                                                ..ConsumerConfigPatch::default()
-                                                            },
-                                                            cx,
-                                                        );
-                                                    })),
-                                            )
-                                            .child(
-                                                Button::new(("draft-consume-timeout", index))
-                                                    .label("Draft timeout +1")
-                                                    .small()
-                                                    .outline()
-                                                    .on_click(cx.listener(move |detail, _, _, cx| {
-                                                        detail.draft_config_patch(
-                                                            timeout_snapshot.clone(),
-                                                            ConsumerConfigPatch {
-                                                                consume_timeout_minutes: Some(
-                                                                    timeout_snapshot
-                                                                        .entries
-                                                                        .consume_timeout_minutes
-                                                                        .saturating_add(1)
-                                                                        .min(1_440),
-                                                                ),
-                                                                ..ConsumerConfigPatch::default()
-                                                            },
-                                                            cx,
-                                                        );
-                                                    })),
-                                            ),
-                                    )
-                                },
-                            ),
-                    );
-                }
-                if let Some(draft) = &self.edit_draft {
-                    body = body
-                        .child(format!(
-                            "Draft target: {} / {} · expected generation {} · only retry_max_times, retry_queue_nums, and consume_timeout_minutes can change.",
-                            draft.snapshot.identity.target.cluster_name(),
-                            draft.snapshot.identity.target.broker_name(),
-                            draft.snapshot.generation
-                        ))
-                        .child(
-                            Button::new("apply-consumer-config-draft")
-                                .debug_selector(|| "apply-consumer-config-draft".to_owned())
-                                .label("Apply exact-target CAS")
-                                .primary()
-                                .on_click(cx.listener(|detail, _, _, cx| detail.submit_config_patch(cx))),
-                        );
-                }
-                body
-            }
-            None => loading_or_empty(&self.store.configuration.state),
-        }
-    }
-
     fn exact_cluster_for_broker(&self, broker_name: &str) -> Option<String> {
         let mut matches = self
             .targets
@@ -665,13 +417,55 @@ impl Render for ConsumerDetail {
             (ConsumerTab::Configuration, "Configuration"),
             (ConsumerTab::OffsetActions, "Offset Actions"),
         ];
-        div()
-            .id("consumer-detail")
-            .size_full()
+        let copy_group = self.store.group.as_str().to_owned();
+        let window_padding = gpui_component::window_paddings(window);
+        let content = div()
+            .w_full()
+            .min_w_0()
+            .whitespace_normal()
             .p_4()
             .flex()
             .flex_col()
             .gap_4()
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .whitespace_normal()
+                    .debug_selector(|| "consumer-detail-group".to_owned())
+                    .child(format!("Consumer group: {}", self.store.group.as_str())),
+            )
+            .child(
+                Button::new("consumer-copy-group")
+                    .debug_selector(|| "consumer-copy-group".to_owned())
+                    .label("Copy group")
+                    .small()
+                    .outline()
+                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_group.clone()))),
+            )
+            .child(div().w_full().min_w_0().whitespace_normal().child(format!(
+                    "Consumer reads: {}",
+                    self.query_scope
+                        .description(&self.services.connection_state().config.connection_snapshot())
+                )))
+            .child(
+                Button::new("consumer-detail-query-scope")
+                    .debug_selector(|| "consumer-detail-query-scope".to_owned())
+                    .label("Switch query scope")
+                    .on_click(cx.listener(|detail, _, _, cx| {
+                        detail.diagnostic_task = None;
+                        detail.store.clear_diagnostic();
+                        let scope = match detail.query_scope {
+                            rocketmq_dashboard_common::ConsumerQueryScope::Configured => {
+                                rocketmq_dashboard_common::ConsumerQueryScope::BrokerDirect
+                            }
+                            rocketmq_dashboard_common::ConsumerQueryScope::BrokerDirect => {
+                                rocketmq_dashboard_common::ConsumerQueryScope::Configured
+                            }
+                        };
+                        cx.emit(ConsumerDetailIntent::QueryScopeChanged(scope));
+                    })),
+            )
             .child(
                 div()
                     .flex()
@@ -691,11 +485,38 @@ impl Render for ConsumerDetail {
             .when_some(self.mutation_outcome.clone(), |this, outcome| {
                 this.child(render_consumer_outcome(&outcome, cx))
             })
-            .child(self.render_active(window, cx))
+            .child(self.render_active(window, cx));
+        div()
+            .id("consumer-detail")
+            .debug_selector(|| "consumer-detail".to_owned())
+            .size_full()
+            // Sheet's scroll layer measures long diagnostic lines at their intrinsic width.
+            // Keep the content inside the configured Sheet width and its one-pixel left border.
+            .max_w(window.viewport_size().width.min(CONSUMER_SHEET_WIDTH) - gpui::px(1.))
+            .max_h(
+                window.viewport_size().height
+                    - window_padding.top
+                    - window_padding.bottom
+                    - gpui_component::TITLE_BAR_HEIGHT
+                    - SHEET_TITLE_ROW_HEIGHT,
+            )
+            .min_w_0()
+            .min_h_0()
+            .child(
+                div()
+                    .id("consumer-detail-scroll")
+                    .debug_selector(|| "consumer-detail-scroll".to_owned())
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(content),
+            )
     }
 }
 
 fn render_consumer_outcome(outcome: &ConsumerPartialOutcome, cx: &gpui::App) -> impl IntoElement {
+    let cleanup = outcome.counts().cleanup_steps;
     div()
         .p_2()
         .rounded_md()
@@ -704,15 +525,25 @@ fn render_consumer_outcome(outcome: &ConsumerPartialOutcome, cx: &gpui::App) -> 
         .flex_col()
         .gap_1()
         .child(format!(
-            "{}: {}/{} target outcomes applied",
+            "{}: {}/{} Broker targets applied",
             if outcome.is_complete_success() {
                 "Complete"
+            } else if !outcome.has_applied_effects() && outcome.has_unconfirmed_effects() {
+                "Unconfirmed"
+            } else if !outcome.has_applied_effects() {
+                "Rejected"
             } else {
                 "Partial"
             },
             outcome.applied_count(),
-            outcome.targets.len()
+            outcome.target_count()
         ))
+        .when(cleanup.total() > 0, |this| {
+            this.child(format!(
+                "Cleanup steps: {} applied, {} not applied, {} unconfirmed",
+                cleanup.applied, cleanup.not_applied, cleanup.unconfirmed
+            ))
+        })
         .children(outcome.targets.iter().enumerate().map(|(index, target)| {
             let applied = target.applied;
             div()

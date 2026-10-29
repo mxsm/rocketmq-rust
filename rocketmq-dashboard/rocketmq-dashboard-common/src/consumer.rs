@@ -22,6 +22,9 @@ mod domain;
 
 pub use domain::*;
 
+mod configuration;
+pub use configuration::*;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerGroupListRequest {

@@ -86,6 +86,59 @@ its local operation record, and its terminal P11 audit event share one canonical
 atomic file replacement; configuration revision checks also prevent writes after
 the connection or environment changes.
 
+## Consumer and Producer workspaces
+
+Consumer creation uses an editable form and explicit Broker checkboxes. Cluster
+shortcuts select their displayed members; the confirmed subset is the write target.
+The form requires complete NameServer Broker target discovery, independently of
+unrelated Groups' Clients and Progress read quality. Every selected target still
+requires an exact Group absence preflight; unknown Group values remain unknown.
+Group membership discovery is tracked before per-Group diagnostic reads. Applied
+mutations can therefore reload an authoritative Group catalog while retaining
+Partial diagnostic quality and unknown client or lag values. Deletion still checks
+the exact current membership and live connections; only the Broker's exact
+ConsumerNotOnline response establishes an empty active-client set.
+Mutation summaries count Broker/group targets separately from internal-topic cleanup
+steps. Cleanup failures and uncertainty still make the workflow Partial. New audit
+events store cleanup step counts separately; historical terminal facts are retained.
+The five numeric controls cover retry queues, maximum retries, consume timeout,
+Broker ID and slow-consumer Broker ID. Four flags control enabled, minimum-offset,
+broadcast and orderly consumption. Maximum retries accepts -1 or greater, retry
+queues accepts zero, and timeout must be positive.
+
+Consumer editing starts from one Broker's versioned snapshot and submits only
+changed fields under the existing state CAS. It preserves the Broker's notifications,
+system flag, retry policy, subscriptions and additional attributes. Brokers without
+that CAS capability return unavailable. A conflict retains the reviewed draft.
+Persistence problems retain confirmed
+in-memory effects and never count as durable success. An applied write with a
+persistence problem is Partial; a rejected write with failed persistence is Failed.
+Uncertainty without confirmed application is Unknown. The same form cannot replay
+these outcomes. Local audit records retain field names and typed
+outcome facts without configuration values or diagnostic text.
+
+Configuration details show consumption, routing, retry policy, subscription Topics,
+redacted attributes and cross-Broker differences. Failed targets stay separate from
+observed configurations. Clients include addresses and subscriptions; progress keeps
+signed lag and queue timestamps. Running Info limits each structured section to 256
+rows and 64 KiB combined metadata. JStack stays only in the active detail and is
+cleared on tab, scope, environment, session or detail changes.
+Long Group and Client identities have full-value copy controls. Client fields and
+subscriptions wrap within the sheet; raw diagnostic lines have a bounded scroll
+area, and the inventory table scrolls horizontally at narrow window widths.
+
+The Consumer query-scope control affects inventory, clients and progress reads.
+Configuration and diagnostics use real Broker Direct targets discovered through the
+selected NameServer, including when Consumer reads are configured for Proxy.
+This Direct read evidence does not enable unsupported Proxy mutations, and a
+missing selected Proxy never falls back to a default endpoint.
+
+Producer inspection discovers real Topic candidates, accepts group row selection,
+and freezes Topic and Group together when Apply is pressed. Discovery failures keep
+a validated manual query available. Client details provide copy controls for client
+ID, address, language and version. Late results from a previous query or environment
+cannot replace the current applied pair.
+
 ## Architecture and configuration
 
 [src/main.rs](src/main.rs) initializes the GPUI component library and application

@@ -33,7 +33,7 @@ impl ProducerIdentity {
             || value.len() > 255
             || value
                 .chars()
-                .any(|character| character.is_control() || matches!(character, '/' | '?' | '#' | '\\'))
+                .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '%' | '|' | '_' | '-')))
         {
             return Err(ProducerValidationError::InvalidGroup);
         }
@@ -112,6 +112,13 @@ impl fmt::Debug for ProducerInventory {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProducerTopicCandidates {
+    pub topics: Vec<String>,
+    pub observation: ConsumerObservationState,
+    pub failed_targets: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProducerFilterDraft {
     pub keyword: String,
@@ -175,7 +182,12 @@ pub struct ProducerConnectionQuery {
 impl ProducerConnectionQuery {
     pub fn try_from_draft(draft: &ProducerConnectionQueryDraft) -> Result<Self, ProducerValidationError> {
         let topic = draft.topic.trim().to_string();
-        if topic.is_empty() || topic.len() > 127 || topic.chars().any(char::is_control) {
+        if topic.is_empty()
+            || topic.len() > 127
+            || topic
+                .chars()
+                .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '%' | '|' | '_' | '-')))
+        {
             return Err(ProducerValidationError::InvalidTopic);
         }
         Ok(Self {

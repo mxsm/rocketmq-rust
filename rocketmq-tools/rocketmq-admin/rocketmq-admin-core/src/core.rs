@@ -27,6 +27,7 @@ pub mod client_connection;
 pub mod clock;
 pub mod config_state;
 pub mod consumer;
+pub mod consumer_configuration;
 pub mod consumer_observation;
 pub mod consumer_runtime;
 pub mod consumer_workspace;
