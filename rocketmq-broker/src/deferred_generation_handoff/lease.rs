@@ -17,7 +17,6 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use super::state::DeferredGenerationHandoffState;
-use super::DeferredGenerationHandoff;
 use super::DeferredGenerationTarget;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,33 +28,6 @@ pub(crate) enum DeferredGenerationSeal {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DeferredGenerationRouteError {
     ShutdownSealed,
-}
-
-pub(crate) struct DeferredGenerationArrivalAdapter<'a> {
-    pub(super) handoff: &'a DeferredGenerationHandoff,
-}
-
-impl DeferredGenerationArrivalAdapter<'_> {
-    pub(crate) fn acquire_route(
-        &self,
-        target: DeferredGenerationTarget,
-    ) -> Result<RoutePermit, DeferredGenerationRouteError> {
-        self.handoff.acquire_route(target)
-    }
-
-    /// Executes the fixed Pull → Pop → Notification → Lite producer order.
-    pub(crate) fn route_arrival<P, O, N, L>(&self, pull: P, pop: O, notification: N, pop_lite: L)
-    where
-        P: FnOnce(&DeferredGenerationHandoff),
-        O: FnOnce(&DeferredGenerationHandoff),
-        N: FnOnce(&DeferredGenerationHandoff),
-        L: FnOnce(&DeferredGenerationHandoff),
-    {
-        pull(self.handoff);
-        pop(self.handoff);
-        notification(self.handoff);
-        pop_lite(self.handoff);
-    }
 }
 
 /// Affine accounting for one accepted canonical deferred route.

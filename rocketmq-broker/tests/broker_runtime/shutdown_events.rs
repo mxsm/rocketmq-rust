@@ -71,6 +71,9 @@ async fn initialized_broker_emits_business_drain_and_finalizes_telemetry() {
     assert_eq!(*events.0.lock().unwrap(), vec!["drained"]);
     use rocketmq_observability::RuntimeDiagnosticsDataProvider;
     assert!(sources.snapshot().shutdown.is_some());
+    let store_root = runtime.message_store_config().store_path_root_dir.clone();
+    drop(runtime);
+    std::fs::remove_dir_all(store_root.as_str()).expect("remove business-drain event test store");
 }
 
 #[tokio::test]

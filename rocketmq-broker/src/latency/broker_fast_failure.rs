@@ -690,6 +690,11 @@ impl BrokerFastFailure {
     }
 
     #[cfg(test)]
+    pub(crate) fn available_permits(&self, kind: FastFailureQueueKind) -> usize {
+        self.inner.queues.get(kind).semaphore.available_permits()
+    }
+
+    #[cfg(test)]
     pub(crate) fn enqueue(
         &self,
         kind: FastFailureQueueKind,

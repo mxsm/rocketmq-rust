@@ -442,7 +442,6 @@ impl HAConnection for DefaultHAConnection {
     }
 }
 
-const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 const REPORT_HEADER_SIZE: usize = 8;
 const SELECT_TIMEOUT: Duration = Duration::from_millis(1000);
 
@@ -456,8 +455,6 @@ pub struct ReadSocketService {
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
-    buffer: BytesMut,
-    process_position: usize,
     message_store_config: Arc<MessageStoreConfig>,
     last_read_timestamp: AtomicU64,
     connection_runtime: HAConnectionRuntimeHandle,
@@ -483,8 +480,6 @@ impl ReadSocketService {
             current_state,
             slave_request_offset,
             slave_ack_offset,
-            buffer: BytesMut::with_capacity(READ_MAX_BUFFER_SIZE),
-            process_position: 0,
             message_store_config,
             last_read_timestamp: AtomicU64::new(current_millis()),
             connection_runtime,
@@ -553,78 +548,6 @@ impl ReadSocketService {
 
         self.cleanup().await;
         info!("HA read service ended");
-    }
-
-    async fn process_incoming_data(&mut self, data: BytesMut) -> HAConnectionResult<()> {
-        if self.buffer.len() + data.len() > READ_MAX_BUFFER_SIZE {
-            self.compact_buffer();
-        }
-
-        self.buffer.extend_from_slice(&data);
-
-        while self.can_process_message() {
-            self.process_message().await?;
-        }
-
-        Ok(())
-    }
-
-    fn can_process_message(&self) -> bool {
-        let available_data = self.buffer.len() - self.process_position;
-        available_data >= REPORT_HEADER_SIZE
-    }
-
-    async fn process_message(&mut self) -> HAConnectionResult<()> {
-        let buffer_position = self.buffer.len();
-        let available_data = buffer_position - self.process_position;
-
-        if available_data >= REPORT_HEADER_SIZE {
-            let aligned_size = available_data - (available_data % REPORT_HEADER_SIZE);
-            let pos = self.process_position + aligned_size;
-
-            if pos >= 8 {
-                let offset_start = pos - 8;
-                let offset_bytes = &self.buffer[offset_start..pos];
-
-                let read_offset = i64::from_be_bytes([
-                    offset_bytes[0],
-                    offset_bytes[1],
-                    offset_bytes[2],
-                    offset_bytes[3],
-                    offset_bytes[4],
-                    offset_bytes[5],
-                    offset_bytes[6],
-                    offset_bytes[7],
-                ]);
-                self.process_position = pos;
-                self.slave_ack_offset.store(read_offset, Ordering::Relaxed);
-                if self
-                    .slave_request_offset
-                    .compare_exchange(-1, read_offset, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    info!("HA replica published its initial request offset");
-                    self.connection_context.notify_append_progress();
-                }
-
-                self.connection_context.notify_transfer_some(read_offset).await;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn compact_buffer(&mut self) {
-        if self.process_position > 0 {
-            let remaining_data = self.buffer.len() - self.process_position;
-            if remaining_data > 0 {
-                let remaining = self.buffer.split_off(self.process_position);
-                self.buffer = remaining;
-            } else {
-                self.buffer.clear();
-            }
-            self.process_position = 0;
-        }
     }
 
     /// Stops the write half too, which then removes the connection from the HA service.
@@ -1140,9 +1063,13 @@ mod tests {
 
     #[test]
     fn ha_connection_helpers_use_typed_errors() {
-        let source = include_str!("default_ha_connection.rs");
+        let source = include_str!("default_ha_connection.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
 
-        assert!(source.matches("HAConnectionResult<()>").count() >= 5);
+        assert!(source.contains("async fn send_heartbeat(&mut self) -> HAConnectionResult<()>"));
+        assert!(source.contains("async fn send_data(&mut self, mut batch: TransferBatch) -> HAConnectionResult<()>"));
         assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
     }
 
