@@ -116,6 +116,48 @@ fn real_test_services(
 }
 
 #[test]
+fn local_commit_uses_the_authenticated_actor_and_captured_environment() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = test_runtime("gpui-operation-context");
+    let path = directory.path().join("config.json");
+    let store = DesktopConfigStore::new(path.clone(), runtime.root_context().component("config"));
+    let auth = DesktopAuthState::new(Arc::new(MapEnvironment::new([
+        (crate::infrastructure::auth_state::LOGIN_USERNAME_ENV, "operator"),
+        (
+            crate::infrastructure::auth_state::LOGIN_PASSWORD_ENV,
+            "private-password",
+        ),
+    ])));
+    let services = AppServices::desktop_inner(
+        Arc::clone(&store),
+        FakeConnectionProvider::new([]),
+        None,
+        auth,
+        runtime.root_context().component("services"),
+        runtime.root_context().component("history"),
+        runtime.root_context().component("monitor"),
+    );
+    runtime.block_on(async {
+        services.bootstrap().await.unwrap();
+        services.authenticate("operator", "private-password").await.unwrap();
+        let original_environment = store.environments().unwrap().active_id;
+        let (progress, _updates) = tokio::sync::mpsc::unbounded_channel();
+        services
+            .mutate_with_progress(ConfigMutation::AddNameServer("one:9876".into()), progress)
+            .await
+            .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-password"));
+        let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let context = &document["localOperations"][0]["context"];
+        assert_eq!(context["actor"]["username"], "operator");
+        assert_eq!(context["configurationRevision"], 0);
+        assert_eq!(context["environmentId"], original_environment.as_str());
+    });
+    runtime.shutdown_runtime_blocking().unwrap();
+}
+
+#[test]
 fn progress_exposes_connecting_before_provider_then_exact_order() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let runtime = test_runtime("gpui-progress-order");

@@ -176,6 +176,7 @@ impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
 
     fn dashboard_topic_history(
         &self,
+        _revision: u64,
         topic: String,
         start_epoch_ms: u64,
         end_epoch_ms: u64,
@@ -197,6 +198,7 @@ impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
 
     fn dashboard_broker_history(
         &self,
+        _revision: u64,
         metric: HistoryMetricKind,
         identity: BrokerIdentity,
         start_epoch_ms: u64,

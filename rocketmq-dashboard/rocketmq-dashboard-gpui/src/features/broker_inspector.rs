@@ -196,6 +196,26 @@ impl BrokerInspector {
         }
     }
 
+    pub(super) fn has_pending_mutation(&self) -> bool {
+        self.mutation_task.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_mutation_task_for_test(&mut self, task: Option<Task<()>>) {
+        self.mutation_task = task;
+    }
+
+    pub(super) fn clear_for_environment(&mut self, revision: u64, cx: &mut Context<Self>) {
+        self.revision = revision;
+        self.overview_task = None;
+        self.runtime_task = None;
+        self.config_task = None;
+        self.store.mark_stale();
+        self.config_editor = None;
+        self.config_dialog_open = false;
+        cx.notify();
+    }
+
     pub fn consume_invalidations(&mut self, invalidations: &[BrokerCacheInvalidation], cx: &mut Context<Self>) {
         if invalidations.contains(&BrokerCacheInvalidation::BrokerRuntime(self.store.identity.clone())) {
             self.store.runtime.invalidate();
@@ -397,6 +417,8 @@ impl BrokerInspector {
         self.mutation_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = services.patch_broker_config(revision, submission.patch).await;
             let _ = this.update_in(cx, |inspector, window, cx| {
+                inspector.mutation_task = None;
+                cx.notify();
                 let applied_invalidations = result.as_ref().ok().and_then(|result| match result {
                     crate::services::brokers::BrokerConfigMutationResult::Applied { invalidations, .. } => {
                         Some(invalidations.clone())

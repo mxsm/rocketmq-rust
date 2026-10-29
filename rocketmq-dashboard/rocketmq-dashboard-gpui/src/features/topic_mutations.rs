@@ -116,6 +116,9 @@ impl TopicsView {
     }
 
     fn submit_topic_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mutation_task.is_some() {
+            return;
+        }
         let Some(form) = self.dialog_form.clone() else {
             return;
         };
@@ -165,6 +168,7 @@ impl TopicsView {
                 }
             };
             let _ = this.update_in(cx, |view, window, cx| {
+                view.mutation_task = None;
                 view.finish_topic_command(&form, token, completion, window, cx);
             });
         }));

@@ -16,7 +16,7 @@
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use rocketmq_dashboard_common::{HistoryPoint, HistoryRetention};
+use rocketmq_dashboard_common::{EnvironmentId, HistoryPoint, HistoryRetention};
 use rocketmq_runtime::ChildServiceContext;
 use tokio_util::sync::CancellationToken;
 
@@ -27,6 +27,14 @@ use super::{config_store::ConfigStoreFailure, history_store::HistoryStore};
 /// Boxed sampling operation implemented by the Dashboard service boundary.
 pub type HistorySampleFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<HistoryPoint>, UiError>> + Send + 'a>>;
 
+pub struct EnvironmentHistorySample {
+    pub environment_id: Option<EnvironmentId>,
+    pub points: Vec<HistoryPoint>,
+}
+
+pub type EnvironmentHistorySampleFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<EnvironmentHistorySample, UiError>> + Send + 'a>>;
+
 /// Produces one set of real observations. Missing resources produce no points.
 pub trait HistorySampler: Send + Sync {
     /// Samples current Topic metrics independently from Broker availability.
@@ -34,6 +42,24 @@ pub trait HistorySampler: Send + Sync {
 
     /// Samples current Broker metrics independently from Topic availability.
     fn sample_brokers(&self) -> HistorySampleFuture<'_>;
+
+    fn sample_topics_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+        Box::pin(async {
+            self.sample_topics().await.map(|points| EnvironmentHistorySample {
+                environment_id: None,
+                points,
+            })
+        })
+    }
+
+    fn sample_brokers_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+        Box::pin(async {
+            self.sample_brokers().await.map(|points| EnvironmentHistorySample {
+                environment_id: None,
+                points,
+            })
+        })
+    }
 }
 
 /// Owned collector lifecycle bound to the existing application runtime context.
@@ -121,15 +147,15 @@ impl Drop for HistoryLifecycle {
 
 async fn collect_once(store: &HistoryStore, sampler: &dyn HistorySampler, retention: HistoryRetention) {
     tokio::join!(
-        sample_and_persist(store, "topic", sampler.sample_topics(), retention),
-        sample_and_persist(store, "broker", sampler.sample_brokers(), retention),
+        sample_and_persist(store, "topic", sampler.sample_topics_scoped(), retention),
+        sample_and_persist(store, "broker", sampler.sample_brokers_scoped(), retention),
     );
 }
 
 async fn sample_and_persist(
     store: &HistoryStore,
     side: &'static str,
-    sample: HistorySampleFuture<'_>,
+    sample: EnvironmentHistorySampleFuture<'_>,
     retention: HistoryRetention,
 ) {
     persist_side(store, side, sample.await, retention).await;
@@ -138,13 +164,21 @@ async fn sample_and_persist(
 async fn persist_side(
     store: &HistoryStore,
     side: &'static str,
-    result: Result<Vec<HistoryPoint>, UiError>,
+    result: Result<EnvironmentHistorySample, UiError>,
     retention: HistoryRetention,
 ) {
     match result {
-        Ok(points) if points.is_empty() => {}
-        Ok(points) => {
-            if store.append_sample(points, retention).await.is_err() {
+        Ok(sample) if sample.points.is_empty() => {}
+        Ok(sample) => {
+            let result = match sample.environment_id {
+                Some(environment_id) => {
+                    store
+                        .append_environment_sample(environment_id, sample.points, retention)
+                        .await
+                }
+                None => store.append_sample(sample.points, retention).await,
+            };
+            if result.is_err() {
                 tracing::warn!(
                     history_side = side,
                     outcome = "persist_failed",
@@ -172,6 +206,104 @@ mod tests {
     use crate::state::UiErrorCode;
 
     use super::*;
+
+    struct CapturedEnvironmentSampler {
+        configuration: Arc<crate::infrastructure::config_store::DesktopConfigStore>,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl HistorySampler for CapturedEnvironmentSampler {
+        fn sample_topics(&self) -> HistorySampleFuture<'_> {
+            Box::pin(std::future::ready(Ok(Vec::new())))
+        }
+
+        fn sample_brokers(&self) -> HistorySampleFuture<'_> {
+            self.sample_topics()
+        }
+
+        fn sample_topics_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+            Box::pin(async move {
+                let snapshot = self.configuration.environment_snapshot().unwrap();
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(EnvironmentHistorySample {
+                    environment_id: Some(snapshot.environment_id),
+                    points: vec![HistoryPoint {
+                        metric: HistoryMetricKind::TopicMessages,
+                        series_identity: "orders".into(),
+                        timestamp_epoch_ms: 1,
+                        value: 3.0,
+                        source_revision: snapshot.connection.revision,
+                    }],
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn environment_change_during_collection_cannot_reassign_the_started_sample() {
+        use rocketmq_dashboard_common::{OperationActor, OperationResource};
+
+        use crate::infrastructure::{config_store::DesktopConfigStore, environment_store::EnvironmentChange};
+
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime();
+        let context = runtime.root_context().component("collection");
+        let configuration = DesktopConfigStore::new(directory.path().join("config.json"), context.clone());
+        let history = HistoryStore::with_config_store(
+            directory.path().join("history.json"),
+            context,
+            Arc::clone(&configuration),
+        );
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let sampler = CapturedEnvironmentSampler {
+            configuration: Arc::clone(&configuration),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        };
+        runtime.block_on(async {
+            let config = configuration.load().await.unwrap();
+            let first = configuration.environments().unwrap().active_id;
+            let collecting = collect_once(&history, &sampler, retention(10));
+            tokio::pin!(collecting);
+            tokio::select! {
+                _ = entered.notified() => {},
+                _ = &mut collecting => panic!("collection completed before release"),
+            }
+            let context = configuration
+                .operation_context(
+                    config.revision,
+                    OperationActor::LocalDesktop,
+                    OperationResource::Configuration,
+                )
+                .unwrap();
+            configuration
+                .change_environment(EnvironmentChange::Create { name: "Staging".into() }, context)
+                .await
+                .unwrap();
+            let second = configuration.environments().unwrap().active_id;
+            release.notify_one();
+            collecting.await;
+            assert_eq!(
+                history
+                    .query_environment(first, HistoryMetricKind::TopicMessages, "orders".into(), 0, 2)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(
+                history
+                    .query_environment(second, HistoryMetricKind::TopicMessages, "orders".into(), 0, 2)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+        runtime.shutdown_runtime_blocking().unwrap();
+    }
 
     struct FailedSampler;
 

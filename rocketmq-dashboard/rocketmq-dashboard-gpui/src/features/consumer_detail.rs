@@ -138,6 +138,35 @@ impl ConsumerDetail {
         }
     }
 
+    pub(super) fn has_pending_mutation(&self) -> bool {
+        self.mutation_task.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_mutation_task_for_test(&mut self, task: Option<Task<()>>) {
+        self.mutation_task = task;
+    }
+
+    pub(super) fn clear_for_environment(&mut self, revision: u64, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        self.revision = revision;
+        self.resource_task = None;
+        self.diagnostic_task = None;
+        self.store.clear_diagnostic();
+        self.store.overview.clear();
+        self.store.clients.clear();
+        self.store.progress.clear();
+        self.store.configuration.clear();
+        self.store.offset_actions.clear();
+        self.targets.clear();
+        self.edit_draft = None;
+        self.mutation_status = None;
+        self.mutation_outcome = None;
+        if let Some(form) = self.offset_dialog.take() {
+            form.update(cx, |form, cx| form.clear_sensitive(window, cx));
+        }
+        cx.notify();
+    }
+
     pub fn set_tab(&mut self, tab: ConsumerTab, cx: &mut Context<Self>) {
         if tab != self.store.active_tab {
             self.store.clear_diagnostic();

@@ -58,6 +58,30 @@ user configuration directory. Set `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` to
 override the complete file path. NameServer selection and connection settings
 are stored in this document.
 
+OPS → Connection manages named environment profiles. Creating or selecting a
+profile explicitly changes the environment; editing its NameServer, Proxy,
+TLS, or VIP settings preserves its persistent identity. History and Monitor
+rules belong to that identity, while the configuration revision identifies a
+particular connection generation.
+
+The version 2 configuration document holds profiles, global settings, Monitor
+rules, and local operation records in one atomic replacement. Metric samples
+remain in the separately versioned `history.json`. Version 1 configuration and
+history files and legacy Monitor arrays are migrated on startup. Legacy points
+and rules without environment evidence remain unassigned and are excluded from
+the selected environment. Legacy rules also require thresholds before they can
+be evaluated; the Monitor lifecycle still performs no evaluation. The original
+`monitors.json` is preserved after its rules are imported into the configuration
+document. Unsupported schemas or failed migration writes preserve their source
+files and report a recoverable startup error.
+
+One application instance owns the local data directory for its lifetime through
+an OS file lock. A second instance using that directory must wait until the first
+closes. An interrupted write leaves either the previous complete document or the
+new complete document; unfinished candidate files are not treated as committed
+state. Configuration and Monitor changes carry their operation record in the
+same commit, providing the local transaction boundary for subsequent audit work.
+
 Authentication has two separate settings in the configuration:
 
 - When local login is enabled, `ROCKETMQ_DASHBOARD_USERNAME` and

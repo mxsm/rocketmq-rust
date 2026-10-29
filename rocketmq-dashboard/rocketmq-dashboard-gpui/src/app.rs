@@ -32,6 +32,7 @@ use gpui_component::{
     input::InputEvent,
     sidebar::{Sidebar, SidebarGroup as GpuiSidebarGroup, SidebarMenu, SidebarMenuItem},
 };
+use rocketmq_dashboard_common::EnvironmentId;
 
 use crate::{
     components::{
@@ -206,6 +207,7 @@ pub struct RocketmqDashboard {
     startup_epoch: RequestEpoch,
     login_epoch: RequestEpoch,
     configuration_revision: u64,
+    environment_id: Option<EnvironmentId>,
     history: NavigationHistory,
     session: SessionState,
     login: LoginForm,
@@ -268,6 +270,7 @@ impl RocketmqDashboard {
             startup_epoch: RequestEpoch::initial(),
             login_epoch: RequestEpoch::initial(),
             configuration_revision: 0,
+            environment_id: None,
             history: NavigationHistory::new(AppRoute::Login),
             session: SessionState::signed_out(),
             login,
@@ -280,7 +283,7 @@ impl RocketmqDashboard {
             last_intent: None,
             last_service_error: None,
         };
-        dashboard.start_bootstrap(cx);
+        dashboard.start_bootstrap(window, cx);
         let dashboard_entity = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             let Some(dashboard) = dashboard_entity.upgrade() else {
@@ -304,7 +307,7 @@ impl RocketmqDashboard {
         dashboard
     }
 
-    fn start_bootstrap(&mut self, cx: &mut Context<Self>) {
+    fn start_bootstrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let epoch = match self.startup_epoch.advance() {
             Ok(request) => request,
             Err(_) => {
@@ -325,10 +328,10 @@ impl RocketmqDashboard {
         self.startup_state = StartupState::Booting;
         self.last_service_error = None;
         let services = self.services.clone();
-        self.startup_task = Some(cx.spawn(async move |this, cx| {
+        self.startup_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = services.bootstrap().await;
-            let _ = this.update(cx, move |dashboard, cx| {
-                dashboard.finish_bootstrap(request, result, cx);
+            let _ = this.update_in(cx, move |dashboard, window, cx| {
+                dashboard.finish_bootstrap(request, result, window, cx);
             });
         }));
         cx.notify();
@@ -338,6 +341,7 @@ impl RocketmqDashboard {
         &mut self,
         request: StartupRequest,
         result: Result<StartupSnapshot, UiError>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !accepts_startup_attempt(self.startup_epoch, request, self.configuration_revision) {
@@ -348,6 +352,16 @@ impl RocketmqDashboard {
             Ok(snapshot) if snapshot.configuration_revision < self.configuration_revision => return,
             Ok(snapshot) => {
                 self.configuration_revision = snapshot.configuration_revision;
+                let environment_id = self
+                    .services
+                    .connection_state()
+                    .environments
+                    .map(|catalog| catalog.active_id);
+                let changed_environment = self.environment_id.is_some() && self.environment_id != environment_id;
+                self.environment_id = environment_id;
+                if changed_environment {
+                    self.clear_environment_state(snapshot.configuration_revision, window, cx);
+                }
                 self.legacy_pages
                     .dashboard
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
@@ -387,9 +401,9 @@ impl RocketmqDashboard {
         }
     }
 
-    fn retry_startup(&mut self, cx: &mut Context<Self>) {
+    fn retry_startup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.startup_state.can_retry() {
-            self.start_bootstrap(cx);
+            self.start_bootstrap(window, cx);
         }
     }
 
@@ -593,6 +607,17 @@ impl RocketmqDashboard {
             }
         }
         self.configuration_revision = event.revision;
+        if event.phase == ConfigUpdatePhase::Persisted {
+            let environment_id = self
+                .services
+                .connection_state()
+                .environments
+                .map(|catalog| catalog.active_id);
+            if self.environment_id != environment_id {
+                self.environment_id = environment_id;
+                self.clear_environment_state(event.revision, window, cx);
+            }
+        }
         if event.phase == ConfigUpdatePhase::Invalidated {
             let _ = self.startup_epoch.advance();
             self.sensitive_feature_cache.clear();
@@ -651,6 +676,43 @@ impl RocketmqDashboard {
         self.legacy_pages
             .proxy
             .update(cx, |view, cx| view.sync_from_services(cx));
+        cx.notify();
+    }
+
+    fn clear_environment_state(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = self.startup_epoch.advance();
+        self.sensitive_feature_cache.clear();
+        self.pending_discard = None;
+        self.login.clear_sensitive(window, cx);
+        self.last_service_error = None;
+        self.legacy_pages
+            .dashboard
+            .update(cx, |view, cx| view.clear_for_environment(revision, cx));
+        self.legacy_pages
+            .brokers
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .topics
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .consumers
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .producers
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .ops
+            .update(cx, |view, cx| view.clear_environment_drafts(window, cx));
+        let route = match self.history.current() {
+            AppRoute::BrokerDetail { .. } => AppRoute::Brokers,
+            AppRoute::TopicDetail { .. } => AppRoute::Topics,
+            AppRoute::ConsumerDetail { .. } => AppRoute::Consumers,
+            route => route.clone(),
+        };
+        self.history.reset(route);
+        window.close_sheet(cx);
+        window.close_all_dialogs(cx);
+        window.clear_notifications(cx);
         cx.notify();
     }
 
@@ -882,7 +944,7 @@ impl RocketmqDashboard {
                 &detail,
                 theme.foreground,
                 theme.muted_foreground,
-                retryable.then(|| cx.listener(|this, _, _, cx| this.retry_startup(cx))),
+                retryable.then(|| cx.listener(|this, _, window, cx| this.retry_startup(window, cx))),
                 Some(cx.listener(|this, _, window, cx| this.open_config_location(window, cx))),
             ))
     }
@@ -1151,7 +1213,7 @@ impl RocketmqDashboard {
                     .icon(IconName::Redo)
                     .ghost()
                     .tooltip("Refresh configuration")
-                    .on_click(cx.listener(|this, _, _, cx| this.start_bootstrap(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.start_bootstrap(window, cx))),
             )
             .child(
                 Button::new("open-ops-settings")

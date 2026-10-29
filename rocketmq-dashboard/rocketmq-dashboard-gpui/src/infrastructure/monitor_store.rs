@@ -14,16 +14,27 @@
 
 //! Monitor CRUD and lifecycle foundation without metric evaluation or UI.
 
-use std::{io, path::PathBuf, sync::Arc};
+#[cfg(test)]
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use rocketmq_dashboard_common::{OperationActor, OperationResource};
 
 use rocketmq_runtime::{ChildServiceContext, TaskGroup, TaskId};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use super::config_store::{ConfigStoreFailure, write_json_atomically};
+use super::{
+    config_store::{ConfigStoreFailure, DesktopConfigStore},
+    environment_store::{MonitorMigrationState, StoredMonitorRule},
+};
 
 #[derive(Debug, thiserror::Error)]
 #[error("Monitor id and consumer group must not be empty")]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "P01 retains Monitor write validation for the P09 rule editor")
+)]
 struct InvalidMonitorRule;
 
 /// Persisted Monitor rule contract for later Delivery 07 evaluation.
@@ -38,86 +49,106 @@ pub struct MonitorRule {
     pub enabled: bool,
 }
 
-/// JSON-backed Monitor CRUD store.
+/// Monitor facade over the canonical configuration/rule/operation document.
 pub struct MonitorStore {
-    path: PathBuf,
-    context: ChildServiceContext,
-    gate: tokio::sync::Mutex<()>,
+    store: Arc<DesktopConfigStore>,
 }
 
 impl MonitorStore {
-    /// Creates a store at an application-owned path.
+    /// Creates an isolated store without a separately composed configuration owner.
+    #[cfg(test)]
     pub fn new(path: PathBuf, context: ChildServiceContext) -> Arc<Self> {
-        Arc::new(Self {
-            path,
-            context,
-            gate: tokio::sync::Mutex::new(()),
-        })
+        Self::with_config_store(DesktopConfigStore::new(path.with_file_name("config.json"), context))
     }
 
-    /// Lists rules in stable identifier order.
+    pub fn with_config_store(store: Arc<DesktopConfigStore>) -> Arc<Self> {
+        Arc::new(Self { store })
+    }
+
+    async fn ensure_loaded(&self) -> Result<(), ConfigStoreFailure> {
+        if self.store.environments().is_none() {
+            self.store.load().await?;
+        }
+        Ok(())
+    }
+
+    /// Lists only the current environment. Incomplete legacy rules are separately recoverable.
     pub async fn list(&self) -> Result<Vec<MonitorRule>, ConfigStoreFailure> {
-        let _guard = self.gate.lock().await;
-        let path = self.path.clone();
-        self.context
-            .storage_io()
-            .spawn_io("gpui-monitor-list", move || load_rules(&path))
-            .await
-            .map_err(ConfigStoreFailure::runtime)?
+        self.ensure_loaded().await?;
+        let environment = self.store.environment_snapshot()?.environment_id;
+        Ok(self
+            .store
+            .monitor_rules()
+            .await?
+            .into_iter()
+            .filter(|rule| rule.environment_id.as_ref() == Some(&environment))
+            .map(|rule| rule.rule)
+            .collect())
     }
 
-    /// Inserts or replaces a rule by identity.
+    #[cfg(test)]
+    pub async fn unassigned(&self) -> Result<Vec<StoredMonitorRule>, ConfigStoreFailure> {
+        self.ensure_loaded().await?;
+        Ok(self
+            .store
+            .monitor_rules()
+            .await?
+            .into_iter()
+            .filter(|rule| rule.environment_id.is_none())
+            .collect())
+    }
+
+    /// Persists a scoped rule as incomplete; P09 supplies thresholds before evaluation.
     #[cfg_attr(
         not(test),
         allow(
             dead_code,
-            reason = "Delivery 02 exposes durable CRUD before the Monitor page exists"
+            reason = "P01 retains durable Monitor mutation APIs for the P09 rule editor"
         )
     )]
     pub async fn upsert(&self, rule: MonitorRule) -> Result<(), ConfigStoreFailure> {
         if rule.id.trim().is_empty() || rule.consumer_group.trim().is_empty() {
             return Err(ConfigStoreFailure::validation(InvalidMonitorRule));
         }
-        let _guard = self.gate.lock().await;
-        let path = self.path.clone();
-        self.context
-            .storage_io()
-            .spawn_io("gpui-monitor-upsert", move || {
-                let mut rules = load_rules(&path)?;
-                rules.retain(|existing| existing.id != rule.id);
-                rules.push(rule);
-                rules.sort_by(|left, right| left.id.cmp(&right.id));
-                write_json_atomically(&path, &rules)
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)?
+        self.ensure_loaded().await?;
+        let snapshot = self.store.environment_snapshot()?;
+        let context = self.store.operation_context(
+            snapshot.connection.revision,
+            OperationActor::System,
+            OperationResource::Monitor(rule.consumer_group.clone()),
+        )?;
+        let id = rule.id.clone();
+        self.store
+            .save_monitor(
+                Some(StoredMonitorRule {
+                    environment_id: Some(snapshot.environment_id),
+                    rule,
+                    migration_state: MonitorMigrationState::NeedsThresholds,
+                }),
+                id,
+                context,
+            )
+            .await?;
+        Ok(())
     }
 
-    /// Deletes a rule and reports whether it existed.
+    /// Deletes only from the current environment, with its operation record in the same commit.
     #[cfg_attr(
         not(test),
         allow(
             dead_code,
-            reason = "Delivery 02 exposes durable CRUD before the Monitor page exists"
+            reason = "P01 retains durable Monitor mutation APIs for the P09 rule editor"
         )
     )]
     pub async fn delete(&self, id: String) -> Result<bool, ConfigStoreFailure> {
-        let _guard = self.gate.lock().await;
-        let path = self.path.clone();
-        self.context
-            .storage_io()
-            .spawn_io("gpui-monitor-delete", move || {
-                let mut rules = load_rules(&path)?;
-                let old_len = rules.len();
-                rules.retain(|rule| rule.id != id);
-                let removed = rules.len() != old_len;
-                if removed {
-                    write_json_atomically(&path, &rules)?;
-                }
-                Ok(removed)
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)?
+        self.ensure_loaded().await?;
+        let snapshot = self.store.environment_snapshot()?;
+        let context = self.store.operation_context(
+            snapshot.connection.revision,
+            OperationActor::System,
+            OperationResource::Monitor(id.clone()),
+        )?;
+        self.store.save_monitor(None, id, context).await
     }
 }
 
@@ -175,17 +206,6 @@ impl Drop for MonitorLifecycle {
             cancellation.cancel();
         }
     }
-}
-
-fn load_rules(path: &PathBuf) -> Result<Vec<MonitorRule>, ConfigStoreFailure> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => {
-            return Err(ConfigStoreFailure::io("read monitors", path.clone(), source));
-        }
-    };
-    serde_json::from_slice(&bytes).map_err(|source| ConfigStoreFailure::invalid_document(path.clone(), source))
 }
 
 #[cfg(test)]

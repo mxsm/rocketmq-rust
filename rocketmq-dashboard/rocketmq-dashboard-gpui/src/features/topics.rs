@@ -223,6 +223,25 @@ impl TopicsView {
         }
     }
 
+    pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.revision = revision;
+        self.inventory_task = None;
+        self.pending_route = None;
+        self.detail_subscription = None;
+        self.detail = None;
+        if let Some(form) = self.dialog_form.take() {
+            form.update(cx, |form, cx| form.clear_sensitive(window, cx));
+        }
+        self.store.inventory.clear();
+        self.store.close_detail();
+        self.store.draft_filter = Default::default();
+        self.store.applied_filter = Default::default();
+        self.store.page = 1;
+        self.keyword.update(cx, |input, cx| input.set_value("", window, cx));
+        self.table.update(cx, |table, cx| table.clear_selection(cx));
+        self.sync_table(cx);
+    }
+
     pub fn ensure_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.store.inventory.state, Loadable::Idle) {
             self.refresh_in(window, cx);

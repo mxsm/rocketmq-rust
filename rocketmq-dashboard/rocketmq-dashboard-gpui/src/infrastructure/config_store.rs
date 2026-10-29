@@ -16,29 +16,35 @@
 
 use std::{
     error::Error as StdError,
-    fmt,
-    fs::{self, OpenOptions},
-    io::{self, Write},
+    fmt, io,
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use rocketmq_dashboard_common::{
-    ConnectionScope, ConnectionSnapshot, CredentialSourceKind, TransportSettings, normalize_nameserver_selection,
-    normalize_proxy_selection,
+    ConnectionScope, ConnectionSnapshot, CredentialSourceKind, EnvironmentConnectionSnapshot, OperationActor,
+    OperationContext, OperationResource, TransportSettings, normalize_nameserver_selection, normalize_proxy_selection,
 };
 use rocketmq_runtime::ChildServiceContext;
 use serde::{Deserialize, Serialize};
 
+pub(super) use super::atomic_file::write_json_atomically;
+
+use super::{
+    environment_store::{
+        DesktopDocument, EnvironmentCatalog, EnvironmentChange, EnvironmentProfile, EnvironmentValidation,
+        LocalOperationKind, LocalOperationRecord, StoredMonitorRule, load_document, new_environment_id,
+    },
+    storage_writer::StorageWriter,
+};
+
 /// Current on-disk schema understood by this delivery.
-pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const CONFIG_SCHEMA_VERSION: u32 = 2;
 /// Environment override used by tests, packaged builds, and portable deployments.
 pub const CONFIG_PATH_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH";
-
-static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Authentication settings that never contain credential values.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +224,7 @@ enum ConfigStoreRejection {
     StaleRevision,
     RevisionExhausted,
     ProtectedOriginal,
+    WriterUnavailable,
 }
 
 #[derive(Clone)]
@@ -251,6 +258,7 @@ enum ConfigStoreFailureCode {
     RevisionExhausted,
     ProtectedOriginal,
     Runtime,
+    WriterUnavailable,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -259,8 +267,6 @@ enum ConfigValidation {
     UserDirectoryUnavailable,
     #[error("Proxy scope requires a selected Proxy endpoint")]
     ProxyRequiresSelection,
-    #[error("the storage path has no parent")]
-    PathHasNoParent,
 }
 
 impl ConfigStoreFailure {
@@ -330,11 +336,22 @@ impl ConfigStoreFailure {
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::ProtectedOriginal) => {
                 ConfigStoreFailureCode::ProtectedOriginal
             }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::WriterUnavailable) => {
+                ConfigStoreFailureCode::WriterUnavailable
+            }
         }
     }
 
     pub(super) fn unsupported_schema(found: u32, supported: u32) -> Self {
         Self::rejected(ConfigStoreRejection::UnsupportedSchema { found, supported })
+    }
+
+    pub(super) fn writer_unavailable() -> Self {
+        Self::rejected(ConfigStoreRejection::WriterUnavailable)
+    }
+
+    pub(super) fn stale_revision() -> Self {
+        Self::rejected(ConfigStoreRejection::StaleRevision)
     }
 
     fn protects_original(&self) -> bool {
@@ -344,7 +361,9 @@ impl ConfigStoreFailure {
                 if error.inner.condition == ConfigStoreCondition::InvalidDocument
         ) || matches!(
             &self.kind,
-            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. })
+            ConfigStoreFailureKind::Rejected(
+                ConfigStoreRejection::UnsupportedSchema { .. } | ConfigStoreRejection::WriterUnavailable
+            )
         )
     }
 
@@ -358,11 +377,25 @@ impl ConfigStoreFailure {
     pub(crate) fn is_retryable(&self) -> bool {
         match &self.kind {
             ConfigStoreFailureKind::Rejected(
-                ConfigStoreRejection::StaleRevision | ConfigStoreRejection::ProtectedOriginal,
+                ConfigStoreRejection::StaleRevision
+                | ConfigStoreRejection::ProtectedOriginal
+                | ConfigStoreRejection::WriterUnavailable,
             ) => true,
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. })
             | ConfigStoreFailureKind::Rejected(ConfigStoreRejection::RevisionExhausted) => false,
             ConfigStoreFailureKind::Operational(_) => true,
+        }
+    }
+
+    pub(crate) fn safe_summary(&self) -> &'static str {
+        match &self.kind {
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::WriterUnavailable) => {
+                "Another Dashboard instance owns this data directory. Close it before opening this instance."
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. }) => {
+                "The local dashboard data uses an unsupported schema version. The original files were preserved."
+            }
+            _ => "The local dashboard configuration could not be loaded or updated.",
         }
     }
 }
@@ -423,8 +456,9 @@ pub struct DesktopConfigStore {
     path: PathBuf,
     context: ChildServiceContext,
     io_gate: tokio::sync::Mutex<()>,
-    known_revision: AtomicU64,
     protected_original: AtomicBool,
+    writer: Arc<parking_lot::Mutex<Option<StorageWriter>>>,
+    document: parking_lot::RwLock<Option<DesktopDocument>>,
 }
 
 impl DesktopConfigStore {
@@ -447,8 +481,9 @@ impl DesktopConfigStore {
             path,
             context,
             io_gate: tokio::sync::Mutex::new(()),
-            known_revision: AtomicU64::new(0),
             protected_original: AtomicBool::new(false),
+            writer: Arc::new(parking_lot::Mutex::new(None)),
+            document: parking_lot::RwLock::new(None),
         })
     }
 
@@ -461,16 +496,31 @@ impl DesktopConfigStore {
     pub async fn load(&self) -> Result<DesktopConfig, ConfigStoreFailure> {
         let _guard = self.io_gate.lock().await;
         let path = self.path.clone();
+        let writer = Arc::clone(&self.writer);
         let result = self
             .context
             .storage_io()
-            .spawn_io("gpui-config-load", move || load_file(&path))
+            .spawn_io("gpui-config-load", move || {
+                let mut writer = writer.lock();
+                if writer.is_none() {
+                    *writer = Some(StorageWriter::acquire(&path)?);
+                }
+                drop(writer);
+                let (document, migrated) = load_document(&path)?;
+                document.validate()?;
+                if migrated {
+                    write_json_atomically(&path, &document)?;
+                }
+                Ok::<_, ConfigStoreFailure>(document)
+            })
             .await
             .map_err(ConfigStoreFailure::runtime)?;
         match result {
-            Ok(config) => {
-                self.known_revision.store(config.revision, Ordering::Release);
+            Ok(document) => {
+                let config = document.config()?;
+
                 self.protected_original.store(false, Ordering::Release);
+                *self.document.write() = Some(document);
                 Ok(config)
             }
             Err(error) if error.protects_original() => {
@@ -483,269 +533,247 @@ impl DesktopConfigStore {
 
     /// Atomically persists a validated next revision.
     pub async fn save_next(&self, config: DesktopConfig) -> Result<DesktopConfig, ConfigStoreFailure> {
+        if self.protected_original.load(Ordering::Acquire) {
+            return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::ProtectedOriginal));
+        }
+        let context = self.operation_context(
+            config.revision,
+            OperationActor::System,
+            OperationResource::Configuration,
+        )?;
+        self.save_next_with_context(config, context).await
+    }
+
+    /// Saves the active profile and its accepted-operation record in one replacement.
+    pub async fn save_next_with_context(
+        &self,
+        config: DesktopConfig,
+        context: OperationContext,
+    ) -> Result<DesktopConfig, ConfigStoreFailure> {
         let _guard = self.io_gate.lock().await;
         if self.protected_original.load(Ordering::Acquire) {
             return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::ProtectedOriginal));
         }
-        let known_revision = self.known_revision.load(Ordering::Acquire);
-        if config.revision != known_revision {
-            return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::StaleRevision));
-        }
-        let mut config = config.normalize()?;
-        config.revision = config
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
+        let config = config.normalize()?;
         let path = self.path.clone();
-        let persisted = config.clone();
-        self.context
+        let document = self
+            .context
             .storage_io()
-            .spawn_io("gpui-config-save", move || save_file(&path, &persisted))
+            .spawn_io("gpui-config-save", move || {
+                let (mut document, _) = load_document(&path)?;
+                if document
+                    .local_operations
+                    .iter()
+                    .any(|record| record.context.request_id == context.request_id)
+                {
+                    return Ok(document);
+                }
+                if config.revision != document.settings.revision
+                    || context.configuration_revision != config.revision
+                    || context.environment_id != document.active_environment_id
+                {
+                    return Err(ConfigStoreFailure::stale_revision());
+                }
+                let mut config = config;
+                config.revision = config
+                    .revision
+                    .checked_add(1)
+                    .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
+                document.apply_config(&config)?;
+                persist_local_document(&path, document, context, LocalOperationKind::ConfigurationSaved)
+            })
             .await
             .map_err(ConfigStoreFailure::runtime)??;
-        self.known_revision.store(config.revision, Ordering::Release);
+        let config = document.config()?;
+
+        *self.document.write() = Some(document);
         Ok(config)
     }
-}
 
-fn load_file(path: &Path) -> Result<DesktopConfig, ConfigStoreFailure> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DesktopConfig::default()),
-        Err(source) => {
-            return Err(ConfigStoreFailure::io("read", path.to_path_buf(), source));
-        }
-    };
-    let config = serde_json::from_slice::<DesktopConfig>(&bytes)
-        .map_err(|source| ConfigStoreFailure::invalid_document(path.to_path_buf(), source))?;
-    config.normalize()
-}
-
-fn save_file(path: &Path, config: &DesktopConfig) -> Result<(), ConfigStoreFailure> {
-    write_json_atomically(path, config)
-}
-
-pub(super) fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigStoreFailure> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::PathHasNoParent))?;
-    fs::create_dir_all(parent)
-        .map_err(|source| ConfigStoreFailure::io("create directory", parent.to_path_buf(), source))?;
-    let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("config.json");
-    let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), sequence));
-    // Keep a synced temporary file on failure. In particular, Windows replacement failures may
-    // require both the original/backup and replacement file for operator recovery.
-    write_and_replace(&temporary, path, value)
-}
-
-fn write_and_replace<T: Serialize>(temporary: &Path, target: &Path, value: &T) -> Result<(), ConfigStoreFailure> {
-    let mut bytes = serde_json::to_vec_pretty(value)
-        .map_err(|source| ConfigStoreFailure::caused_by(ConfigStoreCondition::Validation, None, source))?;
-    bytes.push(b'\n');
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(temporary)
-        .map_err(|source| ConfigStoreFailure::io("create temporary file", temporary.to_path_buf(), source))?;
-    file.write_all(&bytes)
-        .map_err(|source| ConfigStoreFailure::io("write temporary file", temporary.to_path_buf(), source))?;
-    file.sync_all()
-        .map_err(|source| ConfigStoreFailure::io("sync temporary file", temporary.to_path_buf(), source))?;
-    drop(file);
-    atomic_replace(temporary, target).map_err(|source| {
-        ConfigStoreFailure::caused_by(ConfigStoreCondition::Io, Some(target.to_path_buf()), source)
-    })?;
-    sync_parent(target)?;
-    Ok(())
-}
-
-enum AtomicReplaceFailure {
-    Io(io::Error),
-    #[cfg(windows)]
-    Recovery {
-        replacement: io::Error,
-        restore: io::Error,
-    },
-}
-
-impl AtomicReplaceFailure {
-    #[cfg(all(test, windows))]
-    fn raw_os_error(&self) -> Option<i32> {
-        match self {
-            Self::Io(source) => source.raw_os_error(),
-            Self::Recovery { replacement, .. } => replacement.raw_os_error(),
-        }
+    /// Returns profiles from the same committed document as the configuration projection.
+    pub fn environments(&self) -> Option<EnvironmentCatalog> {
+        self.document.read().as_ref().map(DesktopDocument::catalog)
     }
-}
 
-impl fmt::Debug for AtomicReplaceFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let restore_kind: Option<io::ErrorKind> = match self {
-            #[cfg(windows)]
-            Self::Recovery { restore, .. } => Some(restore.kind()),
-            Self::Io(_) => None,
-        };
-        #[cfg(windows)]
-        let recovery_failed = matches!(self, Self::Recovery { .. });
-        #[cfg(not(windows))]
-        let recovery_failed = false;
-        formatter
-            .debug_struct("AtomicReplaceFailure")
-            .field("recovery_failed", &recovery_failed)
-            .field("restore_kind", &restore_kind)
-            .finish()
-    }
-}
-
-impl fmt::Display for AtomicReplaceFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Io(_) => "Atomic replacement failed.",
-            #[cfg(windows)]
-            Self::Recovery { .. } => "Atomic replacement and recovery both failed.",
+    pub fn environment_snapshot(&self) -> Result<EnvironmentConnectionSnapshot, ConfigStoreFailure> {
+        let document = self.document.read();
+        let document = document
+            .as_ref()
+            .ok_or_else(|| ConfigStoreFailure::validation(EnvironmentValidation::MissingProfile))?;
+        Ok(EnvironmentConnectionSnapshot {
+            environment_id: document.active_environment_id.clone(),
+            connection: document.config()?.connection_snapshot(),
         })
     }
-}
 
-impl StdError for AtomicReplaceFailure {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Self::Io(source) => Some(source),
-            #[cfg(windows)]
-            Self::Recovery { replacement, .. } => Some(replacement),
+    /// Resolves attribution at acceptance; caller-supplied form data cannot choose an actor.
+    pub fn operation_context(
+        &self,
+        revision: u64,
+        actor: OperationActor,
+        resource: OperationResource,
+    ) -> Result<OperationContext, ConfigStoreFailure> {
+        let snapshot = self.environment_snapshot()?;
+        if snapshot.connection.revision != revision {
+            return Err(ConfigStoreFailure::stale_revision());
         }
+        Ok(OperationContext {
+            environment_id: snapshot.environment_id,
+            configuration_revision: revision,
+            request_id: format!("request-{:032x}", rand::random::<u128>()),
+            actor,
+            resource,
+        })
     }
-}
 
-#[cfg(not(windows))]
-fn atomic_replace(temporary: &Path, target: &Path) -> Result<(), AtomicReplaceFailure> {
-    fs::rename(temporary, target).map_err(AtomicReplaceFailure::Io)
-}
-
-#[cfg(windows)]
-fn atomic_replace(temporary: &Path, target: &Path) -> Result<(), AtomicReplaceFailure> {
-    atomic_replace_with(temporary, target, &SystemWindowsReplace)
-}
-
-#[cfg(windows)]
-trait WindowsReplace {
-    fn replace(&self, target: &Path, replacement: &Path, backup: &Path) -> io::Result<()>;
-}
-
-#[cfg(windows)]
-struct SystemWindowsReplace;
-
-#[cfg(windows)]
-impl WindowsReplace for SystemWindowsReplace {
-    fn replace(&self, target: &Path, replacement: &Path, backup: &Path) -> io::Result<()> {
-        use std::os::windows::ffi::OsStrExt as _;
-
-        #[link(name = "Kernel32")]
-        unsafe extern "system" {
-            fn ReplaceFileW(
-                replaced_file_name: *const u16,
-                replacement_file_name: *const u16,
-                backup_file_name: *const u16,
-                replace_flags: u32,
-                exclude: *mut std::ffi::c_void,
-                reserved: *mut std::ffi::c_void,
-            ) -> i32;
-        }
-
-        let replaced = target.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
-        let replacement = replacement.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
-        let backup = backup.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
-        // SAFETY: all path buffers are NUL-terminated and live for the call; reserved pointer
-        // arguments are null, and ReplaceFileW does not retain any supplied pointer.
-        let replaced_ok = unsafe {
-            ReplaceFileW(
-                replaced.as_ptr(),
-                replacement.as_ptr(),
-                backup.as_ptr(),
-                0x0000_0002,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if replaced_ok == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[cfg(windows)]
-fn atomic_replace_with(temporary: &Path, target: &Path, api: &dyn WindowsReplace) -> Result<(), AtomicReplaceFailure> {
-    if !target.exists() {
-        return fs::rename(temporary, target).map_err(AtomicReplaceFailure::Io);
-    }
-    let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let file_name = target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("config.json");
-    let backup = target.with_file_name(format!(
-        ".{file_name}.{}.{}.replacement-backup",
-        std::process::id(),
-        sequence
-    ));
-    let recovery = target.with_file_name(format!(
-        ".{file_name}.{}.{}.pre-replacement-recovery",
-        std::process::id(),
-        sequence
-    ));
-    fs::hard_link(target, &recovery).map_err(AtomicReplaceFailure::Io)?;
-
-    match api.replace(target, temporary, &backup) {
-        Ok(()) => {
-            if backup.exists() {
-                let _ = fs::remove_file(&backup);
-            }
-            let _ = fs::remove_file(&recovery);
-            Ok(())
-        }
-        Err(replace_error) => {
-            if !target.exists() {
-                let restore_result = if backup.exists() {
-                    fs::rename(&backup, target)
-                } else {
-                    fs::copy(&recovery, target).map(|_| ())
-                };
-                if let Err(restore_error) = restore_result {
-                    return Err(AtomicReplaceFailure::Recovery {
-                        replacement: replace_error,
-                        restore: restore_error,
-                    });
+    /// Creates an empty profile or selects a profile explicitly. Endpoint edits never call this.
+    pub async fn change_environment(
+        &self,
+        change: EnvironmentChange,
+        context: OperationContext,
+    ) -> Result<DesktopConfig, ConfigStoreFailure> {
+        let _guard = self.io_gate.lock().await;
+        let path = self.path.clone();
+        let document = self
+            .context
+            .storage_io()
+            .spawn_io("gpui-environment-change", move || {
+                let (mut document, _) = load_document(&path)?;
+                if document
+                    .local_operations
+                    .iter()
+                    .any(|record| record.context.request_id == context.request_id)
+                {
+                    return Ok(document);
                 }
-            }
-            Err(AtomicReplaceFailure::Io(replace_error))
-        }
+                if context.configuration_revision != document.settings.revision
+                    || context.environment_id != document.active_environment_id
+                {
+                    return Err(ConfigStoreFailure::stale_revision());
+                }
+                match change {
+                    EnvironmentChange::Create { name } => {
+                        if name.trim().is_empty() {
+                            return Err(ConfigStoreFailure::validation(EnvironmentValidation::InvalidProfile));
+                        }
+                        let id = new_environment_id()?;
+                        document.profiles.push(EnvironmentProfile::from_config(
+                            id.clone(),
+                            name.trim().into(),
+                            &DesktopConfig::default(),
+                        ));
+                        document.active_environment_id = id;
+                    }
+                    EnvironmentChange::Select { id: selected } => {
+                        if !document.profiles.iter().any(|profile| profile.id == selected) {
+                            return Err(ConfigStoreFailure::validation(EnvironmentValidation::MissingProfile));
+                        }
+                        document.active_environment_id = selected;
+                    }
+                }
+                document.settings.revision = document
+                    .settings
+                    .revision
+                    .checked_add(1)
+                    .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
+                persist_local_document(&path, document, context, LocalOperationKind::ConfigurationSaved)
+            })
+            .await
+            .map_err(ConfigStoreFailure::runtime)??;
+        let config = document.config()?;
+
+        *self.document.write() = Some(document);
+        Ok(config)
+    }
+
+    pub async fn monitor_rules(&self) -> Result<Vec<StoredMonitorRule>, ConfigStoreFailure> {
+        let _guard = self.io_gate.lock().await;
+        let path = self.path.clone();
+        self.context
+            .storage_io()
+            .spawn_io("gpui-monitor-list", move || {
+                load_document(&path).map(|(document, _)| document.monitors.rules)
+            })
+            .await
+            .map_err(ConfigStoreFailure::runtime)?
+    }
+
+    /// Commits a Monitor edit and its operation record under the configuration writer lock.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "P01 retains atomic Monitor commits for the P09 rule editor")
+    )]
+    pub async fn save_monitor(
+        &self,
+        rule: Option<StoredMonitorRule>,
+        id: String,
+        context: OperationContext,
+    ) -> Result<bool, ConfigStoreFailure> {
+        let _guard = self.io_gate.lock().await;
+        let path = self.path.clone();
+        let (document, removed) = self
+            .context
+            .storage_io()
+            .spawn_io("gpui-monitor-commit", move || {
+                let (mut document, _) = load_document(&path)?;
+                if document
+                    .local_operations
+                    .iter()
+                    .any(|record| record.context.request_id == context.request_id)
+                {
+                    return Ok((document, false));
+                }
+                if context.configuration_revision != document.settings.revision
+                    || context.environment_id != document.active_environment_id
+                {
+                    return Err(ConfigStoreFailure::stale_revision());
+                }
+                let old_len = document.monitors.rules.len();
+                document.monitors.rules.retain(|existing| {
+                    !(existing.environment_id.as_ref() == Some(&context.environment_id) && existing.rule.id == id)
+                });
+                let removed = old_len != document.monitors.rules.len();
+                let kind = if let Some(rule) = rule {
+                    document.monitors.rules.push(rule);
+                    LocalOperationKind::MonitorSaved
+                } else {
+                    LocalOperationKind::MonitorDeleted
+                };
+                let document = persist_local_document(&path, document, context, kind)?;
+                Ok::<_, ConfigStoreFailure>((document, removed))
+            })
+            .await
+            .map_err(ConfigStoreFailure::runtime)??;
+        *self.document.write() = Some(document);
+        Ok(removed)
     }
 }
 
-#[cfg(not(windows))]
-fn sync_parent(target: &Path) -> Result<(), ConfigStoreFailure> {
-    use std::fs::File;
-
-    let parent = target
-        .parent()
-        .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::PathHasNoParent))?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| ConfigStoreFailure::io("sync directory", parent.to_path_buf(), source))
-}
-
-#[cfg(windows)]
-fn sync_parent(_target: &Path) -> Result<(), ConfigStoreFailure> {
-    // ReplaceFileW completes the same-volume atomic replacement. Windows does not expose
-    // directory handles through std::fs::File, while the temporary file itself is synced above.
-    Ok(())
+fn persist_local_document(
+    path: &Path,
+    mut document: DesktopDocument,
+    context: OperationContext,
+    kind: LocalOperationKind,
+) -> Result<DesktopDocument, ConfigStoreFailure> {
+    let committed_at_epoch_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(ConfigStoreFailure::validation)?;
+    let committed_at_epoch_ms =
+        u64::try_from(committed_at_epoch_ms.as_millis()).map_err(ConfigStoreFailure::validation)?;
+    document.local_operations.push(LocalOperationRecord {
+        context,
+        kind,
+        committed_at_epoch_ms,
+    });
+    document.validate()?;
+    write_json_atomically(path, &document)?;
+    Ok(document)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use rocketmq_runtime::{ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
 
@@ -857,90 +885,5 @@ mod tests {
 
         let schema = ConfigStoreFailure::unsupported_schema(99, CONFIG_SCHEMA_VERSION);
         assert!(schema.into_operational().is_none());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_existing_target_is_replaced_atomically() {
-        let directory = tempfile::tempdir().expect("temp directory");
-        let target = directory.path().join("config.json");
-        let replacement = directory.path().join("replacement.tmp");
-        fs::write(&target, b"old").expect("old target");
-        fs::write(&replacement, b"new").expect("new replacement");
-
-        atomic_replace(&replacement, &target).expect("atomic replacement");
-
-        assert_eq!(fs::read(&target).expect("target"), b"new");
-        assert!(!replacement.exists());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_move_replacement_failure_restores_original_and_preserves_replacement() {
-        struct MoveReplacementFailure;
-
-        impl WindowsReplace for MoveReplacementFailure {
-            fn replace(&self, target: &Path, _replacement: &Path, backup: &Path) -> io::Result<()> {
-                fs::rename(target, backup)?;
-                Err(io::Error::from_raw_os_error(1177))
-            }
-        }
-
-        let directory = tempfile::tempdir().expect("temp directory");
-        let target = directory.path().join("config.json");
-        let replacement = directory.path().join("replacement.tmp");
-        fs::write(&target, b"old").expect("old target");
-        fs::write(&replacement, b"new").expect("new replacement");
-
-        let error = atomic_replace_with(&replacement, &target, &MoveReplacementFailure)
-            .expect_err("injected replacement failure");
-
-        assert_eq!(error.raw_os_error(), Some(1177));
-        assert_eq!(fs::read(&target).expect("restored target"), b"old");
-        assert_eq!(fs::read(&replacement).expect("preserved replacement"), b"new");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_remove_replaced_failure_retains_both_original_names() {
-        struct RemoveReplacedFailure;
-
-        impl WindowsReplace for RemoveReplacedFailure {
-            fn replace(&self, _target: &Path, _replacement: &Path, _backup: &Path) -> io::Result<()> {
-                Err(io::Error::from_raw_os_error(1175))
-            }
-        }
-
-        assert_windows_replacement_failure_preserves_files(&RemoveReplacedFailure, 1175);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_move_replacement_failure_restores_from_pre_replacement_recovery() {
-        struct MoveReplacementFailure;
-
-        impl WindowsReplace for MoveReplacementFailure {
-            fn replace(&self, target: &Path, _replacement: &Path, _backup: &Path) -> io::Result<()> {
-                fs::remove_file(target)?;
-                Err(io::Error::from_raw_os_error(1176))
-            }
-        }
-
-        assert_windows_replacement_failure_preserves_files(&MoveReplacementFailure, 1176);
-    }
-
-    #[cfg(windows)]
-    fn assert_windows_replacement_failure_preserves_files(api: &dyn WindowsReplace, code: i32) {
-        let directory = tempfile::tempdir().expect("temp directory");
-        let target = directory.path().join("config.json");
-        let replacement = directory.path().join("replacement.tmp");
-        fs::write(&target, b"old").expect("old target");
-        fs::write(&replacement, b"new").expect("new replacement");
-
-        let error = atomic_replace_with(&replacement, &target, api).expect_err("injected replacement failure");
-
-        assert_eq!(error.raw_os_error(), Some(code));
-        assert_eq!(fs::read(&target).expect("retained/restored target"), b"old");
-        assert_eq!(fs::read(&replacement).expect("preserved replacement"), b"new");
     }
 }

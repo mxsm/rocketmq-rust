@@ -100,6 +100,23 @@ impl ProducersView {
         }
     }
 
+    pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.revision = revision;
+        self.inventory_task = None;
+        self.connections_task = None;
+        self.store.clear_for_revision();
+        self.store.draft_filter = Default::default();
+        self.store.applied_filter = Default::default();
+        self.store.draft_query = Default::default();
+        self.store.page = 1;
+        self.validation_error = None;
+        self.client_sheet_open = false;
+        for input in [&self.keyword, &self.topic, &self.group] {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+    }
+
     pub fn ensure_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.store.inventory.state, Loadable::Idle) {
             let Some(request) = self.store.begin_inventory(self.revision) else {

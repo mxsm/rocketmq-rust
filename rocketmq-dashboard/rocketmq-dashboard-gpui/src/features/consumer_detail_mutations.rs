@@ -88,6 +88,10 @@ impl ConsumerDetail {
             let result = services.delete_consumer(scope, command).await;
             let _ = this.update(cx, |detail, cx| {
                 detail.mutation_task = None;
+                cx.notify();
+                if scope.revision != detail.revision {
+                    return;
+                }
                 match result {
                     Ok(ConsumerMutationResult::Rejected(outcome)) => {
                         detail.mutation_replay_blocked = true;
@@ -178,6 +182,10 @@ impl ConsumerDetail {
             let result = services.patch_consumer_config(scope, command).await;
             let _ = this.update(cx, |detail, cx| {
                 detail.mutation_task = None;
+                cx.notify();
+                if scope.revision != detail.revision {
+                    return;
+                }
                 match result {
                     Ok(ConsumerConfigMutationResult::Applied {
                         previous_generation,
@@ -297,7 +305,6 @@ impl ConsumerDetail {
                     close_form.update(cx, |form, cx| form.clear_sensitive(window, cx));
                     let _ = on_close.update(cx, |detail, cx| {
                         detail.offset_dialog = None;
-                        detail.mutation_task = None;
                         detail.mutation_replay_blocked = false;
                         cx.notify();
                     });
@@ -361,6 +368,10 @@ impl ConsumerDetail {
             };
             let _ = this.update_in(cx, |detail, _, cx| {
                 detail.mutation_task = None;
+                cx.notify();
+                if consumer_scope.revision != detail.revision {
+                    return;
+                }
                 detail.finish_offset_action(&result, reload);
                 let blocked = !matches!(
                     &result,

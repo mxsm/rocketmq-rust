@@ -47,6 +47,7 @@ pub(crate) trait DashboardBrokerOperations: Send + Sync {
 
     fn dashboard_topic_history(
         &self,
+        revision: u64,
         topic: String,
         start_epoch_ms: u64,
         end_epoch_ms: u64,
@@ -54,6 +55,7 @@ pub(crate) trait DashboardBrokerOperations: Send + Sync {
 
     fn dashboard_broker_history(
         &self,
+        revision: u64,
         metric: HistoryMetricKind,
         identity: BrokerIdentity,
         start_epoch_ms: u64,
@@ -107,15 +109,20 @@ impl DashboardBrokerOperations for RealDashboardBrokerOperations {
 
     fn dashboard_topic_history(
         &self,
+        revision: u64,
         topic: String,
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>> {
-        Box::pin(self.dashboard.topic_history(topic, start_epoch_ms, end_epoch_ms))
+        Box::pin(
+            self.dashboard
+                .topic_history(revision, topic, start_epoch_ms, end_epoch_ms),
+        )
     }
 
     fn dashboard_broker_history(
         &self,
+        revision: u64,
         metric: HistoryMetricKind,
         identity: BrokerIdentity,
         start_epoch_ms: u64,
@@ -123,7 +130,7 @@ impl DashboardBrokerOperations for RealDashboardBrokerOperations {
     ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>> {
         Box::pin(
             self.dashboard
-                .broker_history(metric, identity, start_epoch_ms, end_epoch_ms),
+                .broker_history(revision, metric, identity, start_epoch_ms, end_epoch_ms),
         )
     }
 
@@ -175,25 +182,27 @@ impl AppServices {
     /// Loads actual Topic History points in the requested range.
     pub async fn dashboard_topic_history(
         &self,
+        revision: u64,
         topic: String,
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
         self.dashboard_broker
-            .dashboard_topic_history(topic, start_epoch_ms, end_epoch_ms)
+            .dashboard_topic_history(revision, topic, start_epoch_ms, end_epoch_ms)
             .await
     }
 
     /// Loads actual Broker History points in the requested range.
     pub async fn dashboard_broker_history(
         &self,
+        revision: u64,
         metric: HistoryMetricKind,
         identity: BrokerIdentity,
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
         self.dashboard_broker
-            .dashboard_broker_history(metric, identity, start_epoch_ms, end_epoch_ms)
+            .dashboard_broker_history(revision, metric, identity, start_epoch_ms, end_epoch_ms)
             .await
     }
 

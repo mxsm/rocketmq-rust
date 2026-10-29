@@ -153,6 +153,8 @@ pub struct ConsumersView {
     create_group: Entity<InputState>,
     table: Entity<TableState<ConsumerTableDelegate>>,
     detail: Option<Entity<ConsumerDetail>>,
+    // Retain accepted writes after removing the old environment's visible detail.
+    pending_details: Vec<(Entity<ConsumerDetail>, Subscription)>,
     detail_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
     inventory_task: Option<Task<()>>,
@@ -207,6 +209,7 @@ impl ConsumersView {
             create_group,
             table,
             detail: None,
+            pending_details: Vec::new(),
             detail_subscription: None,
             _subscriptions: subscriptions,
             inventory_task: None,
@@ -251,6 +254,37 @@ impl ConsumersView {
         if loaded {
             self.refresh(cx);
         }
+    }
+
+    pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.revision = revision;
+        self.inventory_task = None;
+        self.pending_route = None;
+        self.detail_subscription = None;
+        self.pending_details
+            .retain(|(detail, _)| detail.read(cx).has_pending_mutation());
+        if let Some(detail) = self.detail.take() {
+            detail.update(cx, |detail, cx| detail.clear_for_environment(revision, window, cx));
+            if detail.read(cx).has_pending_mutation() {
+                let completion = cx.observe(&detail, |view, _, cx| {
+                    view.pending_details
+                        .retain(|(detail, _)| detail.read(cx).has_pending_mutation());
+                });
+                self.pending_details.push((detail, completion));
+            }
+        }
+        self.store.clear_for_revision();
+        self.store.draft_filter = Default::default();
+        self.store.applied_filter = Default::default();
+        self.store.page = 1;
+        self.mutation_status = None;
+        self.mutation_outcome = None;
+        self.mutation_replay_blocked = false;
+        self.keyword.update(cx, |input, cx| input.set_value("", window, cx));
+        self.create_group
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.table.update(cx, |table, cx| table.clear_selection(cx));
+        self.sync_table(cx);
     }
 
     pub fn ensure_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -494,6 +528,10 @@ impl ConsumersView {
             let result = services.create_consumer(scope, command).await;
             let _ = this.update_in(cx, |view, window, cx| {
                 view.mutation_task = None;
+                cx.notify();
+                if scope.revision != view.revision {
+                    return;
+                }
                 match result {
                     Ok(ConsumerMutationResult::Rejected(outcome)) => {
                         view.mutation_replay_blocked = true;
@@ -795,5 +833,90 @@ fn observed_value<T: std::fmt::Display>(observation: &ConsumerObservation<T>) ->
         ConsumerObservation::Complete(value) => value.to_string(),
         ConsumerObservation::Partial { value, .. } => format!("Partial ({value})"),
         ConsumerObservation::Unknown { .. } => "Unknown".into(),
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[gpui::test]
+    fn environment_clear_retains_consumer_write_owners_and_clears_detail_data(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|window, cx| ConsumersView::new(window, AppServices::default(), 10, cx));
+        let (complete_create, create_completion) = tokio::sync::oneshot::channel::<()>();
+        let (complete_detail, detail_completion) = tokio::sync::oneshot::channel::<()>();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let create_completed = completed.clone();
+        let detail_completed = completed.clone();
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                view.mutation_task = Some(cx.spawn(async move |_, _| {
+                    create_completion.await.unwrap();
+                    create_completed.fetch_add(1, Ordering::SeqCst);
+                }));
+                let group = ConsumerIdentity::parse("same-group").unwrap();
+                let detail = cx.new(|cx| {
+                    ConsumerDetail::new(
+                        AppServices::default(),
+                        10,
+                        group.clone(),
+                        ConsumerTab::Progress,
+                        Vec::new(),
+                        rocketmq_dashboard_common::ConsumerCapabilities::for_scope(
+                            rocketmq_dashboard_common::ConnectionScope::NameServer,
+                        ),
+                        cx,
+                    )
+                });
+                detail.update(cx, |detail, cx| {
+                    detail.store.progress.replace(ConsumerObservation::Complete(
+                        rocketmq_dashboard_common::ConsumerProgress::from_rows(group, Vec::new()),
+                    ));
+                    detail.set_mutation_task_for_test(Some(cx.spawn(async move |owner, cx| {
+                        detail_completion.await.unwrap();
+                        detail_completed.fetch_add(1, Ordering::SeqCst);
+                        let _ = owner.update(cx, |detail, cx| {
+                            detail.set_mutation_task_for_test(None);
+                            cx.notify();
+                        });
+                    })));
+                });
+                view.detail = Some(detail);
+                view.clear_for_environment(11, window, cx);
+                assert!(view.mutation_task.is_some());
+                assert!(view.detail.is_none());
+                assert_eq!(view.pending_details.len(), 1);
+                assert!(
+                    view.pending_details[0]
+                        .0
+                        .read(cx)
+                        .store
+                        .progress
+                        .state
+                        .value()
+                        .is_none()
+                );
+                assert!(
+                    view.pending_details[0]
+                        .0
+                        .read(cx)
+                        .store
+                        .diagnostic
+                        .state
+                        .value()
+                        .is_none()
+                );
+            })
+        });
+        complete_create.send(()).unwrap();
+        complete_detail.send(()).unwrap();
+        cx.run_until_parked();
+        assert_eq!(completed.load(Ordering::SeqCst), 2);
+        cx.update(|_, app| assert!(view.read(app).pending_details.is_empty()));
     }
 }

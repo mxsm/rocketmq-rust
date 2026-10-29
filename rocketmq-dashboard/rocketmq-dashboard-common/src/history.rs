@@ -18,6 +18,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::EnvironmentId;
+
+/// A real point with explicit environment attribution. Legacy points remain unassigned.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentHistoryPoint {
+    /// `None` means that the legacy source supplied no evidence of an environment.
+    pub environment_id: Option<EnvironmentId>,
+    /// Original metric contract, retained for source compatibility.
+    pub point: HistoryPoint,
+}
+
 /// Metric kinds persisted by the native Dashboard collector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
