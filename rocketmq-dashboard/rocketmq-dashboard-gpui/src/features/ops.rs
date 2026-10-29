@@ -35,7 +35,7 @@ use crate::{
             ADMIN_ACCESS_KEY_ENV, ADMIN_SECRET_KEY_ENV, ADMIN_SECURITY_TOKEN_ENV, LOGIN_PASSWORD_ENV,
             LOGIN_USERNAME_ENV,
         },
-        config_store::DesktopConfig,
+        config_store::{DesktopConfig, FoundationFlags},
     },
     services::{AppServices, ConfigMutation, ConfigUpdated},
     state::UiError,
@@ -748,8 +748,9 @@ impl OpsView {
                     ("Configuration file", path),
                     ("Schema version", self.config.schema_version.to_string()),
                     ("Revision", self.config.revision.to_string()),
-                    ("History store", "Local JSON foundation (no collection)".into()),
-                    ("Monitor store", "Local JSON foundation (no evaluation)".into()),
+                    ("History store", "Local JSON".into()),
+                    ("History collection", history_collection_label(self.config.foundations)),
+                    ("Monitor store", "Local JSON (no evaluation)".into()),
                     ("Configuration mode", "Versioned atomic file".into()),
                 ],
                 theme.border,
@@ -868,6 +869,16 @@ fn availability_label(availability: EndpointAvailability) -> &'static str {
     }
 }
 
+fn history_collection_label(flags: FoundationFlags) -> String {
+    if !flags.history_enabled {
+        "Disabled".into()
+    } else if flags.history_interval_seconds == 0 {
+        "Disabled (interval is 0 seconds)".into()
+    } else {
+        format!("Enabled (every {} seconds)", flags.history_interval_seconds)
+    }
+}
+
 fn credential_label(kind: CredentialSourceKind) -> &'static str {
     match kind {
         CredentialSourceKind::None => "None",
@@ -878,6 +889,22 @@ fn credential_label(kind: CredentialSourceKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_collection_status_follows_flag_and_effective_interval() {
+        let mut flags = FoundationFlags::default();
+        assert_eq!(history_collection_label(flags), "Disabled");
+
+        flags.history_enabled = true;
+        flags.history_interval_seconds = 15;
+        assert_eq!(history_collection_label(flags), "Enabled (every 15 seconds)");
+
+        flags.history_interval_seconds = 0;
+        assert_eq!(history_collection_label(flags), "Disabled (interval is 0 seconds)");
+
+        flags.history_enabled = false;
+        assert_eq!(history_collection_label(flags), "Disabled");
+    }
 
     #[test]
     fn labels_do_not_infer_proxy_health_or_secret_presence() {

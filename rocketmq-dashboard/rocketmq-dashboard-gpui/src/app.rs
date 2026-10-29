@@ -51,13 +51,12 @@ use crate::{
         proxy::ProxyView,
         topics::TopicsView,
     },
-    route::{AppRoute, NavigationHistory},
+    route::{AppRoute, NavigationHistory, PageCapability},
     services::{
         AppServices, ConfigMutation, ConfigRouteTransition, ConfigUpdatePhase, ConfigUpdated, SessionState,
         StartupSnapshot,
     },
     state::{RequestEpoch, UiError, UiErrorCode},
-    ui::message_view::MessageView,
 };
 
 /// The visible startup state. Ready retains the safe destination selected by local startup data.
@@ -118,13 +117,6 @@ enum PendingDiscardAction {
     CloseWindow,
 }
 
-/// The source of visible page content for the active route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PageTarget {
-    Legacy,
-    Placeholder,
-}
-
 /// A marker for state that must be dropped on sign out. It never stores feature data in Delivery 01.
 #[derive(Default)]
 struct SensitiveFeatureCache {
@@ -149,7 +141,6 @@ struct LegacyPageCache {
     topics: Entity<TopicsView>,
     consumers: Entity<ConsumersView>,
     producers: Entity<ProducersView>,
-    messages: Entity<MessageView>,
     ops: Entity<OpsView>,
     proxy: Entity<ProxyView>,
     unavailable_table: Entity<gpui_component::table::TableState<data_table::UnavailableTable>>,
@@ -163,43 +154,24 @@ impl LegacyPageCache {
             topics: cx.new(|cx| TopicsView::new(window, services.clone(), 0, cx)),
             consumers: cx.new(|cx| ConsumersView::new(window, services.clone(), 0, cx)),
             producers: cx.new(|cx| ProducersView::new(window, services.clone(), 0, cx)),
-            messages: cx.new(|_| MessageView::new()),
             ops: cx.new(|cx| OpsView::new(window, services.clone(), cx)),
             proxy: cx.new(|cx| ProxyView::new(window, services.clone(), cx)),
             unavailable_table: data_table::unavailable_state(
-                "No data capability is available for this route yet.",
+                "No data is available because this feature is not yet supported.",
                 window,
                 cx,
             ),
         }
     }
 
-    const fn accepts_route(route: &AppRoute) -> bool {
-        matches!(
-            route,
-            AppRoute::Dashboard
-                | AppRoute::Brokers
-                | AppRoute::BrokerDetail { .. }
-                | AppRoute::Topics
-                | AppRoute::TopicDetail { .. }
-                | AppRoute::Consumers
-                | AppRoute::ConsumerDetail { .. }
-                | AppRoute::Producers
-                | AppRoute::Messages
-                | AppRoute::OpsSettings
-                | AppRoute::Proxy
-        )
-    }
-
     #[cfg(test)]
-    fn entity_ids(&self) -> [gpui::EntityId; 9] {
+    fn entity_ids(&self) -> [gpui::EntityId; 8] {
         [
             self.dashboard.entity_id(),
             self.brokers.entity_id(),
             self.topics.entity_id(),
             self.consumers.entity_id(),
             self.producers.entity_id(),
-            self.messages.entity_id(),
             self.ops.entity_id(),
             self.proxy.entity_id(),
             self.unavailable_table.entity_id(),
@@ -858,8 +830,8 @@ impl RocketmqDashboard {
         self.session.is_authenticated()
     }
 
-    fn current_page_target(&self) -> PageTarget {
-        page_target(self.history.current())
+    fn current_page_capability(&self) -> PageCapability {
+        self.history.current().page_capability()
     }
 
     fn open_navigation_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1160,6 +1132,7 @@ impl RocketmqDashboard {
         topbar
             .child(
                 Button::new("go-back")
+                    .debug_selector(|| "go-back".to_owned())
                     .icon(IconName::ArrowLeft)
                     .ghost()
                     .tooltip("Back")
@@ -1167,6 +1140,7 @@ impl RocketmqDashboard {
             )
             .child(
                 Button::new("go-forward")
+                    .debug_selector(|| "go-forward".to_owned())
                     .icon(IconName::ArrowRight)
                     .ghost()
                     .tooltip("Forward")
@@ -1202,57 +1176,59 @@ impl RocketmqDashboard {
     fn render_page_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = cx.theme();
         let route = self.history.current().clone();
-        let uses_legacy_page = self.current_page_target() == PageTarget::Legacy;
-        let (description, body) = match &route {
-            AppRoute::Dashboard if uses_legacy_page => (
-                "Connection-independent dashboard content.",
+        let (description, body) = match self.current_page_capability() {
+            PageCapability::Dashboard => (
+                "Inspect cluster metrics and collected history for the active connection.",
                 div().size_full().child(self.legacy_pages.dashboard.clone()),
             ),
-            AppRoute::Brokers | AppRoute::BrokerDetail { .. } if uses_legacy_page => (
+            PageCapability::Brokers => (
                 "Filter real Broker inventory and inspect runtime or generation-aware configuration.",
                 div().size_full().child(self.legacy_pages.brokers.clone()),
             ),
-            AppRoute::Topics | AppRoute::TopicDetail { .. } if uses_legacy_page => (
+            PageCapability::Topics => (
                 "Filter real Topic inventory and inspect independently loaded lifecycle resources.",
                 div().size_full().child(self.legacy_pages.topics.clone()),
             ),
-            AppRoute::Consumers | AppRoute::ConsumerDetail { .. } if uses_legacy_page => (
+            PageCapability::Consumers => (
                 "Filter real Consumer observations and inspect independently loaded group resources.",
                 div().size_full().child(self.legacy_pages.consumers.clone()),
             ),
-            AppRoute::Producers if uses_legacy_page => (
+            PageCapability::Producers => (
                 "Inspect discovered Producer groups and apply an explicit Topic + Group client query.",
                 div().size_full().child(self.legacy_pages.producers.clone()),
             ),
-            AppRoute::Messages if uses_legacy_page => (
-                "Legacy read-only message content is preserved until the diagnostic delivery.",
-                div().size_full().child(self.legacy_pages.messages.clone()),
-            ),
-            AppRoute::OpsSettings if uses_legacy_page => (
+            PageCapability::OpsSettings => (
                 "Manage NameServers, transport security, sessions, and local storage.",
                 div().size_full().child(self.legacy_pages.ops.clone()),
             ),
-            AppRoute::Proxy if uses_legacy_page => (
+            PageCapability::Proxy => (
                 "Manage Proxy endpoints and the active consumer query scope.",
                 div().size_full().child(self.legacy_pages.proxy.clone()),
             ),
-            detail_or_future => (
-                "This route is intentionally a safe placeholder until its dedicated delivery adds the required capability.",
+            PageCapability::Login => ("Sign in to continue.", div()),
+            PageCapability::Unavailable { reason } => (
+                "This feature is not yet available.",
                 div()
+                    .debug_selector(|| "unavailable-page".to_owned())
                     .size_full()
                     .flex()
                     .flex_col()
                     .gap_4()
                     .p_6()
                     .child(query_toolbar::unavailable(
-                        "Query controls are unavailable until this route receives its dedicated capability.",
+                        "Queries and operations are unavailable for this feature.",
                         theme.muted,
                         theme.muted_foreground,
                     ))
-                    .child(div().flex_1().min_h_0().child(data_table::render(&self.legacy_pages.unavailable_table)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .child(data_table::render(&self.legacy_pages.unavailable_table)),
+                    )
                     .child(states::empty_state(
-                        detail_or_future.title(),
-                        "No RocketMQ runtime, provider, network request, or persisted data is available in Delivery 01.",
+                        route.title(),
+                        reason,
                         theme.foreground,
                         theme.muted_foreground,
                     )),
@@ -1273,14 +1249,6 @@ impl RocketmqDashboard {
                 theme.muted_foreground,
             )))
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
-    }
-}
-
-const fn page_target(route: &AppRoute) -> PageTarget {
-    if LegacyPageCache::accepts_route(route) {
-        PageTarget::Legacy
-    } else {
-        PageTarget::Placeholder
     }
 }
 

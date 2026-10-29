@@ -14,5 +14,4 @@
 
 //! UI components for the RocketMQ Dashboard
 
-#[path = "ui/message_view.rs"]
-pub mod message_view;
+// The former sample MessageView is intentionally not registered as production UI.

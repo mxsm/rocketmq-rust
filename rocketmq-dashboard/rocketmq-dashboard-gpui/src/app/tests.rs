@@ -15,9 +15,9 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use gpui::{AppContext as _, KeyUpEvent, Keystroke, point, px, size};
-use gpui_component::{Root, WindowExt as _, dialog::Dialog, notification::Notification};
+use gpui_component::{Root, WindowExt as _, dialog::Dialog, notification::Notification, table::TableDelegate as _};
 
-use super::{LegacyPageCache, PageTarget, ReadyScreen, SensitiveFeatureCache, StartupRequest, StartupState};
+use super::{ReadyScreen, SensitiveFeatureCache, StartupRequest, StartupState};
 use crate::{
     infrastructure::{
         admin_provider::GpuiAdminProvider,
@@ -25,7 +25,7 @@ use crate::{
         client_runtime::DesktopClientRuntime,
         config_store::{AuthConfig, DesktopConfig, DesktopConfigStore},
     },
-    route::{AppRoute, BrokerTab, RouteKey, TopicTab},
+    route::{AppRoute, BrokerTab, PageCapability, RouteKey, TopicTab},
     services::{
         AppServices, ConfigRouteTransition, ConfigUpdatePhase, ConfigUpdated, FakeAuthService, FakeStartupService,
         StartupSnapshot, UnavailableTestConfig, dashboard_broker::test_support::FakeDashboardBrokerOperations,
@@ -913,7 +913,7 @@ fn sign_out_clears_history_sensitive_state_and_rebuilds_page_entities(cx: &mut g
 }
 
 #[gpui::test]
-fn app_route_mapping_uses_cached_legacy_pages_and_safe_placeholders(cx: &mut gpui::TestAppContext) {
+fn app_route_mapping_uses_current_page_capabilities(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let app_services = services(
         StartupSnapshot {
@@ -928,14 +928,133 @@ fn app_route_mapping_uses_cached_legacy_pages_and_safe_placeholders(cx: &mut gpu
 
     cx.update(|_, app| {
         dashboard.update(app, |dashboard, cx| {
-            assert_eq!(dashboard.current_page_target(), PageTarget::Legacy);
+            assert_eq!(dashboard.current_page_capability(), PageCapability::Dashboard);
             dashboard.history.navigate(AppRoute::Brokers);
-            assert_eq!(dashboard.current_page_target(), PageTarget::Legacy);
+            assert_eq!(dashboard.current_page_capability(), PageCapability::Brokers);
             dashboard.history.navigate(AppRoute::OpsSettings);
-            assert_eq!(dashboard.current_page_target(), PageTarget::Legacy);
+            assert_eq!(dashboard.current_page_capability(), PageCapability::OpsSettings);
             cx.notify();
         });
     });
+}
+
+#[gpui::test]
+fn production_messages_route_stays_unavailable_through_navigation_and_relogin(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
+    let app_services = services(
+        StartupSnapshot {
+            configuration_revision: 1,
+            login_required: true,
+            has_valid_session: true,
+        },
+        FakeAuthService::authenticated(),
+    )
+    .with_dashboard_broker_operations(fake.clone());
+    let capture = Rc::new(RefCell::new(None));
+    let capture_dashboard = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        capture_dashboard.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().expect("dashboard entity");
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(1440.), px(900.)));
+
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::OpsSettings, window, cx);
+            dashboard.navigate(AppRoute::Messages, window, cx);
+        });
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    assert!(cx.debug_bounds("unavailable-page").is_some());
+
+    let back = cx.debug_bounds("go-back").expect("Back button");
+    cx.simulate_click(back.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert_eq!(dashboard.read(app).history.current(), &AppRoute::OpsSettings);
+        assert_eq!(
+            dashboard.read(app).current_page_capability(),
+            PageCapability::OpsSettings
+        );
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+
+    let forward = cx.debug_bounds("go-forward").expect("Forward button");
+    cx.simulate_click(forward.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, app| assert_eq!(dashboard.read(app).history.current(), &AppRoute::Messages));
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    assert!(cx.debug_bounds("unavailable-page").is_some());
+    cx.update(|_, app| {
+        assert!(matches!(
+            dashboard.read(app).current_page_capability(),
+            PageCapability::Unavailable { .. }
+        ));
+        let table = dashboard.read(app).legacy_pages.unavailable_table.read(app);
+        assert_eq!(
+            table.delegate().rows_count(app),
+            0,
+            "Messages must not render sample rows"
+        );
+    });
+
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.sign_out(window, cx);
+            dashboard.login.set_values("operator", "password", window, cx);
+        });
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let submit = cx.debug_bounds("login-submit").expect("Sign in button");
+    cx.simulate_click(submit.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, app| assert!(dashboard.read(app).session.is_authenticated()));
+
+    let call_count = || {
+        let calls = fake.calls();
+        calls.overview_revisions.len()
+            + calls.topic_current_revisions.len()
+            + calls.broker_current_revisions.len()
+            + calls.topic_history.len()
+            + calls.broker_history.len()
+            + calls.inventory_revisions.len()
+            + calls.runtime.len()
+            + calls.config.len()
+            + calls.patches.len()
+    };
+    let before_unavailable_pages = call_count();
+    for route in [
+        AppRoute::Messages,
+        AppRoute::DlqMessages,
+        AppRoute::MessageTrace,
+        AppRoute::Acl,
+        AppRoute::Monitors,
+    ] {
+        cx.update(|window, app| {
+            dashboard.update(app, |dashboard, cx| dashboard.navigate(route.clone(), window, cx));
+        });
+        cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("unavailable-page").is_some(), "{route}");
+        cx.update(|_, app| {
+            assert_eq!(dashboard.read(app).history.current(), &route);
+            assert!(matches!(
+                dashboard.read(app).current_page_capability(),
+                PageCapability::Unavailable { .. }
+            ));
+            let table = dashboard.read(app).legacy_pages.unavailable_table.read(app);
+            assert_eq!(table.delegate().rows_count(app), 0);
+        });
+    }
+    assert_eq!(
+        call_count(),
+        before_unavailable_pages,
+        "Unavailable pages must not query the backend"
+    );
 }
 
 #[gpui::test]
@@ -974,7 +1093,7 @@ fn ops_and_proxy_product_pages_render_at_the_960_drawer_breakpoint(cx: &mut gpui
         dashboard.update(app, |dashboard, cx| dashboard.navigate(AppRoute::Proxy, window, cx));
     });
     cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
-    cx.update(|_, app| assert_eq!(dashboard.read(app).current_page_target(), PageTarget::Legacy));
+    cx.update(|_, app| assert_eq!(dashboard.read(app).current_page_capability(), PageCapability::Proxy));
 }
 
 #[gpui::test]
@@ -1068,21 +1187,51 @@ fn sign_out_cleanup_contract_clears_sensitive_feature_cache() {
 }
 
 #[test]
-fn legacy_cache_maps_only_delivery_one_compatible_routes() {
-    let compatible = [
-        AppRoute::Dashboard,
-        AppRoute::Brokers,
-        AppRoute::Topics,
-        AppRoute::Consumers,
-        AppRoute::Producers,
-        AppRoute::Messages,
+fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destinations() {
+    let implemented = [
+        (AppRoute::Login, PageCapability::Login),
+        (AppRoute::Dashboard, PageCapability::Dashboard),
+        (AppRoute::Brokers, PageCapability::Brokers),
+        (AppRoute::Topics, PageCapability::Topics),
+        (AppRoute::Consumers, PageCapability::Consumers),
+        (AppRoute::Producers, PageCapability::Producers),
+        (AppRoute::OpsSettings, PageCapability::OpsSettings),
+        (AppRoute::Proxy, PageCapability::Proxy),
+        (
+            AppRoute::BrokerDetail {
+                broker: RouteKey::parse("broker-a").unwrap(),
+                tab: BrokerTab::Configuration,
+            },
+            PageCapability::Brokers,
+        ),
+        (
+            AppRoute::TopicDetail {
+                topic: RouteKey::parse("orders").unwrap(),
+                tab: TopicTab::Consumers,
+            },
+            PageCapability::Topics,
+        ),
+        (
+            AppRoute::ConsumerDetail {
+                group: RouteKey::parse("group-a").unwrap(),
+                tab: crate::route::ConsumerTab::Clients,
+            },
+            PageCapability::Consumers,
+        ),
     ];
 
-    for route in compatible {
-        assert!(LegacyPageCache::accepts_route(&route));
+    for (route, capability) in implemented {
+        assert_eq!(route.page_capability(), capability);
     }
-    assert!(LegacyPageCache::accepts_route(&AppRoute::OpsSettings));
-    assert!(LegacyPageCache::accepts_route(&AppRoute::Proxy));
+    for route in [
+        AppRoute::Messages,
+        AppRoute::DlqMessages,
+        AppRoute::MessageTrace,
+        AppRoute::Acl,
+        AppRoute::Monitors,
+    ] {
+        assert!(matches!(route.page_capability(), PageCapability::Unavailable { .. }));
+    }
 }
 
 #[gpui::test]
