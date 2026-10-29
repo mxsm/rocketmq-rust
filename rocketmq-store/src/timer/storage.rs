@@ -216,17 +216,7 @@ impl TimerStorage {
             Self::RustV2 { log, .. } => log.read_record(position),
             Self::Java { log, .. } => {
                 let unit = log.read_unit(position).map_err(std::io::Error::other)?;
-                Ok((
-                    TimerLogRecord {
-                        deliver_time_ms: unit.slot_time_ms(),
-                        commit_log_offset: unit.commit_log_offset,
-                        size: unit.size,
-                        queue_offset: -1,
-                        prev_pos: unit.prev_pos,
-                        magic: unit.magic,
-                    },
-                    0,
-                ))
+                Ok((java_record(&unit), 0))
             }
         }
     }
@@ -268,6 +258,7 @@ impl TimerStorage {
                 let mut position = slot.last_pos;
                 let mut before_first = None::<usize>;
                 let mut steps = 0u64;
+                let mut units = log.chain_reader();
                 // Cleanup deletes only files without live units, so a link below the oldest
                 // file left reaches units that were already delivered.
                 let oldest = i64::try_from(log.min_offset()).unwrap_or(i64::MAX);
@@ -279,8 +270,9 @@ impl TimerStorage {
                         ));
                     }
                     steps += 1;
-                    let (record, generation) = self.read_record(position as u64)?;
-                    visit(position, record, generation)?;
+                    let unit = units.read_unit(position as u64).map_err(std::io::Error::other)?;
+                    let record = java_record(&unit);
+                    visit(position, record, 0)?;
                     before_first = match before_first {
                         Some(count) => Some(count + 1),
                         None if position == slot.first_pos => Some(0),
@@ -387,6 +379,18 @@ impl TimerStorage {
                 let _ = wheel.flush();
             }
         }
+    }
+}
+
+/// The record of a Java unit, which keeps no queue offset.
+fn java_record(unit: &JavaTimerLogUnit) -> TimerLogRecord {
+    TimerLogRecord {
+        deliver_time_ms: unit.slot_time_ms(),
+        commit_log_offset: unit.commit_log_offset,
+        size: unit.size,
+        queue_offset: -1,
+        prev_pos: unit.prev_pos,
+        magic: unit.magic,
     }
 }
 
