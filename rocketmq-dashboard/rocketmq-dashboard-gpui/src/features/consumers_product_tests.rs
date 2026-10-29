@@ -266,6 +266,72 @@ fn mount(
 }
 
 #[gpui::test]
+fn late_create_completion_after_environment_switch_reenables_the_button_without_replacing_new_state(
+    cx: &mut gpui::TestAppContext,
+) {
+    let fake = Arc::new(FakeConsumerBackend::default());
+    fake.queue_inventory(Ok(inventory(vec![group_observation()])));
+    fake.queue_create(Ok(consumer_outcome(ConsumerMutationKind::Create, false)));
+    let complete_create = fake.hold_next_create();
+    let services = AppServices::default().with_consumer_backend(fake.clone());
+    let (root, cx, consumers) = mount(cx, services);
+    cx.run_until_parked();
+    let input = cx.read(|app| consumers.read(app).create_group_for_test());
+    cx.update(|window, app| input.update(app, |input, cx| input.set_value("old-environment-group", window, cx)));
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-create");
+    assert_eq!(fake.calls().create.len(), 1);
+
+    cx.update(|window, app| {
+        consumers.update(app, |view, cx| {
+            view.clear_for_environment(8, window, cx);
+            view.store.inventory.replace(inventory(Vec::new()));
+        });
+        input.update(app, |input, cx| input.set_value("new-environment-group", window, cx));
+    });
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-create");
+    assert_eq!(
+        fake.calls().create.len(),
+        1,
+        "Create stays disabled while the accepted write is pending"
+    );
+
+    let notifications = Rc::new(std::cell::Cell::new(0));
+    let observed_notifications = notifications.clone();
+    let _subscription = cx.update(|_, app| {
+        app.observe(&consumers, move |_, _| {
+            observed_notifications.set(observed_notifications.get() + 1);
+        })
+    });
+    fake.queue_inventory(Ok(inventory(vec![group_observation()])));
+    complete_create.send(()).unwrap();
+    cx.run_until_parked();
+    assert!(
+        notifications.get() > 0,
+        "Releasing the old write must schedule a render of Create's enabled state"
+    );
+    cx.update(|_, app| {
+        let view = consumers.read(app);
+        assert!(
+            view.store.inventory.state.value().unwrap().groups.is_empty(),
+            "The old response cannot populate the new environment"
+        );
+        assert!(view.mutation_status_for_test().is_none());
+        assert_eq!(input.read(app).value().as_str(), "new-environment-group");
+    });
+
+    fake.queue_create(Ok(consumer_outcome(ConsumerMutationKind::Create, false)));
+    fake.queue_inventory(Ok(inventory(Vec::new())));
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-create");
+    let calls = fake.calls();
+    assert_eq!(calls.create.len(), 2);
+    assert_eq!(calls.create[1].0.revision, 8);
+    assert_eq!(calls.create[1].1.group.as_str(), "new-environment-group");
+}
+
+#[gpui::test]
 fn create_button_submits_exact_targets_and_authoritatively_reloads(cx: &mut gpui::TestAppContext) {
     let fake = Arc::new(FakeConsumerBackend::default());
     fake.queue_inventory(Ok(inventory(vec![group_observation()])));

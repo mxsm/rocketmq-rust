@@ -25,7 +25,9 @@ use rocketmq_dashboard_common::{
 use crate::{
     infrastructure::{
         admin_provider::{GpuiAdminProvider, SafeBrokerInfo, SafeBrokerList},
-        history_collector::{HistorySampleFuture, HistorySampler},
+        history_collector::{
+            EnvironmentHistorySample, EnvironmentHistorySampleFuture, HistorySampleFuture, HistorySampler,
+        },
         history_store::HistoryStore,
     },
     state::{UiError, UiErrorCode},
@@ -151,19 +153,39 @@ impl DashboardService {
     /// Reads only persisted real points for a Topic series.
     pub async fn topic_history(
         &self,
+        revision: u64,
         topic: String,
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
-        self.history()?
-            .query(HistoryMetricKind::TopicMessages, topic, start_epoch_ms, end_epoch_ms)
-            .await
-            .map_err(history_error)
+        let history = self.history()?;
+        let snapshot = history.environment_snapshot().map_err(history_error)?;
+        validate_history_revision(snapshot.as_ref(), revision)?;
+        match snapshot {
+            Some(snapshot) => {
+                history
+                    .query_environment(
+                        snapshot.environment_id,
+                        HistoryMetricKind::TopicMessages,
+                        topic,
+                        start_epoch_ms,
+                        end_epoch_ms,
+                    )
+                    .await
+            }
+            None => {
+                history
+                    .query(HistoryMetricKind::TopicMessages, topic, start_epoch_ms, end_epoch_ms)
+                    .await
+            }
+        }
+        .map_err(history_error)
     }
 
     /// Reads only persisted real points for a complete Broker identity.
     pub async fn broker_history(
         &self,
+        revision: u64,
         metric: HistoryMetricKind,
         identity: BrokerIdentity,
         start_epoch_ms: u64,
@@ -179,15 +201,19 @@ impl DashboardService {
                 false,
             ));
         }
-        self.history()?
-            .query(
-                metric,
-                broker_history_series_identity(&identity),
-                start_epoch_ms,
-                end_epoch_ms,
-            )
-            .await
-            .map_err(history_error)
+        let history = self.history()?;
+        let series = broker_history_series_identity(&identity);
+        let snapshot = history.environment_snapshot().map_err(history_error)?;
+        validate_history_revision(snapshot.as_ref(), revision)?;
+        match snapshot {
+            Some(snapshot) => {
+                history
+                    .query_environment(snapshot.environment_id, metric, series, start_epoch_ms, end_epoch_ms)
+                    .await
+            }
+            None => history.query(metric, series, start_epoch_ms, end_epoch_ms).await,
+        }
+        .map_err(history_error)
     }
 
     fn provider(&self) -> Result<&Arc<GpuiAdminProvider>, UiError> {
@@ -200,6 +226,21 @@ impl DashboardService {
 }
 
 impl HistorySampler for DashboardService {
+    fn sample_topics_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+        Box::pin(async move {
+            let snapshot = self.history()?.environment_snapshot().map_err(history_error)?;
+            let points = self.sample_topics().await?;
+            scoped_sample(snapshot, points)
+        })
+    }
+
+    fn sample_brokers_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+        Box::pin(async move {
+            let snapshot = self.history()?.environment_snapshot().map_err(history_error)?;
+            let points = self.sample_brokers().await?;
+            scoped_sample(snapshot, points)
+        })
+    }
     fn sample_topics(&self) -> HistorySampleFuture<'_> {
         Box::pin(async move {
             let provider = self.provider()?;
@@ -253,6 +294,47 @@ impl HistorySampler for DashboardService {
             Ok(points)
         })
     }
+}
+
+fn scoped_sample(
+    snapshot: Option<rocketmq_dashboard_common::EnvironmentConnectionSnapshot>,
+    points: Vec<HistoryPoint>,
+) -> Result<EnvironmentHistorySample, UiError> {
+    if let Some(snapshot) = snapshot {
+        if points
+            .iter()
+            .any(|point| point.source_revision != snapshot.connection.revision)
+        {
+            return Err(UiError::new(
+                "The connection changed while metrics were sampled.",
+                UiErrorCode::Connection,
+                true,
+            ));
+        }
+        Ok(EnvironmentHistorySample {
+            environment_id: Some(snapshot.environment_id),
+            points,
+        })
+    } else {
+        Ok(EnvironmentHistorySample {
+            environment_id: None,
+            points,
+        })
+    }
+}
+
+fn validate_history_revision(
+    snapshot: Option<&rocketmq_dashboard_common::EnvironmentConnectionSnapshot>,
+    revision: u64,
+) -> Result<(), UiError> {
+    if snapshot.is_some_and(|snapshot| snapshot.connection.revision != revision) {
+        return Err(UiError::new(
+            "The connection changed before History was queried.",
+            UiErrorCode::Connection,
+            true,
+        ));
+    }
+    Ok(())
 }
 
 fn sample_timestamp() -> Result<u64, UiError> {
@@ -363,6 +445,91 @@ mod tests {
     use rocketmq_dashboard_common::EndpointAvailability;
 
     use super::*;
+
+    #[test]
+    fn history_service_rejects_old_requests_and_filters_the_selected_profile() {
+        use rocketmq_dashboard_common::{OperationActor, OperationResource};
+        use rocketmq_runtime::{ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
+
+        use crate::infrastructure::{config_store::DesktopConfigStore, environment_store::EnvironmentChange};
+
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("history-service-test", 1))
+            .unwrap()
+            .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).unwrap())
+            .build()
+            .unwrap();
+        let context = runtime.root_context().component("history");
+        let configuration = DesktopConfigStore::new(directory.path().join("config.json"), context.clone());
+        let history = HistoryStore::with_config_store(
+            directory.path().join("history.json"),
+            context,
+            Arc::clone(&configuration),
+        );
+        let service = DashboardService {
+            provider: None,
+            history: Some(Arc::clone(&history)),
+        };
+        runtime.block_on(async {
+            let first = configuration.load().await.unwrap();
+            let point = |revision, value| HistoryPoint {
+                metric: HistoryMetricKind::TopicMessages,
+                series_identity: "orders".into(),
+                timestamp_epoch_ms: 1,
+                value,
+                source_revision: revision,
+            };
+            let retention = rocketmq_dashboard_common::HistoryRetention {
+                max_points_per_series: 10,
+                max_series: 10,
+                max_total_points: 10,
+            };
+            let first_id = configuration.environments().unwrap().active_id;
+            history
+                .append_environment_sample(first_id, vec![point(first.revision, 3.0)], retention)
+                .await
+                .unwrap();
+            assert_eq!(
+                service
+                    .topic_history(first.revision, "orders".into(), 0, 2)
+                    .await
+                    .unwrap()[0]
+                    .value,
+                3.0
+            );
+            let context = configuration
+                .operation_context(
+                    first.revision,
+                    OperationActor::LocalDesktop,
+                    OperationResource::Configuration,
+                )
+                .unwrap();
+            let second = configuration
+                .change_environment(EnvironmentChange::Create { name: "Staging".into() }, context)
+                .await
+                .unwrap();
+            let second_id = configuration.environments().unwrap().active_id;
+            history
+                .append_environment_sample(second_id, vec![point(second.revision, 9.0)], retention)
+                .await
+                .unwrap();
+            assert!(
+                service
+                    .topic_history(first.revision, "orders".into(), 0, 2)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                service
+                    .topic_history(second.revision, "orders".into(), 0, 2)
+                    .await
+                    .unwrap()[0]
+                    .value,
+                9.0
+            );
+        });
+        runtime.shutdown_runtime_blocking().unwrap();
+    }
 
     fn broker(
         version: Option<String>,

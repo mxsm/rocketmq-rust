@@ -35,9 +35,9 @@ use std::{
 };
 
 use rocketmq_dashboard_common::{
-    AdminSessionStatus, AdminSessionSummary, ConnectionScope, CredentialSourceKind, EndpointHealth, HistoryRetention,
-    TransportSettings, add_endpoint, normalize_nameserver_address, normalize_proxy_address, remove_endpoint,
-    switch_endpoint,
+    AdminSessionStatus, AdminSessionSummary, ConnectionScope, CredentialSourceKind, EndpointHealth, EnvironmentId,
+    HistoryRetention, OperationActor, OperationResource, TransportSettings, add_endpoint, normalize_nameserver_address,
+    normalize_proxy_address, remove_endpoint, switch_endpoint,
 };
 use rocketmq_runtime::{ChildServiceContext, TaskKind};
 use tokio_util::sync::CancellationToken;
@@ -47,6 +47,7 @@ use crate::{
         admin_provider::{GpuiAdminProvider, ProviderFailure},
         auth_state::DesktopAuthState,
         config_store::{DesktopConfig, DesktopConfigStore},
+        environment_store::{EnvironmentCatalog, EnvironmentChange},
         history_collector::{HistoryLifecycle, HistorySampler},
         history_store::HistoryStore,
         monitor_store::{MonitorLifecycle, MonitorStore},
@@ -194,6 +195,10 @@ impl SessionState {
 pub struct GlobalConnectionState {
     /// Last persisted non-sensitive configuration.
     pub config: DesktopConfig,
+    /// Named persistent environments and the explicitly selected profile.
+    pub environments: Option<EnvironmentCatalog>,
+    /// Legacy observations excluded from all environment charts until explicitly assigned.
+    pub unassigned_history_points: usize,
     /// Current Admin session lifecycle status.
     pub session: AdminSessionSummary,
     /// Latest accepted health result.
@@ -221,6 +226,8 @@ impl Default for GlobalConnectionState {
     fn default() -> Self {
         Self {
             config: DesktopConfig::default(),
+            environments: None,
+            unassigned_history_points: 0,
             session: AdminSessionSummary {
                 revision: 0,
                 status: AdminSessionStatus::NotConfigured,
@@ -279,6 +286,10 @@ impl GlobalConnectionState {
 /// Typed configuration mutation. No write operation is replayed after it completes.
 #[derive(Clone, PartialEq, Eq)]
 pub enum ConfigMutation {
+    /// Creates and selects a distinct, initially empty environment profile.
+    CreateEnvironment(String),
+    /// Explicitly selects a persisted environment, independently of endpoint editing.
+    SwitchEnvironment(EnvironmentId),
     /// Adds a NameServer, selecting it only when the list was empty.
     AddNameServer(String),
     /// Selects an existing NameServer.
@@ -326,6 +337,8 @@ impl ConfigMutation {
 impl fmt::Debug for ConfigMutation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match self {
+            Self::CreateEnvironment(_) => "CreateEnvironment",
+            Self::SwitchEnvironment(_) => "SwitchEnvironment",
             Self::AddNameServer(_) => "AddNameServer",
             Self::SwitchNameServer(_) => "SwitchNameServer",
             Self::RemoveNameServer { .. } => "RemoveNameServer",
@@ -566,8 +579,12 @@ impl AppServices {
         monitor_context: ChildServiceContext,
     ) -> Self {
         let host_context = runtime_context.clone();
-        let history_store = HistoryStore::new(store.path().with_file_name("history.json"), history_context.clone());
-        let monitor_store = MonitorStore::new(store.path().with_file_name("monitors.json"), monitor_context.clone());
+        let history_store = HistoryStore::with_config_store(
+            store.path().with_file_name("history.json"),
+            history_context.clone(),
+            Arc::clone(&store),
+        );
+        let monitor_store = MonitorStore::with_config_store(Arc::clone(&store));
         let dashboard = admin_provider
             .as_ref()
             .map(|provider| dashboard::DashboardService::new(Arc::clone(provider), Arc::clone(&history_store)))
@@ -854,7 +871,11 @@ impl DesktopBackend {
         route_transition: ConfigRouteTransition,
     ) -> Option<UiError> {
         // ConfigUpdated ordering: persisted shell summary, provider, invalidation/clear, read-only health.
-        self.state.write().persisted(config.clone());
+        {
+            let mut state = self.state.write();
+            state.persisted(config.clone());
+            state.environments = self.store.environments();
+        }
         send_progress(
             progress,
             config.revision,
@@ -933,6 +954,11 @@ impl ApplicationBackend for DesktopBackend {
     fn bootstrap(&self) -> ServiceFuture<'_, Result<StartupSnapshot, UiError>> {
         Box::pin(async move {
             let config = self.store.load().await.map_err(config_ui_error)?;
+            let observations = self.history_store.observations().await.map_err(config_ui_error)?;
+            self.state.write().unassigned_history_points = observations
+                .iter()
+                .filter(|point| point.environment_id.is_none())
+                .count();
             self.auth.validate_startup(&config.auth).map_err(auth_ui_error)?;
             if self
                 .install_persisted(config.clone(), None, ConfigRouteTransition::None)
@@ -1005,6 +1031,44 @@ impl ApplicationBackend for DesktopBackend {
                 });
             }
             let old = self.state.read().config.clone();
+            let actor = self
+                .auth
+                .session()
+                .username()
+                .map(|username| OperationActor::LocalOperator {
+                    username: username.to_owned(),
+                })
+                .unwrap_or(OperationActor::LocalDesktop);
+            let context = self
+                .store
+                .operation_context(old.revision, actor, OperationResource::Configuration)
+                .map_err(config_ui_error)?;
+            let environment_change = match &mutation {
+                ConfigMutation::CreateEnvironment(name) => Some(EnvironmentChange::Create { name: name.clone() }),
+                ConfigMutation::SwitchEnvironment(id) => Some(EnvironmentChange::Select { id: id.clone() }),
+                _ => None,
+            };
+            if let Some(change) = environment_change {
+                let saved = self
+                    .store
+                    .change_environment(change, context)
+                    .await
+                    .map_err(config_ui_error)?;
+                let warning = self
+                    .install_persisted(saved.clone(), Some(&progress), ConfigRouteTransition::None)
+                    .await;
+                self.reconcile_foundations(saved.foundations).await?;
+                send_progress(
+                    Some(&progress),
+                    saved.revision,
+                    ConfigUpdatePhase::Completed,
+                    ConfigRouteTransition::None,
+                );
+                return Ok(ConfigUpdate {
+                    config: saved,
+                    connection_warning: warning,
+                });
+            }
             let mut next = old.clone();
             apply_mutation(&mut next, &mutation)?;
             let route_transition = mutation.route_transition(old.auth.enabled, next.auth.enabled);
@@ -1014,7 +1078,11 @@ impl ApplicationBackend for DesktopBackend {
             ) {
                 self.auth.validate_startup(&next.auth).map_err(auth_ui_error)?;
             }
-            let saved = self.store.save_next(next).await.map_err(config_ui_error)?;
+            let saved = self
+                .store
+                .save_next_with_context(next, context)
+                .await
+                .map_err(config_ui_error)?;
             let warning = self
                 .install_persisted(saved.clone(), Some(&progress), route_transition)
                 .await;
@@ -1227,7 +1295,7 @@ fn apply_mutation(config: &mut DesktopConfig, mutation: &ConfigMutation) -> Resu
             config.auth.credential_source = *source;
             Ok(())
         }
-        ConfigMutation::Reload => Ok(()),
+        ConfigMutation::Reload | ConfigMutation::CreateEnvironment(_) | ConfigMutation::SwitchEnvironment(_) => Ok(()),
     };
     result.map_err(|source| {
         UiError::caused_by(
@@ -1262,7 +1330,8 @@ fn auth_ui_error(rejection: crate::infrastructure::auth_state::AuthRejection) ->
 }
 
 fn config_ui_error(error: crate::infrastructure::config_store::ConfigStoreFailure) -> UiError {
-    config_ui_error_with_summary(error, "Unable to access local dashboard data.")
+    let summary = error.safe_summary();
+    config_ui_error_with_summary(error, summary)
 }
 
 fn config_ui_error_with_summary(

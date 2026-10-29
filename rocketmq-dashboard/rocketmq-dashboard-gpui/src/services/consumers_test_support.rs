@@ -61,6 +61,7 @@ struct Queues {
 pub(crate) struct FakeConsumerBackend {
     queues: Mutex<Queues>,
     calls: Mutex<ConsumerCalls>,
+    next_create_completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 macro_rules! queue_method {
@@ -76,6 +77,12 @@ macro_rules! queue_method {
 }
 
 impl FakeConsumerBackend {
+    pub fn hold_next_create(&self) -> tokio::sync::oneshot::Sender<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_create_completion.lock().expect("Consumer create completion") = Some(receiver);
+        sender
+    }
+
     queue_method!(queue_inventory, inventory, ConsumerInventory);
     queue_method!(queue_clients, clients, ConsumerObservation<ConsumerClients>);
     queue_method!(queue_progress, progress, ConsumerObservation<ConsumerProgress>);
@@ -206,7 +213,20 @@ impl ConsumerBackend for FakeConsumerBackend {
             .expect("Consumer fake calls")
             .create
             .push((scope, command));
-        Box::pin(std::future::ready(pop_result!(self, create, "create")))
+        let completion = self
+            .next_create_completion
+            .lock()
+            .expect("Consumer create completion")
+            .take();
+        let result = pop_result!(self, create, "create");
+        Box::pin(async move {
+            if let Some(completion) = completion {
+                completion
+                    .await
+                    .map_err(|_| unexpected_call("cancelled create completion"))?;
+            }
+            result
+        })
     }
 
     fn patch_configuration(

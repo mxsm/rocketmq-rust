@@ -73,6 +73,242 @@ fn services(snapshot: StartupSnapshot, auth: FakeAuthService) -> AppServices {
     )
 }
 
+#[gpui::test]
+fn environment_profile_controls_create_switch_and_clear_previous_resource_state(cx: &mut gpui::TestAppContext) {
+    use rocketmq_dashboard_common::{
+        ConnectionScope, ConsumerCapabilities, ConsumerCategory, ConsumerClientIdentity, ConsumerConnectionState,
+        ConsumerGroupObservation, ConsumerIdentity, ConsumerInventory, ConsumerObservation, ConsumerObservationState,
+    };
+
+    cx.update(gpui_component::init);
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&DesktopConfig {
+            schema_version: 1,
+            nameservers: vec!["first:9876".into()],
+            current_nameserver: Some("first:9876".into()),
+            proxies: vec!["proxy:8080".into()],
+            current_proxy: Some("proxy:8080".into()),
+            scope: ConnectionScope::Proxy,
+            ..DesktopConfig::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("gpui-profile-test", 1))
+        .unwrap()
+        .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).unwrap())
+        .build()
+        .unwrap();
+    let store = DesktopConfigStore::new(config_path, runtime.root_context().component("config"));
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+    let services = AppServices::desktop_with_fake_provider(
+        store,
+        DesktopAuthState::new(Arc::new(MapEnvironment::new([] as [(&str, &str); 0]))),
+        runtime.root_context().component("services"),
+        runtime.root_context().component("history"),
+        runtime.root_context().component("monitor"),
+    )
+    .with_runtime_completion(completion_tx);
+    let capture = Rc::new(RefCell::new(None));
+    let capture_dashboard = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, services, cx));
+        capture_dashboard.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    assert_eq!(
+        completion_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+        "gpui-bootstrap"
+    );
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    let original_id = cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::OpsSettings, window, cx);
+            dashboard.sensitive_feature_cache = SensitiveFeatureCache::with_entries(2);
+            dashboard.legacy_pages.topics.update(cx, |topics, _| {
+                let item = topic_item("orders");
+                topics
+                    .store
+                    .replace_inventory(rocketmq_dashboard_common::TopicInventory {
+                        items: vec![item],
+                        targets: Vec::new(),
+                        completeness: rocketmq_dashboard_common::TopicCompleteness::Complete,
+                        failures: Vec::new(),
+                    });
+                topics.store.open_route(
+                    rocketmq_dashboard_common::TopicIdentity::parse("orders").unwrap(),
+                    TopicTab::Configuration,
+                );
+            });
+            dashboard.legacy_pages.consumers.update(cx, |consumers, _| {
+                let group = ConsumerIdentity::parse("same-group").unwrap();
+                consumers.store.inventory.replace(ConsumerInventory {
+                    groups: vec![ConsumerGroupObservation {
+                        identity: group.clone(),
+                        category: ConsumerCategory::Application,
+                        connection_state: ConsumerObservation::Complete(ConsumerConnectionState::Disconnected),
+                        client_count: ConsumerObservation::Complete(0),
+                        lag: ConsumerObservation::Complete(7),
+                        consume_type: ConsumerObservation::Complete("PUSH".into()),
+                        message_model: ConsumerObservation::Complete("CLUSTERING".into()),
+                        targets: Vec::new(),
+                    }],
+                    targets: Vec::new(),
+                    observation: ConsumerObservationState::Complete,
+                    failures: Vec::new(),
+                    capabilities: ConsumerCapabilities::for_scope(ConnectionScope::NameServer),
+                });
+                consumers.store.open_route(group, crate::route::ConsumerTab::Clients);
+            });
+            dashboard.legacy_pages.producers.update(cx, |producers, _| {
+                producers.store.draft_query.topic = "orders".into();
+                producers.store.draft_query.group = "same-producer".into();
+                producers.store.apply_query().unwrap();
+                producers.store.selected_client = Some(ConsumerClientIdentity::parse("client-a").unwrap());
+            });
+            let ops = dashboard.legacy_pages.ops.clone();
+            ops.update(cx, |ops, cx| {
+                ops.environment_name_input_for_test()
+                    .update(cx, |input, cx| input.set_value("Staging", window, cx));
+                ops.mark_transport_dirty(cx);
+            });
+            dashboard.environment_id.clone().unwrap()
+        })
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let create = cx.debug_bounds("create-environment").unwrap();
+    cx.simulate_click(create.center(), gpui::Modifiers::default());
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    cx.simulate_keystrokes("escape");
+    cx.update(|_, app| {
+        let dashboard = dashboard.read(app);
+        assert_eq!(dashboard.environment_id.as_ref(), Some(&original_id));
+        assert!(dashboard.legacy_pages.ops.read(app).has_unsaved_transport());
+        assert_eq!(
+            dashboard.legacy_pages.topics.read(app).store.visible_page().items.len(),
+            1
+        );
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let create = cx.debug_bounds("create-environment").unwrap();
+    cx.simulate_click(create.center(), gpui::Modifiers::default());
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let confirm = cx.debug_bounds("confirm-dialog-ok").unwrap();
+    cx.simulate_click(confirm.center(), gpui::Modifiers::default());
+    assert_eq!(
+        completion_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+        "gpui-config-mutation"
+    );
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let dashboard = dashboard.read(app);
+        let state = dashboard.services.connection_state();
+        let catalog = state.environments.unwrap();
+        assert_ne!(catalog.active_id, original_id);
+        assert_eq!(catalog.profiles.len(), 2);
+        assert_eq!(catalog.profiles[1].name, "Staging");
+        assert!(state.config.nameservers.is_empty());
+        assert_eq!(dashboard.sensitive_feature_cache.entries, 0);
+        assert!(
+            dashboard
+                .legacy_pages
+                .topics
+                .read(app)
+                .store
+                .inventory
+                .state
+                .value()
+                .is_none()
+        );
+        assert!(dashboard.legacy_pages.topics.read(app).store.detail.is_none());
+        assert!(
+            dashboard
+                .legacy_pages
+                .consumers
+                .read(app)
+                .store
+                .inventory
+                .state
+                .value()
+                .is_none()
+        );
+        assert!(dashboard.legacy_pages.consumers.read(app).store.detail.is_none());
+        assert!(dashboard.legacy_pages.producers.read(app).store.applied_query.is_none());
+        assert!(
+            dashboard
+                .legacy_pages
+                .producers
+                .read(app)
+                .store
+                .selected_client
+                .is_none()
+        );
+        assert_eq!(dashboard.history.current(), &AppRoute::OpsSettings);
+        assert!(dashboard.history.back_target().is_none());
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let switch = cx.debug_bounds("switch-environment-0").unwrap();
+    cx.simulate_click(switch.center(), gpui::Modifiers::default());
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let confirm = cx.debug_bounds("confirm-dialog-ok").unwrap();
+    cx.simulate_click(confirm.center(), gpui::Modifiers::default());
+    assert_eq!(
+        completion_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+        "gpui-config-mutation"
+    );
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let dashboard = dashboard.read(app);
+        assert_eq!(dashboard.environment_id.as_ref(), Some(&original_id));
+        let state = dashboard.services.connection_state();
+        assert_eq!(state.config.current_nameserver.as_deref(), Some("first:9876"));
+        assert_eq!(state.config.scope, ConnectionScope::Proxy);
+        assert!(!dashboard.legacy_pages.ops.read(app).has_unsaved_transport());
+    });
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.legacy_pages.topics.update(cx, |topics, _| {
+                topics
+                    .store
+                    .replace_inventory(rocketmq_dashboard_common::TopicInventory {
+                        items: vec![topic_item("orders")],
+                        targets: Vec::new(),
+                        completeness: rocketmq_dashboard_common::TopicCompleteness::Complete,
+                        failures: Vec::new(),
+                    });
+            });
+            dashboard.legacy_pages.ops.update(cx, |ops, cx| {
+                ops.add_nameserver_for_test("second:9876", window, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        completion_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+        "gpui-config-mutation"
+    );
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let dashboard = dashboard.read(app);
+        let state = dashboard.services.connection_state();
+        assert_eq!(dashboard.environment_id.as_ref(), Some(&original_id));
+        assert_eq!(state.environments.unwrap().profiles.len(), 2);
+        assert_eq!(state.config.scope, ConnectionScope::Proxy);
+        assert!(state.config.nameservers.contains(&"second:9876".to_owned()));
+        assert_eq!(
+            dashboard.legacy_pages.topics.read(app).store.visible_page().items.len(),
+            1,
+            "same-environment endpoint edits preserve the established retained-data refresh"
+        );
+    });
+    runtime.shutdown_runtime_blocking().unwrap();
+}
+
 fn assert_topbar_layout(cx: &mut gpui::VisualTestContext, full_status: bool) {
     let topbar = cx.debug_bounds("topbar").expect("Topbar should be drawn");
     let title = cx.debug_bounds("topbar-title").expect("route title should be drawn");
@@ -328,6 +564,7 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
     let directory = tempfile::tempdir().expect("temporary configuration directory");
     let config_path = directory.path().join("config.json");
     let config = DesktopConfig {
+        schema_version: 1,
         auth: AuthConfig {
             enabled: true,
             credential_source: Default::default(),
@@ -756,7 +993,7 @@ fn stale_startup_error_cannot_replace_the_newer_attempt(cx: &mut gpui::TestAppCo
                 epoch: dashboard.startup_epoch,
                 configuration_revision: dashboard.configuration_revision,
             };
-            dashboard.start_bootstrap(cx);
+            dashboard.start_bootstrap(window, cx);
             dashboard.finish_bootstrap(
                 stale,
                 Err(UiError::new(
@@ -764,6 +1001,7 @@ fn stale_startup_error_cannot_replace_the_newer_attempt(cx: &mut gpui::TestAppCo
                     UiErrorCode::Configuration,
                     true,
                 )),
+                window,
                 cx,
             );
 
@@ -781,6 +1019,7 @@ fn stale_startup_error_cannot_replace_the_newer_attempt(cx: &mut gpui::TestAppCo
                     UiErrorCode::Configuration,
                     true,
                 )),
+                window,
                 cx,
             );
             assert!(matches!(dashboard.startup_state, StartupState::Booting));

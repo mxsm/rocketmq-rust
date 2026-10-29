@@ -125,6 +125,24 @@ impl DashboardView {
         self.refresh(cx);
     }
 
+    /// Discards the previous environment before its replacement provider is installed.
+    pub fn clear_for_environment(&mut self, revision: u64, cx: &mut Context<Self>) {
+        self.revision = revision;
+        self.overview_task = None;
+        self.topic_current_task = None;
+        self.broker_current_task = None;
+        self.topic_history_task = None;
+        self.broker_history_task = None;
+        self.store.overview.clear();
+        self.store.topic_current.clear();
+        self.store.broker_current.clear();
+        self.store.topic_history.clear();
+        self.store.broker_history.clear();
+        self.selected_topic = None;
+        self.selected_broker = None;
+        cx.notify();
+    }
+
     pub fn consume_invalidations(&mut self, invalidations: &[BrokerCacheInvalidation], cx: &mut Context<Self>) {
         if invalidations.contains(&BrokerCacheInvalidation::DashboardOverview) {
             self.store.overview.invalidate();
@@ -218,7 +236,7 @@ impl DashboardView {
                 };
                 let (start, end) = history_range(range)?;
                 services
-                    .dashboard_topic_history(topic, start, end)
+                    .dashboard_topic_history(request.revision(), topic, start, end)
                     .await
                     .map(|points| (!points.is_empty()).then_some(points))
             }
@@ -244,7 +262,13 @@ impl DashboardView {
                 };
                 let (start, end) = history_range(range)?;
                 services
-                    .dashboard_broker_history(HistoryMetricKind::BrokerProduceTps, identity, start, end)
+                    .dashboard_broker_history(
+                        request.revision(),
+                        HistoryMetricKind::BrokerProduceTps,
+                        identity,
+                        start,
+                        end,
+                    )
                     .await
                     .map(|points| (!points.is_empty()).then_some(points))
             }
@@ -818,6 +842,43 @@ mod tests {
 
     fn error() -> UiError {
         UiError::new("History unavailable", UiErrorCode::Connection, true)
+    }
+
+    #[gpui::test]
+    fn environment_clear_discards_all_dashboard_values_and_rejects_old_requests(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|_, cx| DashboardView::new(AppServices::default(), 10, cx));
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.store.overview.replace(DashboardOverviewLoad {
+                    overview: DashboardOverview::default(),
+                    failed_resources: 0,
+                });
+                view.store.topic_current.replace(Vec::new());
+                view.store.broker_current.replace(Vec::new());
+                view.store.topic_history.replace(Vec::new());
+                view.store.broker_history.replace(Vec::new());
+                view.selected_topic = Some("orders".into());
+                view.selected_broker = Some(BrokerIdentity {
+                    cluster: "a".into(),
+                    broker_name: "broker".into(),
+                    broker_id: 0,
+                    address: "first:10911".into(),
+                });
+                let old_request = view.store.topic_current.begin(10).unwrap();
+                view.clear_for_environment(11, cx);
+                assert!(view.store.overview.state.value().is_none());
+                assert!(view.store.topic_current.state.value().is_none());
+                assert!(view.store.broker_current.state.value().is_none());
+                assert!(view.store.topic_history.state.value().is_none());
+                assert!(view.store.broker_history.state.value().is_none());
+                assert!(view.selected_topic.is_none());
+                assert!(view.selected_broker.is_none());
+                assert!(!view.store.topic_current.finish(old_request, 11, Ok(Some(Vec::new()))));
+                assert!(matches!(view.store.topic_current.state, Loadable::Idle));
+            })
+        });
     }
 
     #[test]
