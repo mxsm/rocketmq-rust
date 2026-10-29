@@ -586,3 +586,65 @@ async fn router_fast_failure_keeps_response_affine_and_releases_run_resources() 
 
     fixture.finish().await;
 }
+
+/// Send leaf that appends and then waits for durability until the test lets it reply.
+#[derive(Clone, Default)]
+struct AppendThenWaitProcessor {
+    appended: Arc<tokio::sync::Notify>,
+    durable: Arc<tokio::sync::Notify>,
+}
+
+impl RequestProcessor for AppendThenWaitProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
+        // Stands in for the CommitLog append; the flush or replica wait follows it.
+        rocketmq_store::release_held_until_appended();
+        self.appended.notify_one();
+        self.durable.notified().await;
+        let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_opaque(request.original_identity().original_opaque());
+        Ok(ResponseAction::Reply(
+            RemotingResponse::command(response).expect("append-then-wait response"),
+        ))
+    }
+
+    fn reject_request(&self, _code: i32) -> RejectRequestDecision {
+        RejectRequestDecision::Proceed
+    }
+
+    fn observe_response(&self, _observation: ResponseObservation) {}
+}
+
+#[tokio::test]
+async fn send_waiting_for_durability_holds_no_fast_failure_permit() {
+    let service = fast_failure(4);
+    let permits = service.available_permits(FastFailureQueueKind::Send);
+    let processor = AppendThenWaitProcessor::default();
+    let appended = Arc::clone(&processor.appended);
+    let durable = Arc::clone(&processor.durable);
+    let mut router = BrokerRequestProcessor::new();
+    router.set_auth_disabled_by_validated_config();
+    router.register_processor(RequestCode::SendMessage as i32, processor);
+    router.set_broker_fast_failure(service.clone());
+    let fixture = RouterFixture::new(router, Vec::new());
+
+    let send = fixture.harness.dispatch(
+        None,
+        RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(61),
+    );
+    let permits_while_waiting = async {
+        appended.notified().await;
+        let available = service.available_permits(FastFailureQueueKind::Send);
+        durable.notify_one();
+        available
+    };
+    let (reply, permits_while_waiting) = tokio::join!(send, permits_while_waiting);
+
+    assert_eq!(permits_while_waiting, permits);
+    let EmbeddedDispatchResult::Reply(reply) = reply.expect("admitted send dispatch") else {
+        panic!("admitted send must reply");
+    };
+    assert_eq!(reply.response_code(), ResponseCode::Success as i32);
+    assert_eq!(service.available_permits(FastFailureQueueKind::Send), permits);
+
+    fixture.finish().await;
+}
