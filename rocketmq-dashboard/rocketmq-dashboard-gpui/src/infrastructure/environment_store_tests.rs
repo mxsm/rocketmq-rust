@@ -43,11 +43,13 @@ fn operation(store: &DesktopConfigStore) -> OperationContext {
 fn legacy_config_and_rules_migrate_without_attributing_the_rules() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.json");
-    let mut legacy = DesktopConfig::default();
-    legacy.schema_version = 1;
-    legacy.revision = 12;
-    legacy.nameservers = vec!["one:9876".into()];
-    legacy.current_nameserver = Some("one:9876".into());
+    let legacy = DesktopConfig {
+        schema_version: 1,
+        revision: 12,
+        nameservers: vec!["one:9876".into()],
+        current_nameserver: Some("one:9876".into()),
+        ..DesktopConfig::default()
+    };
     std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
     let monitor_source = br#"[{"id":"old-id","consumerGroup":"orders","enabled":true}]"#;
     std::fs::write(directory.path().join("monitors.json"), monitor_source).unwrap();
