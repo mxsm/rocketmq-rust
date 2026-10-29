@@ -14,6 +14,7 @@
 
 mod failure_switches;
 mod java_file_format;
+mod overdue_timers;
 mod slot_drain_batches;
 mod support;
 mod timer_engine_conformance;
