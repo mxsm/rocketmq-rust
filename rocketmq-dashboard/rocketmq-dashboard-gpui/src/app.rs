@@ -143,6 +143,7 @@ impl SensitiveFeatureCache {
 /// Legacy content entities constructed once and reused on route changes.
 struct LegacyPageCache {
     acl: Entity<crate::features::acl::AclView>,
+    audit: Entity<crate::features::audit::AuditView>,
     monitors: Entity<crate::features::monitors::MonitorsView>,
     dashboard: Entity<DashboardView>,
     brokers: Entity<BrokersView>,
@@ -160,6 +161,7 @@ impl LegacyPageCache {
     fn new(window: &mut Window, services: &AppServices, cx: &mut Context<RocketmqDashboard>) -> Self {
         Self {
             acl: cx.new(|cx| crate::features::acl::AclView::new(window, services.clone(), 0, cx)),
+            audit: cx.new(|cx| crate::features::audit::AuditView::new(window, services.clone(), cx)),
             monitors: cx.new(|cx| crate::features::monitors::MonitorsView::new(window, services.clone(), 0, cx)),
             dashboard: cx.new(|cx| DashboardView::new(window, services.clone(), 0, cx)),
             brokers: cx.new(|cx| BrokersView::new(window, services.clone(), 0, cx)),
@@ -175,9 +177,10 @@ impl LegacyPageCache {
     }
 
     #[cfg(test)]
-    fn entity_ids(&self) -> [gpui::EntityId; 12] {
+    fn entity_ids(&self) -> [gpui::EntityId; 13] {
         [
             self.acl.entity_id(),
+            self.audit.entity_id(),
             self.monitors.entity_id(),
             self.dashboard.entity_id(),
             self.brokers.entity_id(),
@@ -662,6 +665,9 @@ impl RocketmqDashboard {
             }
         }
         if event.phase == ConfigUpdatePhase::Invalidated {
+            self.legacy_pages
+                .audit
+                .update(cx, |view, cx| view.clear_context(window, cx));
             let _ = self.startup_epoch.advance();
             self.sensitive_feature_cache.clear();
             self.pending_discard = None;
@@ -734,6 +740,12 @@ impl RocketmqDashboard {
         self.legacy_pages
             .proxy
             .update(cx, |view, cx| view.sync_from_services(cx));
+        if matches!(
+            event.phase,
+            ConfigUpdatePhase::Completed | ConfigUpdatePhase::RolledBack
+        ) {
+            self.sync_monitor_route(window, cx);
+        }
         cx.notify();
     }
 
@@ -762,6 +774,9 @@ impl RocketmqDashboard {
     }
 
     fn clear_environment_state(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_pages
+            .audit
+            .update(cx, |view, cx| view.clear_context(window, cx));
         let _ = self.startup_epoch.advance();
         self.sensitive_feature_cache.clear();
         self.pending_discard = None;
@@ -849,11 +864,14 @@ impl RocketmqDashboard {
 
     fn finish_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.legacy_pages.acl.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages
+            .audit
+            .update(cx, |view, cx| view.clear_context(window, cx));
         self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages.dlq.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages
             .message_trace
-            .update(cx, |view, cx| view.leave(window, cx));
+            .update(cx, |view, cx| view.clear_context(window, cx));
         self.session.clear();
         self.login.clear_sensitive(window, cx);
         self.sensitive_feature_cache.clear();
@@ -900,6 +918,9 @@ impl RocketmqDashboard {
     }
 
     fn return_to_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_pages
+            .audit
+            .update(cx, |view, cx| view.clear_context(window, cx));
         let _ = self.login_epoch.advance();
         self.login.clear_sensitive(window, cx);
         self.login_security_recovery = false;
@@ -960,6 +981,21 @@ impl RocketmqDashboard {
     }
 
     fn begin_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Logout persistence can outlive session revocation. Drop protected UI at confirmation;
+        // accepted service mutations retain their application-owned runtime work and attribution.
+        self.legacy_pages
+            .audit
+            .update(cx, |view, cx| view.clear_context(window, cx));
+        self.legacy_pages.acl.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages.dlq.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages
+            .message_trace
+            .update(cx, |view, cx| view.clear_context(window, cx));
+        self.login.clear_sensitive(window, cx);
+        self.sensitive_feature_cache.clear();
+        window.close_all_dialogs(cx);
+        window.clear_notifications(cx);
         let services = self.services.clone();
         self.session_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = services.sign_out().await;
@@ -1373,6 +1409,9 @@ impl RocketmqDashboard {
 
     fn sync_monitor_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_acl_route(window, cx);
+        self.legacy_pages.audit.update(cx, |view, cx| {
+            view.set_active(matches!(self.history.current(), AppRoute::Audit), window, cx)
+        });
         let active = matches!(self.history.current(), AppRoute::Monitors);
         self.legacy_pages
             .monitors
@@ -1429,6 +1468,10 @@ impl RocketmqDashboard {
             PageCapability::DlqMessages => (
                 "Inspect dead-letter pages, review recovery outcomes, and export one applied page.",
                 div().size_full().child(self.legacy_pages.dlq.clone()),
+            ),
+            PageCapability::Audit => (
+                "Search operation records retained by this desktop.",
+                div().size_full().child(self.legacy_pages.audit.clone()),
             ),
             PageCapability::OpsSettings => (
                 "Manage NameServers, transport security, sessions, and local storage.",

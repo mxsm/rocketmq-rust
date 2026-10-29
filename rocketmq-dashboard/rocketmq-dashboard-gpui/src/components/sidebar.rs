@@ -110,6 +110,11 @@ pub fn navigation_groups() -> Vec<SidebarGroup> {
                     icon: IconName::Settings,
                 },
                 SidebarItem {
+                    route: AppRoute::Audit,
+                    label: "Local Audit",
+                    icon: IconName::File,
+                },
+                SidebarItem {
                     route: AppRoute::Proxy,
                     label: "Proxy",
                     icon: IconName::PanelRight,
@@ -136,6 +141,7 @@ pub const fn is_active(item: &SidebarItem, current: &AppRoute) -> bool {
             | (AppRoute::MessageTrace, AppRoute::MessageTrace)
             | (AppRoute::Acl, AppRoute::Acl)
             | (AppRoute::Monitors, AppRoute::Monitors)
+            | (AppRoute::Audit, AppRoute::Audit)
             | (AppRoute::OpsSettings, AppRoute::OpsSettings)
             | (AppRoute::Proxy, AppRoute::Proxy)
     )

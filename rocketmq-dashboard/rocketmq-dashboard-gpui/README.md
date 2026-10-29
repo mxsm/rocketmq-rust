@@ -211,10 +211,20 @@ Partial effects, unconfirmed writes, and authoritative refresh failures remain
 separate result facts. A failed terminal audit write preserves the
 business result and displays an application warning; **Retry audit write** only retries
 persistence. The journal retains at most 10,000 terminal events within 31 days and
-128 pending requests. Service queries support bounded filtering and stable cursors;
-the Audit query page and future DLQ and ACL editor hooks are later
-deliveries. These records describe this desktop's operations and are not a tamper-proof
+128 pending requests. **Local Audit** filters UTC time, actor, action, outcome and
+environment. The recent 24-hour preset and explicit start/end fields support windows
+up to 31 days; the end is exclusive. Apply starts a new query window, while Previous
+and Next retain its cursor snapshot. Restart applied query recovers an expired page
+without replacing draft inputs. Queries and detail views append no events.
+These records describe this desktop's operations and are not a tamper-proof
 or organization-wide audit log.
+
+Audit access follows the configured local authentication mode. Sign-out and environment
+changes clear cached rows and details. Details show trusted request/actor/resource
+identities and bounded facts, with Broker target counts separate from Consumer internal
+Topic cleanup steps and requested field names. Unfinished accepted requests have no
+inferred terminal outcome and must be checked against authoritative state; the query
+page cannot replay them. Copy request ID is available in the bounded detail dialog.
 
 Login events preserve their initiating actor and include the verified operator as a
 separate terminal fact after successful authentication. Failed form usernames are not

@@ -22,6 +22,14 @@ pub mod acl_policy_dialog;
 pub mod acl_store;
 #[path = "features/acl_user_dialog.rs"]
 pub mod acl_user_dialog;
+#[path = "features/audit.rs"]
+pub(crate) mod audit;
+#[path = "features/audit_detail.rs"]
+mod audit_detail;
+#[path = "features/audit_presentation.rs"]
+mod audit_presentation;
+#[path = "features/audit_query_store.rs"]
+mod audit_query_store;
 
 #[path = "features/login.rs"]
 pub mod login;
