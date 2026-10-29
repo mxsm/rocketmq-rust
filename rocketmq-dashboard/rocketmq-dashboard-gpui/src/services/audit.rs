@@ -359,38 +359,43 @@ impl AppServices {
         operation: Option<AuditAcceptedOperation>,
         future: impl Future<Output = Result<T, UiError>> + Send + 'static,
     ) -> Result<T, UiError> {
-        let audit = self.audit.clone();
-        let work = async move {
-            if let (Some(audit), Some(operation)) = (&audit, &operation)
-                && !matches!(operation.action, AuditAction::LocalLogin | AuditAction::LocalLogout)
-            {
-                audit.store.accept(operation.clone()).await.map_err(|source| {
-                    super::config_ui_error_with_summary(
-                        source,
-                        "The operation could not be recorded and was not started.",
-                    )
-                })?;
-            }
-            let result = future.await;
-            if let (Some(audit), Some(operation)) = (audit, operation) {
-                let (outcome, facts) = result.as_ref().map_or_else(error_outcome, MutationAudit::audit);
-                // Preserve a terminal fact even if the wall clock fails after acceptance.
-                let timestamp_epoch_ms = now_epoch_ms().unwrap_or(operation.accepted_at_epoch_ms);
-                audit
-                    .complete(TerminalWrite {
-                        operation,
-                        outcome,
-                        facts,
-                        timestamp_epoch_ms,
-                    })
-                    .await;
-            }
-            result
-        };
+        let services = self.clone();
+        let work = async move { services.record_mutation(operation, future).await };
         match &self.runtime_bridge {
             Some(runtime) => runtime.run_owned(name, work).await,
             None => work.await,
         }
+    }
+
+    /// Reuses the audit boundary inside an already application-owned sequential batch.
+    pub(super) async fn record_mutation<T: MutationAudit + Send>(
+        &self,
+        operation: Option<AuditAcceptedOperation>,
+        future: impl Future<Output = Result<T, UiError>> + Send,
+    ) -> Result<T, UiError> {
+        let audit = self.audit.clone();
+        if let (Some(audit), Some(operation)) = (&audit, &operation)
+            && !matches!(operation.action, AuditAction::LocalLogin | AuditAction::LocalLogout)
+        {
+            audit.store.accept(operation.clone()).await.map_err(|source| {
+                super::config_ui_error_with_summary(source, "The operation could not be recorded and was not started.")
+            })?;
+        }
+        let result = future.await;
+        if let (Some(audit), Some(operation)) = (audit, operation) {
+            let (outcome, facts) = result.as_ref().map_or_else(error_outcome, MutationAudit::audit);
+            // Preserve a terminal fact even if the wall clock fails after acceptance.
+            let timestamp_epoch_ms = now_epoch_ms().unwrap_or(operation.accepted_at_epoch_ms);
+            audit
+                .complete(TerminalWrite {
+                    operation,
+                    outcome,
+                    facts,
+                    timestamp_epoch_ms,
+                })
+                .await;
+        }
+        result
     }
 
     pub(crate) fn audit_changes(&self) -> Option<tokio::sync::watch::Receiver<usize>> {

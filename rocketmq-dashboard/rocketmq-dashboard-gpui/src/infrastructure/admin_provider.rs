@@ -41,6 +41,8 @@ mod consumers;
 mod dashboard_broker;
 #[path = "admin_provider/dashboard_metrics.rs"]
 mod dashboard_metrics;
+#[path = "admin_provider/dlq.rs"]
+mod dlq;
 #[path = "admin_provider/messages.rs"]
 mod messages;
 #[path = "admin_provider/topics.rs"]

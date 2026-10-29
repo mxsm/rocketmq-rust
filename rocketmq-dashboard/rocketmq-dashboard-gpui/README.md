@@ -340,6 +340,34 @@ within a bounded area so records and pagination remain reachable. Admitted write
 by the application after the form closes. P11 records the trusted actor, environment,
 subject, action, and bounded outcome counts without passwords or policy payloads.
 
+## Dead-letter recovery
+
+DLQ Messages discovers real Consumer Groups in NameServer Direct scope and applies a Group, inclusive UTC range,
+optional physical/producer Message ID, and page size. Range pages retain the Broker
+scan contract; a full page can lead to an empty next page, and no exact total is
+invented. Changing a draft, page, connection, or environment clears selection and the
+bounded shared Message inspector.
+
+Recovery requires a verified Group DLQ, `RETRY_TOPIC`, and `ORIGIN_MESSAGE_ID` or
+`DLQ_ORIGIN_MESSAGE_ID`. Older Rust records without either origin ID can use their
+preserved producer `UNIQ_KEY`, resolved strictly within the original Topic. Missing
+or conflicting identity metadata disables selection.
+Confirmation freezes and deduplicates the original Topic/Group/ID tuples. The whole
+sequential batch remains application-owned after closing its dialog or signing out;
+each entry retains its initiating audit context and actual outcome. Successful and
+unknown entries are excluded from the explicit failed-entry retry action. Recovery
+uses the original message and the verified Broker's Consumer channel; it does not
+promise a newly produced Message ID.
+
+CSV export opens a native Save File chooser and uses the applied current page only.
+It rechecks that page's identities before writing, without fetching other pages.
+Full Body/Keys/Tags values are exported independently of inspector previews. Output
+larger than 8 MiB fails with reduce-page guidance; a non-UTF-8 Body fails explicitly.
+CSV quotes commas, quotes and line breaks, preserves Unicode, and prefixes cells
+starting with `=`, `+`, `-`, `@`, tab, CR or LF with an apostrophe, following the Web
+policy. Cancelling the chooser performs no query or write. Accepted export work and
+its blocking file write belong to the application; write failures retain the query.
+
 ## License
 
 Apache License, Version 2.0.

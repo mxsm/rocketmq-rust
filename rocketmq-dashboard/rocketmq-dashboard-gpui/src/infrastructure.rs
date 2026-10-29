@@ -27,6 +27,7 @@ pub mod client_runtime;
 #[path = "infrastructure/config_store.rs"]
 pub mod config_store;
 pub mod environment_store;
+pub(crate) mod export_service;
 #[path = "infrastructure/history_collector.rs"]
 pub mod history_collector;
 #[path = "infrastructure/history_health.rs"]

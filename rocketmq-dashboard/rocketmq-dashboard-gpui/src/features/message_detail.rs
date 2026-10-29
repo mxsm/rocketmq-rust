@@ -24,7 +24,7 @@ use gpui::{
     div,
 };
 use gpui_component::{
-    ActiveTheme as _,
+    ActiveTheme as _, Disableable as _,
     button::Button,
     scroll::ScrollableElement as _,
     tab::{Tab, TabBar},
@@ -53,6 +53,7 @@ pub struct MessageDetail {
     preview: Option<BodyPreview>,
     json: bool,
     copied: bool,
+    consume_disabled_reason: Option<&'static str>,
 }
 impl EventEmitter<MessageDetailIntent> for MessageDetail {}
 impl MessageDetail {
@@ -67,7 +68,13 @@ impl MessageDetail {
             preview: None,
             json: false,
             copied: false,
+            consume_disabled_reason: None,
         }
+    }
+    pub fn read_only(services: AppServices, revision: u64, row: MessageMetadataRow, reason: &'static str) -> Self {
+        let mut detail = Self::new(services, revision, row);
+        detail.consume_disabled_reason = Some(reason);
+        detail
     }
     fn load_payload(&mut self, cx: &mut Context<Self>) {
         let Some(request) = self.payload.begin(self.revision) else {
@@ -169,9 +176,11 @@ impl MessageDetail {
                     Button::new("message-consume")
                         .label("Consume directly…")
                         .outline()
+                        .disabled(self.consume_disabled_reason.is_some())
                         .debug_selector(|| "message-consume".into())
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(MessageDetailIntent::Consume))),
-                ),
+                )
+                .children(self.consume_disabled_reason.map(|reason| div().text_sm().child(reason))),
             MessageTab::Trace => div().child("Message Trace lookup is currently unavailable."),
             MessageTab::Body | MessageTab::Properties => {
                 let Some(payload) = self.payload.state.value() else {

@@ -48,6 +48,7 @@ use crate::{
         brokers::BrokersView,
         consumers::ConsumersView,
         dashboard::DashboardView,
+        dlq::DlqView,
         login::LoginForm,
         messages::MessagesView,
         ops::{OpsIntent, OpsView},
@@ -148,6 +149,7 @@ struct LegacyPageCache {
     consumers: Entity<ConsumersView>,
     producers: Entity<ProducersView>,
     messages: Entity<MessagesView>,
+    dlq: Entity<DlqView>,
     ops: Entity<OpsView>,
     proxy: Entity<ProxyView>,
     unavailable_table: Entity<gpui_component::table::TableState<data_table::UnavailableTable>>,
@@ -164,6 +166,7 @@ impl LegacyPageCache {
             consumers: cx.new(|cx| ConsumersView::new(window, services.clone(), 0, cx)),
             producers: cx.new(|cx| ProducersView::new(window, services.clone(), 0, cx)),
             messages: cx.new(|cx| MessagesView::new(window, services.clone(), 0, cx)),
+            dlq: cx.new(|cx| DlqView::new(window, services.clone(), 0, cx)),
             ops: cx.new(|cx| OpsView::new(window, services.clone(), cx)),
             proxy: cx.new(|cx| ProxyView::new(window, services.clone(), cx)),
             unavailable_table: data_table::unavailable_state(
@@ -175,7 +178,7 @@ impl LegacyPageCache {
     }
 
     #[cfg(test)]
-    fn entity_ids(&self) -> [gpui::EntityId; 11] {
+    fn entity_ids(&self) -> [gpui::EntityId; 12] {
         [
             self.acl.entity_id(),
             self.monitors.entity_id(),
@@ -185,6 +188,7 @@ impl LegacyPageCache {
             self.consumers.entity_id(),
             self.producers.entity_id(),
             self.messages.entity_id(),
+            self.dlq.entity_id(),
             self.ops.entity_id(),
             self.proxy.entity_id(),
             self.unavailable_table.entity_id(),
@@ -401,6 +405,9 @@ impl RocketmqDashboard {
                     .monitors
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
                 self.legacy_pages.acl.update(cx, |view, cx| {
+                    view.set_revision(snapshot.configuration_revision, window, cx)
+                });
+                self.legacy_pages.dlq.update(cx, |view, cx| {
                     view.set_revision(snapshot.configuration_revision, window, cx)
                 });
                 self.session = if snapshot.has_valid_session {
@@ -684,6 +691,9 @@ impl RocketmqDashboard {
             self.legacy_pages
                 .acl
                 .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
+            self.legacy_pages
+                .dlq
+                .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
             window.close_all_dialogs(cx);
             window.clear_notifications(cx);
         }
@@ -732,6 +742,13 @@ impl RocketmqDashboard {
                 view.leave(window, cx);
             }
         });
+        self.legacy_pages.dlq.update(cx, |view, cx| {
+            if matches!(self.history.current(), AppRoute::DlqMessages) {
+                view.ensure_groups(window, cx);
+            } else {
+                view.leave(window, cx);
+            }
+        });
     }
 
     fn clear_environment_state(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
@@ -763,6 +780,9 @@ impl RocketmqDashboard {
             .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
         self.legacy_pages
             .acl
+            .update(cx, |view, cx| view.set_revision(revision, window, cx));
+        self.legacy_pages
+            .dlq
             .update(cx, |view, cx| view.set_revision(revision, window, cx));
         self.legacy_pages
             .ops
@@ -817,6 +837,7 @@ impl RocketmqDashboard {
     fn finish_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.legacy_pages.acl.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages.dlq.update(cx, |view, cx| view.leave(window, cx));
         self.session.clear();
         self.login.clear_sensitive(window, cx);
         self.sensitive_feature_cache.clear();
@@ -1384,6 +1405,10 @@ impl RocketmqDashboard {
             PageCapability::Acl => (
                 "Confirm a Broker scope before reading or managing ACL users and structured policy entries.",
                 div().size_full().child(self.legacy_pages.acl.clone()),
+            ),
+            PageCapability::DlqMessages => (
+                "Inspect dead-letter pages, review recovery outcomes, and export one applied page.",
+                div().size_full().child(self.legacy_pages.dlq.clone()),
             ),
             PageCapability::OpsSettings => (
                 "Manage NameServers, transport security, sessions, and local storage.",

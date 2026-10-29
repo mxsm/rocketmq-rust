@@ -129,7 +129,7 @@ impl GpuiAdminProvider {
     }
 }
 
-fn require_direct(scope: ConnectionScope) -> Result<(), ProviderFailure> {
+pub(super) fn require_direct(scope: ConnectionScope) -> Result<(), ProviderFailure> {
     if scope == ConnectionScope::NameServer {
         Ok(())
     } else {
@@ -138,7 +138,7 @@ fn require_direct(scope: ConnectionScope) -> Result<(), ProviderFailure> {
         ))
     }
 }
-fn require_topic(actual: &str, expected: &str) -> Result<(), ProviderFailure> {
+pub(super) fn require_topic(actual: &str, expected: &str) -> Result<(), ProviderFailure> {
     if actual == expected {
         Ok(())
     } else {
@@ -172,7 +172,7 @@ fn query_request(query: &MessageSearchQuery) -> DashboardMessageQuery {
     request
 }
 
-fn dashboard_metadata(message: &DashboardMessage) -> MessageMetadataRow {
+pub(super) fn dashboard_metadata(message: &DashboardMessage) -> MessageMetadataRow {
     MessageMetadataRow {
         identity: MessageIdentity {
             topic: message.topic.clone(),
