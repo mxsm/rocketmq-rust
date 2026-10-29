@@ -46,6 +46,7 @@ pub use entry::NativeDueCursor;
 pub use entry::NativeIndexEntry;
 pub use entry::NativeLocator;
 pub use entry::NATIVE_INDEX_ENTRY_SIZE;
+pub use frame::decode_native_frame;
 pub use frame::decode_native_frames;
 pub use frame::encode_native_frames;
 pub use frame::NativeFileHeader;
