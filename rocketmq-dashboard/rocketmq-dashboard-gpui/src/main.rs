@@ -28,7 +28,6 @@ mod route;
 mod services;
 mod state;
 mod theme;
-mod ui;
 
 use std::{error::Error as StdError, fmt, process::ExitCode, sync::Arc};
 

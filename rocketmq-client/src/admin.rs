@@ -153,3 +153,10 @@ pub use mq_admin_read_ext::TopicConfigVersioned;
 pub use mq_admin_topic_stats_read_ext::MQAdminTopicStatsReadExt;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_topic_subscriber_read_ext::MQAdminTopicSubscriberReadExt;
+
+#[cfg(any(feature = "admin-full", feature = "admin-mutation"))]
+mod scoped_message;
+#[cfg(any(feature = "admin-full", feature = "admin-mutation"))]
+pub use scoped_message::{MQAdminMessageTargetReadExt, MessageTargetLookup};
+#[cfg(feature = "admin-mutation")]
+pub use scoped_message::{MQAdminResolvedMessageMutationExt, ResolvedMessageConsumeRequest};

@@ -14,7 +14,8 @@
   `.clippy.toml`. Do not lower the MSRV or change these settings merely to bypass a local failure.
 - Keep `Cargo.lock` committed and synchronized when dependencies change. Avoid unrelated dependency upgrades.
 - `src/main.rs` owns process startup, observability bootstrap, GPUI initialization, the application window, and
-  orderly shutdown. `src/ui.rs` declares UI modules, and `src/ui/*.rs` owns views and presentation state.
+  orderly shutdown. `src/features.rs` declares product pages, and `src/features/*.rs` owns their views and
+  presentation state. `src/components.rs` and `src/components/*.rs` contain shared native UI components.
 - Keep the existing flat module layout and do not introduce `mod.rs` files.
 - Several view modules are already large; prefer extracting cohesive components or state when extending them.
 

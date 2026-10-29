@@ -161,3 +161,8 @@ pub use crate::producer::RequestReply;
 pub use crate::producer::TransactionSend;
 pub use crate::session::ClientSession;
 pub use crate::session::ClientSessionProvider;
+
+#[cfg(any(feature = "admin-full", feature = "admin-mutation"))]
+pub use crate::admin::{MQAdminMessageTargetReadExt, MessageTargetLookup};
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::{MQAdminResolvedMessageMutationExt, ResolvedMessageConsumeRequest};

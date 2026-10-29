@@ -40,3 +40,6 @@ pub mod toast;
 pub mod topbar;
 #[path = "components/trend.rs"]
 pub mod trend;
+
+#[path = "components/topic_picker.rs"]
+pub(crate) mod topic_picker;

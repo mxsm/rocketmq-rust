@@ -1486,6 +1486,43 @@ fn consumer_batch_target_outcome(
     }
 }
 
+impl crate::core::message::MessageScopedMutationAdmin for MutationAdminSession {
+    fn consume_scoped_message<'a>(
+        &'a mut self,
+        request: &'a DirectConsumeRequest,
+    ) -> AdminFuture<'a, DirectConsumeResult> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let route = self
+                .inner
+                .inner
+                .mutation_topic_route(request.topic.as_str().into())
+                .await
+                .map_err(|source| promote_to_admin_error("message_topic_route", source))?;
+            let resolved = crate::client_adapter::message_target::lookup_physical_message(
+                &self.inner.inner,
+                &request.topic,
+                &request.message_id,
+                route.as_ref(),
+            )
+            .await?;
+            use rocketmq_client_rust::MQAdminResolvedMessageMutationExt as _;
+            let result = self
+                .inner
+                .inner
+                .consume_resolved_message(rocketmq_client_rust::ResolvedMessageConsumeRequest {
+                    broker_addr: resolved.broker_addr,
+                    consumer_group: request.consumer_group.as_str().into(),
+                    client_id: request.client_id.as_deref().map(Into::into),
+                    message: resolved.message,
+                })
+                .await
+                .map_err(|source| promote_to_admin_error("consume_directly", source))?;
+            Ok(direct_consume_result(result))
+        })
+    }
+}
+
 impl MessageMutationAdmin for MutationAdminSession {
     fn consume_message_directly<'a>(
         &'a mut self,
@@ -1937,14 +1974,20 @@ async fn consume_directly(
         )
         .await
         .map_err(|source| promote_to_admin_error("consume_directly", source))?;
-    Ok(DirectConsumeResult {
+    Ok(direct_consume_result(result))
+}
+
+fn direct_consume_result(
+    result: rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult,
+) -> DirectConsumeResult {
+    DirectConsumeResult {
         success: matches!(result.consume_result(), Some(value) if *value == CMResult::CRSuccess),
         consume_result: result.consume_result().map(ToString::to_string),
         remark: result
             .remark()
             .map(ToString::to_string)
             .and_then(|value| non_empty(&value)),
-    })
+    }
 }
 
 fn message_property(message: &MessageExt, key: &str) -> Option<String> {

@@ -94,6 +94,27 @@ pub trait MessageMetadataQueryAdmin: Send {
     ) -> AdminFuture<'a, MessageMetadata>;
 }
 
+/// Concurrent, read-only lookup of a physical or producer-assigned Message ID in an explicit Topic.
+pub trait MessageLookupReadAdmin: Send + Sync {
+    /// Resolves producer IDs through Topic discovery and reads physical offsets only at advertised Brokers.
+    ///
+    /// # Errors
+    /// Returns an error when lookup fails or the returned Topic and physical ID cannot be verified.
+    fn lookup_message<'a>(&'a self, request: &'a MessageLookupRequest) -> AdminFuture<'a, MessageRecord>;
+}
+
+/// Direct consumption whose physical Message ID is verified against the selected Topic route.
+pub trait MessageScopedMutationAdmin: Send {
+    /// Consumes a message verified through the selected Topic route without repeating an embedded-address lookup.
+    ///
+    /// # Errors
+    /// Returns an error when route evidence, message identity, Consumer selection or execution fails.
+    fn consume_scoped_message<'a>(
+        &'a mut self,
+        request: &'a DirectConsumeRequest,
+    ) -> AdminFuture<'a, DirectConsumeResult>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryMessagesByKeyRequest {
     pub topic: String,
