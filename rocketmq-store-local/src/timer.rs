@@ -20,6 +20,7 @@ pub mod java_timer_wheel;
 pub mod metrics;
 pub mod migration;
 pub mod native_format;
+pub mod native_storage;
 pub mod paged_timer_wheel;
 pub mod partition_manifest;
 pub mod payload_record;

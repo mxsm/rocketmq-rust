@@ -179,14 +179,20 @@ pub fn decode_native_frames(bytes: &[u8]) -> Result<Vec<NativeFrame>, NativeForm
     let mut frames = Vec::new();
     let mut rest = bytes;
     while !rest.is_empty() {
-        let (frame, length) = decode_frame(rest)?;
+        let (frame, length) = decode_native_frame(rest)?;
         frames.push(frame);
         rest = &rest[length..];
     }
     Ok(frames)
 }
 
-fn decode_frame(bytes: &[u8]) -> Result<(NativeFrame, usize), NativeFormatError> {
+/// Decodes the frame at the start of `bytes` and returns it with its encoded length.
+///
+/// # Errors
+///
+/// Returns [`NativeFormatError::Truncated`] when `bytes` ends inside the frame, and the errors
+/// of [`decode_native_frames`] for a damaged frame.
+pub fn decode_native_frame(bytes: &[u8]) -> Result<(NativeFrame, usize), NativeFormatError> {
     let record = "frame";
     let mut reader = FieldReader::new(record, bytes);
     let magic = reader.u32()?;
