@@ -23,6 +23,7 @@ use rocketmq_store_local::timer::native_format::NativeBucketId;
 use rocketmq_store_local::timer::native_format::NativeBucketKind;
 use rocketmq_store_local::timer::native_format::NativeCancelRecord;
 use rocketmq_store_local::timer::native_format::NativeCheckpoint;
+use rocketmq_store_local::timer::native_format::NativeDueCursor;
 use rocketmq_store_local::timer::native_format::NativeIndexEntry;
 use rocketmq_store_local::timer::native_format::NativeLocator;
 use rocketmq_store_local::timer::native_storage::NativeStorageError;
@@ -34,6 +35,8 @@ use super::cancel_set::NativeRecall;
 use super::config::NativeTimerConfig;
 use super::near_wheel::NearWheel;
 
+mod commit;
+
 /// A `native` timer engine that cannot open, index or load its timers.
 #[derive(Debug, Error)]
 pub(crate) enum NativeEngineError {
@@ -43,6 +46,8 @@ pub(crate) enum NativeEngineError {
     Storage(#[from] NativeStorageError),
     #[error("native bucket {0:?} was written by a newer engine")]
     UnsupportedBucket(NativeBucketId),
+    #[error("native checkpoint has {found} lane watermarks for {lanes} lanes")]
+    WatermarkCount { found: usize, lanes: u16 },
 }
 
 /// One Timer CQ record for the engine to index, its properties already read.
@@ -102,6 +107,16 @@ struct EngineState {
     /// Hour buckets starting before this are in the wheel; a timer indexed into one of them
     /// goes into the wheel as well.
     loaded_until_ms: i64,
+    /// Per lane, the last timer delivered in an unbroken run of the lane's order. A restart
+    /// takes every timer at or below it for delivered.
+    watermarks: Vec<NativeDueCursor>,
+    /// The Timer CQ offset after the last batch indexed.
+    source_frontier: i64,
+    /// The lowest CommitLog offset of each hour bucket written to since the engine opened.
+    bucket_min_offsets: BTreeMap<NativeBucketId, i64>,
+    /// The fence of the checkpoint the engine opened from. It stands in for the buckets found
+    /// on disk, whose lowest offsets were not read.
+    opened_fence: Option<i64>,
 }
 
 /// The `native` engine's index for timers due within its mid horizon: hour buckets on disk
@@ -116,17 +131,20 @@ pub(crate) struct NativeTimerEngine {
     config: NativeTimerConfig,
     storage: NativeTimerStorage,
     state: Mutex<EngineState>,
+    /// Serializes group commits.
+    commit: Mutex<()>,
 }
 
 impl NativeTimerEngine {
     /// Opens the engine's files under `store_root`, cut back to their last checkpoint, which it
-    /// returns along with the engine; the Timer CQ is replayed from there. The recalls on disk
-    /// are loaded, and the hour buckets wait in their files until their hour comes near.
+    /// returns along with the engine. The recalls on disk are loaded, the lane watermarks
+    /// restored, and the hour buckets wait in their files until their hour comes near; the
+    /// caller replays the Timer CQ from [`Self::source_frontier`].
     ///
     /// # Errors
     ///
-    /// Returns [`NativeEngineError`] for an invalid setting, a storage failure, or a bucket
-    /// kind this engine does not read.
+    /// Returns [`NativeEngineError`] for an invalid setting, a storage failure, a bucket kind
+    /// this engine does not read, or a checkpoint whose watermarks do not match the lanes.
     pub(crate) fn open(
         store_root: impl AsRef<Path>,
         config: NativeTimerConfig,
@@ -149,56 +167,103 @@ impl NativeTimerEngine {
         for record in storage.read_cancels()? {
             cancels.insert(&record);
         }
+        let lanes = usize::from(config.lane_count);
+        let watermarks = match &checkpoint {
+            Some(checkpoint) if checkpoint.lane_watermarks.len() != lanes => {
+                return Err(NativeEngineError::WatermarkCount {
+                    found: checkpoint.lane_watermarks.len(),
+                    lanes: config.lane_count,
+                });
+            }
+            Some(checkpoint) => checkpoint.lane_watermarks.clone(),
+            None => vec![NativeDueCursor::START; lanes],
+        };
         let engine = Self {
             state: Mutex::new(EngineState {
                 wheel: NearWheel::new(config.lane_count),
                 cancels,
-                hours,
                 loaded_until_ms: i64::MIN,
+                watermarks,
+                source_frontier: checkpoint.as_ref().map_or(0, |checkpoint| checkpoint.source_cq_offset),
+                bucket_min_offsets: BTreeMap::new(),
+                opened_fence: checkpoint
+                    .as_ref()
+                    .filter(|_| !hours.is_empty())
+                    .map(|checkpoint| checkpoint.commit_log_fence),
+                hours,
             }),
             config,
             storage,
+            commit: Mutex::new(()),
         };
         Ok((engine, checkpoint))
     }
 
-    /// Indexes `sources`, read in Timer CQ order at `now_ms`: timers into their hour buckets,
-    /// and into the wheel when their hour is loaded; recalls into the cancel log and the cancel
-    /// set. Nothing is synced.
+    /// The Timer CQ offset to read the next source from: after the last batch indexed, or,
+    /// right after opening, the checkpointed offset to replay from.
+    pub(crate) fn source_frontier(&self) -> i64 {
+        self.state.lock().source_frontier
+    }
+
+    /// Indexes `sources`, read in Timer CQ order at `now_ms` up to `next_source_offset`:
+    /// timers into their hour buckets, and into the wheel when their hour is loaded; recalls
+    /// into the cancel log and the cancel set. Nothing is synced.
+    ///
+    /// A timer at or below its lane's watermark would be taken for delivered after a restart,
+    /// so it is indexed at the watermark's deadline instead, right after it in the lane's
+    /// order. That only delivers it later than its deadline, as it already is.
     ///
     /// # Errors
     ///
-    /// Returns a storage error when a bucket or the cancel log cannot be appended. Part of the
-    /// batch may then be in its files; indexing the batch again repeats those entries, which
-    /// the wheel adds once, keyed by their cursors.
+    /// Returns a storage error when a bucket or the cancel log cannot be appended; the frontier
+    /// then stays where it was. Part of the batch may be in its files; indexing the batch again
+    /// repeats those entries, which the wheel adds once, keyed by their cursors.
     pub(crate) fn ingest(
         &self,
         sources: &[NativeTimerSource],
+        next_source_offset: i64,
         now_ms: i64,
     ) -> Result<NativeIngestReport, NativeEngineError> {
         let mut report = NativeIngestReport::default();
         let mut timers: BTreeMap<NativeBucketId, Vec<NativeIndexEntry>> = BTreeMap::new();
         let mut recalls = Vec::new();
+        let mut state = self.state.lock();
         for source in sources {
-            let bucket = match self.hour_of(source, now_ms) {
-                Ok(bucket) => bucket,
-                Err(rejection) => {
-                    report.rejected.push((source.cq_offset, rejection));
-                    continue;
-                }
-            };
+            if let Err(rejection) = self.admit(source.due_ms, now_ms) {
+                report.rejected.push((source.cq_offset, rejection));
+                continue;
+            }
             match &source.kind {
-                NativeSourceKind::Timer { unique_key } => timers.entry(bucket).or_default().push(NativeIndexEntry {
-                    due_ms: source.due_ms,
-                    cq_offset: source.cq_offset,
-                    locator: NativeLocator::CommitLog {
-                        offset: source.commit_log_offset,
-                    },
-                    generation: source.generation,
-                    key_hash: native_key_hash(unique_key.as_bytes()),
-                    size: source.size,
-                    lane: native_lane(&source.real_topic, source.real_queue_id, self.config.lane_count),
-                }),
+                NativeSourceKind::Timer { unique_key } => {
+                    let lane = native_lane(&source.real_topic, source.real_queue_id, self.config.lane_count);
+                    let watermark = state.watermark(lane);
+                    let cursor = NativeDueCursor {
+                        due_ms: source.due_ms,
+                        cq_offset: source.cq_offset,
+                    };
+                    let due_ms = if cursor <= watermark {
+                        watermark.due_ms
+                    } else {
+                        source.due_ms
+                    };
+                    let Ok(bucket) = NativeBucketId::containing(NativeBucketKind::Hour, due_ms) else {
+                        report
+                            .rejected
+                            .push((source.cq_offset, NativeRejection::InvalidDeadline));
+                        continue;
+                    };
+                    timers.entry(bucket).or_default().push(NativeIndexEntry {
+                        due_ms,
+                        cq_offset: source.cq_offset,
+                        locator: NativeLocator::CommitLog {
+                            offset: source.commit_log_offset,
+                        },
+                        generation: source.generation,
+                        key_hash: native_key_hash(unique_key.as_bytes()),
+                        size: source.size,
+                        lane,
+                    });
+                }
                 NativeSourceKind::Recall { key } => recalls.push(NativeCancelRecord {
                     due_ms: source.due_ms,
                     tombstone_cq_offset: source.cq_offset,
@@ -208,7 +273,6 @@ impl NativeTimerEngine {
             }
         }
 
-        let mut state = self.state.lock();
         for (bucket, entries) in &timers {
             self.storage.append_entries(*bucket, entries)?;
         }
@@ -218,9 +282,13 @@ impl NativeTimerEngine {
         for (bucket, entries) in timers {
             state.hours.insert(bucket);
             report.indexed += entries.len();
+            if let Some(lowest) = entries.iter().filter_map(commit_log_offset).min() {
+                let min = state.bucket_min_offsets.entry(bucket).or_insert(lowest);
+                *min = (*min).min(lowest);
+            }
             if bucket.start_ms() < state.loaded_until_ms {
                 for entry in entries {
-                    state.wheel.insert(entry);
+                    state.insert_undelivered(entry);
                 }
             }
         }
@@ -228,11 +296,17 @@ impl NativeTimerEngine {
             state.cancels.insert(recall);
         }
         report.recalls = recalls.len();
+        let after_last = sources.iter().map(|source| source.cq_offset.saturating_add(1)).max();
+        state.source_frontier = state
+            .source_frontier
+            .max(next_source_offset)
+            .max(after_last.unwrap_or(i64::MIN));
         Ok(report)
     }
 
     /// Takes up to `max` timers of `lane` due at or before `now_ms`, in `(due_ms, cq_offset)`
-    /// order, after loading the hour buckets that have come near.
+    /// order, after loading the hour buckets that have come near. A taken timer counts as
+    /// delivered once [`Self::advance_delivered`] passes it.
     ///
     /// # Errors
     ///
@@ -253,6 +327,15 @@ impl NativeTimerEngine {
                 entry,
             })
             .collect())
+    }
+
+    /// Records that `lane` delivered every timer up to `through`, in its order. The watermark
+    /// never moves back.
+    pub(crate) fn advance_delivered(&self, lane: u16, through: NativeDueCursor) {
+        let mut state = self.state.lock();
+        if let Some(watermark) = state.watermarks.get_mut(usize::from(lane)) {
+            *watermark = (*watermark).max(through);
+        }
     }
 
     /// When the engine next has work: the earliest deadline in the wheel, rounded up to the
@@ -288,20 +371,23 @@ impl NativeTimerEngine {
         (state.wheel.len(), state.cancels.len(), state.hours.len())
     }
 
-    /// The hour bucket of a source, or why it is not indexed.
-    fn hour_of(&self, source: &NativeTimerSource, now_ms: i64) -> Result<NativeBucketId, NativeRejection> {
-        if source.due_ms > now_ms.saturating_add(self.config.max_delay_ms) {
+    /// Why a source due at `due_ms` is not indexed, if it is not.
+    fn admit(&self, due_ms: i64, now_ms: i64) -> Result<(), NativeRejection> {
+        if due_ms < 0 {
+            return Err(NativeRejection::InvalidDeadline);
+        }
+        if due_ms > now_ms.saturating_add(self.config.max_delay_ms) {
             return Err(NativeRejection::BeyondMaxDelay);
         }
-        if source.due_ms >= now_ms.saturating_add(self.config.mid_horizon_ms) {
+        if due_ms >= now_ms.saturating_add(self.config.mid_horizon_ms) {
             return Err(NativeRejection::BeyondMidHorizon);
         }
-        NativeBucketId::containing(NativeBucketKind::Hour, source.due_ms).map_err(|_| NativeRejection::InvalidDeadline)
+        Ok(())
     }
 
     /// Loads, oldest first, the hour buckets starting before the end of the hour the near
-    /// window reaches. Past the memory budget, only hours that have already started load, so
-    /// due timers are never held back by later ones.
+    /// window reaches, leaving out timers their lanes delivered. Past the memory budget, only
+    /// hours that have already started load, so due timers are never held back by later ones.
     fn load_near_hours(&self, state: &mut EngineState, now_ms: i64) -> Result<(), NativeEngineError> {
         let hour_ms = NativeBucketKind::Hour.window_ms();
         let reach = now_ms.saturating_add(self.config.near_window_ms);
@@ -320,10 +406,9 @@ impl NativeTimerEngine {
                 state.loaded_until_ms = bucket.start_ms();
                 return Ok(());
             }
-            let wheel = &mut state.wheel;
             self.storage.visit_entries(bucket, |entries| {
                 for entry in entries {
-                    wheel.insert(*entry);
+                    state.insert_undelivered(*entry);
                 }
                 Ok(())
             })?;
@@ -331,5 +416,28 @@ impl NativeTimerEngine {
         }
         state.loaded_until_ms = target;
         Ok(())
+    }
+}
+
+impl EngineState {
+    fn watermark(&self, lane: u16) -> NativeDueCursor {
+        self.watermarks
+            .get(usize::from(lane))
+            .copied()
+            .unwrap_or(NativeDueCursor::START)
+    }
+
+    /// Adds `entry` to the wheel unless its lane delivered it.
+    fn insert_undelivered(&mut self, entry: NativeIndexEntry) {
+        if entry.cursor() > self.watermark(entry.lane) {
+            self.wheel.insert(entry);
+        }
+    }
+}
+
+fn commit_log_offset(entry: &NativeIndexEntry) -> Option<i64> {
+    match entry.locator {
+        NativeLocator::CommitLog { offset } => Some(offset),
+        NativeLocator::Payload { .. } => None,
     }
 }
