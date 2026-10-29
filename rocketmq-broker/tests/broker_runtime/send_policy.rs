@@ -244,8 +244,11 @@ async fn send_policy_generation_survives_configuration_update_through_store_and_
         }
         let rejected = process_broker_request(&processor, &mut request(code, "NewPolicyTopic", false)).await;
         assert_eq!(ResponseCode::from(rejected.code()), ResponseCode::TopicNotExist);
+        let store_root = runtime.message_store_config().store_path_root_dir.clone();
         drop(processor);
         runtime.shutdown().await;
+        drop(runtime);
+        std::fs::remove_dir_all(store_root.as_str()).expect("remove send-policy test store");
     }
 }
 
@@ -307,6 +310,9 @@ async fn send_policy_snapshot_does_not_preserve_revoked_permission() {
     );
     let next = process_broker_request(&processor, &mut request(RequestCode::SendMessage, "PolicyTopic", false)).await;
     assert_eq!(ResponseCode::from(next.code()), ResponseCode::NoPermission);
+    let store_root = runtime.message_store_config().store_path_root_dir.clone();
     drop(processor);
     runtime.shutdown().await;
+    drop(runtime);
+    std::fs::remove_dir_all(store_root.as_str()).expect("remove send-policy permission test store");
 }
