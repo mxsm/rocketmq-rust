@@ -14,12 +14,17 @@
 
 //! Narrow Dashboard query and History sampling service.
 
-use std::{collections::BTreeSet, sync::Arc, time::SystemTime};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::SystemTime,
+};
 
 use rocketmq_dashboard_common::{
     BrokerCurrentMetric, BrokerIdentity, BrokerInventoryItem, BrokerRole, DashboardOverview, DashboardOverviewEvidence,
-    HistoryMetricKind, HistoryPoint, Observed, TopicCurrentMetric, broker_history_series_identity,
-    project_dashboard_overview, rank_brokers, rank_topics, topic_current_from_offsets,
+    HISTORY_CLUSTER_SERIES, HistoryMetricKind, HistoryPoint, Observed, TopicCurrentFailure, TopicCurrentLoad,
+    TopicCurrentObservation, TopicCurrentStage, broker_history_series_identity, project_dashboard_overview,
+    rank_brokers,
 };
 use rocketmq_runtime::ChildServiceContext;
 
@@ -27,7 +32,7 @@ use super::RuntimeBridge;
 
 use crate::{
     infrastructure::{
-        admin_provider::{GpuiAdminProvider, SafeBrokerInfo, SafeBrokerList},
+        admin_provider::{GpuiAdminProvider, SafeBrokerInfo, SafeBrokerList, SafeTopicRate},
         history_collector::{
             EnvironmentHistorySample, EnvironmentHistorySampleFuture, HistorySampleFuture, HistorySampler,
         },
@@ -88,7 +93,7 @@ impl DashboardService {
             provider.check_health(),
             provider.list_brokers(revision),
             provider.list_topics(revision),
-            provider.list_consumers(revision),
+            provider.consumer_summary(revision),
             provider.list_producers(revision),
         );
 
@@ -114,13 +119,12 @@ impl DashboardService {
             consumer_group_count: consumers
                 .as_ref()
                 .ok()
-                .and_then(|items| u64::try_from(items.group_count).ok()),
+                .and_then(|items| items.group_count.and_then(|count| u64::try_from(count).ok())),
             producer_group_count: producers
                 .as_ref()
                 .ok()
                 .and_then(|items| u64::try_from(items.distinct_group_count).ok()),
-            // The list contract does not prove that every backlog partition was returned.
-            complete_consumer_backlog: None,
+            complete_consumer_backlog: consumers.as_ref().ok().and_then(|items| items.complete_backlog),
             nameserver_availability: health.as_ref().ok().map(|health| health.availability),
             broker_availability: mapped_brokers
                 .unwrap_or_default()
@@ -128,24 +132,96 @@ impl DashboardService {
                 .map(|item| item.availability)
                 .collect(),
         };
-        project_overview_load(evidence, successful_resources)
+        let mut load = project_overview_load(evidence, successful_resources)?;
+        load.failed_resources += consumers.as_ref().ok().map_or(0, |items| items.failed_targets);
+        Ok(load)
     }
 
-    /// Returns current Topic metrics backed only by successful offset responses.
-    pub async fn topic_current(&self, revision: u64) -> Result<Vec<TopicCurrentMetric>, UiError> {
+    /// Samples at most twenty application Topics, retaining independent rate/offset failures.
+    pub async fn topic_current(&self, revision: u64) -> Result<TopicCurrentLoad, UiError> {
         let provider = self.provider()?;
         let topics = provider.list_topics(revision).await.map_err(query_error)?;
-        let names = topics.topics.into_iter().collect::<BTreeSet<_>>();
-        let mut metrics = Vec::with_capacity(names.len());
-        for topic in names {
-            let stats = provider.topic_stats(revision, topic).await.map_err(query_error)?;
-            metrics.push(topic_current_from_offsets(
-                stats.topic,
-                stats.total_min_offset,
-                stats.total_max_offset,
-            ));
+        let application = topics.application_topics.into_iter().collect::<BTreeSet<_>>();
+        let application_topics = application.len();
+        let available_topics = application.into_iter().collect::<Vec<_>>();
+        let candidates = available_topics
+            .iter()
+            .take(rocketmq_admin_core::core::dashboard_metrics::DASHBOARD_RATE_CANDIDATES)
+            .cloned()
+            .collect::<Vec<_>>();
+        let rates = provider.topic_rates(revision, candidates.clone()).await;
+        let rates = rates
+            .unwrap_or_default()
+            .into_iter()
+            .map(|rate| (rate.topic.clone(), rate))
+            .collect::<BTreeMap<_, _>>();
+        let sampled = select_topic_candidates(&candidates, &rates);
+        let mut items = Vec::with_capacity(sampled.len());
+        let mut failed = candidates
+            .iter()
+            .filter(|topic| {
+                rates.get(*topic).is_none_or(|rate| {
+                    rate.failed_targets > 0 || rate.produce_tps.is_none() || rate.consume_tps.is_none()
+                })
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut failures = failed
+            .iter()
+            .map(|topic| TopicCurrentFailure {
+                topic: topic.clone(),
+                stage: TopicCurrentStage::Rates,
+                failed_targets: rates.get(topic).map_or(1, |rate| rate.failed_targets.max(1)),
+            })
+            .collect::<Vec<_>>();
+        for topic in sampled {
+            let rate = rates.get(&topic);
+            let stats = match rocketmq_dashboard_common::topic::TopicIdentity::parse(topic.clone()) {
+                Ok(identity) => provider.detailed_topic_stats(revision, identity).await.ok(),
+                Err(_) => None,
+            };
+            let total_messages = stats
+                .as_ref()
+                .filter(|stats| stats.completeness.is_complete())
+                .and_then(|stats| u64::try_from(stats.total_message_count).ok());
+            if total_messages.is_none() {
+                failures.push(TopicCurrentFailure {
+                    topic: topic.clone(),
+                    stage: TopicCurrentStage::Offsets,
+                    failed_targets: stats.as_ref().map_or(1, |stats| stats.failures.len().max(1)),
+                });
+            }
+            let produce_tps = rate.and_then(|rate| rate.produce_tps);
+            let consume_tps = rate.and_then(|rate| rate.consume_tps);
+            if total_messages.is_none() || produce_tps.is_none() || consume_tps.is_none() {
+                failed.insert(topic.clone());
+            }
+            items.push(TopicCurrentObservation {
+                topic,
+                total_messages: total_messages.map_or(Observed::Unknown, Observed::Observed),
+                produce_tps: produce_tps.map_or(Observed::Unknown, Observed::Observed),
+                consume_tps: consume_tps.map_or(Observed::Unknown, Observed::Observed),
+            });
         }
-        Ok(rank_topics(metrics))
+        items.sort_by(|left, right| {
+            match (&left.total_messages, &right.total_messages) {
+                (Observed::Observed(left), Observed::Observed(right)) => right.cmp(left),
+                (Observed::Observed(_), Observed::Unknown) => std::cmp::Ordering::Less,
+                (Observed::Unknown, Observed::Observed(_)) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
+            .then(left.topic.cmp(&right.topic))
+        });
+        Ok(TopicCurrentLoad {
+            total_topics: topics.topics.len(),
+            application_topics,
+            available_topics,
+            omitted_topics: application_topics.saturating_sub(candidates.len()),
+            candidates,
+            items,
+            failed_topics: failed.len(),
+            failures,
+        })
     }
 
     /// Returns current Broker metrics from real inventory runtime evidence.
@@ -242,7 +318,39 @@ impl DashboardService {
                 true,
             ));
         }
+        let mut points = points;
+        if points.len() > 1_440 {
+            points.drain(..points.len() - 1_440);
+        }
         Ok(points)
+    }
+
+    pub async fn count_history(
+        &self,
+        revision: u64,
+        metric: HistoryMetricKind,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<HistoryPoint>, UiError> {
+        if !matches!(metric, HistoryMetricKind::BrokerCount | HistoryMetricKind::TopicCount) {
+            return Err(UiError::new(
+                "Select a count History metric.",
+                UiErrorCode::Validation,
+                false,
+            ));
+        }
+        self.query_history(revision, metric, HISTORY_CLUSTER_SERIES.into(), start, end)
+            .await
+    }
+
+    pub fn collection_health(
+        &self,
+        revision: u64,
+    ) -> Result<crate::infrastructure::history_health::HistoryCollectionHealth, UiError> {
+        let history = self.history()?;
+        let snapshot = history.environment_snapshot().map_err(history_error)?;
+        validate_history_revision(snapshot.as_ref(), revision)?;
+        history.collection_health().map_err(history_error)
     }
 
     fn provider(&self) -> Result<&Arc<GpuiAdminProvider>, UiError> {
@@ -258,16 +366,40 @@ impl HistorySampler for DashboardService {
     fn sample_topics_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
         Box::pin(async move {
             let snapshot = self.history()?.environment_snapshot().map_err(history_error)?;
-            let points = self.sample_topics().await?;
-            scoped_sample(snapshot, points)
+            let revision = snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.connection.revision)
+                .or_else(|| self.provider.as_ref().and_then(|provider| provider.revision()))
+                .ok_or_else(capability_unavailable)?;
+            let topics = self.topic_current(revision).await?;
+            let failed_resources = topics.failed_topics + topics.omitted_topics;
+            let timestamp = sample_timestamp()?;
+            let points = topic_sample_points(topics, revision, timestamp);
+            let mut sample = scoped_sample(snapshot, points)?;
+            sample.failed_resources = failed_resources;
+            Ok(sample)
         })
     }
 
     fn sample_brokers_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
         Box::pin(async move {
             let snapshot = self.history()?.environment_snapshot().map_err(history_error)?;
-            let points = self.sample_brokers().await?;
-            scoped_sample(snapshot, points)
+            let revision = snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.connection.revision)
+                .or_else(|| self.provider.as_ref().and_then(|provider| provider.revision()))
+                .ok_or_else(capability_unavailable)?;
+            let brokers = self.broker_current(revision).await?;
+            let failed_resources = brokers
+                .iter()
+                .filter(|broker| {
+                    matches!(broker.produce_tps, Observed::Unknown) || matches!(broker.consume_tps, Observed::Unknown)
+                })
+                .count();
+            let points = broker_sample_points(brokers, revision, sample_timestamp()?);
+            let mut sample = scoped_sample(snapshot, points)?;
+            sample.failed_resources = failed_resources;
+            Ok(sample)
         })
     }
     fn sample_topics(&self) -> HistorySampleFuture<'_> {
@@ -275,19 +407,7 @@ impl HistorySampler for DashboardService {
             let provider = self.provider()?;
             let revision = provider.revision().ok_or_else(capability_unavailable)?;
             let topics = self.topic_current(revision).await?;
-            let timestamp_epoch_ms = sample_timestamp()?;
-            let mut points = Vec::new();
-            for topic in topics {
-                if let Observed::Observed(value) = topic.total_messages {
-                    points.push(HistoryPoint {
-                        metric: HistoryMetricKind::TopicMessages,
-                        series_identity: topic.topic,
-                        timestamp_epoch_ms,
-                        value: value as f64,
-                        source_revision: revision,
-                    });
-                }
-            }
+            let points = topic_sample_points(topics, revision, sample_timestamp()?);
             Ok(points)
         })
     }
@@ -297,32 +417,83 @@ impl HistorySampler for DashboardService {
             let provider = self.provider()?;
             let revision = provider.revision().ok_or_else(capability_unavailable)?;
             let brokers = self.broker_current(revision).await?;
-            let timestamp_epoch_ms = sample_timestamp()?;
-            let mut points = Vec::new();
-            for broker in brokers {
-                let series_identity = broker_history_series_identity(&broker.identity);
-                if let Observed::Observed(value) = broker.produce_tps {
-                    points.push(HistoryPoint {
-                        metric: HistoryMetricKind::BrokerProduceTps,
-                        series_identity: series_identity.clone(),
-                        timestamp_epoch_ms,
-                        value,
-                        source_revision: revision,
-                    });
-                }
-                if let Observed::Observed(value) = broker.consume_tps {
-                    points.push(HistoryPoint {
-                        metric: HistoryMetricKind::BrokerConsumeTps,
-                        series_identity,
-                        timestamp_epoch_ms,
-                        value,
-                        source_revision: revision,
-                    });
-                }
-            }
+            let points = broker_sample_points(brokers, revision, sample_timestamp()?);
             Ok(points)
         })
     }
+}
+
+fn topic_sample_points(topics: TopicCurrentLoad, revision: u64, timestamp_epoch_ms: u64) -> Vec<HistoryPoint> {
+    let mut points = vec![HistoryPoint {
+        metric: HistoryMetricKind::TopicCount,
+        series_identity: HISTORY_CLUSTER_SERIES.into(),
+        timestamp_epoch_ms,
+        value: topics.total_topics as f64,
+        source_revision: revision,
+    }];
+    for topic in topics.items {
+        if let Observed::Observed(value) = topic.total_messages {
+            points.push(HistoryPoint {
+                metric: HistoryMetricKind::TopicMessages,
+                series_identity: topic.topic,
+                timestamp_epoch_ms,
+                value: value as f64,
+                source_revision: revision,
+            });
+        }
+    }
+    points
+}
+
+fn broker_sample_points(
+    brokers: Vec<BrokerCurrentMetric>,
+    revision: u64,
+    timestamp_epoch_ms: u64,
+) -> Vec<HistoryPoint> {
+    let mut points = vec![HistoryPoint {
+        metric: HistoryMetricKind::BrokerCount,
+        series_identity: HISTORY_CLUSTER_SERIES.into(),
+        timestamp_epoch_ms,
+        value: brokers.len() as f64,
+        source_revision: revision,
+    }];
+    for broker in brokers {
+        let series_identity = broker_history_series_identity(&broker.identity);
+        for (metric, observation) in [
+            (HistoryMetricKind::BrokerProduceTps, broker.produce_tps),
+            (HistoryMetricKind::BrokerConsumeTps, broker.consume_tps),
+        ] {
+            if let Observed::Observed(value) = observation {
+                points.push(HistoryPoint {
+                    metric,
+                    series_identity: series_identity.clone(),
+                    timestamp_epoch_ms,
+                    value,
+                    source_revision: revision,
+                });
+            }
+        }
+    }
+    points
+}
+
+fn select_topic_candidates(candidates: &[String], rates: &BTreeMap<String, SafeTopicRate>) -> Vec<String> {
+    let mut sampled = candidates.to_vec();
+    sampled.sort_by(|left, right| {
+        let activity = |topic: &String| {
+            rates.get(topic).map_or((0, 0.0), |rate| {
+                (rate.produced_messages_24h.unwrap_or(0), rate.produce_tps.unwrap_or(0.0))
+            })
+        };
+        let (left_count, left_tps) = activity(left);
+        let (right_count, right_tps) = activity(right);
+        right_count
+            .cmp(&left_count)
+            .then(right_tps.total_cmp(&left_tps))
+            .then(left.cmp(right))
+    });
+    sampled.truncate(20);
+    sampled
 }
 
 fn scoped_sample(
@@ -341,11 +512,13 @@ fn scoped_sample(
             ));
         }
         Ok(EnvironmentHistorySample {
+            failed_resources: 0,
             environment_id: Some(snapshot.environment_id),
             points,
         })
     } else {
         Ok(EnvironmentHistorySample {
+            failed_resources: 0,
             environment_id: None,
             points,
         })

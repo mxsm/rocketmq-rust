@@ -29,6 +29,8 @@ pub mod config_store;
 pub mod environment_store;
 #[path = "infrastructure/history_collector.rs"]
 pub mod history_collector;
+#[path = "infrastructure/history_health.rs"]
+pub mod history_health;
 #[path = "infrastructure/history_store.rs"]
 pub mod history_store;
 #[path = "infrastructure/monitor_store.rs"]

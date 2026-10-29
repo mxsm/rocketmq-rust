@@ -5783,6 +5783,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "cfg-if",
+ "chrono",
  "config",
  "dirs 7.0.0",
  "embed-resource",

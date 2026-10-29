@@ -32,7 +32,7 @@ struct Fixture {
     context: ChildServiceContext,
     configuration: Arc<DesktopConfigStore>,
     history: Arc<HistoryStore>,
-    service: DashboardService,
+    service: Arc<DashboardService>,
     revision: u64,
     completions: mpsc::Receiver<&'static str>,
 }
@@ -57,14 +57,14 @@ impl Fixture {
             Arc::clone(&configuration),
         );
         let (completion, completions) = mpsc::channel();
-        let service = DashboardService {
+        let service = Arc::new(DashboardService {
             provider: None,
             history: Some(Arc::clone(&history)),
             history_runtime: Some(RuntimeBridge {
                 context: context.clone(),
                 completion: Some(completion),
             }),
-        };
+        });
         Self {
             _directory: directory,
             runtime,
@@ -308,5 +308,161 @@ fn history_queries_cancel_on_caller_drop_and_drain_with_the_owner(cx: &mut TestA
             .block(fixture.service.topic_history(fixture.revision, "orders".into(), 0, 20))
             .is_err()
     );
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
+}
+
+#[gpui::test]
+fn count_history_is_bounded_after_environment_metric_and_utc_day_filtering(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    cx.background_executor.allow_parking();
+    let start = 1_792_966_400_000;
+    let environment = fixture.configuration.environment_snapshot().unwrap().environment_id;
+    let mut points = (0..1_450)
+        .map(|index| {
+            point(
+                HistoryMetricKind::TopicCount,
+                HISTORY_CLUSTER_SERIES.into(),
+                fixture.revision,
+                start + index,
+                index as f64,
+            )
+        })
+        .collect::<Vec<_>>();
+    points.push(point(
+        HistoryMetricKind::TopicCount,
+        HISTORY_CLUSTER_SERIES.into(),
+        fixture.revision,
+        start - 1,
+        99.0,
+    ));
+    points.push(point(
+        HistoryMetricKind::BrokerCount,
+        HISTORY_CLUSTER_SERIES.into(),
+        fixture.revision,
+        start,
+        99.0,
+    ));
+    fixture
+        .runtime
+        .block_on(fixture.history.append_environment_sample(
+            environment,
+            points,
+            HistoryRetention {
+                max_points_per_series: 2_000,
+                max_series: 10,
+                max_total_points: 3_000,
+            },
+        ))
+        .unwrap();
+    let result = cx
+        .background_executor
+        .block(fixture.service.count_history(
+            fixture.revision,
+            HistoryMetricKind::TopicCount,
+            start,
+            start + 86_399_999,
+        ))
+        .unwrap();
+    assert_eq!(result.len(), 1_440);
+    assert_eq!(result.first().unwrap().value, 10.0);
+    assert_eq!(result.last().unwrap().value, 1_449.0);
+    assert_eq!(
+        cx.background_executor
+            .block(fixture.service.count_history(
+                fixture.revision,
+                HistoryMetricKind::BrokerCount,
+                start,
+                start + 86_399_999,
+            ))
+            .unwrap()[0]
+            .value,
+        99.0
+    );
+    let revision = fixture.switch_environment();
+    assert!(
+        cx.background_executor
+            .block(
+                fixture
+                    .service
+                    .count_history(revision, HistoryMetricKind::TopicCount, start, start + 86_399_999,)
+            )
+            .unwrap()
+            .is_empty()
+    );
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
+}
+
+#[gpui::test]
+fn history_topic_picker_searches_an_unsampled_topic_and_loads_its_persisted_points(cx: &mut TestAppContext) {
+    use crate::{
+        features::dashboard::DashboardView,
+        services::{AppServices, dashboard_broker::test_support::FakeDashboardBrokerOperations},
+    };
+    use gpui::{AppContext as _, Modifiers, point as ui_point, px, size};
+    use gpui_component::Root;
+    use std::{cell::RefCell, rc::Rc};
+
+    let fixture = Fixture::new();
+    cx.update(gpui_component::init);
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
+    fake.use_history_service(Arc::clone(&fixture.service));
+    let names = (0..205).map(|index| format!("topic-{index:03}")).collect::<Vec<_>>();
+    fake.queue_topic_load(Ok(TopicCurrentLoad {
+        total_topics: names.len(),
+        application_topics: names.len(),
+        candidates: names.iter().take(200).cloned().collect(),
+        available_topics: names,
+        omitted_topics: 5,
+        items: vec![TopicCurrentObservation {
+            topic: "topic-000".into(),
+            total_messages: Observed::Observed(0),
+            produce_tps: Observed::Observed(0.0),
+            consume_tps: Observed::Observed(0.0),
+        }],
+        ..Default::default()
+    }));
+    let capture = Rc::new(RefCell::new(None));
+    let capturing = capture.clone();
+    let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
+    let revision = fixture.revision;
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| DashboardView::new(window, services, revision, cx));
+        capturing.replace(Some(view.clone()));
+        Root::new(view, window, cx)
+    });
+    let view = capture.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    let (_, start, end) = fake
+        .calls()
+        .count_history
+        .into_iter()
+        .find(|(metric, _, _)| *metric == HistoryMetricKind::TopicCount)
+        .unwrap();
+    let persisted = point(
+        HistoryMetricKind::TopicMessages,
+        "topic-204".into(),
+        fixture.revision,
+        start + 1_000,
+        73.0,
+    );
+    fixture.append(vec![persisted.clone()]);
+    cx.simulate_resize(size(px(1440.), px(1400.)));
+    cx.draw(ui_point(px(0.), px(0.)), size(px(1440.), px(1400.)), |_, _| {
+        root.clone()
+    });
+    let bounds = cx.debug_bounds("dashboard-history-topic").unwrap();
+    cx.simulate_click(bounds.center(), Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_input("topic-204");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    assert_eq!(
+        fake.calls().topic_history.last(),
+        Some(&("topic-204".into(), start, end))
+    );
+    fixture.completed();
+    cx.run_until_parked();
+    cx.read(|app| assert_eq!(view.read(app).topic_history_for_test().value(), Some(&vec![persisted])));
     fixture.runtime.shutdown_runtime_blocking().unwrap();
 }

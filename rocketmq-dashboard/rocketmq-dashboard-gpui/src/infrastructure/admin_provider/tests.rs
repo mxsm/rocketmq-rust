@@ -51,6 +51,11 @@ impl HealthClock for FixedClock {
 
 #[derive(Default)]
 struct FakeControls {
+    dashboard_consumer_summary:
+        std::sync::Mutex<Option<rocketmq_admin_core::core::dashboard_metrics::DashboardConsumerSummary>>,
+    dashboard_topics: std::sync::Mutex<Option<Vec<String>>>,
+    dashboard_rate_calls: std::sync::Mutex<Vec<Vec<String>>>,
+    dashboard_stats_calls: std::sync::Mutex<Vec<String>>,
     query_active: AtomicUsize,
     query_max: AtomicUsize,
     mutation_active: AtomicUsize,
@@ -130,6 +135,21 @@ impl DashboardQuerySession for FakeQuerySession {
     }
 
     fn list_topics(&self) -> SessionFuture<'_, AdminResult<DashboardTopicList>> {
+        if let Some(names) = self.controls.dashboard_topics.lock().unwrap().clone() {
+            return Box::pin(std::future::ready(Ok(DashboardTopicList {
+                items: names
+                    .into_iter()
+                    .map(|topic| DashboardTopicInfo {
+                        topic,
+                        category: "NORMAL".into(),
+                        broker_name: None,
+                        read_queue_count: 0,
+                        write_queue_count: 0,
+                        perm: 0,
+                    })
+                    .collect(),
+            })));
+        }
         Box::pin(std::future::ready(Ok(DashboardTopicList {
             items: vec![DashboardTopicInfo {
                 topic: "private-topic".into(),
@@ -140,6 +160,71 @@ impl DashboardQuerySession for FakeQuerySession {
                 category: "raw-topic-category".into(),
             }],
         })))
+    }
+
+    fn consumer_summary(
+        &self,
+    ) -> SessionFuture<'_, AdminResult<rocketmq_admin_core::core::dashboard_metrics::DashboardConsumerSummary>> {
+        Box::pin(std::future::ready(Ok(self
+            .controls
+            .dashboard_consumer_summary
+            .lock()
+            .unwrap()
+            .unwrap_or(
+                rocketmq_admin_core::core::dashboard_metrics::DashboardConsumerSummary {
+                    group_count: Some(1),
+                    complete_backlog: None,
+                    failed_targets: 1,
+                },
+            ))))
+    }
+
+    fn topic_rates<'a>(
+        &'a self,
+        topics: &'a [String],
+    ) -> SessionFuture<'a, AdminResult<Vec<rocketmq_admin_core::core::dashboard_metrics::DashboardTopicRates>>> {
+        self.controls.dashboard_rate_calls.lock().unwrap().push(topics.to_vec());
+        Box::pin(std::future::ready(Ok(topics
+            .iter()
+            .map(
+                |topic| rocketmq_admin_core::core::dashboard_metrics::DashboardTopicRates {
+                    topic: topic.clone(),
+                    produced_messages_24h: Some(if topic == "a-000" { 9_000 } else { 1 }),
+                    produce_tps: if topic == "a-001" { None } else { Some(0.5) },
+                    consume_tps: Some(0.0),
+                    failed_targets: usize::from(topic == "a-001"),
+                },
+            )
+            .collect())))
+    }
+
+    fn detailed_topic_stats<'a>(
+        &'a self,
+        topic: &'a str,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::topic::DetailedTopicStats>> {
+        self.controls
+            .dashboard_stats_calls
+            .lock()
+            .unwrap()
+            .push(topic.to_string());
+        if topic == "a-002" {
+            return Box::pin(std::future::ready(Err(AdminError::operation_failed(
+                "topic_stats",
+                "private backend body",
+            ))));
+        }
+        Box::pin(std::future::ready(Ok(
+            rocketmq_admin_core::core::topic::DetailedTopicStats {
+                stats: rocketmq_admin_core::core::topic::TopicStats {
+                    topic: topic.to_string(),
+                    total_message_count: if topic == "a-000" { 50 } else { 0 },
+                    queue_count: 1,
+                    offsets: Vec::new(),
+                },
+                completeness: rocketmq_admin_core::core::topic::TopicInspectionCompleteness::Complete,
+                failures: Vec::new(),
+            },
+        )))
     }
 
     fn topic_stats<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<DashboardTopicStats>> {
@@ -577,4 +662,117 @@ fn generation_conflict_is_returned_without_an_overwrite_retry() {
     });
     assert_eq!(controls.mutation_creates.load(Ordering::SeqCst), 1);
     runtime.shutdown_runtime_blocking().expect("shutdown");
+}
+
+#[test]
+fn dashboard_sampling_bounds_calls_filters_application_topics_and_keeps_partial_observations() {
+    use crate::{
+        infrastructure::{history_collector::HistorySampler, history_store::HistoryStore},
+        services::dashboard::DashboardService,
+    };
+    use rocketmq_dashboard_common::{HistoryMetricKind, Observed};
+    let runtime = runtime();
+    let controls = Arc::new(FakeControls::default());
+    let mut names = (0..205).map(|index| format!("a-{index:03}")).collect::<Vec<_>>();
+    names.extend([
+        "%RETRY%orders".into(),
+        "%DLQ%orders".into(),
+        "SCHEDULE_TOPIC_XXXX".into(),
+        "rmq_sys_private".into(),
+    ]);
+    *controls.dashboard_topics.lock().unwrap() = Some(names);
+    let provider = provider(&runtime, controls.clone(), Ok(()), None, applied());
+    let directory = tempfile::tempdir().unwrap();
+    let context = runtime.root_context().component("history");
+    let history = HistoryStore::new(directory.path().join("history.json"), context.clone());
+    let service = DashboardService::new(provider.clone(), history, context);
+    runtime.block_on(async {
+        provider.switch(snapshot(1, ConnectionScope::NameServer)).await.unwrap();
+        let load = service.topic_current(1).await.unwrap();
+        assert_eq!(load.total_topics, 209);
+        assert_eq!(load.application_topics, 205);
+        assert_eq!(load.omitted_topics, 5);
+        assert_eq!(controls.dashboard_rate_calls.lock().unwrap()[0].len(), 200);
+        assert_eq!(controls.dashboard_stats_calls.lock().unwrap().len(), 20);
+        assert_eq!(load.items.len(), 20);
+        assert_eq!(load.items[0].topic, "a-000");
+        assert_eq!(load.items[0].produce_tps, Observed::Observed(0.5));
+        assert_eq!(load.items[0].consume_tps, Observed::Observed(0.0));
+        assert!(load.failed_topics >= 2);
+        assert!(load.failures.iter().any(|failure| failure.topic == "a-002"
+            && failure.stage == rocketmq_dashboard_common::TopicCurrentStage::Offsets));
+        assert!(
+            load.failures.iter().any(|failure| failure.topic == "a-001"
+                && failure.stage == rocketmq_dashboard_common::TopicCurrentStage::Rates)
+        );
+        assert_eq!(
+            load.items
+                .iter()
+                .find(|item| item.topic == "a-002")
+                .unwrap()
+                .total_messages,
+            Observed::Unknown
+        );
+        assert!(
+            load.items
+                .iter()
+                .any(|item| item.total_messages == Observed::Observed(0))
+        );
+        let points = service.sample_topics().await.unwrap();
+        assert!(
+            points
+                .iter()
+                .any(|point| point.metric == HistoryMetricKind::TopicCount && point.value == 209.0)
+        );
+        assert!(
+            points
+                .iter()
+                .any(|point| point.series_identity == "a-000" && point.value == 50.0)
+        );
+        assert!(!points.iter().any(|point| point.series_identity == "a-002"));
+        provider.shutdown().await;
+    });
+    runtime.shutdown_runtime_blocking().unwrap();
+}
+
+#[test]
+fn dashboard_overview_keeps_incomplete_backlog_unknown_and_preserves_real_zero() {
+    use crate::{infrastructure::history_store::HistoryStore, services::dashboard::DashboardService};
+    use rocketmq_admin_core::core::dashboard_metrics::DashboardConsumerSummary;
+    use rocketmq_dashboard_common::Observed;
+    let runtime = runtime();
+    let controls = Arc::new(FakeControls::default());
+    let provider = provider(&runtime, controls.clone(), Ok(()), None, applied());
+    let directory = tempfile::tempdir().unwrap();
+    let context = runtime.root_context().component("history");
+    let service = DashboardService::new(
+        provider.clone(),
+        HistoryStore::new(directory.path().join("history.json"), context.clone()),
+        context,
+    );
+    runtime.block_on(async {
+        provider.switch(snapshot(1, ConnectionScope::NameServer)).await.unwrap();
+        for value in [0, -2, 9] {
+            *controls.dashboard_consumer_summary.lock().unwrap() = Some(DashboardConsumerSummary {
+                group_count: Some(2),
+                complete_backlog: Some(value),
+                failed_targets: 0,
+            });
+            let load = service.overview(1).await.unwrap();
+            assert_eq!(load.overview.consumer_backlog, Observed::Observed(value));
+            assert_eq!(load.overview.consumer_group_count, Observed::Observed(2));
+        }
+        *controls.dashboard_consumer_summary.lock().unwrap() = Some(DashboardConsumerSummary {
+            group_count: None,
+            complete_backlog: None,
+            failed_targets: 2,
+        });
+        let load = service.overview(1).await.unwrap();
+        assert_eq!(load.overview.consumer_backlog, Observed::Unknown);
+        assert_eq!(load.overview.consumer_group_count, Observed::Unknown);
+        assert!(load.has_warning());
+        assert_eq!(load.overview.topic_count, Observed::Observed(1));
+        provider.shutdown().await;
+    });
+    runtime.shutdown_runtime_blocking().unwrap();
 }

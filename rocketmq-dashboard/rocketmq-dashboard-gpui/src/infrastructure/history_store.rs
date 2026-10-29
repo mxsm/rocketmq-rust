@@ -56,6 +56,7 @@ pub struct HistoryStore {
     gate: tokio::sync::Mutex<()>,
     owner: Option<Arc<DesktopConfigStore>>,
     writer: Arc<parking_lot::Mutex<Option<StorageWriter>>>,
+    health: parking_lot::RwLock<BTreeMap<Option<EnvironmentId>, super::history_health::HistoryCollectionHealth>>,
 }
 
 impl HistoryStore {
@@ -80,6 +81,7 @@ impl HistoryStore {
             gate: tokio::sync::Mutex::new(()),
             owner: None,
             writer: Arc::new(parking_lot::Mutex::new(None)),
+            health: parking_lot::RwLock::new(BTreeMap::new()),
         })
     }
 
@@ -90,7 +92,42 @@ impl HistoryStore {
             gate: tokio::sync::Mutex::new(()),
             owner: Some(owner),
             writer: Arc::new(parking_lot::Mutex::new(None)),
+            health: parking_lot::RwLock::new(BTreeMap::new()),
         })
+    }
+
+    pub fn collection_health(&self) -> Result<super::history_health::HistoryCollectionHealth, ConfigStoreFailure> {
+        let environment = self.environment_snapshot()?.map(|snapshot| snapshot.environment_id);
+        let mut health = self.health.read().get(&environment).copied().unwrap_or_default();
+        let settings = self
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.history_settings())
+            .unwrap_or_default();
+        health.enabled = settings.history_enabled;
+        health.interval_seconds = settings.history_interval_seconds;
+        Ok(health)
+    }
+
+    pub fn record_collection(
+        &self,
+        environment: Option<EnvironmentId>,
+        side: super::history_health::CollectionSide,
+        timestamp: u64,
+        failed_resources: usize,
+        persisted: bool,
+    ) {
+        let mut health = self.health.write();
+        let health = health.entry(environment).or_default();
+        let side = match side {
+            super::history_health::CollectionSide::Topics => &mut health.topics,
+            super::history_health::CollectionSide::Brokers => &mut health.brokers,
+        };
+        side.failed = !persisted;
+        side.failed_resources = failed_resources;
+        if persisted {
+            side.last_success_epoch_ms = Some(timestamp);
+        }
     }
 
     async fn ensure_writer(&self) -> Result<(), ConfigStoreFailure> {

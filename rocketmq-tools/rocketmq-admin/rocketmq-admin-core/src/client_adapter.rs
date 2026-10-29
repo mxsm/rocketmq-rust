@@ -22,6 +22,8 @@ mod connection;
 mod consumer;
 #[cfg(feature = "client-adapter")]
 mod dashboard;
+#[cfg(feature = "client-adapter")]
+mod dashboard_metrics;
 pub(crate) mod lifecycle;
 #[cfg(feature = "client-adapter")]
 mod lite;

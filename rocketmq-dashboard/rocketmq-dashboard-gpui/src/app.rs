@@ -152,7 +152,7 @@ struct LegacyPageCache {
 impl LegacyPageCache {
     fn new(window: &mut Window, services: &AppServices, cx: &mut Context<RocketmqDashboard>) -> Self {
         Self {
-            dashboard: cx.new(|cx| DashboardView::new(services.clone(), 0, cx)),
+            dashboard: cx.new(|cx| DashboardView::new(window, services.clone(), 0, cx)),
             brokers: cx.new(|cx| BrokersView::new(window, services.clone(), 0, cx)),
             topics: cx.new(|cx| TopicsView::new(window, services.clone(), 0, cx)),
             consumers: cx.new(|cx| ConsumersView::new(window, services.clone(), 0, cx)),
@@ -694,7 +694,7 @@ impl RocketmqDashboard {
         self.last_service_error = None;
         self.legacy_pages
             .dashboard
-            .update(cx, |view, cx| view.clear_for_environment(revision, cx));
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
         self.legacy_pages
             .brokers
             .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
