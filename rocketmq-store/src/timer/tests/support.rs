@@ -31,7 +31,7 @@ use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
 
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::message_store_reader::MessageStoreReader;
 use crate::timer::clock::TimerClock;
 use crate::timer::timer_message_store::TimerMessageStore;

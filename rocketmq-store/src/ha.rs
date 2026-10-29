@@ -341,7 +341,7 @@ pub(crate) mod test_support {
     use bytes::BytesMut;
     use rocketmq_model::common::message::MessageVersion;
 
-    use crate::base::backend_ops::BackendOps;
+    use crate::base::backend_ops::MessageStoreEngine;
     use crate::config::flush_disk_type::FlushDiskType;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::config::store_runtime_config::StoreRuntimeConfig;

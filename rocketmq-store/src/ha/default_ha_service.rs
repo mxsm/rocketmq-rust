@@ -971,7 +971,7 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     use super::*;
-    use crate::base::backend_ops::BackendOps;
+    use crate::base::backend_ops::MessageStoreEngine;
     use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
     use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::test_support::new_test_message_store;

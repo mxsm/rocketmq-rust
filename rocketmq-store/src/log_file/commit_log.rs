@@ -3045,7 +3045,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::base::backend_ops::BackendOps;
+    use crate::base::backend_ops::MessageStoreEngine;
     use crate::base::memory_lock_manager::MemoryLockCategory;
     use crate::base::message_store_reader::MessageStoreReader;
     use crate::config::message_store_config::LinuxMemoryLockMode;

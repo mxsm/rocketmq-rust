@@ -15,7 +15,7 @@
 //! Canonical capability projections for the composed message store.
 //!
 //! Broker request paths depend on the smallest capability that serves their
-//! use case. The broad backend adapter remains crate-internal implementation
+//! use case. The `MessageStoreEngine` contract remains crate-internal implementation
 //! glue and is not part of the Broker-facing API.
 
 mod read;
@@ -58,7 +58,7 @@ use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
 
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
@@ -138,7 +138,7 @@ impl CommitLogReadMode {
 /// declared by their bound, while Store implementations retain one internal forwarding surface.
 #[doc(hidden)]
 pub trait MessageStoreAccess: Send + Sync + 'static {
-    type MessageStore: BackendOps;
+    type MessageStore: MessageStoreEngine;
 
     fn message_store(&self) -> &Self::MessageStore;
 
@@ -147,7 +147,7 @@ pub trait MessageStoreAccess: Send + Sync + 'static {
 
 impl<T> MessageStoreAccess for T
 where
-    T: BackendOps,
+    T: MessageStoreEngine,
 {
     type MessageStore = T;
 
@@ -165,75 +165,75 @@ where
 /// Request paths should prefer one of the narrower use-case markers below.
 pub trait BrokerStorePort: BrokerAdminStore + BrokerReplicationStore {
     fn load(&mut self) -> impl Future<Output = bool> + Send {
-        BackendOps::load(self.message_store_mut())
+        MessageStoreEngine::load(self.message_store_mut())
     }
 
     fn start(&mut self) -> impl Future<Output = Result<(), crate::store_error::StoreError>> + Send {
-        BackendOps::start(self.message_store_mut())
+        MessageStoreEngine::start(self.message_store_mut())
     }
 
     fn init(&mut self) -> impl Future<Output = Result<(), crate::store_error::StoreError>> + Send {
-        BackendOps::init(self.message_store_mut())
+        MessageStoreEngine::init(self.message_store_mut())
     }
 
     fn shutdown_gracefully(
         &mut self,
     ) -> impl Future<Output = Result<MessageStoreShutdownReport, crate::store_error::StoreError>> + Send {
-        BackendOps::shutdown_gracefully(self.message_store_mut())
+        MessageStoreEngine::shutdown_gracefully(self.message_store_mut())
     }
 
     fn shutdown(&mut self) -> impl Future<Output = ()> + Send {
-        BackendOps::shutdown(self.message_store_mut())
+        MessageStoreEngine::shutdown(self.message_store_mut())
     }
 
     fn destroy(&mut self) {
-        BackendOps::destroy(self.message_store_mut());
+        MessageStoreEngine::destroy(self.message_store_mut());
     }
 
     fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>) {
-        BackendOps::set_timer_message_store(self.message_store_mut(), timer_message_store);
+        MessageStoreEngine::set_timer_message_store(self.message_store_mut(), timer_message_store);
     }
 
     fn get_commit_log_mut(&mut self) -> &mut CommitLog {
-        BackendOps::get_commit_log_mut(self.message_store_mut())
+        MessageStoreEngine::get_commit_log_mut(self.message_store_mut())
     }
 
     fn recover_topic_queue_table(&mut self) {
-        BackendOps::recover_topic_queue_table(self.message_store_mut());
+        MessageStoreEngine::recover_topic_queue_table(self.message_store_mut());
     }
 
     fn add_first_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>) {
-        BackendOps::add_first_dispatcher(self.message_store_mut(), dispatcher);
+        MessageStoreEngine::add_first_dispatcher(self.message_store_mut(), dispatcher);
     }
 
     fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook) {
-        BackendOps::set_put_message_hook(self.message_store_mut(), put_message_hook);
+        MessageStoreEngine::set_put_message_hook(self.message_store_mut(), put_message_hook);
     }
 }
 
 /// Broker primary append capability set.
 pub trait BrokerWriteStore: BrokerReadStore {
     fn put_message(&mut self, message: MessageExtBrokerInner) -> impl Future<Output = PutMessageResult> + Send {
-        BackendOps::put_message(self.message_store_mut(), message)
+        MessageStoreEngine::put_message(self.message_store_mut(), message)
     }
 
     fn put_messages(&mut self, batch: MessageExtBatch) -> impl Future<Output = PutMessageResult> + Send {
-        BackendOps::put_messages(self.message_store_mut(), batch)
+        MessageStoreEngine::put_messages(self.message_store_mut(), batch)
     }
 
     fn assign_offset(&self, message: &mut MessageExtBrokerInner) -> Result<(), crate::store_error::StoreError> {
-        BackendOps::assign_offset(self.message_store(), message)
+        MessageStoreEngine::assign_offset(self.message_store(), message)
     }
 
     fn increase_offset(&self, message: &MessageExtBrokerInner, message_num: i16) {
-        BackendOps::increase_offset(self.message_store(), message, message_num);
+        MessageStoreEngine::increase_offset(self.message_store(), message, message_num);
     }
 
     fn recall_extended_timer(
         &self,
         request: &TimerRecallRequest,
     ) -> Result<TimerRecallStatus, crate::store_error::StoreError> {
-        BackendOps::recall_extended_timer(self.message_store(), request)
+        MessageStoreEngine::recall_extended_timer(self.message_store(), request)
     }
 }
 
@@ -246,7 +246,7 @@ pub trait BrokerReadWriteStore: BrokerReadStore + BrokerWriteStore {
 /// Broker capability for updating both HA and logical master addresses.
 pub trait BrokerMasterAddressStore: BrokerReadStore {
     fn update_logical_master_address(&self, new_addr: &CheetahString) {
-        BackendOps::update_master_address(self.message_store(), new_addr);
+        MessageStoreEngine::update_master_address(self.message_store(), new_addr);
     }
 
     fn update_master_address(&self, new_addr: &CheetahString) -> impl Future<Output = ()> + Send {
@@ -259,7 +259,7 @@ pub trait BrokerMasterAddressStore: BrokerReadStore {
         logical_address: &CheetahString,
     ) -> impl Future<Output = ()> + Send {
         async move {
-            BackendOps::update_ha_master_address(self.message_store(), ha_address).await;
+            MessageStoreEngine::update_ha_master_address(self.message_store(), ha_address).await;
             self.update_logical_master_address(logical_address);
         }
     }
@@ -268,19 +268,19 @@ pub trait BrokerMasterAddressStore: BrokerReadStore {
 /// Broker administrative and configuration capability set.
 pub trait BrokerAdminStore: BrokerReplicationStore {
     fn get_running_data_info(&self) -> String {
-        BackendOps::get_running_data_info(self.message_store())
+        MessageStoreEngine::get_running_data_info(self.message_store())
     }
 
     fn get_runtime_info(&self) -> HashMap<String, String> {
-        BackendOps::get_runtime_info(self.message_store())
+        MessageStoreEngine::get_runtime_info(self.message_store())
     }
 
     fn get_message_store_config(&self) -> &MessageStoreConfig {
-        BackendOps::get_message_store_config(self.message_store())
+        MessageStoreEngine::get_message_store_config(self.message_store())
     }
 
     fn get_queue_store(&self) -> &dyn Any {
-        BackendOps::get_queue_store(self.message_store())
+        MessageStoreEngine::get_queue_store(self.message_store())
     }
 
     /// Returns queue counts without exposing the backend's queue table or lock.
@@ -289,38 +289,38 @@ pub trait BrokerAdminStore: BrokerReplicationStore {
     }
 
     fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32 {
-        BackendOps::delete_topics(self.message_store(), delete_topics)
+        MessageStoreEngine::delete_topics(self.message_store(), delete_topics)
     }
 
     fn clean_unused_topic(&self, retain_topics: &HashSet<String>) -> i32 {
-        BackendOps::clean_unused_topic(self.message_store(), retain_topics)
+        MessageStoreEngine::clean_unused_topic(self.message_store(), retain_topics)
     }
 
     fn clean_expired_consumer_queue(&self) {
-        BackendOps::clean_expired_consumer_queue(self.message_store());
+        MessageStoreEngine::clean_expired_consumer_queue(self.message_store());
     }
 
     fn execute_delete_files_manually(&self) {
-        BackendOps::execute_delete_files_manually(self.message_store());
+        MessageStoreEngine::execute_delete_files_manually(self.message_store());
     }
 
     fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: CommitLogReadMode,
     ) -> Result<(), crate::store_error::StoreError> {
-        BackendOps::set_commitlog_read_mode(self.message_store(), read_ahead_mode)
+        MessageStoreEngine::set_commitlog_read_mode(self.message_store(), read_ahead_mode)
     }
 
     fn flush(&self) -> i64 {
-        BackendOps::flush(self.message_store())
+        MessageStoreEngine::flush(self.message_store())
     }
 
     fn try_flush(&self) -> Result<FlushProgress, crate::store_error::StoreError> {
-        BackendOps::try_flush(self.message_store())
+        MessageStoreEngine::try_flush(self.message_store())
     }
 
     fn get_dispatcher_list(&self) -> &[Arc<dyn CommitLogDispatcher>] {
-        BackendOps::get_dispatcher_list(self.message_store())
+        MessageStoreEngine::get_dispatcher_list(self.message_store())
     }
 
     fn install_message_index_runtime(&self, source: Arc<dyn MessageIndexRuntimeSource>) -> bool {
@@ -353,22 +353,22 @@ pub trait BrokerAdminStore: BrokerReplicationStore {
     }
 
     fn truncate_dirty_logic_files(&self, phy_offset: i64) {
-        BackendOps::truncate_dirty_logic_files(self.message_store(), phy_offset);
+        MessageStoreEngine::truncate_dirty_logic_files(self.message_store(), phy_offset);
     }
 }
 
 /// Broker HA and replication-control capability set.
 pub trait BrokerReplicationStore: BrokerReadWriteStore + BrokerMasterAddressStore {
     fn get_commit_log(&self) -> &CommitLog {
-        BackendOps::get_commit_log(self.message_store())
+        MessageStoreEngine::get_commit_log(self.message_store())
     }
 
     fn get_commit_log_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
-        BackendOps::get_commit_log_data(self.message_store(), offset)
+        MessageStoreEngine::get_commit_log_data(self.message_store(), offset)
     }
 
     fn get_bulk_commit_log_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
-        BackendOps::get_bulk_commit_log_data(self.message_store(), offset, size)
+        MessageStoreEngine::get_bulk_commit_log_data(self.message_store(), offset, size)
     }
 
     fn append_to_commit_log(
@@ -378,39 +378,39 @@ pub trait BrokerReplicationStore: BrokerReadWriteStore + BrokerMasterAddressStor
         data_start: i32,
         data_length: i32,
     ) -> impl Future<Output = Result<bool, crate::store_error::StoreError>> + Send {
-        BackendOps::append_to_commit_log(self.message_store_mut(), start_offset, data, data_start, data_length)
+        MessageStoreEngine::append_to_commit_log(self.message_store_mut(), start_offset, data, data_start, data_length)
     }
 
     fn update_ha_master_address(&self, new_addr: &str) -> impl Future<Output = ()> + Send {
-        BackendOps::update_ha_master_address(self.message_store(), new_addr)
+        MessageStoreEngine::update_ha_master_address(self.message_store(), new_addr)
     }
 
     fn set_confirm_offset(&mut self, phy_offset: i64) {
-        BackendOps::set_confirm_offset(self.message_store_mut(), phy_offset);
+        MessageStoreEngine::set_confirm_offset(self.message_store_mut(), phy_offset);
     }
 
     fn set_alive_replica_num_in_group(&self, alive_replica_nums: i32) {
-        BackendOps::set_alive_replica_num_in_group(self.message_store(), alive_replica_nums);
+        MessageStoreEngine::set_alive_replica_num_in_group(self.message_store(), alive_replica_nums);
     }
 
     fn get_alive_replica_num_in_group(&self) -> i32 {
-        BackendOps::get_alive_replica_num_in_group(self.message_store())
+        MessageStoreEngine::get_alive_replica_num_in_group(self.message_store())
     }
 
     fn sync_controller_sync_state_set(&self, local_broker_id: i64, sync_state_set: &HashSet<i64>) {
-        BackendOps::sync_controller_sync_state_set(self.message_store(), local_broker_id, sync_state_set);
+        MessageStoreEngine::sync_controller_sync_state_set(self.message_store(), local_broker_id, sync_state_set);
     }
 
     fn wakeup_ha_client(&self) {
-        BackendOps::wakeup_ha_client(self.message_store());
+        MessageStoreEngine::wakeup_ha_client(self.message_store());
     }
 
     fn set_master_flushed_offset(&self, master_flushed_offset: i64) {
-        BackendOps::set_master_flushed_offset(self.message_store(), master_flushed_offset);
+        MessageStoreEngine::set_master_flushed_offset(self.message_store(), master_flushed_offset);
     }
 
     fn sync_broker_role(&self, broker_role: BrokerRole) {
-        BackendOps::sync_broker_role(self.message_store(), broker_role);
+        MessageStoreEngine::sync_broker_role(self.message_store(), broker_role);
     }
 
     fn sync_broker_role_with_term(
@@ -418,33 +418,33 @@ pub trait BrokerReplicationStore: BrokerReadWriteStore + BrokerMasterAddressStor
         broker_role: BrokerRole,
         external_term: u64,
     ) -> Result<bool, crate::store_error::StoreError> {
-        BackendOps::sync_broker_role_with_term(self.message_store(), broker_role, external_term)
+        MessageStoreEngine::sync_broker_role_with_term(self.message_store(), broker_role, external_term)
     }
 
     fn install_controller_write_lease(&self, token: WriteLeaseToken, valid_for: Duration) -> bool {
-        BackendOps::install_controller_write_lease(self.message_store(), token, valid_for)
+        MessageStoreEngine::install_controller_write_lease(self.message_store(), token, valid_for)
     }
 
     fn fence_controller_writes(&self) {
-        BackendOps::fence_controller_writes(self.message_store());
+        MessageStoreEngine::fence_controller_writes(self.message_store());
     }
 
     fn get_ha_service(&self) -> Option<&GeneralHAService> {
-        BackendOps::get_ha_service(self.message_store())
+        MessageStoreEngine::get_ha_service(self.message_store())
     }
 
     fn get_ha_runtime_info(&self) -> Option<HARuntimeInfo> {
-        BackendOps::get_ha_runtime_info(self.message_store())
+        MessageStoreEngine::get_ha_runtime_info(self.message_store())
     }
 }
 
-impl<T> BrokerStorePort for T where T: BackendOps {}
-impl<T> BrokerReadStore for T where T: BackendOps {}
-impl<T> BrokerWriteStore for T where T: BackendOps {}
+impl<T> BrokerStorePort for T where T: MessageStoreEngine {}
+impl<T> BrokerReadStore for T where T: MessageStoreEngine {}
+impl<T> BrokerWriteStore for T where T: MessageStoreEngine {}
 impl<T> BrokerReadWriteStore for T where T: BrokerReadStore + BrokerWriteStore {}
-impl<T> BrokerMasterAddressStore for T where T: BackendOps {}
-impl<T> BrokerAdminStore for T where T: BackendOps {}
-impl<T> BrokerReplicationStore for T where T: BackendOps {}
+impl<T> BrokerMasterAddressStore for T where T: MessageStoreEngine {}
+impl<T> BrokerAdminStore for T where T: MessageStoreEngine {}
+impl<T> BrokerReplicationStore for T where T: MessageStoreEngine {}
 
 /// Backend append output plus independent append and durable progress.
 #[derive(Clone)]
@@ -573,7 +573,7 @@ impl<'a, MS> MessageStoreHealthCapability<'a, MS> {
 ///
 /// Filtered reads remain on the backend trait. This canonical read port intentionally
 /// forwards only unfiltered reads, so its hot request path has no dynamic filter allocation.
-/// Test doubles can implement these four operations without copying `BackendOps`.
+/// Test doubles can implement these four operations without copying `MessageStoreEngine`.
 pub(crate) trait MessageStoreReadPort: Sync {
     fn get_message(
         &self,
@@ -606,7 +606,7 @@ pub(crate) trait MessageStoreReadPort: Sync {
     fn select_message(&self, physical_offset: i64, size: Option<i32>) -> Option<SelectMappedBufferResult>;
 }
 
-impl<MS: BackendOps> MessageStoreReadPort for MS {
+impl<MS: MessageStoreEngine> MessageStoreReadPort for MS {
     async fn get_message(
         &self,
         group: &CheetahString,

@@ -542,7 +542,7 @@ mod tests {
         use rocketmq_store_api::ReplicaCount;
         use rocketmq_store_api::WriteAuthority;
 
-        use crate::base::backend_ops::BackendOps;
+        use crate::base::backend_ops::MessageStoreEngine;
         use crate::config::flush_disk_type::FlushDiskType;
         use crate::ha::test_support::new_test_message_store_with_flush;
 

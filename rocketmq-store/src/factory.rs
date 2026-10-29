@@ -22,7 +22,7 @@ use dashmap::DashMap;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_runtime::ChildServiceContext;
 
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::store_enum::StoreType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_runtime_config::StoreRuntimeConfig;

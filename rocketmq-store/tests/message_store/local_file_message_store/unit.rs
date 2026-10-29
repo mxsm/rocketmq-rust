@@ -87,7 +87,7 @@ use super::LocalFileMessageStore;
 use super::ReputMessageService;
 use super::ReputMessageServiceInner;
 use super::StoreRootLeaseState;
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::message_arriving_listener::MessageArrivingListener;
@@ -491,7 +491,7 @@ async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destro
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    let error = BackendOps::destroy_gracefully(&mut store)
+    let error = MessageStoreEngine::destroy_gracefully(&mut store)
         .await
         .expect_err("explicit destroy must wait for ordinary shutdown");
     assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
@@ -505,7 +505,7 @@ async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destro
         "ordinary shutdown must preserve consume-queue data"
     );
 
-    assert!(BackendOps::destroy_gracefully(&mut store)
+    assert!(MessageStoreEngine::destroy_gracefully(&mut store)
         .await
         .expect("explicit managed Store destroy completes"));
     assert_eq!(store.store_root_lease_state, StoreRootLeaseState::Destroyed);
@@ -515,7 +515,7 @@ async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destro
         temp_dir.path().join(".rocketmq-lifecycle").is_dir(),
         "durable lifecycle evidence remains as the audit trail"
     );
-    assert!(BackendOps::destroy_gracefully(&mut store)
+    assert!(MessageStoreEngine::destroy_gracefully(&mut store)
         .await
         .expect("completed managed Store destroy is idempotent"));
 }
@@ -567,7 +567,7 @@ async fn wave_b_normal_shutdown_replays_the_same_segments_on_restart() {
 
     reopened.start().await.expect("start reopened managed Store");
     reopened.shutdown().await;
-    assert!(BackendOps::destroy_gracefully(&mut reopened)
+    assert!(MessageStoreEngine::destroy_gracefully(&mut reopened)
         .await
         .expect("durably destroy reopened managed Store"));
 }
@@ -812,7 +812,7 @@ async fn graceful_destroy_keeps_legacy_store_namespace_write_disabled() {
     fs::write(&commitlog, b"legacy-segment-must-remain").expect("legacy segment");
     store.set_lifecycle_state(LocalStoreState::Shutdown);
 
-    assert!(!BackendOps::destroy_gracefully(&mut store)
+    assert!(!MessageStoreEngine::destroy_gracefully(&mut store)
         .await
         .expect("legacy graceful destroy remains write-disabled"));
     assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
@@ -3453,7 +3453,7 @@ async fn local_index_failure_sentinel_keeps_store_queries_unsafe_after_restart()
         ..DispatchRequest::default()
     });
     let confirm_offset = second_append.wrote_offset + i64::from(second_append.wrote_bytes);
-    BackendOps::set_confirm_offset(&mut store, confirm_offset);
+    MessageStoreEngine::set_confirm_offset(&mut store, confirm_offset);
     store.commit_log.flush();
 
     for (key, expect_hit) in [(&first_key, true), (&missing_key, false)] {
