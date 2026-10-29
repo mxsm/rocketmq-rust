@@ -132,6 +132,7 @@ pub(crate) enum PageCapability {
     Topics,
     Consumers,
     Producers,
+    Messages,
     OpsSettings,
     Proxy,
     Unavailable { reason: &'static str },
@@ -149,9 +150,7 @@ impl AppRoute {
             Self::Producers => PageCapability::Producers,
             Self::OpsSettings => PageCapability::OpsSettings,
             Self::Proxy => PageCapability::Proxy,
-            Self::Messages => PageCapability::Unavailable {
-                reason: "Message search and message details are not yet available in this desktop app.",
-            },
+            Self::Messages => PageCapability::Messages,
             Self::DlqMessages => PageCapability::Unavailable {
                 reason: "Dead-letter message search and recovery are not yet available in this desktop app.",
             },

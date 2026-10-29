@@ -1201,7 +1201,9 @@ fn app_route_mapping_uses_current_page_capabilities(cx: &mut gpui::TestAppContex
 }
 
 #[gpui::test]
-fn production_messages_route_stays_unavailable_through_navigation_and_relogin(cx: &mut gpui::TestAppContext) {
+fn production_messages_route_has_no_sample_or_implicit_query_through_navigation_and_relogin(
+    cx: &mut gpui::TestAppContext,
+) {
     cx.update(gpui_component::init);
     let fake = Arc::new(FakeDashboardBrokerOperations::default());
     let app_services = services(
@@ -1231,7 +1233,7 @@ fn production_messages_route_stays_unavailable_through_navigation_and_relogin(cx
         });
     });
     cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
-    assert!(cx.debug_bounds("unavailable-page").is_some());
+    assert!(cx.debug_bounds("messages-workspace").is_some());
 
     let back = cx.debug_bounds("go-back").expect("Back button");
     cx.simulate_click(back.center(), gpui::Modifiers::default());
@@ -1250,18 +1252,11 @@ fn production_messages_route_stays_unavailable_through_navigation_and_relogin(cx
     cx.run_until_parked();
     cx.update(|_, app| assert_eq!(dashboard.read(app).history.current(), &AppRoute::Messages));
     cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
-    assert!(cx.debug_bounds("unavailable-page").is_some());
+    assert!(cx.debug_bounds("messages-workspace").is_some());
     cx.update(|_, app| {
-        assert!(matches!(
-            dashboard.read(app).current_page_capability(),
-            PageCapability::Unavailable { .. }
-        ));
-        let table = dashboard.read(app).legacy_pages.unavailable_table.read(app);
-        assert_eq!(
-            table.delegate().rows_count(app),
-            0,
-            "Messages must not render sample rows"
-        );
+        assert_eq!(dashboard.read(app).current_page_capability(), PageCapability::Messages);
+        let messages = dashboard.read(app).legacy_pages.messages.read(app);
+        assert!(messages.search_is_idle());
     });
 
     cx.update(|window, app| {
@@ -1290,7 +1285,6 @@ fn production_messages_route_stays_unavailable_through_navigation_and_relogin(cx
     };
     let before_unavailable_pages = call_count();
     for route in [
-        AppRoute::Messages,
         AppRoute::DlqMessages,
         AppRoute::MessageTrace,
         AppRoute::Acl,
@@ -1526,6 +1520,7 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
         (AppRoute::Topics, PageCapability::Topics),
         (AppRoute::Consumers, PageCapability::Consumers),
         (AppRoute::Producers, PageCapability::Producers),
+        (AppRoute::Messages, PageCapability::Messages),
         (AppRoute::OpsSettings, PageCapability::OpsSettings),
         (AppRoute::Proxy, PageCapability::Proxy),
         (
@@ -1555,7 +1550,6 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
         assert_eq!(route.page_capability(), capability);
     }
     for route in [
-        AppRoute::Messages,
         AppRoute::DlqMessages,
         AppRoute::MessageTrace,
         AppRoute::Acl,
@@ -1734,5 +1728,82 @@ fn rebuilding_delivery_pages_keeps_root_subscriptions_bounded(cx: &mut gpui::Tes
                 assert_eq!(dashboard.subscriptions.len(), expected);
             }
         });
+    });
+}
+
+#[gpui::test]
+fn message_compact_workspace_and_logout_clear_a_retained_inspector_payload(cx: &mut gpui::TestAppContext) {
+    use crate::services::messages::test_support::{FakeMessageBackend, page, row};
+    use rocketmq_dashboard_common::MessagePayload;
+    cx.update(gpui_component::init);
+    let backend = Arc::new(FakeMessageBackend::default());
+    backend.queue_query(Ok(page()));
+    let app_services = services(
+        StartupSnapshot {
+            configuration_revision: 7,
+            login_required: true,
+            has_valid_session: true,
+        },
+        FakeAuthService::authenticated(),
+    )
+    .with_message_backend(backend.clone());
+    let captured = Rc::new(RefCell::new(None));
+    let capture = captured.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        capture.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = captured.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(960.), px(640.)));
+    let messages = cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::Messages, window, cx);
+            dashboard.legacy_pages.messages.clone()
+        })
+    });
+    cx.update(|window, app| {
+        messages
+            .read(app)
+            .topic_input()
+            .update(app, |input, cx| input.set_value("orders", window, cx))
+    });
+    cx.run_until_parked();
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..2 {
+            cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+        }
+    };
+    draw(cx);
+    let search = cx.debug_bounds("message-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    draw(cx);
+    let open = cx.debug_bounds("message-open-row-0").unwrap();
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    draw(cx);
+    let detail = cx.read(|app| messages.read(app).detail_for_test().unwrap());
+    backend.queue_payload(Ok(MessagePayload::bounded(
+        row().identity,
+        b"private-body".to_vec(),
+        std::collections::BTreeMap::new(),
+    )));
+    let body = cx.debug_bounds("message-tab-body").unwrap();
+    cx.simulate_click(body.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.read(|app| detail.read(app).has_payload()));
+    cx.update(|window, app| dashboard.update(app, |dashboard, cx| dashboard.sign_out(window, cx)));
+    cx.run_until_parked();
+    assert!(!cx.read(|app| detail.read(app).has_payload()));
+    cx.update(|window, app| {
+        assert!(!window.has_active_sheet(app));
+        assert_eq!(dashboard.read(app).history.current(), &AppRoute::Login);
+        assert_ne!(
+            dashboard.read(app).legacy_pages.messages.entity_id(),
+            messages.entity_id()
+        );
+        assert!(messages.read(app).search_is_idle());
     });
 }

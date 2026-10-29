@@ -30,6 +30,8 @@ use rocketmq_admin_core::core::{
         DashboardConsumerGroup, DashboardConsumerList, DashboardProducerInfo, DashboardTopicInfo, DashboardTopicList,
         DashboardTopicStats,
     },
+    dashboard::{DashboardMessage, DashboardMessageList, DashboardMessageQuery},
+    message::{DirectConsumeRequest, DirectConsumeResult, MessageLookupRequest, MessageRecord},
     security::AdminCredentials,
 };
 use rocketmq_dashboard_common::{CredentialSourceKind, TransportSettings};
@@ -51,6 +53,12 @@ impl HealthClock for FixedClock {
 
 #[derive(Default)]
 struct FakeControls {
+    message_queries: std::sync::Mutex<Vec<DashboardMessageQuery>>,
+    message_lookups: std::sync::Mutex<Vec<MessageLookupRequest>>,
+    message_consumes: std::sync::Mutex<Vec<DirectConsumeRequest>>,
+    message_results: std::sync::Mutex<Option<DashboardMessageList>>,
+    message_record: std::sync::Mutex<Option<MessageRecord>>,
+    message_consume_result: std::sync::Mutex<Option<DirectConsumeResult>>,
     dashboard_consumer_summary:
         std::sync::Mutex<Option<rocketmq_admin_core::core::dashboard_metrics::DashboardConsumerSummary>>,
     dashboard_topics: std::sync::Mutex<Option<Vec<String>>>,
@@ -152,6 +160,34 @@ impl DashboardQuerySession for FakeQuerySession {
             completeness: TopicInspectionCompleteness::Complete,
             failures: Vec::new(),
         })))
+    }
+
+    fn query_messages<'a>(
+        &'a self,
+        request: &'a DashboardMessageQuery,
+    ) -> SessionFuture<'a, AdminResult<DashboardMessageList>> {
+        self.controls.message_queries.lock().unwrap().push(request.clone());
+        Box::pin(std::future::ready(Ok(self
+            .controls
+            .message_results
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_default())))
+    }
+    fn lookup_message<'a>(
+        &'a self,
+        request: &'a MessageLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageRecord>> {
+        self.controls.message_lookups.lock().unwrap().push(request.clone());
+        Box::pin(std::future::ready(
+            self.controls
+                .message_record
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| AdminError::not_found("message", "missing test response")),
+        ))
     }
     fn health(&self) -> SessionFuture<'_, AdminResult<()>> {
         Box::pin(async move {
@@ -409,6 +445,21 @@ impl DashboardMutationSession for FakeMutationSession {
                 order_reconciled: Some(true),
             })
         })
+    }
+
+    fn consume_message_directly<'a>(
+        &'a mut self,
+        request: &'a DirectConsumeRequest,
+    ) -> SessionFuture<'a, AdminResult<DirectConsumeResult>> {
+        self.controls.message_consumes.lock().unwrap().push(request.clone());
+        Box::pin(std::future::ready(
+            self.controls
+                .message_consume_result
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| AdminError::operation_failed("consume", "missing test response")),
+        ))
     }
     fn query_config_generation<'a>(
         &'a mut self,
@@ -1014,4 +1065,264 @@ fn dashboard_overview_keeps_incomplete_backlog_unknown_and_preserves_real_zero()
         provider.shutdown().await;
     });
     runtime.shutdown_runtime_blocking().unwrap();
+}
+
+fn raw_message(topic: &str, id: &str) -> DashboardMessage {
+    DashboardMessage {
+        topic: topic.into(),
+        message_id: id.into(),
+        keys: Some("private-key".into()),
+        tags: Some("private-tag".into()),
+        born_timestamp: 10,
+        store_timestamp: 20,
+        born_host: "private-host".into(),
+        store_host: "private-host".into(),
+        queue_id: 2,
+        queue_offset: 33,
+        store_size: 100,
+        reconsume_times: 0,
+        body_crc: 0,
+        sys_flag: 0,
+        flag: 0,
+        prepared_transaction_offset: 0,
+        body: b"private-body".to_vec(),
+        properties: BTreeMap::from([("private-property".into(), "private-value".into())]),
+    }
+}
+fn raw_record(topic: &str, id: &str) -> MessageRecord {
+    let message = raw_message(topic, id);
+    MessageRecord {
+        topic: message.topic,
+        message_id: message.message_id,
+        unique_message_id: Some("unique-id".into()),
+        keys: message.keys,
+        tags: message.tags,
+        born_timestamp: message.born_timestamp,
+        store_timestamp: message.store_timestamp,
+        born_host: message.born_host,
+        store_host: message.store_host,
+        queue_id: message.queue_id,
+        queue_offset: message.queue_offset,
+        store_size: message.store_size,
+        reconsume_times: 0,
+        body_crc: 0,
+        sys_flag: 0,
+        flag: 0,
+        prepared_transaction_offset: 0,
+        body: message.body,
+        properties: message.properties,
+    }
+}
+
+#[test]
+fn message_provider_maps_each_mode_preserves_scan_paging_and_discards_search_payloads() {
+    use rocketmq_dashboard_common::{MessagePageExtent, MessageSearchQuery};
+    let runtime = runtime();
+    let controls = Arc::new(FakeControls::default());
+    let provider = provider(&runtime, controls.clone(), Ok(()), None, applied());
+    runtime.block_on(async {
+        provider.switch(snapshot(5, ConnectionScope::NameServer)).await.unwrap();
+        *controls.message_results.lock().unwrap() = Some(DashboardMessageList {
+            items: vec![raw_message("orders", "physical-id")],
+            total: 999,
+        });
+        let query = MessageSearchQuery::TopicRange {
+            topic: "orders".into(),
+            begin: 100,
+            end: 200,
+            page: 2,
+            page_size: 1,
+        };
+        let page = provider.query_messages(5, query).await.unwrap();
+        assert_eq!(page.extent, MessagePageExtent::MoreMayExist);
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].queue_offset, 33);
+        assert_eq!(page.rows[0].tags.as_ref().unwrap().text, "private-tag");
+        assert_eq!(page.rows[0].keys.as_ref().unwrap().text, "private-key");
+        assert_eq!(page.rows[0].born_host.text, "private-host");
+        assert_eq!(page.rows[0].store_host.text, "private-host");
+        let debug = format!("{page:?}");
+        for secret in [
+            "private-body",
+            "private-key",
+            "private-tag",
+            "private-property",
+            "private-value",
+            "private-host",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+        assert_eq!(
+            controls.message_queries.lock().unwrap()[0],
+            DashboardMessageQuery {
+                topic: Some("orders".into()),
+                begin: Some(100),
+                end: Some(200),
+                page_num: Some(2),
+                page_size: Some(1),
+                ..Default::default()
+            }
+        );
+        provider
+            .query_messages(
+                5,
+                MessageSearchQuery::Key {
+                    topic: "orders".into(),
+                    key: "key-a".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            controls.message_queries.lock().unwrap()[1],
+            DashboardMessageQuery {
+                topic: Some("orders".into()),
+                key: Some("key-a".into()),
+                ..Default::default()
+            }
+        );
+        *controls.message_record.lock().unwrap() = Some(raw_record("orders", "physical-id"));
+        let page = provider
+            .query_messages(
+                5,
+                MessageSearchQuery::MessageId {
+                    topic: "orders".into(),
+                    message_id: "unique-id".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.rows[0].identity.message_id, "physical-id");
+        assert_eq!(controls.message_lookups.lock().unwrap()[0].message_id, "unique-id");
+        *controls.message_results.lock().unwrap() = Some(DashboardMessageList::default());
+        let empty = provider
+            .query_messages(
+                5,
+                MessageSearchQuery::TopicRange {
+                    topic: "orders".into(),
+                    begin: 100,
+                    end: 200,
+                    page: 3,
+                    page_size: 1,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(empty.rows.is_empty());
+        assert_eq!(empty.extent, MessagePageExtent::End);
+    });
+    assert!(runtime.shutdown_runtime_blocking().unwrap().is_healthy());
+}
+
+#[test]
+fn message_provider_rejects_wrong_topic_or_detail_id_and_controls_consume_result_and_remark() {
+    use rocketmq_dashboard_common::{MessageConsumeCode, MessageConsumeCommand, MessageIdentity, MessageSearchQuery};
+    let runtime = runtime();
+    let controls = Arc::new(FakeControls::default());
+    let provider = provider(&runtime, controls.clone(), Ok(()), None, applied());
+    runtime.block_on(async {
+        provider.switch(snapshot(8, ConnectionScope::NameServer)).await.unwrap();
+        *controls.message_record.lock().unwrap() = Some(raw_record("other", "physical-id"));
+        assert!(
+            provider
+                .query_messages(
+                    8,
+                    MessageSearchQuery::MessageId {
+                        topic: "orders".into(),
+                        message_id: "physical-id".into()
+                    }
+                )
+                .await
+                .is_err()
+        );
+        let identity = MessageIdentity {
+            topic: "orders".into(),
+            message_id: "physical-id".into(),
+        };
+        *controls.message_record.lock().unwrap() = Some(raw_record("orders", "wrong-id"));
+        assert!(provider.message_payload(8, identity.clone()).await.is_err());
+        *controls.message_record.lock().unwrap() = Some(raw_record("orders", "physical-id"));
+        let payload = provider.message_payload(8, identity.clone()).await.unwrap();
+        assert_eq!(payload.body(), b"private-body");
+        *controls.message_consume_result.lock().unwrap() = Some(DirectConsumeResult {
+            success: true,
+            consume_result: Some("CR_LATER".into()),
+            remark: Some("private-server-remark private-body".into()),
+        });
+        let receipt = provider
+            .consume_message(
+                8,
+                MessageConsumeCommand {
+                    identity,
+                    consumer_group: "group-a".into(),
+                    client_id: Some("client-a".into()),
+                    scope: ConnectionScope::NameServer,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.code, MessageConsumeCode::Later);
+        assert!(!receipt.is_success());
+        assert!(receipt.remark_returned);
+        assert!(!format!("{receipt:?} {}", receipt.remark()).contains("private-server-remark"));
+        let calls = controls.message_consumes.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].topic, "orders");
+        assert_eq!(calls[0].message_id, "physical-id");
+        assert_eq!(calls[0].consumer_group, "group-a");
+        assert_eq!(calls[0].client_id.as_deref(), Some("client-a"));
+    });
+    assert!(runtime.shutdown_runtime_blocking().unwrap().is_healthy());
+}
+
+#[test]
+fn message_provider_bounds_real_tags_keys_and_hosts_without_cloning_arbitrary_properties() {
+    use rocketmq_dashboard_common::MessageSearchQuery;
+    let runtime = runtime();
+    let controls = Arc::new(FakeControls::default());
+    let provider = provider(&runtime, controls.clone(), Ok(()), None, applied());
+    let mut raw = raw_message("orders", "id");
+    raw.keys = Some("private-key".repeat(500));
+    raw.tags = Some("长标签".repeat(500));
+    raw.born_host = "private-host".repeat(500);
+    raw.store_host = raw.born_host.clone();
+    *controls.message_results.lock().unwrap() = Some(DashboardMessageList {
+        items: vec![raw],
+        total: 1,
+    });
+    runtime.block_on(async {
+        provider.switch(snapshot(1, ConnectionScope::NameServer)).await.unwrap();
+        let page = provider
+            .query_messages(
+                1,
+                MessageSearchQuery::Key {
+                    topic: "orders".into(),
+                    key: "key".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let row = &page.rows[0];
+        for preview in [
+            row.keys.as_ref().unwrap(),
+            row.tags.as_ref().unwrap(),
+            &row.born_host,
+            &row.store_host,
+        ] {
+            assert!(preview.truncated);
+            assert!(preview.text.len() <= 1024);
+            assert!(preview.display().ends_with('…'));
+        }
+        for secret in [
+            "private-body",
+            "private-property",
+            "private-value",
+            "private-key",
+            "private-host",
+            "长标签",
+        ] {
+            assert!(!format!("{row:?}").contains(secret));
+        }
+    });
+    assert!(runtime.shutdown_runtime_blocking().unwrap().is_healthy());
 }

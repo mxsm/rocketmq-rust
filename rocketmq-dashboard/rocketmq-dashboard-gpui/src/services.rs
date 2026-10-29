@@ -24,6 +24,8 @@ pub(crate) mod consumers;
 pub mod dashboard;
 #[path = "services/dashboard_broker.rs"]
 pub(crate) mod dashboard_broker;
+#[path = "services/messages.rs"]
+pub(crate) mod messages;
 #[path = "services/topics.rs"]
 pub(crate) mod topics;
 
@@ -554,6 +556,7 @@ pub struct AppServices {
     dashboard_broker: Arc<dyn dashboard_broker::DashboardBrokerOperations>,
     consumers: Arc<dyn consumers::ConsumerBackend>,
     topics: Arc<dyn topics::TopicBackend>,
+    messages: Arc<dyn messages::MessageBackend>,
 }
 
 impl AppServices {
@@ -574,6 +577,7 @@ impl AppServices {
             ),
             consumers: consumers::RealConsumerBackend::unavailable(),
             topics: topics::RealTopicBackend::unavailable(),
+            messages: messages::RealMessageBackend::unavailable(),
         }
     }
 
@@ -631,6 +635,10 @@ impl AppServices {
             .as_ref()
             .map(|provider| consumers::RealConsumerBackend::new(Arc::clone(provider)))
             .unwrap_or_else(consumers::RealConsumerBackend::unavailable);
+        let messages = admin_provider
+            .as_ref()
+            .map(|provider| messages::RealMessageBackend::new(Arc::clone(provider)))
+            .unwrap_or_else(messages::RealMessageBackend::unavailable);
         let topics = admin_provider
             .map(topics::RealTopicBackend::new)
             .unwrap_or_else(topics::RealTopicBackend::unavailable);
@@ -662,6 +670,7 @@ impl AppServices {
             dashboard_broker,
             consumers,
             topics,
+            messages,
         }
     }
 

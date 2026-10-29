@@ -49,6 +49,7 @@ use crate::{
         consumers::ConsumersView,
         dashboard::DashboardView,
         login::LoginForm,
+        messages::MessagesView,
         ops::{OpsIntent, OpsView},
         producers::ProducersView,
         proxy::ProxyView,
@@ -144,6 +145,7 @@ struct LegacyPageCache {
     topics: Entity<TopicsView>,
     consumers: Entity<ConsumersView>,
     producers: Entity<ProducersView>,
+    messages: Entity<MessagesView>,
     ops: Entity<OpsView>,
     proxy: Entity<ProxyView>,
     unavailable_table: Entity<gpui_component::table::TableState<data_table::UnavailableTable>>,
@@ -157,6 +159,7 @@ impl LegacyPageCache {
             topics: cx.new(|cx| TopicsView::new(window, services.clone(), 0, cx)),
             consumers: cx.new(|cx| ConsumersView::new(window, services.clone(), 0, cx)),
             producers: cx.new(|cx| ProducersView::new(window, services.clone(), 0, cx)),
+            messages: cx.new(|cx| MessagesView::new(window, services.clone(), 0, cx)),
             ops: cx.new(|cx| OpsView::new(window, services.clone(), cx)),
             proxy: cx.new(|cx| ProxyView::new(window, services.clone(), cx)),
             unavailable_table: data_table::unavailable_state(
@@ -168,13 +171,14 @@ impl LegacyPageCache {
     }
 
     #[cfg(test)]
-    fn entity_ids(&self) -> [gpui::EntityId; 8] {
+    fn entity_ids(&self) -> [gpui::EntityId; 9] {
         [
             self.dashboard.entity_id(),
             self.brokers.entity_id(),
             self.topics.entity_id(),
             self.consumers.entity_id(),
             self.producers.entity_id(),
+            self.messages.entity_id(),
             self.ops.entity_id(),
             self.proxy.entity_id(),
             self.unavailable_table.entity_id(),
@@ -384,6 +388,9 @@ impl RocketmqDashboard {
                 self.legacy_pages
                     .producers
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
+                self.legacy_pages.messages.update(cx, |view, cx| {
+                    view.set_revision(snapshot.configuration_revision, window, cx)
+                });
                 self.session = if snapshot.has_valid_session {
                     SessionState::restored()
                 } else {
@@ -440,6 +447,7 @@ impl RocketmqDashboard {
 
     fn navigate_now(&mut self, route: AppRoute, window: &mut Window, cx: &mut Context<Self>) {
         self.history.navigate(route);
+        self.sync_message_route(window, cx);
         self.sync_broker_route(window, cx);
         self.sync_topic_route(window, cx);
         self.sync_consumer_route(window, cx);
@@ -454,6 +462,7 @@ impl RocketmqDashboard {
             return;
         }
         if self.history.back().is_some() {
+            self.sync_message_route(window, cx);
             self.sync_broker_route(window, cx);
             self.sync_topic_route(window, cx);
             self.sync_consumer_route(window, cx);
@@ -469,6 +478,7 @@ impl RocketmqDashboard {
             return;
         }
         if self.history.forward().is_some() {
+            self.sync_message_route(window, cx);
             self.sync_broker_route(window, cx);
             self.sync_topic_route(window, cx);
             self.sync_consumer_route(window, cx);
@@ -543,6 +553,7 @@ impl RocketmqDashboard {
                         PendingDiscardAction::Navigate(target) => dashboard.navigate_now(target, window, cx),
                         PendingDiscardAction::Back => {
                             let _ = dashboard.history.back();
+                            dashboard.sync_message_route(window, cx);
                             dashboard.sync_broker_route(window, cx);
                             dashboard.sync_topic_route(window, cx);
                             dashboard.sync_consumer_route(window, cx);
@@ -550,6 +561,7 @@ impl RocketmqDashboard {
                         }
                         PendingDiscardAction::Forward => {
                             let _ = dashboard.history.forward();
+                            dashboard.sync_message_route(window, cx);
                             dashboard.sync_broker_route(window, cx);
                             dashboard.sync_topic_route(window, cx);
                             dashboard.sync_consumer_route(window, cx);
@@ -646,6 +658,9 @@ impl RocketmqDashboard {
             self.legacy_pages
                 .producers
                 .update(cx, |view, cx| view.set_revision(event.revision, cx));
+            self.legacy_pages
+                .messages
+                .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
             window.close_all_dialogs(cx);
             window.clear_notifications(cx);
         }
@@ -686,6 +701,16 @@ impl RocketmqDashboard {
         cx.notify();
     }
 
+    fn sync_message_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_pages.messages.update(cx, |view, cx| {
+            if matches!(self.history.current(), AppRoute::Messages) {
+                view.ensure_topics(window, cx);
+            } else {
+                view.leave(window, cx);
+            }
+        });
+    }
+
     fn clear_environment_state(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
         let _ = self.startup_epoch.advance();
         self.sensitive_feature_cache.clear();
@@ -707,6 +732,9 @@ impl RocketmqDashboard {
         self.legacy_pages
             .producers
             .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .messages
+            .update(cx, |view, cx| view.set_revision(revision, window, cx));
         self.legacy_pages
             .ops
             .update(cx, |view, cx| view.clear_environment_drafts(window, cx));
@@ -758,6 +786,7 @@ impl RocketmqDashboard {
     }
 
     fn finish_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
         self.session.clear();
         self.login.clear_sensitive(window, cx);
         self.sensitive_feature_cache.clear();
@@ -1298,6 +1327,10 @@ impl RocketmqDashboard {
             PageCapability::Producers => (
                 "Inspect discovered Producer groups and apply an explicit Topic + Group client query.",
                 div().size_full().child(self.legacy_pages.producers.clone()),
+            ),
+            PageCapability::Messages => (
+                "Search real messages, inspect bounded details, and confirm a direct-consume attempt.",
+                div().size_full().child(self.legacy_pages.messages.clone()),
             ),
             PageCapability::OpsSettings => (
                 "Manage NameServers, transport security, sessions, and local storage.",

@@ -39,6 +39,8 @@ mod consumers;
 mod dashboard_broker;
 #[path = "admin_provider/dashboard_metrics.rs"]
 mod dashboard_metrics;
+#[path = "admin_provider/messages.rs"]
+mod messages;
 #[path = "admin_provider/topics.rs"]
 mod topics;
 
@@ -232,6 +234,18 @@ impl ProviderFailure {
                 | ProviderRejection::SessionUnavailable(summary),
             ) => summary,
             ProviderFailureKind::Operational(error) => error.inner.summary,
+        }
+    }
+
+    pub(crate) fn is_invalid_request(&self) -> bool {
+        match &self.kind {
+            ProviderFailureKind::Rejected(ProviderRejection::InvalidRequest(_)) => true,
+            ProviderFailureKind::Operational(error) => error
+                .inner
+                .source
+                .downcast_ref::<AdminError>()
+                .is_some_and(|source| source.failure() == AdminFailure::InvalidArgument),
+            _ => false,
         }
     }
 

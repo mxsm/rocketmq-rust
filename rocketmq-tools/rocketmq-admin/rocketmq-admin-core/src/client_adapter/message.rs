@@ -38,6 +38,12 @@ const PROPERTY_ORIGIN_MESSAGE_ID: &str = "ORIGIN_MESSAGE_ID";
 const PROPERTY_DLQ_ORIGIN_MESSAGE_ID: &str = "DLQ_ORIGIN_MESSAGE_ID";
 const PROPERTY_WAIT_STORE_MSG_OK: &str = "WAIT";
 
+impl MessageLookupReadAdmin for AdminSession {
+    fn lookup_message<'a>(&'a self, request: &'a MessageLookupRequest) -> AdminFuture<'a, MessageRecord> {
+        Box::pin(lookup::lookup_scoped_message(self, request))
+    }
+}
+
 macro_rules! map_message_record {
     ($message:expr) => {{
         let properties = $message
@@ -71,6 +77,8 @@ macro_rules! map_message_record {
         }
     }};
 }
+
+mod lookup;
 
 impl MessageAdmin for AdminSession {
     fn query_messages_by_key<'a>(

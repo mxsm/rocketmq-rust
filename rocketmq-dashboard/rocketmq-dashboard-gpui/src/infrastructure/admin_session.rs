@@ -43,6 +43,10 @@ use rocketmq_admin_core::{
             DashboardProducerInfo, DashboardTopicList,
         },
         dashboard_metrics::{DashboardConsumerSummary, DashboardMetricsAdmin, DashboardTopicRates},
+        message::{
+            DirectConsumeRequest, DirectConsumeResult, MessageLookupReadAdmin, MessageLookupRequest, MessageRecord,
+            MessageScopedMutationAdmin,
+        },
         security::AdminCredentials,
         topic::{
             DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicConfig, DetailedTopicConsumers,
@@ -149,6 +153,18 @@ pub(crate) trait DashboardQuerySession: Send + Sync {
     ) -> SessionFuture<'a, AdminResult<ProducerConnectionsResult>> {
         Box::pin(async { Err(unsupported_consumer_session("producer_connections")) })
     }
+    fn query_messages<'a>(
+        &'a self,
+        _request: &'a rocketmq_admin_core::core::dashboard::DashboardMessageQuery,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::dashboard::DashboardMessageList>> {
+        Box::pin(async { Err(unsupported_message_session()) })
+    }
+    fn lookup_message<'a>(
+        &'a self,
+        _request: &'a MessageLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageRecord>> {
+        Box::pin(async { Err(unsupported_message_session()) })
+    }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
 }
 
@@ -222,7 +238,20 @@ pub(crate) trait DashboardMutationSession: Send {
     ) -> SessionFuture<'a, AdminResult<SubscriptionGroupConfigPatchResult>> {
         Box::pin(async { Err(unsupported_consumer_session("patch_consumer_config")) })
     }
+    fn consume_message_directly<'a>(
+        &'a mut self,
+        _request: &'a DirectConsumeRequest,
+    ) -> SessionFuture<'a, AdminResult<DirectConsumeResult>> {
+        Box::pin(async { Err(unsupported_message_session()) })
+    }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
+}
+
+fn unsupported_message_session() -> rocketmq_admin_core::core::AdminError {
+    rocketmq_admin_core::core::AdminError::operation_failed(
+        "messages",
+        "Message capability is unavailable in this session",
+    )
 }
 
 fn unsupported_topic_session(operation: &'static str) -> rocketmq_admin_core::core::AdminError {
@@ -479,6 +508,18 @@ impl DashboardQuerySession for RealQuerySession {
         ConsumerWorkspaceAdmin::producer_connections(&self.inner, request)
     }
 
+    fn query_messages<'a>(
+        &'a self,
+        request: &'a rocketmq_admin_core::core::dashboard::DashboardMessageQuery,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::dashboard::DashboardMessageList>> {
+        DashboardAdmin::dashboard_query_messages(&self.inner, request)
+    }
+    fn lookup_message<'a>(
+        &'a self,
+        request: &'a MessageLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageRecord>> {
+        MessageLookupReadAdmin::lookup_message(&self.inner, request)
+    }
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {
         Box::pin(async move { self.inner.shutdown().await })
     }
@@ -573,6 +614,12 @@ impl DashboardMutationSession for RealMutationSession {
         ConsumerMutationAdmin::patch_config_if_version(&mut self.inner, request)
     }
 
+    fn consume_message_directly<'a>(
+        &'a mut self,
+        request: &'a DirectConsumeRequest,
+    ) -> SessionFuture<'a, AdminResult<DirectConsumeResult>> {
+        MessageScopedMutationAdmin::consume_scoped_message(&mut self.inner, request)
+    }
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {
         Box::pin(async move { self.inner.shutdown().await })
     }

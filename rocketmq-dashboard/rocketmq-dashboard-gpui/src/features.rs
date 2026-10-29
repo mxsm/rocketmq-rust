@@ -78,3 +78,12 @@ mod topics_product_tests;
 #[cfg(test)]
 #[path = "features/consumers_product_tests.rs"]
 mod consumers_product_tests;
+
+#[path = "features/message_detail.rs"]
+pub(crate) mod message_detail;
+#[path = "features/message_dialogs.rs"]
+pub(crate) mod message_dialogs;
+#[path = "features/messages.rs"]
+pub(crate) mod messages;
+#[path = "features/messages_store.rs"]
+pub(crate) mod messages_store;

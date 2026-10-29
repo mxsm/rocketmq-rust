@@ -197,6 +197,36 @@ cargo test --locked <test_name>
 
 See [AGENTS.md](AGENTS.md) for platform setup and graphical smoke checks.
 
+## Message workspace
+
+Messages supports Topic/time-range, Topic + Key and Topic + Message ID searches in
+NameServer Direct scope. UTC input uses `YYYY-MM-DD HH:MM:SS`. Search applies the
+current draft; Refresh replays the applied query. Changing filters, page or connection
+clears selection and cancels obsolete reads. Range pages scan Broker queues and sort
+only the returned page by stored time. The SDK does not provide an exact grand total;
+a full page permits trying the next page, which may be empty. Key searches return at
+most 64 matches.
+
+A searchable Topic picker loads real inventory and preserves validated manual entry
+when discovery fails or is partial. Lists retain bounded Tags, Keys and host metadata only;
+Overview includes readable UTC times and a Copy Message ID control. Properties and
+Body load when their inspector tab opens;
+one inspector retains at most 256 KiB of body and 128 properties / 64 KiB. JSON and
+plain-text previews show truncation. Closing the inspector, navigating away, changing
+connection or signing out clears its payload. Trace remains unavailable until P07.
+Physical offsets are read through the selected Topic's advertised Broker addresses,
+including hostname aliases. Returned Topic and physical ID are verified before details
+or direct consumption; the embedded address never supplies a transport target.
+
+Direct consume requires confirmation of the exact Message ID, Topic, environment,
+Consumer group and optional Client ID. An admitted attempt stays owned by the
+application and writes its terminal P11 audit fact even if the inspector closes.
+The verified Broker validates the selected client and forwards consumption over its
+registered Consumer channel; the Consumer's reported socket is never an RPC target.
+Only `CR_SUCCESS` confirms success; other results and unconfirmed calls remain
+distinct. Consumer remarks are represented by presence, without displaying arbitrary
+private content. No new Message ID is promised.
+
 ## License
 
 Apache License, Version 2.0.
