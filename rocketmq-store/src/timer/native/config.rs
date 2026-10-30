@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::message_store_config::MessageStoreConfig;
+
 const MINUTE_MS: i64 = 60_000;
 const HOUR_MS: i64 = 60 * MINUTE_MS;
 const DAY_MS: i64 = 24 * HOUR_MS;
@@ -51,10 +53,32 @@ impl Default for NativeTimerConfig {
 }
 
 impl NativeTimerConfig {
-    /// The mid horizon for CommitLog files kept `file_reserved_hours`: 48 hours, or six hours
-    /// less than the retention when that is shorter.
-    pub(crate) fn mid_horizon_for(file_reserved_hours: i64) -> i64 {
-        (48 * HOUR_MS).min(file_reserved_hours.saturating_sub(6).saturating_mul(HOUR_MS))
+    /// The engine's settings: `timerNative`, the store's timer precision, and a mid horizon that
+    /// ends six hours before CommitLog cleanup could delete a timer's record.
+    pub(crate) fn from_store(config: &MessageStoreConfig) -> Self {
+        let native = &config.timer_native;
+        Self {
+            lane_count: native.lane_count,
+            precision_ms: i64::try_from(config.timer_precision_ms).unwrap_or(i64::MAX),
+            near_window_ms: i64::try_from(native.near_window_sec)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(1_000),
+            near_wheel_memory_bytes: usize::try_from(native.near_wheel_memory_bytes).unwrap_or(usize::MAX),
+            mid_horizon_ms: Self::mid_horizon_for(
+                i64::from(native.mid_horizon_hours),
+                i64::try_from(config.file_reserved_time).unwrap_or(i64::MAX),
+            ),
+            max_delay_ms: i64::from(native.max_delay_days).saturating_mul(DAY_MS),
+            payload_segment_bytes: native.payload_segment_bytes,
+        }
+    }
+
+    /// The mid horizon of `configured_hours` for CommitLog files kept `file_reserved_hours`: six
+    /// hours less than the retention when that is shorter.
+    pub(crate) fn mid_horizon_for(configured_hours: i64, file_reserved_hours: i64) -> i64 {
+        configured_hours
+            .saturating_mul(HOUR_MS)
+            .min(file_reserved_hours.saturating_sub(6).saturating_mul(HOUR_MS))
     }
 
     /// Checks the settings, naming the first that is invalid.
@@ -93,8 +117,9 @@ mod tests {
         let config = NativeTimerConfig::default();
         assert_eq!(config.validate(), Ok(()));
         assert_eq!(config.max_delay_ms, 400 * DAY_MS);
-        assert_eq!(NativeTimerConfig::mid_horizon_for(72), 48 * HOUR_MS);
-        assert_eq!(NativeTimerConfig::mid_horizon_for(24), 18 * HOUR_MS);
+        assert_eq!(NativeTimerConfig::mid_horizon_for(48, 72), 48 * HOUR_MS);
+        assert_eq!(NativeTimerConfig::mid_horizon_for(48, 24), 18 * HOUR_MS);
+        assert_eq!(NativeTimerConfig::from_store(&MessageStoreConfig::default()), config);
     }
 
     #[test]

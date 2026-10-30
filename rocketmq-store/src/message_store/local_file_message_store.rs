@@ -200,6 +200,7 @@ use crate::timer::delivery::TimelineDeliveryCoordinator;
 use crate::timer::engine::TimerEngine;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::engine::WorkBudget;
+use crate::timer::native::NativeTimerService;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::role::TimerRoleState;
 use crate::timer::source_wake::TimerSourceWake;
@@ -659,6 +660,10 @@ pub struct LocalFileMessageStore {
     timer_message_store: Option<Arc<TimerMessageStore>>,
     /// Woken by Reput after it dispatches Timer topic records; the timer source stages wait on it.
     timer_source_wake: Arc<TimerSourceWake>,
+    /// The native timer engine, run under `timerStoreMode = native`.
+    native_timer: Option<Arc<NativeTimerService>>,
+    /// The lowest CommitLog offset the native timer engine still needs; `-1` without it.
+    native_timer_cleanup_pin: Arc<AtomicI64>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_cleanup_pin: Arc<AtomicI64>,
     #[cfg(feature = "extended_timeline")]

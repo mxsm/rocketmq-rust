@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::*;
+use rocketmq_store_local::timer::native_format::NATIVE_TIMER_DIR;
 
+use super::*;
 use crate::config::timer_store_config::ValidatedTimerStoreConfig;
 #[cfg(feature = "tieredstore")]
 use rocketmq_tieredstore::provider::BuiltinTieredStoreProviderFactory;
@@ -472,6 +473,22 @@ impl LocalFileMessageStore {
             minimum_pinned_wal_segment
         };
 
+        let native_timer_enabled = message_store_config.timer_store_mode == TimerStoreMode::Native;
+        let native_timer_cleanup_pin = Arc::new(AtomicI64::new(if native_timer_enabled { 0 } else { -1 }));
+        let minimum_pinned_wal_segment = if native_timer_enabled {
+            let existing_pin = minimum_pinned_wal_segment.clone();
+            let native_pin = Arc::clone(&native_timer_cleanup_pin);
+            Some(Arc::new(move || {
+                let native_offset = u64::try_from(native_pin.load(Ordering::Acquire)).ok();
+                match (existing_pin.as_ref().and_then(|pin| pin()), native_offset) {
+                    (Some(existing), Some(native)) => Some(existing.min(native)),
+                    (existing, native) => existing.or(native),
+                }
+            }) as Arc<CommitLogWalPin>)
+        } else {
+            minimum_pinned_wal_segment
+        };
+
         ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
         ensure_dir_ok(Self::get_store_path_logic(&message_store_config).as_str());
@@ -548,6 +565,8 @@ impl LocalFileMessageStore {
             compaction_store,
             timer_message_store: None,
             timer_source_wake: Arc::new(TimerSourceWake::default()),
+            native_timer: None,
+            native_timer_cleanup_pin,
             #[cfg(feature = "extended_timeline")]
             extended_timeline_cleanup_pin,
             #[cfg(feature = "extended_timeline")]
@@ -924,6 +943,21 @@ impl LocalFileMessageStore {
             ));
             self.set_timer_message_store(timer_message_store);
         }
+        if self.message_store_config.is_timer_wheel_enable()
+            && self.message_store_config.timer_store_mode == TimerStoreMode::Native
+            && self.native_timer.is_none()
+        {
+            let native_timer = NativeTimerService::open(
+                self.message_store_config.as_ref(),
+                self.timer_store_context(),
+                self.runtime_scope.clone(),
+                Arc::clone(&self.native_timer_cleanup_pin),
+            )
+            .map_err(|error| {
+                store_read_error(StoreOperation::Load, "failed to open the native timer engine").with_source(error)
+            })?;
+            self.native_timer = Some(Arc::new(native_timer));
+        }
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
             && !self.message_store_config.duplication_enable
         {
@@ -965,6 +999,12 @@ impl LocalFileMessageStore {
     #[inline]
     pub fn max_delay_level(&self) -> i32 {
         self.max_delay_level
+    }
+
+    /// The native timer engine, run under `timerStoreMode = native`.
+    #[inline]
+    pub(crate) fn native_timer(&self) -> Option<&Arc<NativeTimerService>> {
+        self.native_timer.as_ref()
     }
 
     pub(super) fn enabled_rocksdb_specific_options(message_store_config: &MessageStoreConfig) -> Vec<&'static str> {
@@ -1019,6 +1059,22 @@ impl LocalFileMessageStore {
                     ),
                 ));
             }
+        }
+        if self.message_store_config.timer_store_mode == TimerStoreMode::Native {
+            if !self.message_store_config.is_timer_wheel_enable() {
+                return Err(store_config_error(
+                    StoreOperation::Load,
+                    "timer_store_mode=native requires timer_wheel_enable=true".to_string(),
+                ));
+            }
+        } else if Path::new(self.message_store_config.store_path_root_dir.as_str())
+            .join(NATIVE_TIMER_DIR)
+            .exists()
+        {
+            return Err(store_unsupported_error(
+                StoreOperation::Load,
+                "the store holds native timers; keep timer_store_mode=native so they are delivered".to_string(),
+            ));
         }
         if self.message_store_config.timer_rocksdb_enable && !self.message_store_config.is_enable_rocksdb_store() {
             return Err(store_unsupported_error(
@@ -1134,14 +1190,21 @@ impl LocalFileMessageStore {
     }
 
     pub(super) fn should_run_timer_dequeue(&self) -> bool {
+        // Under `native`, the Java-compatible engine still delivers the timers it admitted before.
         self.message_store_config.is_timer_wheel_enable()
-            && self.message_store_config.timer_store_mode == TimerStoreMode::JavaCompat
+            && matches!(
+                self.message_store_config.timer_store_mode,
+                TimerStoreMode::JavaCompat | TimerStoreMode::Native
+            )
             && self.store_runtime_state.broker_role() != BrokerRole::Slave
     }
 
     pub(super) fn sync_timer_message_store_role(&self) {
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
             timer_message_store.set_should_running_dequeue(self.should_run_timer_dequeue());
+        }
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            native_timer.set_delivering(self.store_runtime_state.broker_role() != BrokerRole::Slave);
         }
     }
 

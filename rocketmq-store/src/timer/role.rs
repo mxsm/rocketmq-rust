@@ -47,6 +47,15 @@ impl TimerRoleState {
         }
     }
 
+    /// A lease kept in `file_name` under the store's `config` directory, for an engine that runs
+    /// beside the Java-compatible one and so cannot share its lease.
+    pub(crate) fn named(store_root: &str, file_name: &str) -> Self {
+        Self {
+            path: Path::new(store_root).join("config").join(file_name),
+            ..Self::new(store_root)
+        }
+    }
+
     pub(crate) fn load(&self) -> std::io::Result<()> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;

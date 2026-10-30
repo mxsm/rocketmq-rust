@@ -312,6 +312,7 @@ pub(crate) const fn encode_engine(engine: TimerEngineId) -> u8 {
     match engine {
         TimerEngineId::JavaCompat => 0,
         TimerEngineId::ExtendedTimeline => 1,
+        TimerEngineId::Native => 2,
     }
 }
 
@@ -319,6 +320,7 @@ pub(crate) fn decode_engine(operation: StoreOperation, value: u8) -> Result<Time
     match value {
         0 => Ok(TimerEngineId::JavaCompat),
         1 => Ok(TimerEngineId::ExtendedTimeline),
+        2 => Ok(TimerEngineId::Native),
         _ => Err(codec_corrupted(operation)),
     }
 }

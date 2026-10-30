@@ -627,6 +627,9 @@ impl LocalFileMessageStore {
             if let Some(timer_message_store) = self.timer_message_store.as_ref() {
                 timer_message_store.start();
             }
+            if let Some(native_timer) = self.native_timer.as_ref() {
+                native_timer.start();
+            }
             self.sync_timer_message_store_role();
             #[cfg(feature = "extended_timeline")]
             self.sync_extended_timeline_role();
@@ -862,6 +865,12 @@ impl LocalFileMessageStore {
                 };
                 if persist_timer_storage {
                     timer_message_store.shutdown_storage_with_persistence();
+                }
+                if let Some(native_timer) = self.native_timer.clone() {
+                    let _ = native_timer.stop_gracefully().await;
+                    if persist_timer_storage {
+                        native_timer.persist_at_shutdown();
+                    }
                 }
             }
             self.flush_consume_queue_service.shutdown().await;

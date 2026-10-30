@@ -144,7 +144,7 @@ pub const MAGIC_DEFAULT: i32 = 1;
 pub const MAGIC_ROLL: i32 = 1 << 1;
 pub const MAGIC_DELETE: i32 = 1 << 2;
 const EMPTY_TIMER_LOG_POS: i64 = -1;
-const MIN_SCHEDULER_INTERVAL_MS: u64 = 100;
+pub(crate) const MIN_SCHEDULER_INTERVAL_MS: u64 = 100;
 const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
 /// Writes one slot drain keeps in flight. Java runs three put threads; more concurrent puts let
 /// the CommitLog append path merge them, which matters most when each put waits for a flush or
@@ -156,7 +156,7 @@ const SLOT_DELIVERY_PIPELINE_DEPTH: usize = 32;
 /// the delivering task.
 const PREPARE_CHUNK_ENTRIES: usize = 16;
 /// Writes one delivery gets while `timerEnableRetryUntilSuccess` is off, as in Java.
-const TIMER_WRITE_ATTEMPTS: u32 = 3;
+pub(crate) const TIMER_WRITE_ATTEMPTS: u32 = 3;
 /// How often a checkpoint deletes TimerLog files no pending timer reads; Java runs its TimerLog
 /// cleanup every 30 seconds too.
 const TIMER_LOG_CLEANUP_INTERVAL_MS: i64 = 30_000;
@@ -497,22 +497,33 @@ impl TimerStoreContext {
         }
     }
 
-    fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+    pub(crate) fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
         self.consume_queues.find_or_create_consume_queue(topic, queue_id)
     }
 
-    fn look_message_by_offset_with_size(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt> {
+    pub(crate) fn commit_log(&self) -> &CommitLogReadHandle {
+        &self.commit_log
+    }
+
+    pub(crate) fn source_wake(&self) -> &TimerSourceWake {
+        &self.source_wake
+    }
+
+    pub(crate) fn look_message_by_offset_with_size(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt> {
         let result = self.commit_log.get_message(commit_log_offset, size)?;
         let mut bytes = result.get_bytes()?;
         MessageDecoder::decode(&mut bytes, true, false, false, false, false)
     }
 
     /// Whether CommitLog cleanup has deleted the file that held `commit_log_offset`.
-    fn is_cleaned_up(&self, commit_log_offset: i64) -> bool {
+    pub(crate) fn is_cleaned_up(&self, commit_log_offset: i64) -> bool {
         commit_log_offset < self.commit_log.get_min_offset()
     }
 
-    async fn put_message(&self, message: MessageExtBrokerInner) -> crate::base::message_result::PutMessageResult {
+    pub(crate) async fn put_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> crate::base::message_result::PutMessageResult {
         self.message_write.put_message(message).await
     }
 }
@@ -571,7 +582,8 @@ pub struct TimerMessageStore {
 
 impl TimerMessageStore {
     pub fn load(&self) -> bool {
-        if self.message_store_config.timer_store_mode != TimerStoreMode::JavaCompat {
+        // Under `native`, this engine still delivers the timers it admitted before the switch.
+        if self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
             error!("extended timer timeline is configured but its storage capability is not installed");
             return false;
         }
@@ -2329,11 +2341,14 @@ impl TimerMessageStore {
             };
             if message
                 .property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE))
-                .is_some_and(|engine| engine.as_str() == TimerEngineId::ExtendedTimeline.as_str())
+                .is_some_and(|engine| {
+                    engine.as_str() == TimerEngineId::ExtendedTimeline.as_str()
+                        || engine.as_str() == TimerEngineId::Native.as_str()
+                })
             {
-                // The Extended materializer owns this source. Advancing the Java-compatible
-                // enqueue cursor is safe because its independent cleanup fence remains pinned
-                // until payload and Timeline commits are durable.
+                // The Extended materializer or the native engine owns this source. Advancing the
+                // Java-compatible enqueue cursor is safe because each keeps its own cleanup pin
+                // until the sources it indexed are durable.
                 next_queue_offset = Some(cq_unit.queue_offset.saturating_add(1));
                 owned_elsewhere = owned_elsewhere.saturating_add(1);
                 continue;
@@ -3605,7 +3620,7 @@ fn real_write_target(message: &MessageExt) -> Result<TimerWriteTarget, InvalidRe
     Ok(TimerWriteTarget::Real { topic, queue_id })
 }
 
-fn parse_deliver_time_ms(message: &MessageExt) -> Option<i64> {
+pub(crate) fn parse_deliver_time_ms(message: &MessageExt) -> Option<i64> {
     message
         .property(&CheetahString::from_static_str(TIMER_OUT_MS))
         .and_then(|value| value.parse::<i64>().ok())
@@ -3661,7 +3676,7 @@ fn delete_identities_for_message(message: &MessageExt) -> Vec<TimerDeleteIdentit
     .collect()
 }
 
-fn timer_generation(message: &MessageExt) -> u64 {
+pub(crate) fn timer_generation(message: &MessageExt) -> u64 {
     message
         .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_GENERATION))
         .and_then(|generation| generation.parse::<u64>().ok())
