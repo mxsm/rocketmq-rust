@@ -3737,7 +3737,9 @@ fn validate_timer_source_route(message: &MessageExt) -> Result<(), CorruptionRea
     }
 }
 
-fn original_deliver_time_ms(message: &MessageExt, precision_ms: i64) -> Option<i64> {
+/// The deadline a timer was admitted with. `TIMER_OUT_MS` holds the start of its precision slot,
+/// so a timer admitted without the original deadline counts as due at the end of that slot.
+pub(crate) fn original_deliver_time_ms(message: &MessageExt, precision_ms: i64) -> Option<i64> {
     message
         .property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
