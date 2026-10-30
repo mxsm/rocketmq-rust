@@ -33,6 +33,7 @@ mod engine;
 mod near_wheel;
 mod service;
 
+pub(crate) use engine::NativeRecallVerdict;
 pub(crate) use service::NativeTimerService;
 
 #[cfg(test)]

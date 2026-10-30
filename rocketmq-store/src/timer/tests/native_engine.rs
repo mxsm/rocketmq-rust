@@ -18,6 +18,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -27,6 +28,8 @@ use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerI
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::TimerEngineId;
+use rocketmq_store_api::TimerRecallRegistration;
+use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
 use tempfile::tempdir;
 
@@ -251,5 +254,61 @@ async fn a_store_holding_native_timers_loads_only_in_native_mode() {
     let store = open(root.path(), TimerStoreMode::Native)
         .await
         .expect("reopen the native store");
+    close(store).await;
+}
+
+fn registration(target: &str, deliver_ms: i64) -> TimerRecallRegistration {
+    TimerRecallRegistration {
+        key: build_delete_key(REAL_TOPIC, target).to_string(),
+        generation: 0,
+        deliver_ms,
+    }
+}
+
+#[tokio::test]
+async fn a_recall_registered_before_its_tombstone_cancels_its_timer_unless_withdrawn() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    let start_ms = current_millis() as i64;
+    let clock = Arc::new(ManualClock(AtomicI64::new(start_ms)));
+    native_timer.set_clock(clock.clone());
+    let due_ms = start_ms + 1_000;
+    put_all(
+        &mut store,
+        vec![native(timer_message(due_ms, "n0")), native(timer_message(due_ms, "n1"))],
+    )
+    .await;
+    let register = |store: &LocalFileMessageStore, target| {
+        MessageStoreEngine::register_native_timer_recall(store, &registration(target, due_ms)).unwrap()
+    };
+
+    assert_eq!(register(&store, "n0"), TimerRecallStatus::Cancelled);
+    // The tombstone of the recall of n1 could not be written.
+    assert_eq!(register(&store, "n1"), TimerRecallStatus::Cancelled);
+    MessageStoreEngine::withdraw_native_timer_recall(&store, &registration("n1", due_ms));
+
+    clock.0.store(due_ms, Ordering::Release);
+    native_timer.set_delivering(true);
+    assert_eq!(native_timer.process_once().await, 2);
+    store.reput_once().await;
+    assert_eq!(delivered_keys(&store), keys(&["n1"]));
+    assert_eq!(register(&store, "n1"), TimerRecallStatus::TooLate);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn native_recalls_are_unsupported_in_other_modes() {
+    let root = tempdir().unwrap();
+    let store = open(root.path(), TimerStoreMode::JavaCompat)
+        .await
+        .expect("open a Java-compatible store");
+    let deliver_ms = current_millis() as i64 + 60_000;
+    assert_eq!(
+        MessageStoreEngine::register_native_timer_recall(&store, &registration("j0", deliver_ms)).unwrap(),
+        TimerRecallStatus::Unsupported
+    );
     close(store).await;
 }

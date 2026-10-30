@@ -37,6 +37,7 @@ use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::FlushBacklog;
 use rocketmq_store_api::StoreHealthSnapshot;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
@@ -363,6 +364,19 @@ pub trait MessageStoreEngine: MessageStoreReader + Send + Sync + 'static {
     fn recall_extended_timer(&self, _request: &TimerRecallRequest) -> Result<TimerRecallStatus, StoreError> {
         Ok(TimerRecallStatus::Unsupported)
     }
+
+    /// Registers a recall of a native timer before its tombstone is written. `Cancelled` means
+    /// the timer can still be stopped and the caller writes the tombstone; `TooLate` and
+    /// `NotFound` mean it cannot, and nothing was registered.
+    fn register_native_timer_recall(
+        &self,
+        _registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, StoreError> {
+        Ok(TimerRecallStatus::Unsupported)
+    }
+
+    /// Withdraws a registration whose tombstone could not be written.
+    fn withdraw_native_timer_recall(&self, _registration: &TimerRecallRegistration) {}
 
     /*    /// Asynchronous get message
     async fn get_message_async(

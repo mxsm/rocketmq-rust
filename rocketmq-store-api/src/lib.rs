@@ -88,6 +88,7 @@ pub use timer::TimerGeneration;
 pub use timer::TimerId;
 pub use timer::TimerPayloadLocator;
 pub use timer::TimerPayloadStoreLocator;
+pub use timer::TimerRecallRegistration;
 pub use timer::TimerRecallRequest;
 pub use timer::TimerRecallStatus;
 pub use timer::TimerSourceCqOffset;
