@@ -61,6 +61,7 @@ impl NativeTimerEngine {
                 return Ok(());
             }
             self.storage.visit_entries(minute, |entries| {
+                state.extend_tails(minute, entries);
                 for entry in entries {
                     state.insert_undelivered(*entry);
                 }
@@ -153,6 +154,7 @@ impl NativeTimerEngine {
             state.hours.remove(&hour);
             state.bucket_min_offsets.remove(&hour);
             state.retired.insert(hour);
+            state.forget_opened(hour);
         }
         state.promoted_until_ms = state.promoted_until_ms.max(hour_end_ms(horizon.saturating_sub(1)));
         Ok(())

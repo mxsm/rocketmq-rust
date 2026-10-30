@@ -421,6 +421,40 @@ fn payload_copies_fill_segments_in_turn_and_read_back() {
 }
 
 #[test]
+fn a_deleted_payload_day_is_gone_with_its_directory() {
+    let root = tempdir().unwrap();
+    let record_len = payload(0, DAY).len() as u64;
+    let (storage, _) = open_with_segment(&root, 2 * record_len);
+    let records: Vec<_> = (0..3).map(|cq| payload(cq, DAY)).collect();
+    storage.append_payloads(DAY, &records).unwrap();
+    let kept = storage.append_payloads(DAY + 1, &[payload(9, DAY + 1)]).unwrap();
+    assert_eq!(storage.payload_days(), vec![DAY, DAY + 1]);
+
+    storage.delete_payload_day(DAY).unwrap();
+    assert_eq!(storage.payload_days(), vec![DAY + 1]);
+    let day_dir = storage
+        .root()
+        .join(
+            NativePayloadSegment {
+                due_day_utc: DAY,
+                segment_id: 0,
+            }
+            .relative_path(),
+        )
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    assert!(!day_dir.exists());
+    assert!(storage
+        .sync()
+        .unwrap()
+        .payload_segments
+        .iter()
+        .all(|segment| segment.due_day_utc == DAY + 1));
+    assert!(storage.read_payload(kept[0]).is_ok());
+}
+
+#[test]
 fn a_payload_larger_than_a_segment_or_read_past_its_end_is_refused() {
     let root = tempdir().unwrap();
     let (storage, _) = open_with_segment(&root, 64);

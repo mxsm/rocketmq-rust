@@ -34,6 +34,7 @@ use super::engine::NativeTimerEngine;
 use super::engine::NativeTimerSource;
 use super::near_wheel::ENTRY_MEMORY_BYTES;
 
+mod collect;
 mod delivery;
 mod recall;
 

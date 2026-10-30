@@ -138,7 +138,7 @@ Each timer is delivered by the engine that admitted it, so `timerStoreMode` can 
 
 In a master/slave group, a slave indexes native timers and follows its master's deliveries through the messages the master writes. A slave promoted to master therefore writes only the timers its old master had not written; as with the standard engine, a timer can still be delivered twice around a failover.
 
-Current limit: files of delivered timers and of recalls are not yet removed.
+Once a checkpoint makes their delivery durable, the files of delivered timers and their payload copies are deleted, and the CommitLog files they referred to are released for cleanup. A recall is dropped from memory once the timer it names is delivered, but the recall log on disk is not yet compacted.
 
 ## Example and validation scope
 
