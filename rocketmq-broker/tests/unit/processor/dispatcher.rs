@@ -648,3 +648,66 @@ async fn send_waiting_for_durability_holds_no_fast_failure_permit() {
 
     fixture.finish().await;
 }
+
+/// Send leaf that records whether its request still holds the transport ordering slot just before
+/// and just after its append.
+#[derive(Clone, Default)]
+struct OrderingAtAppendProcessor {
+    held: Arc<Mutex<Vec<(bool, bool)>>>,
+}
+
+impl RequestProcessor for OrderingAtAppendProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
+        let before = rocketmq_transport::test_support::request_ordering_held();
+        // Stands in for the CommitLog append; the flush or replica wait follows it.
+        rocketmq_store::release_held_until_appended();
+        let after = rocketmq_transport::test_support::request_ordering_held();
+        self.held.lock().push((before, after));
+        let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_opaque(request.original_identity().original_opaque());
+        Ok(ResponseAction::Reply(
+            RemotingResponse::command(response).expect("ordering probe response"),
+        ))
+    }
+
+    fn reject_request(&self, _code: i32) -> RejectRequestDecision {
+        RejectRequestDecision::Proceed
+    }
+
+    fn observe_response(&self, _observation: ResponseObservation) {}
+}
+
+#[tokio::test]
+async fn appended_send_releases_its_ordering_slot_with_or_without_fast_failure() {
+    for fast_failure_enabled in [true, false] {
+        let processor = OrderingAtAppendProcessor::default();
+        let held = Arc::clone(&processor.held);
+        let mut router = BrokerRequestProcessor::new();
+        router.set_auth_disabled_by_validated_config();
+        router.register_processor(RequestCode::SendMessage as i32, processor);
+        if fast_failure_enabled {
+            router.set_broker_fast_failure(fast_failure(4));
+        }
+        let fixture = RouterFixture::new(router, Vec::new());
+
+        let reply = fixture
+            .harness
+            .dispatch(
+                None,
+                RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(71),
+            )
+            .await
+            .expect("admitted send dispatch");
+
+        let EmbeddedDispatchResult::Reply(reply) = reply else {
+            panic!("admitted send must reply");
+        };
+        assert_eq!(reply.response_code(), ResponseCode::Success as i32);
+        assert_eq!(
+            *held.lock(),
+            vec![(true, false)],
+            "fast failure enabled: {fast_failure_enabled}"
+        );
+        fixture.finish().await;
+    }
+}

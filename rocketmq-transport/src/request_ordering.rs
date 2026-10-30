@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::Cell;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Weak;
 
@@ -120,6 +122,44 @@ impl Drop for RequestOrderingGuard {
     }
 }
 
+tokio::task_local! {
+    static HELD_ORDERING: Cell<Option<RequestOrderingGuard>>;
+}
+
+/// Runs an admitted request while it holds its ordering slot.
+///
+/// The slot is released when `request` completes or is dropped, or earlier through
+/// [`release_request_ordering`].
+pub(crate) async fn run_ordered<F>(guard: RequestOrderingGuard, request: F) -> F::Output
+where
+    F: Future,
+{
+    HELD_ORDERING.scope(Cell::new(Some(guard)), request).await
+}
+
+/// Ends the ordered part of the request running on the current task.
+///
+/// The next request with the same ordering key may start once this returns, while the current
+/// request keeps running. A handler calls it once the work that must not overlap a later
+/// same-key request is complete, for example after a send is appended but before it waits for the
+/// disk flush. Calls after the first one, outside a request, or from another task do nothing.
+pub fn release_request_ordering() {
+    let _ = HELD_ORDERING.try_with(|guard| drop(guard.take()));
+}
+
+/// Returns whether the request running on the current task still holds its ordering slot.
+#[cfg(any(test, feature = "test-support"))]
+pub fn request_ordering_held() -> bool {
+    HELD_ORDERING
+        .try_with(|guard| {
+            let held = guard.take();
+            let is_held = held.is_some();
+            guard.set(held);
+            is_held
+        })
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicUsize;
@@ -175,5 +215,57 @@ mod tests {
 
         assert_eq!(completed.load(Ordering::Relaxed), 128);
         assert_eq!(sequencer.retained_key_count(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn released_ordering_admits_the_next_same_key_request_while_the_first_runs() {
+        let sequencer = RequestSequencer::default();
+        let ordering = RequestOrdering::Ordered(RequestOrderingKey::new(9));
+        let released = Arc::new(tokio::sync::Notify::new());
+        let finish = Arc::new(tokio::sync::Notify::new());
+        let first = tokio::spawn(run_ordered(sequencer.acquire(ordering).await, {
+            let released = released.clone();
+            let finish = finish.clone();
+            async move {
+                release_request_ordering();
+                released.notify_one();
+                finish.notified().await;
+            }
+        }));
+        released.notified().await;
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), sequencer.acquire(ordering))
+            .await
+            .expect("a released ordering admits the next same-key request");
+
+        assert!(!first.is_finished());
+        drop(second);
+        finish.notify_one();
+        first.await.expect("first request");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unreleased_ordering_is_held_until_the_request_completes() {
+        let sequencer = RequestSequencer::default();
+        let ordering = RequestOrdering::Ordered(RequestOrderingKey::new(10));
+        let finish = Arc::new(tokio::sync::Notify::new());
+        let first = tokio::spawn(run_ordered(sequencer.acquire(ordering).await, {
+            let finish = finish.clone();
+            async move { finish.notified().await }
+        }));
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), sequencer.acquire(ordering))
+                .await
+                .is_err()
+        );
+        finish.notify_one();
+        first.await.expect("first request");
+        drop(sequencer.acquire(ordering).await);
+    }
+
+    #[test]
+    fn release_outside_a_request_is_a_no_op() {
+        release_request_ordering();
     }
 }

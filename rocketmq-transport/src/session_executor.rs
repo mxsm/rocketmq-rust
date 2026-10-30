@@ -37,6 +37,7 @@ use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
 use crate::dispatch::deferred_resume::DeferredResumeSubmissionResult;
 use crate::dispatch::deferred_resume::ResumeJobCell;
+use crate::request_ordering::run_ordered;
 use crate::request_ordering::RequestOrdering;
 use crate::request_ordering::RequestSequencer;
 
@@ -173,8 +174,7 @@ impl SessionExecutor {
                 drop(queued);
                 let _inflight = inflight;
                 let _processor = processor;
-                let _ordering_guard = ordering_guard;
-                execute(request_operation_for_task).await;
+                run_ordered(ordering_guard, execute(request_operation_for_task)).await;
             },
         ) {
             Ok(task_id) => Ok(SessionDispatchAttempt::Accepted(task_id)),
@@ -407,8 +407,7 @@ impl DeferredResumeExecutor {
                 drop(queued);
                 let _inflight = inflight;
                 let _processor = processor;
-                let _ordering_guard = ordering_guard;
-                job.execute(operation_for_task).await;
+                run_ordered(ordering_guard, job.execute(operation_for_task)).await;
             },
         ) {
             Ok(task_id) => DeferredResumeSubmissionResult::Submitted(task_id),

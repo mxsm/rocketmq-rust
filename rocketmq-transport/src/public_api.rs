@@ -131,6 +131,7 @@ pub use crate::file_region_writer::file_transfer_snapshot;
 pub use crate::file_region_writer::FileTransferSnapshot;
 pub use crate::proxy_protocol::ProxyProtocolConfig;
 pub use crate::remoting_server::rocketmq_tokio_server::TransportServer;
+pub use crate::request_ordering::release_request_ordering;
 pub use crate::request_ordering::RequestOrdering;
 pub use crate::request_ordering::RequestOrderingKey;
 pub use crate::request_outcome::OutboundRequestContract;
