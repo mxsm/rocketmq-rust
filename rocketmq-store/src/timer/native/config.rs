@@ -32,6 +32,8 @@ pub(crate) struct NativeTimerConfig {
     pub(crate) mid_horizon_ms: i64,
     /// The latest deadline accepted, relative to now.
     pub(crate) max_delay_ms: i64,
+    /// Size a payload segment fills before the next one starts.
+    pub(crate) payload_segment_bytes: u64,
 }
 
 impl Default for NativeTimerConfig {
@@ -43,6 +45,7 @@ impl Default for NativeTimerConfig {
             near_wheel_memory_bytes: 256 * 1024 * 1024,
             mid_horizon_ms: 48 * HOUR_MS,
             max_delay_ms: 400 * DAY_MS,
+            payload_segment_bytes: 256 * 1024 * 1024,
         }
     }
 }
@@ -73,6 +76,9 @@ impl NativeTimerConfig {
         }
         if self.max_delay_ms < self.mid_horizon_ms {
             return Err("maxDelayDays");
+        }
+        if self.payload_segment_bytes == 0 || self.payload_segment_bytes > u64::from(u32::MAX) {
+            return Err("payloadSegmentBytes");
         }
         Ok(())
     }
@@ -109,5 +115,9 @@ mod tests {
             Err("nearWindowSec")
         );
         assert_eq!(invalid(|config| config.max_delay_ms = HOUR_MS), Err("maxDelayDays"));
+        assert_eq!(
+            invalid(|config| config.payload_segment_bytes = 1 << 32),
+            Err("payloadSegmentBytes")
+        );
     }
 }

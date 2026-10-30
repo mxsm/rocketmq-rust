@@ -14,13 +14,15 @@
 
 //! The `native` timer engine: a tiered time-bucket log for long delays.
 //!
-//! Timers due within the mid horizon are indexed in hour buckets that point into the
-//! CommitLog. An hour bucket is split into sorted minute runs when its hour comes near, and a
-//! minute run is loaded into the in-memory near wheel when its minute does; delivery takes due
-//! timers from the wheel per lane, in `(due_ms, cq_offset)` order. Recalls go to the cancel log
-//! and an in-memory cancel set. A group commit checkpoints how far the Timer CQ is indexed and
-//! how far each lane delivered. Day buckets with payload copies, delivery and wiring into the
-//! timer store come in later changes; until then nothing outside this module uses it.
+//! A timer due beyond the mid horizon has its record copied once and is indexed in a day
+//! bucket, which moves into hours when its day comes within the mid horizon. Other timers are
+//! indexed in hour buckets that point into the CommitLog. An hour bucket is split into sorted
+//! minute runs when its hour comes near, and a minute run is loaded into the in-memory near
+//! wheel when its minute does; delivery takes due timers from the wheel per lane, in
+//! `(due_ms, cq_offset)` order. Recalls go to the cancel log and an in-memory cancel set. A
+//! group commit checkpoints how far the Timer CQ is indexed and how far each lane delivered.
+//! Delivery and wiring into the timer store come in later changes; until then nothing outside
+//! this module uses it.
 
 mod cancel_set;
 mod config;

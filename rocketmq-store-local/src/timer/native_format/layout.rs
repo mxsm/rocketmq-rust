@@ -222,6 +222,49 @@ impl NativeBucketId {
     }
 }
 
+/// Directory of payload copies under [`NATIVE_TIMER_DIR`].
+pub const NATIVE_PAYLOAD_DIR: &str = "payload";
+
+/// One segment of payload copies: the copies of timers due on one UTC day, in the order they
+/// were written, each a self-checking `TimerPayloadRecordV1`. A day's segments are numbered
+/// from 0; a new one starts when the last is full.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NativePayloadSegment {
+    pub due_day_utc: i32,
+    pub segment_id: u32,
+}
+
+impl NativePayloadSegment {
+    /// The UTC day of `due_ms`, or `None` before the Unix epoch.
+    pub fn due_day_of(due_ms: i64) -> Option<i32> {
+        if due_ms < 0 {
+            return None;
+        }
+        i32::try_from(due_ms / NativeBucketKind::Day.window_ms()).ok()
+    }
+
+    /// Path of the segment under [`NATIVE_TIMER_DIR`]: `payload/<day>/<segment>`, both
+    /// zero-padded.
+    pub fn relative_path(self) -> PathBuf {
+        PathBuf::from(NATIVE_PAYLOAD_DIR)
+            .join(format!("{:08}", self.due_day_utc))
+            .join(format!("{:010}", self.segment_id))
+    }
+
+    /// Parses a day directory name and a segment file name, as [`Self::relative_path`] writes
+    /// them.
+    pub fn parse(day_dir: &str, file_name: &str) -> Option<Self> {
+        let digits = |name: &str, width: usize| name.len() == width && name.bytes().all(|byte| byte.is_ascii_digit());
+        if !digits(day_dir, 8) || !digits(file_name, 10) {
+            return None;
+        }
+        Some(Self {
+            due_day_utc: day_dir.parse().ok()?,
+            segment_id: file_name.parse().ok()?,
+        })
+    }
+}
+
 /// FNV-1a 64 of `bytes`.
 fn fnv1a64(bytes: impl IntoIterator<Item = u8>) -> u64 {
     bytes.into_iter().fold(FNV_OFFSET, |hash, byte| {

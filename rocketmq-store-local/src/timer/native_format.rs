@@ -22,8 +22,9 @@
 //!   checkpoint.0, .1       A/B checkpoints; the valid one with the higher sequence wins
 //!   cancel.log             recalls, appended in Timer CQ order
 //!   day/<start_ms>         day buckets: index entries whose payload was copied
-//!   hour/<start_ms>        hour buckets: index entries pointing into the CommitLog
+//!   hour/<start_ms>        hour buckets: index entries pointing into the CommitLog or at copies
 //!   minute/<start_ms>      minute runs: index entries sorted by (due_ms, cq_offset)
+//!   payload/<day>/<seg>    payload copies of timers due on that UTC day
 //! ```
 //!
 //! A bucket file is a 64-byte header followed by frames of at most 4 KiB, each holding up to
@@ -60,9 +61,11 @@ pub use layout::native_lane;
 pub use layout::NativeBucketId;
 pub use layout::NativeBucketKind;
 pub use layout::NativeFormat;
+pub use layout::NativePayloadSegment;
 pub use layout::NATIVE_CANCEL_LOG_NAME;
 pub use layout::NATIVE_FORMAT_FILE_NAME;
 pub use layout::NATIVE_FORMAT_SIZE;
+pub use layout::NATIVE_PAYLOAD_DIR;
 pub use layout::NATIVE_TIMER_DIR;
 use thiserror::Error;
 

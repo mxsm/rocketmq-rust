@@ -23,8 +23,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -49,15 +47,23 @@ use crate::timer::native_format::NativeFormat;
 use crate::timer::native_format::NativeFormatError;
 use crate::timer::native_format::NativeFrameOrder;
 use crate::timer::native_format::NativeIndexEntry;
+use crate::timer::native_format::NativePayloadSegment;
+use crate::timer::native_format::NativePayloadSegmentLength;
 use crate::timer::native_format::NATIVE_CANCEL_LOG_NAME;
 use crate::timer::native_format::NATIVE_FILE_HEADER_SIZE;
 use crate::timer::native_format::NATIVE_FORMAT_FILE_NAME;
+use crate::timer::native_format::NATIVE_PAYLOAD_DIR;
 use crate::timer::native_format::NATIVE_TIMER_DIR;
 use crate::timer::positional_io::read_exact_at;
 use crate::timer::positional_io::write_all_at;
 
-/// Bucket files kept open at once.
-const HANDLE_LIMIT: usize = 64;
+mod handles;
+mod payload;
+
+pub use payload::NativePayloadLocation;
+
+use handles::HandleCache;
+
 /// Bytes a bucket read takes from the file at a time.
 const READ_CHUNK_BYTES: u64 = 1 << 20;
 const HEADER_LEN: u64 = NATIVE_FILE_HEADER_SIZE as u64;
@@ -83,13 +89,41 @@ pub enum NativeStorageError {
     StaleCheckpoint { sequence: u64, last: u64 },
     #[error("native checkpoint {sequence} records more than the files hold durably")]
     CheckpointAheadOfFiles { sequence: u64 },
+    #[error("native payload record of {length} bytes does not fit a {segment_bytes}-byte segment")]
+    PayloadTooLarge { length: usize, segment_bytes: u64 },
+    #[error("native payload record at {location:?} is not readable")]
+    CorruptPayload { location: NativePayloadLocation },
+    #[error("native payload segment size {0} must be positive and fit 32-bit offsets")]
+    InvalidSegmentSize(u64),
 }
 
-/// Lengths of the bucket files and the cancel log: what [`NativeTimerStorage::sync`] made
-/// durable, or what [`NativeTimerStorage::written_lengths`] found written.
+/// How a `native` timer directory is laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeStorageConfig {
+    /// Lanes the directory is written with; fixed for its life.
+    pub lane_count: u16,
+    /// Size a payload segment fills before the next one starts; at most `u32::MAX`, since a
+    /// location keeps a 32-bit offset.
+    pub payload_segment_bytes: u64,
+}
+
+impl NativeStorageConfig {
+    /// `lane_count` lanes and 256 MiB payload segments.
+    pub fn new(lane_count: u16) -> Self {
+        Self {
+            lane_count,
+            payload_segment_bytes: 256 * 1024 * 1024,
+        }
+    }
+}
+
+/// Lengths of the bucket files, the payload segments and the cancel log: what
+/// [`NativeTimerStorage::sync`] made durable, or what [`NativeTimerStorage::written_lengths`]
+/// found written.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NativeSyncedLengths {
     pub buckets: Vec<NativeBucketLength>,
+    pub payload_segments: Vec<NativePayloadSegmentLength>,
     pub cancel_log_length: u64,
 }
 
@@ -103,8 +137,9 @@ struct LogFile {
 
 struct StorageState {
     buckets: BTreeMap<NativeBucketId, LogFile>,
-    handles: HashMap<NativeBucketId, File>,
-    handle_order: VecDeque<NativeBucketId>,
+    handles: HandleCache<NativeBucketId>,
+    payloads: BTreeMap<NativePayloadSegment, LogFile>,
+    payload_handles: HandleCache<NativePayloadSegment>,
     cancel_file: File,
     cancel: LogFile,
     /// Directories whose entries changed since the last sync.
@@ -122,30 +157,34 @@ struct LastCheckpoint {
 pub struct NativeTimerStorage {
     root: PathBuf,
     format: NativeFormat,
+    payload_segment_bytes: u64,
     state: Mutex<StorageState>,
     /// Serializes checkpoint writes; kept apart from `state` so appends go on while one syncs.
     checkpoint: Mutex<Option<LastCheckpoint>>,
 }
 
 impl NativeTimerStorage {
-    /// Opens `timer-native/` under `store_root`, creating it with `lane_count` lanes when it is
-    /// new, and cuts every file back to the last checkpoint, which it returns. With no
-    /// checkpoint, nothing is durable yet: every bucket file is deleted and the cancel log
-    /// emptied, and the engine replays the Timer CQ from its start.
+    /// Opens `timer-native/` under `store_root`, creating it with the configured lanes when it
+    /// is new, and cuts every file back to the last checkpoint, which it returns. With no
+    /// checkpoint, nothing is durable yet: every bucket file and payload segment is deleted and
+    /// the cancel log emptied, and the engine replays the Timer CQ from its start.
     ///
     /// # Errors
     ///
-    /// Returns [`NativeStorageError`] when the directory was written with another lane count,
-    /// has timer files but no FORMAT, holds a corrupt record, or lost bytes its checkpoint made
-    /// durable, and on I/O failure.
+    /// Returns [`NativeStorageError`] for an invalid segment size, or when the directory was
+    /// written with another lane count, has timer files but no FORMAT, holds a corrupt record,
+    /// or lost bytes its checkpoint made durable, and on I/O failure.
     pub fn open(
         store_root: impl AsRef<Path>,
-        lane_count: u16,
+        config: NativeStorageConfig,
         now_ms: i64,
     ) -> Result<(Self, Option<NativeCheckpoint>), NativeStorageError> {
+        if config.payload_segment_bytes == 0 || config.payload_segment_bytes > u64::from(u32::MAX) {
+            return Err(NativeStorageError::InvalidSegmentSize(config.payload_segment_bytes));
+        }
         let root = store_root.as_ref().join(NATIVE_TIMER_DIR);
         fs::create_dir_all(&root)?;
-        let format = open_format(&root, lane_count, now_ms)?;
+        let format = open_format(&root, config.lane_count, now_ms)?;
         let checkpoint = NativeCheckpoint::select(
             read_if_present(&root.join(NativeCheckpointSlot::A.file_name()))?.as_deref(),
             read_if_present(&root.join(NativeCheckpointSlot::B.file_name()))?.as_deref(),
@@ -195,6 +234,8 @@ impl NativeTimerStorage {
             });
         }
 
+        let payloads = payload::recover(&root, recorded.map(|checkpoint| checkpoint.payload_segments.as_slice()))?;
+
         let cancel_path = root.join(NATIVE_CANCEL_LOG_NAME);
         let cancel_file = OpenOptions::new()
             .create(true)
@@ -211,10 +252,12 @@ impl NativeTimerStorage {
         });
         let storage = Self {
             format,
+            payload_segment_bytes: config.payload_segment_bytes,
             state: Mutex::new(StorageState {
                 buckets,
-                handles: HashMap::new(),
-                handle_order: VecDeque::new(),
+                handles: HandleCache::new(),
+                payloads,
+                payload_handles: HandleCache::new(),
                 cancel_file,
                 cancel: LogFile {
                     length: cancel_length,
@@ -243,9 +286,9 @@ impl NativeTimerStorage {
         self.written_lengths().buckets
     }
 
-    /// How much of every bucket file and of the cancel log is written. A writer that knows
-    /// which sources these bytes hold takes them, syncs, and checkpoints exactly them; the
-    /// lengths are no larger than what the sync then makes durable.
+    /// How much of every bucket file, payload segment and the cancel log is written. A writer
+    /// that knows which sources these bytes hold takes them, syncs, and checkpoints exactly
+    /// them; the lengths are no larger than what the sync then makes durable.
     pub fn written_lengths(&self) -> NativeSyncedLengths {
         let state = self.state.lock();
         NativeSyncedLengths {
@@ -257,6 +300,7 @@ impl NativeTimerStorage {
                     durable_length: file.length,
                 })
                 .collect(),
+            payload_segments: payload::lengths(&state.payloads, |file| file.length),
             cancel_log_length: state.cancel.length,
         }
     }
@@ -368,9 +412,7 @@ impl NativeTimerStorage {
         if !state.buckets.contains_key(&bucket) {
             return Ok(false);
         }
-        // An open handle keeps a file from being deleted on Windows.
         state.handles.remove(&bucket);
-        state.handle_order.retain(|cached| *cached != bucket);
         let path = self.root.join(bucket.relative_path());
         match fs::remove_file(&path) {
             Ok(()) => {}
@@ -431,7 +473,7 @@ impl NativeTimerStorage {
     /// Returns an I/O error when a file or directory cannot be synced; durable lengths then
     /// stay where they were.
     pub fn sync(&self) -> Result<NativeSyncedLengths, NativeStorageError> {
-        let (buckets, cancel, dirs) = {
+        let (buckets, payloads, cancel, dirs) = {
             let mut state = self.state.lock();
             let pending: Vec<_> = state
                 .buckets
@@ -443,14 +485,16 @@ impl NativeTimerStorage {
             for (bucket, length) in pending {
                 buckets.push((bucket, length, self.handle(&mut state, bucket)?.try_clone()?));
             }
+            let payloads = self.unsynced_payloads(&mut state)?;
             let cancel = (state.cancel.length > state.cancel.durable)
                 .then(|| state.cancel_file.try_clone().map(|file| (file, state.cancel.length)))
                 .transpose()?;
-            (buckets, cancel, std::mem::take(&mut state.changed_dirs))
+            (buckets, payloads, cancel, std::mem::take(&mut state.changed_dirs))
         };
         let synced = buckets
             .iter()
             .try_for_each(|(_, _, file)| file.sync_data())
+            .and_then(|()| payloads.iter().try_for_each(|(_, _, file)| file.sync_data()))
             .and_then(|()| cancel.as_ref().map_or(Ok(()), |(file, _)| file.sync_data()))
             .and_then(|()| dirs.iter().try_for_each(|dir| sync_directory(dir)));
 
@@ -461,6 +505,11 @@ impl NativeTimerStorage {
         }
         for (bucket, length, _) in buckets {
             if let Some(file) = state.buckets.get_mut(&bucket) {
+                file.durable = file.durable.max(length);
+            }
+        }
+        for (segment, length, _) in payloads {
+            if let Some(file) = state.payloads.get_mut(&segment) {
                 file.durable = file.durable.max(length);
             }
         }
@@ -478,6 +527,7 @@ impl NativeTimerStorage {
                     durable_length: file.durable,
                 })
                 .collect(),
+            payload_segments: payload::lengths(&state.payloads, |file| file.durable),
             cancel_log_length: state.cancel.durable,
         })
     }
@@ -513,6 +563,15 @@ impl NativeTimerStorage {
                     state
                         .buckets
                         .get(&recorded.bucket)
+                        .is_some_and(|file| recorded.durable_length <= file.durable)
+                })
+                && checkpoint.payload_segments.iter().all(|recorded| {
+                    state
+                        .payloads
+                        .get(&NativePayloadSegment {
+                            due_day_utc: recorded.due_day_utc,
+                            segment_id: recorded.segment_id,
+                        })
                         .is_some_and(|file| recorded.durable_length <= file.durable)
                 });
             if !covered {
@@ -562,37 +621,15 @@ impl NativeTimerStorage {
                 durable: 0,
             },
         );
-        self.cache(state, bucket, file);
+        state.handles.insert(bucket, file);
         Ok(())
     }
 
     fn handle<'a>(&self, state: &'a mut StorageState, bucket: NativeBucketId) -> Result<&'a File, NativeStorageError> {
-        if !state.handles.contains_key(&bucket) {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(self.root.join(bucket.relative_path()))?;
-            self.cache(state, bucket, file);
-        } else if state.handle_order.back() != Some(&bucket) {
-            state.handle_order.retain(|cached| *cached != bucket);
-            state.handle_order.push_back(bucket);
-        }
-        state
+        let path = self.root.join(bucket.relative_path());
+        Ok(state
             .handles
-            .get(&bucket)
-            .ok_or(NativeStorageError::UnknownBucket(bucket))
-    }
-
-    fn cache(&self, state: &mut StorageState, bucket: NativeBucketId, file: File) {
-        if state.handles.insert(bucket, file).is_none() {
-            state.handle_order.push_back(bucket);
-        }
-        while state.handles.len() > HANDLE_LIMIT {
-            let Some(evicted) = state.handle_order.pop_front() else {
-                break;
-            };
-            state.handles.remove(&evicted);
-        }
+            .get_or_open(bucket, || OpenOptions::new().read(true).write(true).open(path))?)
     }
 }
 
@@ -636,6 +673,7 @@ fn holds_timer_files(root: &Path) -> Result<bool, NativeStorageError> {
         NativeCheckpointSlot::A.file_name(),
         NativeCheckpointSlot::B.file_name(),
         NATIVE_CANCEL_LOG_NAME,
+        NATIVE_PAYLOAD_DIR,
     ] {
         if root.join(name).exists() {
             return Ok(true);

@@ -12,10 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bytes::Bytes;
 use rocketmq_store_local::timer::native_format::native_lane;
 use rocketmq_store_local::timer::native_format::NativeBucketId;
 use rocketmq_store_local::timer::native_format::NativeBucketKind;
 use rocketmq_store_local::timer::native_format::NativeDueCursor;
+use rocketmq_store_local::timer::native_format::NativeLocator;
+use rocketmq_store_local::timer::native_format::NativePayloadSegment;
+use rocketmq_store_local::timer::native_storage::NativePayloadLocation;
+use rocketmq_store_local::timer::payload_record::TimerPayloadRecordV1;
 use tempfile::tempdir;
 use tempfile::TempDir;
 
@@ -31,6 +36,7 @@ use super::near_wheel::ENTRY_MEMORY_BYTES;
 
 const HOUR_MS: i64 = 3_600_000;
 const MINUTE_MS: i64 = 60_000;
+const DAY_MS: i64 = 24 * HOUR_MS;
 /// The start of an hour.
 const H0: i64 = 1_700_000_000_000 - 1_700_000_000_000 % HOUR_MS;
 const LANES: u16 = 4;
@@ -62,6 +68,7 @@ fn timer(cq_offset: i64, due_ms: i64) -> NativeTimerSource {
         kind: NativeSourceKind::Timer {
             unique_key: format!("key-{cq_offset}"),
         },
+        frame: Bytes::from(format!("frame-{cq_offset}").into_bytes()),
     }
 }
 
@@ -184,32 +191,36 @@ fn a_due_timer_carries_the_recalls_that_may_cancel_it() {
 }
 
 #[test]
-fn sources_past_the_mid_horizon_or_the_maximum_delay_are_not_indexed() {
+fn sources_past_the_maximum_delay_or_without_a_copyable_record_are_not_indexed() {
     let root = tempdir().unwrap();
     let engine = open(&root, config(), H0);
+    let mut empty_frame = timer(4, H0 + 3 * DAY_MS);
+    empty_frame.frame = Bytes::new();
     let report = ingest(
         &engine,
         &[
             timer(1, -5),
-            timer(2, H0 + 48 * HOUR_MS),
-            timer(3, H0 + 401 * 24 * HOUR_MS),
-            recall(4, 9, H0 + 49 * HOUR_MS),
+            timer(2, H0 + 3 * DAY_MS),
+            timer(3, H0 + 401 * DAY_MS),
+            empty_frame,
             timer(5, H0 + 48 * HOUR_MS - 1),
+            recall(6, 2, H0 + 3 * DAY_MS),
         ],
         H0,
     );
-    assert_eq!(report.indexed, 1);
+    assert_eq!((report.indexed, report.recalls), (2, 1));
     assert_eq!(
         report.rejected,
         vec![
             (1, NativeRejection::InvalidDeadline),
-            (2, NativeRejection::BeyondMidHorizon),
             (3, NativeRejection::BeyondMaxDelay),
-            (4, NativeRejection::BeyondMidHorizon),
+            (4, NativeRejection::InvalidPayload),
         ]
     );
     // Rejected sources are passed all the same.
-    assert_eq!(engine.source_frontier(), 6);
+    assert_eq!(engine.source_frontier(), 7);
+    let counts = engine.counts();
+    assert_eq!((counts.days, counts.hours), (1, 1));
 }
 
 #[test]
@@ -416,6 +427,110 @@ fn a_timer_of_a_split_hour_goes_to_its_minute_run() {
     assert!(due(&engine, H0 + 30 * MINUTE_MS).is_empty());
     assert_eq!(engine.counts().wheel, 1);
     assert_eq!(offsets(&due(&engine, H0 + 40 * MINUTE_MS)), vec![2]);
+}
+
+/// The start of the UTC day three days after `H0`.
+const D3: i64 = (H0 / DAY_MS + 3) * DAY_MS;
+
+/// The copied record of a due timer that points at one.
+fn copy_of(engine: &NativeTimerEngine, timer: &NativeDueTimer) -> TimerPayloadRecordV1 {
+    let NativeLocator::Payload { segment_id, offset } = timer.entry.locator else {
+        panic!("timer {} was not copied", timer.entry.cq_offset);
+    };
+    let location = NativePayloadLocation {
+        segment: NativePayloadSegment {
+            due_day_utc: NativePayloadSegment::due_day_of(timer.entry.due_ms).unwrap(),
+            segment_id,
+        },
+        offset,
+        length: timer.entry.size as u32,
+    };
+    engine.storage().read_payload(location).unwrap()
+}
+
+#[test]
+fn a_timer_beyond_the_mid_horizon_is_copied_and_moves_into_hours_on_its_way() {
+    let root = tempdir().unwrap();
+    let engine = open(&root, config(), H0);
+    let due_ms = D3 + 5 * MINUTE_MS;
+    ingest(&engine, &[timer(1, due_ms)], H0);
+    let counts = engine.counts();
+    assert_eq!((counts.days, counts.hours), (1, 0));
+    assert_eq!(engine.next_deadline_ms(), Some(D3 - 48 * HOUR_MS));
+
+    // Its day moves into hours once the day starts within the mid horizon.
+    assert!(due(&engine, D3 - 48 * HOUR_MS - 1).is_empty());
+    assert_eq!(engine.counts().days, 1);
+    assert!(due(&engine, D3 - 48 * HOUR_MS).is_empty());
+    let counts = engine.counts();
+    assert_eq!((counts.days, counts.hours), (0, 1));
+
+    let due = due(&engine, due_ms);
+    assert_eq!(offsets(&due), vec![1]);
+    let copy = copy_of(&engine, &due[0]);
+    assert_eq!(copy.frame, b"frame-1");
+    assert_eq!(copy.source_cq_offset.get(), 1);
+    assert_eq!(copy.real_topic, TOPIC);
+}
+
+#[test]
+fn a_moved_day_bucket_is_deleted_only_once_a_checkpoint_leaves_it_out() {
+    let root = tempdir().unwrap();
+    let engine = open(&root, config(), H0);
+    ingest(&engine, &[timer(1, D3 + 1_000)], H0);
+    assert!(due(&engine, D3 - 47 * HOUR_MS).is_empty());
+    let day = NativeBucketId::starting_at(NativeBucketKind::Day, D3).unwrap();
+    let day_file = engine.storage().root().join(day.relative_path());
+    assert!(day_file.exists());
+
+    let checkpoint = engine.checkpoint(COMMIT_LOG_END, H0).unwrap();
+    assert!(checkpoint
+        .buckets
+        .iter()
+        .all(|bucket| bucket.bucket.kind() != NativeBucketKind::Day));
+    assert_eq!(checkpoint.payload_segments.len(), 1);
+    assert!(!day_file.exists());
+    drop(engine);
+
+    let engine = open(&root, config(), D3);
+    assert_eq!(engine.counts().days, 0);
+    let due = due(&engine, D3 + 1_000);
+    assert_eq!(offsets(&due), vec![1]);
+    assert_eq!(copy_of(&engine, &due[0]).frame, b"frame-1");
+}
+
+#[test]
+fn a_crash_cuts_copies_back_with_the_buckets_and_the_replay_copies_again() {
+    let root = tempdir().unwrap();
+    let engine = open(&root, config(), H0);
+    ingest(&engine, &[timer(1, D3 + 1_000)], H0);
+    engine.checkpoint(COMMIT_LOG_END, H0).unwrap();
+    ingest(&engine, &[timer(2, D3 + 2_000)], H0);
+    drop(engine);
+
+    let engine = open(&root, config(), H0);
+    assert_eq!(engine.source_frontier(), 2);
+    ingest(&engine, &[timer(2, D3 + 2_000)], H0);
+    let due = due(&engine, D3 + 2_000);
+    assert_eq!(offsets(&due), vec![1, 2]);
+    assert_eq!(copy_of(&engine, &due[0]).frame, b"frame-1");
+    assert_eq!(copy_of(&engine, &due[1]).frame, b"frame-2");
+}
+
+#[test]
+fn a_copied_timer_of_a_moved_day_goes_straight_to_its_hour() {
+    let root = tempdir().unwrap();
+    let engine = open(&root, config(), H0);
+    ingest(&engine, &[timer(1, D3 + HOUR_MS)], H0);
+    let now = D3 - 47 * HOUR_MS;
+    assert!(due(&engine, now).is_empty());
+    // Still beyond the mid horizon, so copied, but its day is already moved into hours.
+    ingest(&engine, &[timer(2, D3 + 2 * HOUR_MS)], now);
+    let counts = engine.counts();
+    assert_eq!((counts.days, counts.hours), (0, 2));
+    let due = due(&engine, D3 + 2 * HOUR_MS);
+    assert_eq!(offsets(&due), vec![1, 2]);
+    assert_eq!(copy_of(&engine, &due[1]).frame, b"frame-2");
 }
 
 #[test]
