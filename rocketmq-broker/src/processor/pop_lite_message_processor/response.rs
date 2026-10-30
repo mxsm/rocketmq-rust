@@ -37,21 +37,6 @@ impl<MS> PopLiteMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
-    pub(super) fn compose_pop_lite_command(
-        &self,
-        opaque: i32,
-        request_header: &PopLiteMessageRequestHeader,
-        result: PopLiteCoreResult,
-        kind: PopLiteResponseKind,
-    ) -> RemotingCommand {
-        let (mut head, body) = self.compose_pop_lite_parts(request_header, result, kind);
-        head.set_opaque_mut(opaque);
-        if let Some(body) = body {
-            head.set_body_mut_ref(body);
-        }
-        head
-    }
-
     pub(super) fn compose_pop_lite_response(
         &self,
         request_header: &PopLiteMessageRequestHeader,
@@ -59,15 +44,6 @@ where
         kind: PopLiteResponseKind,
     ) -> crate::broker_error::BrokerResult<RemotingResponse> {
         compose_pop_lite_response(&self.context.command_factory, request_header, result, kind)
-    }
-
-    fn compose_pop_lite_parts(
-        &self,
-        request_header: &PopLiteMessageRequestHeader,
-        result: PopLiteCoreResult,
-        kind: PopLiteResponseKind,
-    ) -> (RemotingCommand, Option<bytes::Bytes>) {
-        compose_pop_lite_response_parts(&self.context.command_factory, request_header, result, kind)
     }
 }
 
