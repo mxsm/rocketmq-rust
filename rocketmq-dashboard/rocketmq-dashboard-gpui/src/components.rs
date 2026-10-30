@@ -16,8 +16,6 @@
 
 #[path = "components/app_shell.rs"]
 pub mod app_shell;
-#[path = "components/data_table.rs"]
-pub mod data_table;
 #[path = "components/dialog.rs"]
 pub mod dialog;
 #[path = "components/key_value.rs"]
@@ -26,8 +24,6 @@ pub mod key_value;
 pub mod metric_card;
 #[path = "components/page_header.rs"]
 pub mod page_header;
-#[path = "components/query_toolbar.rs"]
-pub mod query_toolbar;
 #[path = "components/sidebar.rs"]
 pub mod sidebar;
 #[path = "components/states.rs"]
@@ -38,5 +34,14 @@ pub mod status_badge;
 pub mod toast;
 #[path = "components/topbar.rs"]
 pub mod topbar;
+#[path = "components/topology_map.rs"]
+pub(crate) mod topology_map;
+#[path = "components/topology_panels.rs"]
+pub(crate) mod topology_panels;
 #[path = "components/trend.rs"]
 pub mod trend;
+
+#[path = "components/topic_picker.rs"]
+pub(crate) mod topic_picker;
+#[path = "components/trace_timeline.rs"]
+pub(crate) mod trace_timeline;

@@ -16,17 +16,30 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, Window, div, px,
+    AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
     button::Button,
     input::{Input, InputEvent, InputState},
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
 };
 use rocketmq_dashboard_common::{ConsumerClientObservation, ConsumerObservation, ConsumerObservationState};
 
 use crate::{features::producers_store::ProducersStore, services::AppServices, state::Loadable};
+
+#[derive(Clone)]
+struct ProducerTopicOption(String);
+impl SelectItem for ProducerTopicOption {
+    type Value = String;
+    fn title(&self) -> gpui::SharedString {
+        self.0.clone().into()
+    }
+    fn value(&self) -> &String {
+        &self.0
+    }
+}
 
 pub struct ProducersView {
     services: AppServices,
@@ -35,8 +48,10 @@ pub struct ProducersView {
     keyword: Entity<InputState>,
     topic: Entity<InputState>,
     group: Entity<InputState>,
-    _subscriptions: [Subscription; 3],
+    topic_picker: Entity<SelectState<SearchableVec<ProducerTopicOption>>>,
+    _subscriptions: Vec<Subscription>,
     inventory_task: Option<Task<()>>,
+    topics_task: Option<Task<()>>,
     connections_task: Option<Task<()>>,
     validation_error: Option<&'static str>,
     client_sheet_open: bool,
@@ -47,7 +62,15 @@ impl ProducersView {
         let keyword = cx.new(|cx| InputState::new(window, cx).placeholder("Search Producer group"));
         let topic = cx.new(|cx| InputState::new(window, cx).placeholder("Topic"));
         let group = cx.new(|cx| InputState::new(window, cx).placeholder("Producer group"));
-        let subscriptions = [
+        let topic_picker = cx.new(|cx| {
+            SelectState::new(SearchableVec::<ProducerTopicOption>::new(Vec::new()), None, window, cx).searchable(true)
+        });
+        let subscriptions = vec![
+            cx.subscribe_in(&topic_picker, window, |view, _, event, window, cx| {
+                if let SelectEvent::Confirm(Some(topic)) = event {
+                    view.use_topic(topic.clone(), window, cx);
+                }
+            }),
             cx.subscribe_in(&keyword, window, |view, input, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     view.store.draft_filter.keyword = input.read(cx).value().to_string();
@@ -76,8 +99,10 @@ impl ProducersView {
             keyword,
             topic,
             group,
+            topic_picker,
             _subscriptions: subscriptions,
             inventory_task: None,
+            topics_task: None,
             connections_task: None,
             validation_error: None,
             client_sheet_open: false,
@@ -103,6 +128,10 @@ impl ProducersView {
     pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.revision = revision;
         self.inventory_task = None;
+        self.topics_task = None;
+        self.topic_picker.update(cx, |picker, cx| {
+            picker.set_items(SearchableVec::<ProducerTopicOption>::new(Vec::new()), window, cx)
+        });
         self.connections_task = None;
         self.store.clear_for_revision();
         self.store.draft_filter = Default::default();
@@ -118,6 +147,9 @@ impl ProducersView {
     }
 
     pub fn ensure_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.store.topics.state, Loadable::Idle) {
+            self.refresh_topics(window, cx);
+        }
         if matches!(self.store.inventory.state, Loadable::Idle) {
             let Some(request) = self.store.begin_inventory(self.revision) else {
                 return;
@@ -147,6 +179,68 @@ impl ProducersView {
         }));
     }
 
+    fn refresh_topics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(request) = self.store.topics.begin(self.revision) else {
+            return;
+        };
+        let services = self.services.clone();
+        self.topics_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = services
+                .topic_inventory(crate::services::topics::TopicRequestScope {
+                    revision: request.revision(),
+                    epoch: request.epoch(),
+                })
+                .await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                let accepted = view.store.topics.finish(
+                    request,
+                    view.revision,
+                    result.map(|inventory| {
+                        let mut topics = inventory
+                            .items
+                            .into_iter()
+                            .map(|item| item.identity.as_str().to_owned())
+                            .collect::<Vec<_>>();
+                        topics.sort();
+                        topics.dedup();
+                        Some(rocketmq_dashboard_common::ProducerTopicCandidates {
+                            topics,
+                            observation: match inventory.completeness {
+                                rocketmq_dashboard_common::TopicCompleteness::Complete => {
+                                    ConsumerObservationState::Complete
+                                }
+                                rocketmq_dashboard_common::TopicCompleteness::Partial { .. } => {
+                                    ConsumerObservationState::Partial
+                                }
+                            },
+                            failed_targets: inventory.failures.len(),
+                        })
+                    }),
+                );
+                if accepted {
+                    let options: Vec<ProducerTopicOption> = view
+                        .store
+                        .topics
+                        .state
+                        .value()
+                        .map(|topics| topics.topics.iter().cloned().map(ProducerTopicOption).collect())
+                        .unwrap_or_default();
+                    view.topic_picker.update(cx, |picker, cx| {
+                        picker.set_items(SearchableVec::new(options), window, cx)
+                    });
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn use_topic(&mut self, topic: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.store.draft_query.topic = topic.clone();
+        self.topic.update(cx, |input, cx| input.set_value(topic, window, cx));
+        self.validation_error = None;
+        cx.notify();
+    }
+
     fn apply_filter(&mut self, cx: &mut Context<Self>) {
         self.store.apply_filter();
         cx.notify();
@@ -157,6 +251,14 @@ impl ProducersView {
         self.group.update(cx, |input, cx| input.set_value(group, window, cx));
         self.validation_error = None;
         cx.notify();
+    }
+
+    pub(crate) fn select_topology_group(&mut self, group: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.connections_task = None;
+        self.store.connections.clear();
+        self.store.applied_query = None;
+        self.close_owned_sheet(window, cx);
+        self.use_group(group, window, cx);
     }
 
     fn apply_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -224,7 +326,32 @@ impl ProducersView {
                         .child(format!("Client: {}", client.identity.as_str()))
                         .child(format!("Address: {}", client.address))
                         .child(format!("Language: {}", client.language))
-                        .child(format!("Version: {}", client.version_description))
+                        .child(format!("Version: {} ({})", client.version_description, client.version))
+                        .children(
+                            [
+                                (
+                                    "producer-copy-client",
+                                    "Copy client ID",
+                                    client.identity.as_str().to_owned(),
+                                ),
+                                ("producer-copy-address", "Copy address", client.address.clone()),
+                                ("producer-copy-language", "Copy language", client.language.clone()),
+                                (
+                                    "producer-copy-version",
+                                    "Copy version",
+                                    format!("{} ({})", client.version_description, client.version),
+                                ),
+                            ]
+                            .into_iter()
+                            .map(|(id, label, value)| {
+                                Button::new(id)
+                                    .debug_selector(move || id.to_owned())
+                                    .label(label)
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(value.clone()))
+                                    })
+                            }),
+                        )
                         .child(div().h(px(1.)))
                         .child("Apply a different Topic + Group identity")
                         .child(Input::new(&topic))
@@ -306,25 +433,34 @@ impl Render for ProducersView {
             .state
             .value()
             .is_some_and(|inventory| inventory.observation == ConsumerObservationState::Partial);
+        let direct_scope =
+            self.services.connection_state().config.scope == rocketmq_dashboard_common::ConnectionScope::NameServer;
         let apply_enabled = !self.store.draft_query.topic.trim().is_empty()
             && !self.store.draft_query.group.trim().is_empty()
-            && self.store.inventory.state.value().is_some_and(|inventory| {
-                inventory.capabilities.connections == rocketmq_dashboard_common::CapabilityAvailability::Available
-            });
+            && direct_scope;
         let mut list = div().flex().flex_col().gap_2();
         for (index, item) in page.items.iter().enumerate() {
             let group = item.identity.as_str().to_owned();
+            let selected = group == self.store.draft_query.group;
             list = list.child(
                 div()
+                    .id(("producer-group-row", index))
+                    .debug_selector(move || format!("producer-group-row-{index}"))
+                    .on_click({
+                        let group = group.clone();
+                        cx.listener(move |view, _, window, cx| view.use_group(group.clone(), window, cx))
+                    })
                     .flex()
                     .items_center()
                     .gap_3()
                     .p_2()
+                    .when(selected, |row| row.bg(cx.theme().primary.opacity(0.12)))
                     .child(group.clone())
                     .child(format!("Observed clients: {}", observed_count(&item.client_count)))
                     .child(
                         Button::new(("producer-use-group", index))
-                            .label("Use group")
+                            .label("Select group")
+                            .debug_selector(move || format!("producer-use-group-{index}"))
                             .small()
                             .outline()
                             .on_click(cx.listener(move |view, _, window, cx| {
@@ -341,6 +477,11 @@ impl Render for ProducersView {
             .flex()
             .flex_col()
             .gap_3()
+            .when(!direct_scope, |body| {
+                body.child(
+                    "Producer discovery and client inspection require NameServer Direct scope in connection settings.",
+                )
+            })
             .when(partial, |this| {
                 this.child(
                     div()
@@ -360,11 +501,12 @@ impl Render for ProducersView {
                             .label("Apply search")
                             .on_click(cx.listener(|view, _, _, cx| view.apply_filter(cx))),
                     )
-                    .child(
-                        Button::new("producer-refresh")
-                            .label("Refresh")
-                            .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
-                    ),
+                    .child(Button::new("producer-refresh").label("Refresh").on_click(cx.listener(
+                        |view, _, window, cx| {
+                            view.refresh(cx);
+                            view.refresh_topics(window, cx);
+                        },
+                    ))),
             )
             .child(list)
             .child(
@@ -393,6 +535,52 @@ impl Render for ProducersView {
                     ),
             )
             .child(div().h(px(1.)).bg(cx.theme().border))
+            .when_some(
+                match &self.store.inventory.state {
+                    Loadable::Failed { error, .. } => Some(error.summary().to_owned()),
+                    _ => None,
+                },
+                |body, error| {
+                    body.child(format!(
+                        "Producer discovery failed: {error} Enter and validate a Topic + Group below."
+                    ))
+                },
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child("Discovered Topics")
+                    .child(
+                        div()
+                            .id("producer-topic-candidates")
+                            .debug_selector(|| "producer-topic-candidates".to_owned())
+                            .w(px(300.))
+                            .child(Select::new(&self.topic_picker)),
+                    ),
+            )
+            .child(match &self.store.topics.state {
+                Loadable::Failed { .. } => {
+                    "Topic discovery unavailable. Manual Topic + Group entry is supported and validated."
+                }
+                Loadable::InitialLoading => "Loading real Topic candidates… Manual entry is available.",
+                Loadable::Ready(topics) if topics.observation != ConsumerObservationState::Complete => {
+                    "Partial Topic discovery. Only returned candidates are shown; manual entry remains available."
+                }
+                Loadable::Ready(topics) if topics.topics.is_empty() => {
+                    "No Topics discovered. Manual entry remains available."
+                }
+                _ => "Choose a discovered Topic or enter a Topic manually, then Apply the Topic + Group together.",
+            })
+            .when_some(self.store.applied_query.as_ref(), |body, query| {
+                body.child(format!(
+                    "Applied query: Topic={} · Group={}",
+                    query.topic(),
+                    query.group().as_str()
+                ))
+            })
             .child(
                 div()
                     .flex()

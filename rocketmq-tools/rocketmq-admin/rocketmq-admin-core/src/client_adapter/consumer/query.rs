@@ -379,6 +379,28 @@ pub(super) fn map_consumer_running_info(
             .then(left.sub_version.cmp(&right.sub_version))
     });
 
+    let mut details_budget = Utf8Budget::new(64 * 1024);
+    if subscriptions.len() > 256 {
+        details_budget.truncated = true;
+        subscriptions.truncate(256);
+    }
+    for subscription in &mut subscriptions {
+        subscription.topic = details_budget.take(&subscription.topic);
+        subscription.sub_string = details_budget.take(&subscription.sub_string);
+        subscription.expression_type = details_budget.take(&subscription.expression_type);
+        if subscription.tags_set.len() > 256 {
+            details_budget.truncated = true;
+            subscription.tags_set.truncate(256);
+        }
+        for tag in &mut subscription.tags_set {
+            *tag = details_budget.take(tag);
+        }
+        if subscription.code_set.len() > 256 {
+            details_budget.truncated = true;
+            subscription.code_set.truncate(256);
+        }
+    }
+
     let mut process_queues = running_info
         .mq_table
         .into_iter()
@@ -399,6 +421,17 @@ pub(super) fn map_consumer_running_info(
             .then(left.broker_name.cmp(&right.broker_name))
             .then(left.queue_id.cmp(&right.queue_id))
     });
+
+    if process_queues.len() > 256 {
+        details_budget.truncated = true;
+        process_queues.truncate(256);
+    }
+    for queue in &mut process_queues {
+        queue.topic = details_budget.take(&queue.topic);
+        queue.broker_name = details_budget.take(&queue.broker_name);
+    }
+
+    budget.truncated |= details_budget.truncated;
 
     let jstack = if include_jstack {
         match running_info.jstack {
@@ -826,5 +859,34 @@ mod tests {
 
         assert_eq!(mapped.jstack, None);
         assert!(mapped.truncated);
+    }
+    #[test]
+    fn consumer_running_info_bounds_structured_sections_and_preserves_queue_times() {
+        let mut running = running_info_fixture();
+        running.subscription_set.clear();
+        running.mq_table.clear();
+        for index in 0..300 {
+            running.subscription_set.insert(SubscriptionData {
+                topic: format!("topic-{index:03}").into(),
+                sub_string: "created".into(),
+                ..Default::default()
+            });
+            running.mq_table.insert(
+                MessageQueue::from_parts(format!("topic-{index:03}"), "broker-a", index),
+                ProcessQueueInfo {
+                    commit_offset: 17,
+                    last_consume_timestamp: 23,
+                    ..Default::default()
+                },
+            );
+        }
+        let mapped = map_consumer_running_info("orders", "client-a", false, 1024, running).into_parts();
+        assert_eq!(mapped.subscriptions.len(), 256);
+        assert_eq!(mapped.process_queues.len(), 256);
+        assert!(mapped.truncated);
+        assert_eq!(mapped.process_queues[0].last_consume_timestamp, 23);
+        assert_eq!(mapped.process_queues[0].commit_offset, 17);
+        assert_eq!(mapped.process_queues[0].topic, "topic-000");
+        assert_eq!(mapped.subscriptions[255].topic, "topic-255");
     }
 }

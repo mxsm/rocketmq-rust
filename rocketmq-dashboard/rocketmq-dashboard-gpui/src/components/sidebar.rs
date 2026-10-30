@@ -54,6 +54,11 @@ pub fn navigation_groups() -> Vec<SidebarGroup> {
                     label: "Brokers",
                     icon: IconName::Building2,
                 },
+                SidebarItem {
+                    route: AppRoute::Topology,
+                    label: "Topology",
+                    icon: IconName::Map,
+                },
             ],
         },
         SidebarGroup {
@@ -101,13 +106,18 @@ pub fn navigation_groups() -> Vec<SidebarGroup> {
                 },
                 SidebarItem {
                     route: AppRoute::Monitors,
-                    label: "Monitors",
+                    label: "Monitor rules",
                     icon: IconName::Bell,
                 },
                 SidebarItem {
                     route: AppRoute::OpsSettings,
                     label: "Operations Settings",
                     icon: IconName::Settings,
+                },
+                SidebarItem {
+                    route: AppRoute::Audit,
+                    label: "Local Audit",
+                    icon: IconName::File,
                 },
                 SidebarItem {
                     route: AppRoute::Proxy,
@@ -124,6 +134,7 @@ pub const fn is_active(item: &SidebarItem, current: &AppRoute) -> bool {
     matches!(
         (&item.route, current),
         (AppRoute::Dashboard, AppRoute::Dashboard)
+            | (AppRoute::Topology, AppRoute::Topology)
             | (AppRoute::Brokers, AppRoute::Brokers | AppRoute::BrokerDetail { .. })
             | (AppRoute::Topics, AppRoute::Topics | AppRoute::TopicDetail { .. })
             | (
@@ -136,6 +147,7 @@ pub const fn is_active(item: &SidebarItem, current: &AppRoute) -> bool {
             | (AppRoute::MessageTrace, AppRoute::MessageTrace)
             | (AppRoute::Acl, AppRoute::Acl)
             | (AppRoute::Monitors, AppRoute::Monitors)
+            | (AppRoute::Audit, AppRoute::Audit)
             | (AppRoute::OpsSettings, AppRoute::OpsSettings)
             | (AppRoute::Proxy, AppRoute::Proxy)
     )

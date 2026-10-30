@@ -12,8 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-fn main() -> Result<(), std::convert::Infallible> {
-    // Build script for rocketmq-dashboard
-    // This can be used to compile assets, check dependencies, etc.
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    {
+        println!("cargo:rerun-if-changed=resources/windows/app.rc");
+        println!("cargo:rerun-if-changed=assets/app-icon.ico");
+        embed_resource::compile_for(
+            "resources/windows/app.rc",
+            ["rocketmq-dashboard-gpui"],
+            embed_resource::NONE,
+        )
+        .manifest_required()?;
+    }
     Ok(())
 }

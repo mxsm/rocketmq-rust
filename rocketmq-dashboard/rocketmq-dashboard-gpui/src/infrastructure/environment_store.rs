@@ -22,6 +22,7 @@ use rocketmq_dashboard_common::{
 use serde::{Deserialize, Serialize};
 
 use super::{
+    audit_store::AuditJournal,
     config_store::{AuthConfig, CONFIG_SCHEMA_VERSION, ConfigStoreFailure, DesktopConfig, FoundationFlags},
     monitor_store::MonitorRule,
 };
@@ -102,6 +103,7 @@ pub(super) struct DesktopSettings {
 pub enum MonitorMigrationState {
     NeedsEnvironmentAndThresholds,
     NeedsThresholds,
+    Ready,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +112,33 @@ pub struct StoredMonitorRule {
     pub environment_id: Option<EnvironmentId>,
     pub rule: MonitorRule,
     pub migration_state: MonitorMigrationState,
+    #[serde(default)]
+    pub thresholds: Option<rocketmq_dashboard_common::MonitorThresholds>,
+    pub revision: u64,
+    #[serde(default)]
+    pub updated_at_epoch_ms: Option<u64>,
+}
+
+impl StoredMonitorRule {
+    pub fn view(&self) -> rocketmq_dashboard_common::MonitorRuleView {
+        use rocketmq_dashboard_common::MonitorRuleStatus;
+        rocketmq_dashboard_common::MonitorRuleView {
+            environment_id: self.environment_id.clone(),
+            legacy_id: self.rule.id.clone(),
+            consumer_group: self.rule.consumer_group.clone(),
+            enabled: self.rule.enabled,
+            thresholds: self.thresholds,
+            revision: self.revision,
+            updated_at_epoch_ms: self.updated_at_epoch_ms,
+            status: match self.migration_state {
+                MonitorMigrationState::Ready => MonitorRuleStatus::Ready,
+                MonitorMigrationState::NeedsThresholds => MonitorRuleStatus::NeedsThresholds,
+                MonitorMigrationState::NeedsEnvironmentAndThresholds => {
+                    MonitorRuleStatus::NeedsEnvironmentAndThresholds
+                }
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +146,8 @@ pub struct StoredMonitorRule {
 pub(super) struct MonitorDocument {
     pub schema_version: u32,
     pub rules: Vec<StoredMonitorRule>,
+    /// Retains revision progress through deletion so stale edits cannot match a recreated rule.
+    pub revision_counter: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +177,7 @@ pub(super) struct DesktopDocument {
     pub profiles: Vec<EnvironmentProfile>,
     pub monitors: MonitorDocument,
     pub local_operations: Vec<LocalOperationRecord>,
+    pub audit: AuditJournal,
 }
 
 impl DesktopDocument {
@@ -162,17 +194,22 @@ impl DesktopDocument {
             active_environment_id: id,
             profiles: vec![profile],
             monitors: MonitorDocument {
-                schema_version: 1,
+                schema_version: 2,
+                revision_counter: 0,
                 rules: monitors
                     .into_iter()
                     .map(|rule| StoredMonitorRule {
                         environment_id: None,
                         rule,
                         migration_state: MonitorMigrationState::NeedsEnvironmentAndThresholds,
+                        thresholds: None,
+                        revision: 1,
+                        updated_at_epoch_ms: None,
                     })
                     .collect(),
             },
             local_operations: Vec::new(),
+            audit: AuditJournal::default(),
         })
     }
 
@@ -223,8 +260,8 @@ impl DesktopDocument {
                 CONFIG_SCHEMA_VERSION,
             ));
         }
-        if self.monitors.schema_version != 1 {
-            return Err(ConfigStoreFailure::unsupported_schema(self.monitors.schema_version, 1));
+        if self.monitors.schema_version != 2 {
+            return Err(ConfigStoreFailure::unsupported_schema(self.monitors.schema_version, 2));
         }
         let mut ids = std::collections::BTreeSet::new();
         for profile in &self.profiles {
@@ -234,6 +271,36 @@ impl DesktopDocument {
             profile.project(&self.settings).normalize()?;
         }
         self.active_profile()?;
+        let mut monitor_keys = std::collections::BTreeSet::new();
+        for rule in &self.monitors.rules {
+            if rule.revision == 0 {
+                return Err(ConfigStoreFailure::validation(
+                    rocketmq_dashboard_common::MonitorValidationError::Revision,
+                ));
+            }
+            if let Some(thresholds) = rule.thresholds {
+                thresholds.validate().map_err(ConfigStoreFailure::validation)?;
+            }
+            if rule.migration_state == MonitorMigrationState::Ready {
+                let group = rocketmq_dashboard_common::ConsumerIdentity::parse(&rule.rule.consumer_group)
+                    .map_err(ConfigStoreFailure::validation)?;
+                if group.as_str() != rule.rule.consumer_group {
+                    return Err(ConfigStoreFailure::validation(
+                        rocketmq_dashboard_common::MonitorValidationError::Group,
+                    ));
+                }
+                if rule.environment_id.is_none()
+                    || rule.thresholds.is_none()
+                    || rule.updated_at_epoch_ms.is_none()
+                    || !monitor_keys.insert((rule.environment_id.as_ref(), rule.rule.consumer_group.as_str()))
+                {
+                    return Err(ConfigStoreFailure::validation(
+                        rocketmq_dashboard_common::MonitorValidationError::Thresholds,
+                    ));
+                }
+            }
+        }
+        self.audit.validate()?;
         Ok(())
     }
 }
@@ -275,7 +342,49 @@ pub(super) fn load_document(path: &Path) -> Result<(DesktopDocument, bool), Conf
             let monitors = load_legacy_monitors(&path.with_file_name("monitors.json"))?;
             DesktopDocument::from_legacy(config, monitors).map(|document| (document, true))
         }
+        2 => {
+            let mut value = value;
+            if let Some(object) = value.as_object_mut() {
+                object
+                    .entry("audit")
+                    .or_insert(serde_json::to_value(AuditJournal::default()).map_err(ConfigStoreFailure::validation)?);
+            }
+            migrate_monitor_fields(&mut value)?;
+            let mut document: DesktopDocument = serde_json::from_value(value)
+                .map_err(|source| ConfigStoreFailure::invalid_document(path.to_path_buf(), source))?;
+            document.schema_version = CONFIG_SCHEMA_VERSION;
+            if document.monitors.schema_version == 1 {
+                document.monitors.schema_version = 2;
+            }
+            for record in &document.local_operations {
+                let action = match record.kind {
+                    LocalOperationKind::ConfigurationSaved => {
+                        rocketmq_dashboard_common::AuditAction::ConfigurationSaved
+                    }
+                    LocalOperationKind::MonitorSaved => rocketmq_dashboard_common::AuditAction::MonitorSaved,
+                    LocalOperationKind::MonitorDeleted => rocketmq_dashboard_common::AuditAction::MonitorDeleted,
+                };
+                document
+                    .audit
+                    .finish_local(record.context.clone(), action, record.committed_at_epoch_ms)?;
+            }
+            document.validate()?;
+            Ok((document, true))
+        }
+        3 => {
+            let mut value = value;
+            migrate_monitor_fields(&mut value)?;
+            let mut document: DesktopDocument = serde_json::from_value(value)
+                .map_err(|source| ConfigStoreFailure::invalid_document(path.to_path_buf(), source))?;
+            document.schema_version = CONFIG_SCHEMA_VERSION;
+            if document.monitors.schema_version == 1 {
+                document.monitors.schema_version = 2;
+            }
+            document.validate()?;
+            Ok((document, true))
+        }
         version if version == u64::from(CONFIG_SCHEMA_VERSION) => {
+            check_monitor_schema(&value)?;
             let document: DesktopDocument = serde_json::from_value(value)
                 .map_err(|source| ConfigStoreFailure::invalid_document(path.to_path_buf(), source))?;
             document.validate()?;
@@ -286,6 +395,38 @@ pub(super) fn load_document(path: &Path) -> Result<(DesktopDocument, bool), Conf
             CONFIG_SCHEMA_VERSION,
         )),
     }
+}
+
+fn check_monitor_schema(value: &serde_json::Value) -> Result<(), ConfigStoreFailure> {
+    if let Some(version) = value
+        .get("monitors")
+        .and_then(|monitor| monitor.get("schemaVersion"))
+        .and_then(serde_json::Value::as_u64)
+        && version != 2
+    {
+        return Err(ConfigStoreFailure::unsupported_schema(
+            u32::try_from(version).unwrap_or(u32::MAX),
+            2,
+        ));
+    }
+    Ok(())
+}
+
+fn migrate_monitor_fields(value: &mut serde_json::Value) -> Result<(), ConfigStoreFailure> {
+    if let Some(monitors) = value.get_mut("monitors").and_then(serde_json::Value::as_object_mut)
+        && monitors.get("schemaVersion").and_then(serde_json::Value::as_u64) == Some(1)
+    {
+        monitors.insert("schemaVersion".into(), 2.into());
+        monitors.entry("revisionCounter").or_insert(0.into());
+        if let Some(rules) = monitors.get_mut("rules").and_then(serde_json::Value::as_array_mut) {
+            for rule in rules {
+                if let Some(rule) = rule.as_object_mut() {
+                    rule.entry("revision").or_insert(1.into());
+                }
+            }
+        }
+    }
+    check_monitor_schema(value)
 }
 
 fn load_legacy_monitors(path: &Path) -> Result<Vec<MonitorRule>, ConfigStoreFailure> {

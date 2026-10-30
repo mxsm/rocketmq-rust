@@ -15,8 +15,6 @@
 use std::collections::HashMap;
 
 use rocketmq_store_local::timer::native_format::native_key_hash;
-use rocketmq_store_local::timer::native_format::NativeBucketId;
-use rocketmq_store_local::timer::native_format::NativeBucketKind;
 use rocketmq_store_local::timer::native_format::NativeCancelRecord;
 use rocketmq_store_local::timer::native_format::NativeIndexEntry;
 
@@ -28,31 +26,28 @@ pub(crate) struct NativeRecall {
     pub(crate) generation: u64,
 }
 
-/// Recalls by the hash of each unique key they may name, scoped to the hour of the deadline
-/// they carry. A recall carries the deadline of the timer it cancels, so it can only cancel a
-/// timer due in that hour.
+/// Recalls by the hash of each unique key they may name.
+///
+/// A recall carries the deadline of the timer it cancels, but that timer may be indexed later
+/// than its deadline: one that reaches the engine after its lane has delivered past its
+/// deadline is moved up to the lane's watermark. So a recall is matched by key alone, and its
+/// key and generation decide at delivery.
 #[derive(Default)]
 pub(crate) struct CancelSet {
-    recalls: HashMap<(u64, i64), Vec<NativeRecall>>,
+    recalls: HashMap<u64, Vec<NativeRecall>>,
     len: usize,
 }
 
 impl CancelSet {
     /// Adds a recall; adding the same recall again changes nothing.
     pub(crate) fn insert(&mut self, record: &NativeCancelRecord) {
-        let Ok(hour) = NativeBucketId::containing(NativeBucketKind::Hour, record.due_ms) else {
-            return;
-        };
         let recall = NativeRecall {
             key: record.key.clone(),
             generation: record.generation,
         };
         let mut added = false;
         for unique_key in named_unique_keys(&record.key) {
-            let recalls = self
-                .recalls
-                .entry((native_key_hash(unique_key), hour.start_ms()))
-                .or_default();
+            let recalls = self.recalls.entry(native_key_hash(unique_key)).or_default();
             if !recalls.contains(&recall) {
                 recalls.push(recall.clone());
                 added = true;
@@ -65,13 +60,7 @@ impl CancelSet {
 
     /// The recalls that may cancel the timer of `entry`.
     pub(crate) fn candidates(&self, entry: &NativeIndexEntry) -> Vec<NativeRecall> {
-        let Ok(hour) = NativeBucketId::containing(NativeBucketKind::Hour, entry.due_ms) else {
-            return Vec::new();
-        };
-        self.recalls
-            .get(&(entry.key_hash, hour.start_ms()))
-            .cloned()
-            .unwrap_or_default()
+        self.recalls.get(&entry.key_hash).cloned().unwrap_or_default()
     }
 
     /// Recalls added.
@@ -158,13 +147,12 @@ mod tests {
     }
 
     #[test]
-    fn a_recall_only_reaches_timers_due_in_its_hour() {
+    fn a_recall_reaches_its_timer_wherever_the_timer_was_indexed() {
         let mut cancels = CancelSet::default();
         cancels.insert(&recall(UNIQUE_KEY, DUE_MS));
-        let hour = NativeBucketId::containing(NativeBucketKind::Hour, DUE_MS).unwrap();
-        assert!(cancels.candidates(&timer(UNIQUE_KEY, hour.end_ms())).is_empty());
+        // A timer moved up to its lane's watermark, into a later hour, is still found.
+        assert_eq!(cancels.candidates(&timer(UNIQUE_KEY, DUE_MS + 3_600_000)).len(), 1);
         assert!(cancels.candidates(&timer("another-key", DUE_MS)).is_empty());
-        assert_eq!(cancels.candidates(&timer(UNIQUE_KEY, hour.start_ms())).len(), 1);
     }
 
     #[test]

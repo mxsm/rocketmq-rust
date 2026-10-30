@@ -21,22 +21,26 @@
 use std::future::Future;
 use std::pin::Pin;
 
+pub mod acl_workspace;
 pub mod admin;
 pub mod broker;
 pub mod client_connection;
 pub mod clock;
 pub mod config_state;
 pub mod consumer;
+pub mod consumer_configuration;
 pub mod consumer_observation;
 pub mod consumer_runtime;
 pub mod consumer_workspace;
 pub mod dashboard;
+pub mod dashboard_metrics;
 pub mod error;
 pub mod error_view;
 pub mod infrastructure_observation;
 pub mod lite;
 pub mod message;
 pub mod message_index;
+pub mod message_trace;
 pub mod proxy;
 pub mod query;
 pub mod queue;
@@ -47,6 +51,7 @@ pub mod supervised_mutation;
 pub mod supervised_operation;
 pub mod topic;
 pub mod topic_observation;
+pub mod topology;
 
 pub use self::error::AdminCompletionStatus;
 pub use self::error::AdminError;

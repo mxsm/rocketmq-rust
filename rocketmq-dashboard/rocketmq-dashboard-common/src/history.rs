@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::EnvironmentId;
 
+/// Aggregate count series identity, independent of an individual resource name.
+pub const HISTORY_CLUSTER_SERIES: &str = "cluster";
+
 /// A real point with explicit environment attribution. Legacy points remain unassigned.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,12 +37,39 @@ pub struct EnvironmentHistoryPoint {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoryMetricKind {
+    /// Registered Broker instances, including replicas, in the complete inventory.
+    BrokerCount,
+    /// All registered Topics, including system, retry and DLQ Topics.
+    TopicCount,
     /// Total messages derived from a successful Topic offset response.
     TopicMessages,
     /// Produce TPS present in a successful Broker runtime response.
     BrokerProduceTps,
     /// Consume TPS present in a successful Broker runtime response.
     BrokerConsumeTps,
+}
+
+impl HistoryMetricKind {
+    /// Human-readable metric name for history controls and data tables.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::BrokerCount => "Broker count",
+            Self::TopicCount => "Topic count",
+            Self::TopicMessages => "Stored Topic messages",
+            Self::BrokerProduceTps => "Broker produce rate",
+            Self::BrokerConsumeTps => "Broker consume rate",
+        }
+    }
+
+    /// Unit of a real observation, independent of its series identity.
+    pub const fn unit(self) -> &'static str {
+        match self {
+            Self::BrokerCount => "brokers",
+            Self::TopicCount => "topics",
+            Self::TopicMessages => "messages",
+            Self::BrokerProduceTps | Self::BrokerConsumeTps => "messages/s",
+        }
+    }
 }
 
 /// One real metric observation. Missing samples have no point representation.

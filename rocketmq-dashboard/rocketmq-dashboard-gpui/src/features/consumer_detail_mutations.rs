@@ -16,19 +16,16 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gpui::{AppContext as _, Context, InteractiveElement as _, ParentElement as _, Window};
+use gpui::{AppContext as _, Context, InteractiveElement as _, ParentElement as _, Styled as _, Window, px};
 use gpui_component::{
     WindowExt as _,
     dialog::{Dialog, DialogButtonProps},
 };
-use rocketmq_dashboard_common::{
-    ConsumerAclClassification, ConsumerConfigPatch, ConsumerConfigPatchCommand, ConsumerDeleteCommand,
-    ConsumerObservation, TopicIdentity,
-};
+use rocketmq_dashboard_common::{ConsumerDeleteCommand, ConsumerObservation, TopicIdentity};
 
 use super::{ConsumerDetail, ConsumerDetailIntent};
 use crate::{
-    components::dialog,
+    features::consumer_dialogs::{ConsumerDialogForm, ConsumerDialogKind, PreparedConsumerCommand},
     features::topic_dialogs::{PreparedTopicCommand, TopicDialogForm, TopicDialogKind, TopicSubmissionState},
     services::{
         consumers::{
@@ -45,41 +42,108 @@ impl ConsumerDetail {
         ConsumerRequestScope {
             revision: self.revision,
             epoch: self.mutation_epoch,
+            query_scope: Default::default(),
         }
     }
 
     pub(super) fn request_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.targets.is_empty() || self.mutation_task.is_some() || self.mutation_replay_blocked {
+        if self.targets.is_empty() {
             return;
         }
-        let group = self.store.group.as_str().to_owned();
-        let owner = cx.entity().downgrade();
-        dialog::open_confirm(
-            "Delete Consumer group?",
-            format!(
-                "Delete {group} from all {} authoritative targets. A fresh exact connection observation must prove every target disconnected.",
-                self.targets.len()
-            ),
-            "Delete",
-            move |_, _, cx| {
-                let _ = owner.update(cx, |detail, cx| detail.submit_delete(cx));
-                true
+        self.open_consumer_dialog(
+            ConsumerDialogKind::Delete {
+                group: self.store.group.clone(),
+                targets: self.targets.clone(),
             },
             window,
             cx,
         );
     }
 
-    fn submit_delete(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_config_dialog(
+        &mut self,
+        snapshot: rocketmq_dashboard_common::ConsumerConfigSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_consumer_dialog(ConsumerDialogKind::Edit(snapshot), window, cx);
+    }
+
+    fn open_consumer_dialog(&mut self, kind: ConsumerDialogKind, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mutation_task.is_some() || self.mutation_dialog.is_some() || self.offset_dialog.is_some() {
+            return;
+        }
+        self.mutation_replay_blocked = false;
+        let group = cx.new(|cx| {
+            gpui_component::input::InputState::new(window, cx).default_value(self.store.group.as_str().to_owned())
+        });
+        let form = cx.new(|cx| ConsumerDialogForm::new(kind, group, window, cx));
+        let title = form.read(cx).title();
+        self.mutation_dialog = Some(form.clone());
+        let owner = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog: Dialog, window, _| {
+            let submit = owner.clone();
+            let close = owner.clone();
+            let cancel_form = form.clone();
+            dialog
+                .title(title)
+                .margin_top(px(16.))
+                .max_h(window.viewport_size().height - px(32.))
+                .confirm()
+                .child(form.clone())
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("Apply reviewed command")
+                        .cancel_text("Close"),
+                )
+                .footer(|ok, cancel, window, cx| {
+                    vec![
+                        gpui::div()
+                            .debug_selector(|| "consumer-dialog-close".to_owned())
+                            .child(cancel(window, cx)),
+                        gpui::div()
+                            .debug_selector(|| "consumer-dialog-confirm".to_owned())
+                            .child(ok(window, cx)),
+                    ]
+                })
+                .on_ok(move |_, _, cx| {
+                    let _ = submit.update(cx, |detail, cx| detail.submit_consumer_dialog(cx));
+                    false
+                })
+                .on_cancel(move |_, _, cx| cancel_form.read(cx).can_cancel())
+                .on_close(move |_, _, cx| {
+                    let _ = close.update(cx, |detail, cx| {
+                        detail.mutation_dialog = None;
+                        detail.edit_draft = None;
+                        cx.notify();
+                    });
+                })
+        });
+        cx.notify();
+    }
+
+    fn submit_consumer_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.mutation_task.is_some() || self.mutation_replay_blocked {
+            return;
+        }
+        let Some(form) = self.mutation_dialog.clone() else {
+            return;
+        };
+        match form.update(cx, |form, cx| form.begin(cx)) {
+            Ok(PreparedConsumerCommand::Edit(command)) => {
+                self.edit_draft = Some(*command);
+                self.submit_config_patch(cx);
+            }
+            Ok(PreparedConsumerCommand::Delete(command)) => self.submit_delete(command, cx),
+            Ok(PreparedConsumerCommand::Create(_)) => {}
+            Err(error) => form.update(cx, |form, cx| form.error(error, cx)),
+        }
+    }
+
+    fn submit_delete(&mut self, command: ConsumerDeleteCommand, cx: &mut Context<Self>) {
         if self.targets.is_empty() || self.mutation_task.is_some() || self.mutation_replay_blocked {
             return;
         }
-        let command = ConsumerDeleteCommand {
-            group: self.store.group.clone(),
-            selected_targets: self.targets.clone(),
-            authoritative_targets: self.targets.clone(),
-            authorization: ConsumerAclClassification::Authorized,
-        };
         let services = self.services.clone();
         let scope = self.next_consumer_scope();
         self.mutation_status = Some("Checking exact targets and live connections…".into());
@@ -97,9 +161,10 @@ impl ConsumerDetail {
                         detail.mutation_replay_blocked = true;
                         detail.mutation_outcome = Some(outcome.clone());
                         detail.mutation_status = Some(format!(
-                            "Delete rejected before a complete apply (Partial: {}/{} applied). Close this Sheet before a new command.",
+                            "{} ({}/{} Broker targets applied). Close this Sheet before a new command.",
+                            if outcome.has_unconfirmed_effects() {"Delete result is unconfirmed; the command cannot be replayed"} else {"Delete rejected before execution"},
                             outcome.applied_count(),
-                            outcome.targets.len()
+                            outcome.target_count()
                         ));
                     }
                     Ok(ConsumerMutationResult::Applied {
@@ -108,19 +173,23 @@ impl ConsumerDetail {
                         invalidations,
                     }) => {
                         detail.mutation_outcome = Some(outcome.clone());
+                        detail.targets=inventory.groups.iter().find(|item| item.identity==detail.store.group).map(|item| item.targets.clone()).unwrap_or_default();
+                        detail.store.configuration.clear();
                         detail.apply_invalidations(&invalidations);
                         if outcome.is_complete_success() {
                             detail.mutation_status = Some(format!(
-                                "Deleted on {} target(s); authoritative inventory reloaded.",
+                                "Deleted on {} Broker target(s); authoritative inventory reloaded.",
                                 outcome.applied_count()
                             ));
-                            cx.emit(ConsumerDetailIntent::Deleted(inventory));
+                            if inventory.groups.iter().any(|item| item.identity == detail.store.group) {
+                                cx.emit(ConsumerDetailIntent::InventoryReloaded(inventory));
+                            } else { cx.emit(ConsumerDetailIntent::Deleted(inventory)); }
                         } else {
                             detail.mutation_replay_blocked = true;
                             detail.mutation_status = Some(format!(
-                                "Delete was only Partial ({}/{} targets applied). Authoritative inventory reloaded; this Sheet remains open and the command cannot be replayed.",
+                                "Delete was only Partial ({}/{} Broker targets applied; cleanup step outcomes are retained below). Authoritative inventory reloaded; this Sheet remains open and the command cannot be replayed.",
                                 outcome.applied_count(),
-                                outcome.targets.len()
+                                outcome.target_count()
                             ));
                             cx.emit(ConsumerDetailIntent::InventoryReloaded(inventory));
                         }
@@ -134,7 +203,7 @@ impl ConsumerDetail {
                         detail.mutation_outcome = Some(outcome.clone());
                         detail.apply_invalidations(&invalidations);
                         detail.mutation_status = Some(format!(
-                            "Delete applied on {} target(s), but authoritative reload failed: {} Do not replay blindly; refresh first.",
+                            "Delete applied on {} Broker target(s), but authoritative reload failed: {} Do not replay blindly; refresh first.",
                             outcome.applied_count(),
                             error.summary()
                         ));
@@ -147,25 +216,10 @@ impl ConsumerDetail {
                         ));
                     }
                 }
+                if let Some(form)=&detail.mutation_dialog { let status=detail.mutation_status.clone().unwrap_or_default(); form.update(cx,|form,cx| form.finish(status,cx)); }
                 cx.notify();
             });
         }));
-    }
-
-    pub(super) fn draft_config_patch(
-        &mut self,
-        snapshot: rocketmq_dashboard_common::ConsumerConfigSnapshot,
-        patch: ConsumerConfigPatch,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_draft = Some(ConsumerConfigPatchCommand {
-            snapshot,
-            patch,
-            authorization: ConsumerAclClassification::Authorized,
-        });
-        self.mutation_replay_blocked = false;
-        self.mutation_status = Some("Configuration draft retained until authoritative reload succeeds.".into());
-        cx.notify();
     }
 
     pub(super) fn submit_config_patch(&mut self, cx: &mut Context<Self>) {
@@ -187,6 +241,12 @@ impl ConsumerDetail {
                     return;
                 }
                 match result {
+                    Ok(ConsumerConfigMutationResult::PersistenceIncomplete {applied,previous_generation,generation,persistence,invalidations}) => {
+                        detail.mutation_replay_blocked=true;detail.apply_invalidations(&invalidations);detail.store.configuration.clear();
+                        detail.mutation_status=Some(if applied {
+                            format!("Broker applied configuration in memory ({previous_generation} → {generation}), but persistence is {persistence:?}. This is not a durable success; this command cannot be replayed. Close and refresh before a new reviewed command.")
+                        } else {format!("Broker did not apply this command: persistence is {persistence:?} at version {generation}. Resolve Broker persistence before a new reviewed command.")});
+                    },
                     Ok(ConsumerConfigMutationResult::Applied {
                         previous_generation,
                         generation,
@@ -232,6 +292,7 @@ impl ConsumerDetail {
                         ));
                     }
                 }
+                if let Some(form)=&detail.mutation_dialog { let status=detail.mutation_status.clone().unwrap_or_default(); form.update(cx,|form,cx| form.finish(status,cx)); }
                 cx.notify();
             });
         }));
@@ -343,6 +404,7 @@ impl ConsumerDetail {
         let consumer_scope = ConsumerRequestScope {
             revision: self.revision,
             epoch: self.mutation_epoch,
+            query_scope: Default::default(),
         };
         let group = self.store.group.clone();
         let (command, skip) = command;

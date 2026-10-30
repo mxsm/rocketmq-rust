@@ -293,6 +293,10 @@ impl UiError {
     pub fn is_retryable(&self) -> bool {
         self.inner.retryable
     }
+
+    pub(crate) fn code(&self) -> UiErrorCode {
+        self.inner.code
+    }
 }
 
 impl PartialEq for UiError {

@@ -21,8 +21,8 @@ pub(crate) mod test_support;
 use std::sync::Arc;
 
 use rocketmq_dashboard_common::{
-    BrokerConfigPatch, BrokerConfigSnapshot, BrokerCurrentMetric, BrokerIdentity, BrokerInventoryItem,
-    HistoryMetricKind, HistoryPoint, RuntimeEntry, TopicCurrentMetric,
+    AuditAction, BrokerConfigPatch, BrokerConfigSnapshot, BrokerCurrentMetric, BrokerIdentity, BrokerInventoryItem,
+    HistoryMetricKind, HistoryPoint, OperationResource, RuntimeEntry, TopicCurrentLoad, broker_history_series_identity,
 };
 
 use super::{
@@ -41,7 +41,7 @@ use crate::state::UiError;
 pub(crate) trait DashboardBrokerOperations: Send + Sync {
     fn dashboard_overview(&self, revision: u64) -> ServiceFuture<'_, Result<DashboardOverviewLoad, UiError>>;
 
-    fn dashboard_topic_current(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<TopicCurrentMetric>, UiError>>;
+    fn dashboard_topic_current(&self, revision: u64) -> ServiceFuture<'_, Result<TopicCurrentLoad, UiError>>;
 
     fn dashboard_broker_current(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<BrokerCurrentMetric>, UiError>>;
 
@@ -61,6 +61,18 @@ pub(crate) trait DashboardBrokerOperations: Send + Sync {
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>>;
+
+    fn dashboard_count_history(
+        &self,
+        revision: u64,
+        metric: HistoryMetricKind,
+        start: u64,
+        end: u64,
+    ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>>;
+    fn dashboard_history_health(
+        &self,
+        revision: u64,
+    ) -> ServiceFuture<'_, Result<crate::infrastructure::history_health::HistoryCollectionHealth, UiError>>;
 
     fn broker_inventory(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<BrokerInventoryItem>, UiError>>;
 
@@ -99,7 +111,7 @@ impl DashboardBrokerOperations for RealDashboardBrokerOperations {
         Box::pin(self.dashboard.overview(revision))
     }
 
-    fn dashboard_topic_current(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<TopicCurrentMetric>, UiError>> {
+    fn dashboard_topic_current(&self, revision: u64) -> ServiceFuture<'_, Result<TopicCurrentLoad, UiError>> {
         Box::pin(self.dashboard.topic_current(revision))
     }
 
@@ -132,6 +144,22 @@ impl DashboardBrokerOperations for RealDashboardBrokerOperations {
             self.dashboard
                 .broker_history(revision, metric, identity, start_epoch_ms, end_epoch_ms),
         )
+    }
+
+    fn dashboard_count_history(
+        &self,
+        revision: u64,
+        metric: HistoryMetricKind,
+        start: u64,
+        end: u64,
+    ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>> {
+        Box::pin(self.dashboard.count_history(revision, metric, start, end))
+    }
+    fn dashboard_history_health(
+        &self,
+        revision: u64,
+    ) -> ServiceFuture<'_, Result<crate::infrastructure::history_health::HistoryCollectionHealth, UiError>> {
+        Box::pin(std::future::ready(self.dashboard.collection_health(revision)))
     }
 
     fn broker_inventory(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<BrokerInventoryItem>, UiError>> {
@@ -170,7 +198,7 @@ impl AppServices {
     }
 
     /// Loads current Topic metrics without inferred rates.
-    pub async fn dashboard_topic_current(&self, revision: u64) -> Result<Vec<TopicCurrentMetric>, UiError> {
+    pub async fn dashboard_topic_current(&self, revision: u64) -> Result<TopicCurrentLoad, UiError> {
         self.dashboard_broker.dashboard_topic_current(revision).await
     }
 
@@ -206,6 +234,24 @@ impl AppServices {
             .await
     }
 
+    pub async fn dashboard_count_history(
+        &self,
+        revision: u64,
+        metric: HistoryMetricKind,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<HistoryPoint>, UiError> {
+        self.dashboard_broker
+            .dashboard_count_history(revision, metric, start, end)
+            .await
+    }
+    pub async fn dashboard_history_health(
+        &self,
+        revision: u64,
+    ) -> Result<crate::infrastructure::history_health::HistoryCollectionHealth, UiError> {
+        self.dashboard_broker.dashboard_history_health(revision).await
+    }
+
     /// Loads the complete Broker inventory.
     pub async fn broker_inventory(&self, revision: u64) -> Result<Vec<BrokerInventoryItem>, UiError> {
         self.dashboard_broker.broker_inventory(revision).await
@@ -231,7 +277,16 @@ impl AppServices {
         revision: u64,
         patch: BrokerConfigPatch,
     ) -> Result<BrokerConfigMutationResult, UiError> {
-        self.dashboard_broker.patch_broker_config(revision, patch).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        let operation = self.accept_operation(
+            revision,
+            AuditAction::BrokerUpdated,
+            OperationResource::Broker(broker_history_series_identity(&patch.identity)),
+        )?;
+        self.run_mutation("gpui-service-broker-patch", operation, async move {
+            backend.patch_broker_config(revision, patch).await
+        })
+        .await
     }
 
     #[cfg(test)]

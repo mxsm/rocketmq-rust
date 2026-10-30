@@ -251,6 +251,8 @@ mod tests {
                 broker_name: "b".into(),
                 broker_address: "addr".into(),
             }],
+            target_observation: WorkspaceObservationState::Complete,
+            group_observation: WorkspaceObservationState::Complete,
             observation: WorkspaceObservationState::Partial,
             failures: vec![],
         };
@@ -267,6 +269,8 @@ mod tests {
         let inventory = ConsumerInventoryResult {
             items: vec![],
             targets: vec![],
+            target_observation: WorkspaceObservationState::Unknown,
+            group_observation: WorkspaceObservationState::Unknown,
             observation: WorkspaceObservationState::Unknown,
             failures: vec![],
         };

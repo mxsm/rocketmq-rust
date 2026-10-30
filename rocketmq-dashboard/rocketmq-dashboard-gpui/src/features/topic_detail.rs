@@ -42,10 +42,8 @@ pub enum TopicDetailIntent {
     ReplaceRoute(AppRoute),
     NavigateConsumer(AppRoute),
     EditTarget {
-        target: TopicTargetIdentity,
-        expected_version: u64,
-        read_queue_count: u32,
-        write_queue_count: u32,
+        target: TopicConfigTargetView,
+        targets: Vec<TopicConfigTargetView>,
     },
     Send(TopicIdentity),
     DeleteTopic {

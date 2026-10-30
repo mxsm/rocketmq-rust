@@ -14,11 +14,14 @@
 
 //! Deterministic safe-DTO fake for Dashboard/Broker product-path tests.
 
-use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use rocketmq_dashboard_common::{
     BrokerConfigPatch, BrokerConfigSnapshot, BrokerCurrentMetric, BrokerIdentity, BrokerInventoryItem,
-    DashboardOverview, HistoryMetricKind, HistoryPoint, RuntimeEntry, TopicCurrentMetric,
+    DashboardOverview, HistoryMetricKind, HistoryPoint, RuntimeEntry, TopicCurrentLoad, TopicCurrentObservation,
 };
 
 use super::{DashboardBrokerOperations, ServiceFuture};
@@ -29,6 +32,7 @@ use crate::{
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DashboardBrokerCalls {
+    pub count_history: Vec<(HistoryMetricKind, u64, u64)>,
     pub overview_revisions: Vec<u64>,
     pub topic_current_revisions: Vec<u64>,
     pub broker_current_revisions: Vec<u64>,
@@ -42,7 +46,7 @@ pub(crate) struct DashboardBrokerCalls {
 
 #[derive(Default)]
 struct Queues {
-    topic_current: VecDeque<Result<Vec<TopicCurrentMetric>, UiError>>,
+    topic_current: VecDeque<Result<TopicCurrentLoad, UiError>>,
     broker_current: VecDeque<Result<Vec<BrokerCurrentMetric>, UiError>>,
     topic_history: VecDeque<Result<Vec<HistoryPoint>, UiError>>,
     broker_history: VecDeque<Result<Vec<HistoryPoint>, UiError>>,
@@ -57,15 +61,39 @@ struct Queues {
 pub(crate) struct FakeDashboardBrokerOperations {
     queues: Mutex<Queues>,
     calls: Mutex<DashboardBrokerCalls>,
+    next_patch: Mutex<Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>>,
+    history_service: Mutex<Option<Arc<crate::services::dashboard::DashboardService>>>,
 }
 
 impl FakeDashboardBrokerOperations {
-    pub fn queue_topic_current(&self, result: Result<Vec<TopicCurrentMetric>, UiError>) {
+    pub fn hold_next_patch(&self) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let (started, observed) = tokio::sync::oneshot::channel();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        *self.next_patch.lock().expect("Broker patch gate") = Some((started, gate));
+        (observed, release)
+    }
+
+    pub fn use_history_service(&self, service: Arc<crate::services::dashboard::DashboardService>) {
+        *self.history_service.lock().unwrap() = Some(service);
+    }
+
+    pub fn queue_topic_load(&self, result: Result<TopicCurrentLoad, UiError>) {
+        self.queues.lock().unwrap().topic_current.push_back(result);
+    }
+
+    pub fn queue_topic_current(&self, result: Result<Vec<TopicCurrentObservation>, UiError>) {
         self.queues
             .lock()
             .expect("dashboard_broker queues")
             .topic_current
-            .push_back(result);
+            .push_back(result.map(|items| TopicCurrentLoad {
+                total_topics: items.len(),
+                application_topics: items.len(),
+                candidates: items.iter().map(|item| item.topic.clone()).collect(),
+                available_topics: items.iter().map(|item| item.topic.clone()).collect(),
+                items,
+                ..Default::default()
+            }));
     }
 
     pub fn queue_topic_history(&self, result: Result<Vec<HistoryPoint>, UiError>) {
@@ -142,7 +170,7 @@ impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
         })))
     }
 
-    fn dashboard_topic_current(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<TopicCurrentMetric>, UiError>> {
+    fn dashboard_topic_current(&self, revision: u64) -> ServiceFuture<'_, Result<TopicCurrentLoad, UiError>> {
         self.calls
             .lock()
             .expect("dashboard_broker calls")
@@ -154,7 +182,7 @@ impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
             .expect("dashboard_broker queues")
             .topic_current
             .pop_front()
-            .unwrap_or_else(|| Ok(Vec::new()));
+            .unwrap_or_else(|| Ok(TopicCurrentLoad::default()));
         Box::pin(std::future::ready(result))
     }
 
@@ -176,16 +204,23 @@ impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
 
     fn dashboard_topic_history(
         &self,
-        _revision: u64,
+        revision: u64,
         topic: String,
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>> {
-        self.calls
-            .lock()
-            .expect("dashboard_broker calls")
-            .topic_history
-            .push((topic, start_epoch_ms, end_epoch_ms));
+        self.calls.lock().expect("dashboard_broker calls").topic_history.push((
+            topic.clone(),
+            start_epoch_ms,
+            end_epoch_ms,
+        ));
+        if let Some(service) = self.history_service.lock().unwrap().clone() {
+            return Box::pin(async move {
+                service
+                    .topic_history(revision, topic, start_epoch_ms, end_epoch_ms)
+                    .await
+            });
+        }
         let result = self
             .queues
             .lock()
@@ -218,6 +253,29 @@ impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
             .pop_front()
             .unwrap_or_else(|| Ok(Vec::new()));
         Box::pin(std::future::ready(result))
+    }
+
+    fn dashboard_count_history(
+        &self,
+        _revision: u64,
+        metric: HistoryMetricKind,
+        start: u64,
+        end: u64,
+    ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>> {
+        self.calls.lock().unwrap().count_history.push((metric, start, end));
+        let mut queues = self.queues.lock().unwrap();
+        let queue = if metric == HistoryMetricKind::TopicCount {
+            &mut queues.topic_history
+        } else {
+            &mut queues.broker_history
+        };
+        Box::pin(std::future::ready(queue.pop_front().unwrap_or_else(|| Ok(Vec::new()))))
+    }
+    fn dashboard_history_health(
+        &self,
+        _revision: u64,
+    ) -> ServiceFuture<'_, Result<crate::infrastructure::history_health::HistoryCollectionHealth, UiError>> {
+        Box::pin(std::future::ready(Ok(Default::default())))
     }
 
     fn broker_inventory(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<BrokerInventoryItem>, UiError>> {
@@ -293,7 +351,14 @@ impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
             .patches
             .pop_front()
             .unwrap_or_else(|| Err(unexpected_call("Broker config mutation")));
-        Box::pin(std::future::ready(result))
+        let gate = self.next_patch.lock().expect("Broker patch gate").take();
+        Box::pin(async move {
+            if let Some((started, gate)) = gate {
+                let _ = started.send(());
+                gate.await.map_err(|_| unexpected_call("cancelled Broker patch gate"))?;
+            }
+            result
+        })
     }
 }
 

@@ -13,6 +13,11 @@
 
 //! Application services coordinating persistence, shell state, provider replacement, and health.
 
+pub(crate) mod audit;
+mod audit_outcomes;
+
+#[path = "services/acl.rs"]
+pub(crate) mod acl;
 #[path = "services/brokers.rs"]
 pub mod brokers;
 #[path = "services/consumers.rs"]
@@ -21,8 +26,16 @@ pub(crate) mod consumers;
 pub mod dashboard;
 #[path = "services/dashboard_broker.rs"]
 pub(crate) mod dashboard_broker;
+#[path = "services/dlq.rs"]
+pub(crate) mod dlq;
+#[path = "services/messages.rs"]
+pub(crate) mod messages;
+#[path = "services/monitors.rs"]
+pub(crate) mod monitors;
 #[path = "services/topics.rs"]
 pub(crate) mod topics;
+#[path = "services/topology.rs"]
+pub(crate) mod topology;
 
 use std::{
     fmt,
@@ -35,9 +48,9 @@ use std::{
 };
 
 use rocketmq_dashboard_common::{
-    AdminSessionStatus, AdminSessionSummary, ConnectionScope, CredentialSourceKind, EndpointHealth, EnvironmentId,
-    HistoryRetention, OperationActor, OperationResource, TransportSettings, add_endpoint, normalize_nameserver_address,
-    normalize_proxy_address, remove_endpoint, switch_endpoint,
+    AdminSessionStatus, AdminSessionSummary, AuditAction, ConnectionScope, CredentialSourceKind, EndpointHealth,
+    EnvironmentId, HistoryRetention, OperationActor, OperationContext, OperationResource, TransportSettings,
+    add_endpoint, normalize_nameserver_address, normalize_proxy_address, remove_endpoint, switch_endpoint,
 };
 use rocketmq_runtime::{ChildServiceContext, TaskKind};
 use tokio_util::sync::CancellationToken;
@@ -74,6 +87,28 @@ impl Drop for CancelOnDrop {
 }
 
 impl RuntimeBridge {
+    /// Registration belongs to the application group. Dropping a GPUI receiver only stops delivery;
+    /// shutdown drains the admitted work before aborting it at the group's existing deadline.
+    async fn run_owned<T: Send + 'static>(
+        &self,
+        name: &'static str,
+        future: impl Future<Output = Result<T, UiError>> + Send + 'static,
+    ) -> Result<T, UiError> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        #[cfg(test)]
+        let completion = self.completion.clone();
+        self.context
+            .spawn(name, TaskKind::Other, async move {
+                let _ = sender.send(future.await);
+                #[cfg(test)]
+                if let Some(completion) = completion {
+                    let _ = completion.send(name);
+                }
+            })
+            .map_err(runtime_unavailable)?;
+        receiver.await.map_err(runtime_unavailable)?
+    }
+
     async fn run<T>(
         &self,
         name: &'static str,
@@ -512,6 +547,7 @@ trait ApplicationBackend: Send + Sync {
         &self,
         mutation: ConfigMutation,
         progress: ConfigProgressSender,
+        context: Option<OperationContext>,
     ) -> ServiceFuture<'_, Result<ConfigUpdate, UiError>>;
     fn check_all_nameservers(&self) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, UiError>>;
     fn connection_state(&self) -> GlobalConnectionState;
@@ -524,9 +560,15 @@ trait ApplicationBackend: Send + Sync {
 pub struct AppServices {
     backend: Arc<dyn ApplicationBackend>,
     runtime_bridge: Option<RuntimeBridge>,
+    audit: Option<Arc<audit::AuditService>>,
+    monitors: Option<Arc<MonitorStore>>,
     dashboard_broker: Arc<dyn dashboard_broker::DashboardBrokerOperations>,
     consumers: Arc<dyn consumers::ConsumerBackend>,
     topics: Arc<dyn topics::TopicBackend>,
+    messages: Arc<dyn messages::MessageBackend>,
+    acl: Arc<dyn acl::AclBackend>,
+    dlq: Arc<dyn dlq::DlqBackend>,
+    topology: Arc<dyn topology::TopologyBackend>,
 }
 
 impl AppServices {
@@ -540,12 +582,18 @@ impl AppServices {
         Self {
             backend: Arc::new(InjectedBackend { startup, config, auth }),
             runtime_bridge: None,
+            audit: None,
+            monitors: None,
             dashboard_broker: dashboard_broker::RealDashboardBrokerOperations::new(
                 dashboard::DashboardService::unavailable(),
                 brokers::BrokerService::unavailable(),
             ),
             consumers: consumers::RealConsumerBackend::unavailable(),
             topics: topics::RealTopicBackend::unavailable(),
+            messages: messages::RealMessageBackend::unavailable(),
+            acl: acl::RealAclBackend::unavailable(),
+            dlq: dlq::RealDlqBackend::unavailable(),
+            topology: topology::RealTopologyBackend::unavailable(),
         }
     }
 
@@ -587,7 +635,13 @@ impl AppServices {
         let monitor_store = MonitorStore::with_config_store(Arc::clone(&store));
         let dashboard = admin_provider
             .as_ref()
-            .map(|provider| dashboard::DashboardService::new(Arc::clone(provider), Arc::clone(&history_store)))
+            .map(|provider| {
+                dashboard::DashboardService::new(
+                    Arc::clone(provider),
+                    Arc::clone(&history_store),
+                    history_context.clone(),
+                )
+            })
             .unwrap_or_else(dashboard::DashboardService::unavailable);
         let brokers = admin_provider
             .as_ref()
@@ -597,11 +651,31 @@ impl AppServices {
             .as_ref()
             .map(|provider| consumers::RealConsumerBackend::new(Arc::clone(provider)))
             .unwrap_or_else(consumers::RealConsumerBackend::unavailable);
+        let messages = admin_provider
+            .as_ref()
+            .map(|provider| messages::RealMessageBackend::new(Arc::clone(provider)))
+            .unwrap_or_else(messages::RealMessageBackend::unavailable);
         let topics = admin_provider
+            .as_ref()
+            .cloned()
             .map(topics::RealTopicBackend::new)
             .unwrap_or_else(topics::RealTopicBackend::unavailable);
+        let acl = admin_provider
+            .as_ref()
+            .cloned()
+            .map(acl::RealAclBackend::new)
+            .unwrap_or_else(acl::RealAclBackend::unavailable);
+        let dlq = admin_provider
+            .as_ref()
+            .cloned()
+            .map(dlq::RealDlqBackend::new)
+            .unwrap_or_else(dlq::RealDlqBackend::unavailable);
+        let topology = admin_provider
+            .map(topology::RealTopologyBackend::new)
+            .unwrap_or_else(topology::RealTopologyBackend::unavailable);
         let history_sampler: Arc<dyn HistorySampler> = dashboard.clone();
         let dashboard_broker = dashboard_broker::RealDashboardBrokerOperations::new(dashboard, brokers);
+        let audit = audit::AuditService::new(Arc::clone(&store), Arc::clone(&auth));
         Self {
             backend: Arc::new(DesktopBackend {
                 store,
@@ -614,7 +688,7 @@ impl AppServices {
                 host_context,
                 history_store,
                 history_sampler,
-                monitor_store,
+                monitor_store: Arc::clone(&monitor_store),
                 history_lifecycle: parking_lot::Mutex::new(None),
                 monitor_lifecycle: parking_lot::Mutex::new(None),
             }),
@@ -623,9 +697,15 @@ impl AppServices {
                 #[cfg(test)]
                 completion: None,
             }),
+            audit: Some(audit),
+            monitors: Some(monitor_store),
             dashboard_broker,
             consumers,
             topics,
+            messages,
+            acl,
+            dlq,
+            topology,
         }
     }
 
@@ -663,34 +743,42 @@ impl AppServices {
             return self.backend.bootstrap().await;
         };
         let backend = Arc::clone(&self.backend);
-        runtime
+        let result = runtime
             .run("gpui-bootstrap", async move { backend.bootstrap().await })
-            .await
+            .await;
+        if result.is_ok()
+            && let Some(audit) = &self.audit
+        {
+            audit.recover_pending();
+        }
+        result
     }
 
     /// Authenticates without retaining the supplied password.
     pub async fn authenticate(&self, username: &str, password: &str) -> Result<SessionState, UiError> {
-        let Some(runtime) = self.runtime_bridge.as_ref() else {
-            return self.backend.authenticate(username, password).await;
-        };
         let backend = Arc::clone(&self.backend);
+        let operation = self.accept_operation(
+            self.connection_state().config.revision,
+            AuditAction::LocalLogin,
+            OperationResource::LocalSession,
+        )?;
         let username = username.to_owned();
         let password = password.to_owned();
-        runtime
-            .run("gpui-authenticate", async move {
-                backend.authenticate(&username, &password).await
-            })
-            .await
+        self.run_mutation("gpui-authenticate", operation, async move {
+            backend.authenticate(&username, &password).await
+        })
+        .await
     }
 
     /// Clears the in-memory local session.
     pub async fn sign_out(&self) -> Result<(), UiError> {
-        let Some(runtime) = self.runtime_bridge.as_ref() else {
-            return self.backend.sign_out().await;
-        };
         let backend = Arc::clone(&self.backend);
-        runtime
-            .run("gpui-sign-out", async move { backend.sign_out().await })
+        let operation = self.accept_operation(
+            self.connection_state().config.revision,
+            AuditAction::LocalLogout,
+            OperationResource::LocalSession,
+        )?;
+        self.run_mutation("gpui-sign-out", operation, async move { backend.sign_out().await })
             .await
     }
 
@@ -700,15 +788,24 @@ impl AppServices {
         mutation: ConfigMutation,
         progress: tokio::sync::mpsc::UnboundedSender<ConfigUpdated>,
     ) -> Result<ConfigUpdate, UiError> {
-        let Some(runtime) = self.runtime_bridge.as_ref() else {
-            return self.backend.mutate(mutation, progress).await;
-        };
         let backend = Arc::clone(&self.backend);
-        runtime
-            .run("gpui-config-mutation", async move {
-                backend.mutate(mutation, progress).await
-            })
-            .await
+        if mutation == ConfigMutation::Reload {
+            let work = async move { backend.mutate(mutation, progress, None).await };
+            return match &self.runtime_bridge {
+                Some(runtime) => runtime.run("gpui-config-reload", work).await,
+                None => work.await,
+            };
+        }
+        let operation = self.accept_operation(
+            self.connection_state().config.revision,
+            AuditAction::ConfigurationSaved,
+            OperationResource::Configuration,
+        )?;
+        let context = operation.as_ref().map(|operation| operation.context.clone());
+        self.run_mutation("gpui-config-mutation", operation, async move {
+            backend.mutate(mutation, progress, context).await
+        })
+        .await
     }
 
     /// Checks every configured NameServer without changing the selected endpoint.
@@ -838,7 +935,8 @@ impl DesktopBackend {
         if foundations.monitor_enabled {
             let needs_start = self.monitor_lifecycle.lock().is_none();
             if needs_start {
-                self.monitor_store.list().await.map_err(config_ui_error)?;
+                let scope = self.store.environment_snapshot().map_err(config_ui_error)?;
+                self.monitor_store.snapshot(scope).await.map_err(config_ui_error)?;
                 let lifecycle = MonitorLifecycle::start(&self.monitor_context, true).map_err(config_ui_error)?;
                 if !lifecycle.is_started() {
                     return Err(UiError::new(
@@ -1008,6 +1106,7 @@ impl ApplicationBackend for DesktopBackend {
         &self,
         mutation: ConfigMutation,
         progress: ConfigProgressSender,
+        accepted_context: Option<OperationContext>,
     ) -> ServiceFuture<'_, Result<ConfigUpdate, UiError>> {
         Box::pin(async move {
             let _update = self.update_gate.lock().await;
@@ -1031,18 +1130,21 @@ impl ApplicationBackend for DesktopBackend {
                 });
             }
             let old = self.state.read().config.clone();
-            let actor = self
-                .auth
-                .session()
-                .username()
-                .map(|username| OperationActor::LocalOperator {
-                    username: username.to_owned(),
-                })
-                .unwrap_or(OperationActor::LocalDesktop);
-            let context = self
-                .store
-                .operation_context(old.revision, actor, OperationResource::Configuration)
-                .map_err(config_ui_error)?;
+            let context = if let Some(context) = accepted_context {
+                context
+            } else {
+                let actor = self
+                    .auth
+                    .session()
+                    .username()
+                    .map(|username| OperationActor::LocalOperator {
+                        username: username.to_owned(),
+                    })
+                    .unwrap_or(OperationActor::LocalDesktop);
+                self.store
+                    .operation_context(old.revision, actor, OperationResource::Configuration)
+                    .map_err(config_ui_error)?
+            };
             let environment_change = match &mutation {
                 ConfigMutation::CreateEnvironment(name) => Some(EnvironmentChange::Create { name: name.clone() }),
                 ConfigMutation::SwitchEnvironment(id) => Some(EnvironmentChange::Select { id: id.clone() }),
@@ -1414,6 +1516,7 @@ impl ApplicationBackend for InjectedBackend {
         &self,
         _mutation: ConfigMutation,
         _progress: ConfigProgressSender,
+        _context: Option<OperationContext>,
     ) -> ServiceFuture<'_, Result<ConfigUpdate, UiError>> {
         Box::pin(std::future::ready(Err(test_capability_unavailable())))
     }

@@ -76,7 +76,7 @@ fn legacy_config_and_rules_migrate_without_attributing_the_rules() {
     );
     let document: DesktopDocument = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(document.schema_version, CONFIG_SCHEMA_VERSION);
-    assert_eq!(document.monitors.schema_version, 1);
+    assert_eq!(document.monitors.schema_version, 2);
     assert!(document.monitors.rules[0].environment_id.is_none());
     runtime.shutdown_runtime_blocking().unwrap();
 }
@@ -145,6 +145,24 @@ fn configuration_and_monitor_records_commit_once_with_their_state() {
         assert_eq!(document.monitors.rules.len(), 1);
         assert_eq!(document.local_operations.len(), 2);
         assert_eq!(document.local_operations[1].kind, LocalOperationKind::MonitorSaved);
+        let audit = crate::infrastructure::audit_store::AuditStore::new(Arc::clone(&store));
+        let page = audit
+            .query(rocketmq_dashboard_common::AuditQuery {
+                filter: rocketmq_dashboard_common::AuditFilter::recent(crate::services::audit::now_epoch_ms().unwrap()),
+                limit: 10,
+                cursor: None,
+            })
+            .unwrap();
+        assert_eq!(page.events.len(), 2);
+        assert_eq!(
+            page.events[0].operation.action,
+            rocketmq_dashboard_common::AuditAction::MonitorSaved
+        );
+        assert_eq!(page.events[0].operation.context, document.local_operations[1].context);
+        assert_eq!(
+            page.events[0].outcome,
+            rocketmq_dashboard_common::AuditOutcome::Succeeded
+        );
         assert_eq!(
             document.monitors.rules[0].environment_id.as_ref(),
             Some(&document.active_environment_id)

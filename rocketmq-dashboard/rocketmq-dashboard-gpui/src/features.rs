@@ -14,12 +14,35 @@
 
 //! Feature-local state for the first dashboard delivery.
 
+#[path = "features/acl.rs"]
+pub mod acl;
+#[path = "features/acl_policy_dialog.rs"]
+pub mod acl_policy_dialog;
+#[path = "features/acl_store.rs"]
+pub mod acl_store;
+#[path = "features/acl_user_dialog.rs"]
+pub mod acl_user_dialog;
+#[path = "features/audit.rs"]
+pub(crate) mod audit;
+#[path = "features/audit_detail.rs"]
+mod audit_detail;
+#[path = "features/audit_presentation.rs"]
+mod audit_presentation;
+#[path = "features/audit_query_store.rs"]
+mod audit_query_store;
+
 #[path = "features/login.rs"]
 pub mod login;
 
 #[path = "features/ops.rs"]
 pub mod ops;
 
+#[path = "features/monitor_dialog.rs"]
+pub mod monitor_dialog;
+#[path = "features/monitors.rs"]
+pub mod monitors;
+#[path = "features/monitors_store.rs"]
+pub mod monitors_store;
 #[path = "features/proxy.rs"]
 pub mod proxy;
 
@@ -55,6 +78,13 @@ pub mod topic_detail;
 
 #[path = "features/topics.rs"]
 pub mod topics;
+#[path = "features/topology.rs"]
+pub(crate) mod topology;
+#[path = "features/topology_store.rs"]
+pub(crate) mod topology_store;
+
+#[path = "features/consumer_dialogs.rs"]
+pub mod consumer_dialogs;
 
 #[path = "features/consumers_store.rs"]
 pub mod consumers_store;
@@ -78,3 +108,22 @@ mod topics_product_tests;
 #[cfg(test)]
 #[path = "features/consumers_product_tests.rs"]
 mod consumers_product_tests;
+
+#[path = "features/dlq.rs"]
+pub(crate) mod dlq;
+#[path = "features/dlq_dialogs.rs"]
+pub(crate) mod dlq_dialogs;
+#[path = "features/dlq_store.rs"]
+pub(crate) mod dlq_store;
+#[path = "features/message_detail.rs"]
+pub(crate) mod message_detail;
+#[path = "features/message_dialogs.rs"]
+pub(crate) mod message_dialogs;
+#[path = "features/message_trace.rs"]
+pub(crate) mod message_trace;
+#[path = "features/message_trace_store.rs"]
+pub(crate) mod message_trace_store;
+#[path = "features/messages.rs"]
+pub(crate) mod messages;
+#[path = "features/messages_store.rs"]
+pub(crate) mod messages_store;

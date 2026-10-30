@@ -252,6 +252,8 @@ pub enum TopicFailureCode {
     InvalidData,
     Unavailable,
     Conflict,
+    /// The remote write may have applied; refresh before another attempt.
+    Unconfirmed,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -514,7 +516,7 @@ pub struct TopicRouteView {
     pub queues: Vec<TopicRouteQueueView>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TopicConfigTargetView {
     pub target: TopicTargetIdentity,
     pub version: u64,
@@ -523,6 +525,84 @@ pub struct TopicConfigTargetView {
     pub permission: Option<TopicPermission>,
     pub ordered: bool,
     pub message_type: TopicMessageType,
+}
+
+/// The editable Topic contract, independent of UI widgets and Admin wire types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TopicConfigValues {
+    pub read_queue_count: u32,
+    pub write_queue_count: u32,
+    pub permission: TopicPermission,
+    pub ordered: bool,
+    pub message_type: TopicMessageType,
+}
+
+impl TopicConfigTargetView {
+    pub fn editable_values(&self) -> Option<TopicConfigValues> {
+        matches!(
+            self.message_type,
+            TopicMessageType::Normal
+                | TopicMessageType::Fifo
+                | TopicMessageType::Delay
+                | TopicMessageType::Transaction
+                | TopicMessageType::Unspecified
+        )
+        .then_some(TopicConfigValues {
+            read_queue_count: self.read_queue_count,
+            write_queue_count: self.write_queue_count,
+            permission: self.permission?,
+            ordered: self.ordered,
+            message_type: self.message_type,
+        })
+    }
+}
+
+/// An absent field preserves that field separately on every selected Broker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TopicConfigFieldsPatch {
+    pub read_queue_count: Option<u32>,
+    pub write_queue_count: Option<u32>,
+    pub permission: Option<TopicPermission>,
+    pub ordered: Option<bool>,
+    pub message_type: Option<TopicMessageType>,
+}
+
+impl TopicConfigValues {
+    #[must_use]
+    pub fn changes_from(self, baseline: Self) -> TopicConfigFieldsPatch {
+        TopicConfigFieldsPatch {
+            read_queue_count: (self.read_queue_count != baseline.read_queue_count).then_some(self.read_queue_count),
+            write_queue_count: (self.write_queue_count != baseline.write_queue_count).then_some(self.write_queue_count),
+            permission: (self.permission != baseline.permission).then_some(self.permission),
+            ordered: (self.ordered != baseline.ordered).then_some(self.ordered),
+            message_type: (self.message_type != baseline.message_type).then_some(self.message_type),
+        }
+    }
+
+    #[must_use]
+    pub fn with_patch(self, patch: TopicConfigFieldsPatch) -> Self {
+        Self {
+            read_queue_count: patch.read_queue_count.unwrap_or(self.read_queue_count),
+            write_queue_count: patch.write_queue_count.unwrap_or(self.write_queue_count),
+            permission: patch.permission.unwrap_or(self.permission),
+            ordered: patch.ordered.unwrap_or(self.ordered),
+            message_type: patch.message_type.unwrap_or(self.message_type),
+        }
+    }
+}
+
+impl TopicConfigFieldsPatch {
+    pub fn is_empty(self) -> bool {
+        self == Self::default()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct TopicConfigEditOutcome {
+    pub outcome: TopicPartialOutcome,
+    /// Only version-conflicted targets with a complete new state can be
+    /// explicitly rebased. Applied or unknown targets cannot be replayed.
+    pub conflicts: Vec<TopicConfigTargetView>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -614,7 +694,10 @@ impl TopicPartialOutcome {
 
     #[must_use]
     pub fn failed_count(&self) -> usize {
-        self.targets.len().saturating_sub(self.applied_count())
+        self.targets
+            .iter()
+            .filter(|target| !target.applied || target.failure.is_some())
+            .count()
     }
 
     #[must_use]
@@ -763,5 +846,25 @@ mod tests {
         };
         assert!(!outcome.is_complete_success());
         assert_eq!(outcome.applied_count(), 1);
+    }
+
+    #[test]
+    fn applied_broker_with_an_unconfirmed_stage_is_still_an_incomplete_outcome() {
+        let outcome = TopicPartialOutcome {
+            topic: TopicIdentity::parse("orders").unwrap(),
+            kind: TopicMutationKind::Edit,
+            guarantee: TopicMutationGuarantee::VersionCas,
+            targets: vec![TopicTargetOutcome {
+                target: "broker-a".into(),
+                stage: TopicFailureStage::Mutation,
+                applied: true,
+                failure: Some(TopicFailureCode::Unavailable),
+                retryable: false,
+            }],
+            reload_failed: false,
+        };
+        assert_eq!(outcome.applied_count(), 1);
+        assert_eq!(outcome.failed_count(), 1);
+        assert!(!outcome.is_complete_success());
     }
 }

@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+mod acl_workspace;
 #[cfg(feature = "admin-full")]
 mod capability;
 pub mod default_mq_admin_ext;
 pub mod default_mq_admin_ext_impl;
 #[cfg(feature = "admin-read")]
 mod mq_admin_acl_read_ext;
+#[cfg(feature = "admin-read")]
+pub use acl_workspace::{AclWorkspaceDocuments, AclWorkspaceReadKind, MQAdminAclWorkspaceReadExt};
+#[cfg(feature = "admin-mutation")]
+pub use acl_workspace::{AclWorkspaceWrite, MQAdminAclWorkspaceMutationExt};
 #[cfg(feature = "admin-read")]
 mod mq_admin_consumer_observation_read_ext;
 #[cfg(feature = "admin-read")]
@@ -79,6 +85,8 @@ pub use mq_admin_message_index_read_ext::MQAdminMessageIndexReadExt;
 pub use mq_admin_message_index_read_ext::MessageIndexQuery;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_message_index_read_ext::MessageTraceRead;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_message_index_read_ext::MessageTraceRecordsRead;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::BrokerConfigPatchResult;
 #[cfg(feature = "admin-mutation")]
@@ -153,3 +161,10 @@ pub use mq_admin_read_ext::TopicConfigVersioned;
 pub use mq_admin_topic_stats_read_ext::MQAdminTopicStatsReadExt;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_topic_subscriber_read_ext::MQAdminTopicSubscriberReadExt;
+
+#[cfg(any(feature = "admin-full", feature = "admin-mutation"))]
+mod scoped_message;
+#[cfg(any(feature = "admin-full", feature = "admin-mutation"))]
+pub use scoped_message::{MQAdminMessageTargetReadExt, MessageTargetLookup};
+#[cfg(feature = "admin-mutation")]
+pub use scoped_message::{MQAdminResolvedMessageMutationExt, ResolvedMessageConsumeRequest};

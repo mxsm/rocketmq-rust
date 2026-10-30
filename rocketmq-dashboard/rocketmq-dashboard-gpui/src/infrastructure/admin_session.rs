@@ -16,6 +16,8 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
+#[cfg(test)]
+use rocketmq_admin_core::core::dashboard::{DashboardConsumerList, DashboardTopicStats};
 use rocketmq_admin_core::{
     client_adapter::{AdminBuilder, AdminSession, ClientRuntime},
     core::{
@@ -26,9 +28,11 @@ use rocketmq_admin_core::{
         },
         consumer::{
             ConsumerExactBatchDeleteRequest, ConsumerExactBatchMutationAdmin, ConsumerExactBatchUpsertMutationAdmin,
-            ConsumerExactBatchUpsertRequest, ConsumerMutationAdmin, DashboardConsumerBatchResult,
-            DashboardConsumerRunningInfo, DashboardConsumerRunningInfoRequest, PatchSubscriptionGroupConfigRequest,
-            SubscriptionGroupConfigPatchResult,
+            ConsumerExactBatchUpsertRequest, DashboardConsumerBatchResult, DashboardConsumerRunningInfo,
+            DashboardConsumerRunningInfoRequest,
+        },
+        consumer_configuration::{
+            ConsumerWorkspaceConfigPatchResult, ConsumerWorkspaceMutationAdmin, PatchConsumerWorkspaceConfigRequest,
         },
         consumer_workspace::{
             ConsumerClientsResult, ConsumerConfigPresenceResult, ConsumerConfigurationResult,
@@ -38,17 +42,22 @@ use rocketmq_admin_core::{
         },
         dashboard::{
             DashboardAdmin, DashboardBrokerConfig, DashboardBrokerList, DashboardBrokerRuntime, DashboardBrokerTarget,
-            DashboardConsumerList, DashboardProducerInfo, DashboardTopicList, DashboardTopicStats,
+            DashboardProducerInfo, DashboardTopicList,
         },
+        dashboard_metrics::{DashboardConsumerSummary, DashboardMetricsAdmin, DashboardTopicRates},
+        message::{
+            DirectConsumeRequest, DirectConsumeResult, MessageLookupReadAdmin, MessageLookupRequest, MessageRecord,
+            MessageScopedMutationAdmin,
+        },
+        message_trace::{MessageTraceLookupRequest, MessageTraceReadAdmin, MessageTraceReadResult},
         security::AdminCredentials,
         topic::{
             DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicConfig, DetailedTopicConsumers,
-            DetailedTopicStats, GetTopicRouteRequest, PatchTopicConfigRequest, QueryTopicConfigCasRequest,
-            TopicBatchDeleteAdmin, TopicBatchDeleteReport, TopicBatchDeleteRequest, TopicBatchMutationAdmin,
-            TopicBatchMutationReport, TopicBatchUpsertRequest, TopicConfigCasState, TopicConfigPatchResult,
-            TopicInspectionAdmin, TopicMutationAdmin, TopicMutationPreflightAdmin, TopicMutationSummary,
-            TopicOffsetMutationAdmin, TopicOffsetMutationReport, TopicOffsetMutationRequest, TopicRoute,
-            TopicSendRequest, TopicSendResult,
+            DetailedTopicStats, GetTopicRouteRequest, TopicBatchDeleteAdmin, TopicBatchDeleteReport,
+            TopicBatchDeleteRequest, TopicBatchMutationAdmin, TopicBatchMutationReport, TopicBatchUpsertRequest,
+            TopicConfigFieldsMutationAdmin, TopicConfigFieldsPatchReport, TopicConfigFieldsPatchRequest,
+            TopicInspectionAdmin, TopicMutationAdmin, TopicMutationSummary, TopicOffsetMutationAdmin,
+            TopicOffsetMutationReport, TopicOffsetMutationRequest, TopicRoute, TopicSendRequest, TopicSendResult,
         },
     },
     mutation_client_adapter::{MutationAdminBuilder, MutationAdminSession},
@@ -57,11 +66,45 @@ use rocketmq_dashboard_common::ConnectionSnapshot;
 
 pub(crate) type SessionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+pub(crate) enum TopologyAdminData {
+    Brokers(rocketmq_admin_core::core::topology::TopologyRead<rocketmq_admin_core::core::topology::TopologyBrokerRow>),
+    Topics(rocketmq_admin_core::core::topology::TopologyRead<rocketmq_admin_core::core::topology::TopologyTopicRow>),
+    Producers(rocketmq_admin_core::core::topology::TopologyRead<rocketmq_admin_core::core::topology::TopologyGroupRow>),
+    Consumers(rocketmq_admin_core::core::topology::TopologyRead<rocketmq_admin_core::core::topology::TopologyGroupRow>),
+    Replication(rocketmq_admin_core::core::topology::TopologyReplicationRead),
+}
+
 /// Concurrent query capability of one started Admin session.
 pub(crate) trait DashboardQuerySession: Send + Sync {
+    fn acl_documents<'a>(
+        &'a self,
+        _address: &'a str,
+        _kind: rocketmq_admin_core::core::acl_workspace::AclReadKind,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::acl_workspace::AclDocuments>> {
+        Box::pin(async {
+            Err(rocketmq_admin_core::core::AdminError::operation_failed(
+                "acl",
+                "ACL capability unavailable",
+            ))
+        })
+    }
+    fn topology_layer(
+        &self,
+        _source: rocketmq_dashboard_common::TopologySource,
+    ) -> SessionFuture<'_, AdminResult<TopologyAdminData>> {
+        Box::pin(async { Err(unsupported_topic_session("topology")) })
+    }
     fn health(&self) -> SessionFuture<'_, AdminResult<()>>;
     fn list_topics(&self) -> SessionFuture<'_, AdminResult<DashboardTopicList>>;
+    #[cfg(test)]
     fn topic_stats<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<DashboardTopicStats>>;
+    fn topic_rates<'a>(&'a self, _topics: &'a [String]) -> SessionFuture<'a, AdminResult<Vec<DashboardTopicRates>>> {
+        Box::pin(async { Err(unsupported_topic_session("topic_rates")) })
+    }
+    fn consumer_summary(&self) -> SessionFuture<'_, AdminResult<DashboardConsumerSummary>> {
+        Box::pin(async { Err(unsupported_consumer_session("consumer_summary")) })
+    }
+    #[cfg(test)]
     fn list_consumers(&self) -> SessionFuture<'_, AdminResult<DashboardConsumerList>>;
     fn list_producers(&self) -> SessionFuture<'_, AdminResult<Vec<DashboardProducerInfo>>>;
     fn list_brokers(&self) -> SessionFuture<'_, AdminResult<DashboardBrokerList>>;
@@ -139,11 +182,47 @@ pub(crate) trait DashboardQuerySession: Send + Sync {
     ) -> SessionFuture<'a, AdminResult<ProducerConnectionsResult>> {
         Box::pin(async { Err(unsupported_consumer_session("producer_connections")) })
     }
+    fn query_messages<'a>(
+        &'a self,
+        _request: &'a rocketmq_admin_core::core::dashboard::DashboardMessageQuery,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::dashboard::DashboardMessageList>> {
+        Box::pin(async { Err(unsupported_message_session()) })
+    }
+    fn lookup_message<'a>(
+        &'a self,
+        _request: &'a MessageLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageRecord>> {
+        Box::pin(async { Err(unsupported_message_session()) })
+    }
+    fn message_trace<'a>(
+        &'a self,
+        _request: &'a MessageTraceLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageTraceReadResult>> {
+        Box::pin(async { Err(unsupported_message_session()) })
+    }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
 }
 
 /// Serialized generation-aware Broker mutation capability.
 pub(crate) trait DashboardMutationSession: Send {
+    fn apply_acl<'a>(
+        &'a mut self,
+        _address: &'a str,
+        _request: &'a rocketmq_admin_core::core::acl_workspace::AclExactWrite,
+    ) -> SessionFuture<'a, AdminResult<()>> {
+        Box::pin(async {
+            Err(rocketmq_admin_core::core::AdminError::operation_failed(
+                "acl",
+                "ACL capability unavailable",
+            ))
+        })
+    }
+    fn patch_topic_fields<'a>(
+        &'a mut self,
+        _request: &'a TopicConfigFieldsPatchRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicConfigFieldsPatchReport>> {
+        Box::pin(async { Err(unsupported_topic_session("patch_topic_fields")) })
+    }
     fn query_config_generation<'a>(
         &'a mut self,
         request: &'a QueryBrokerConfigGenerationRequest,
@@ -152,18 +231,6 @@ pub(crate) trait DashboardMutationSession: Send {
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
     ) -> SessionFuture<'a, AdminResult<BrokerConfigPatchResult>>;
-    fn topic_config_cas_state<'a>(
-        &'a mut self,
-        _request: &'a QueryTopicConfigCasRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicConfigCasState>> {
-        Box::pin(async { Err(unsupported_topic_session("topic_config_cas_state")) })
-    }
-    fn patch_topic_config<'a>(
-        &'a mut self,
-        _request: &'a PatchTopicConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicConfigPatchResult>> {
-        Box::pin(async { Err(unsupported_topic_session("patch_topic_config")) })
-    }
     fn upsert_topic_batch<'a>(
         &'a mut self,
         _request: &'a TopicBatchUpsertRequest,
@@ -214,11 +281,24 @@ pub(crate) trait DashboardMutationSession: Send {
     }
     fn patch_consumer_config<'a>(
         &'a mut self,
-        _request: &'a PatchSubscriptionGroupConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<SubscriptionGroupConfigPatchResult>> {
+        _request: &'a PatchConsumerWorkspaceConfigRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerWorkspaceConfigPatchResult>> {
         Box::pin(async { Err(unsupported_consumer_session("patch_consumer_config")) })
     }
+    fn consume_message_directly<'a>(
+        &'a mut self,
+        _request: &'a DirectConsumeRequest,
+    ) -> SessionFuture<'a, AdminResult<DirectConsumeResult>> {
+        Box::pin(async { Err(unsupported_message_session()) })
+    }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
+}
+
+fn unsupported_message_session() -> rocketmq_admin_core::core::AdminError {
+    rocketmq_admin_core::core::AdminError::operation_failed(
+        "messages",
+        "Message capability is unavailable in this session",
+    )
 }
 
 fn unsupported_topic_session(operation: &'static str) -> rocketmq_admin_core::core::AdminError {
@@ -314,18 +394,85 @@ struct RealQuerySession {
 }
 
 impl DashboardQuerySession for RealQuerySession {
+    fn acl_documents<'a>(
+        &'a self,
+        address: &'a str,
+        kind: rocketmq_admin_core::core::acl_workspace::AclReadKind,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::acl_workspace::AclDocuments>> {
+        Box::pin(async move { self.inner.acl_documents_at(address, kind).await })
+    }
+    fn topology_layer(
+        &self,
+        source: rocketmq_dashboard_common::TopologySource,
+    ) -> SessionFuture<'_, AdminResult<TopologyAdminData>> {
+        use rocketmq_admin_core::core::topology::TopologyReadAdmin as _;
+        use rocketmq_dashboard_common::TopologySource;
+        Box::pin(async move {
+            match source {
+                TopologySource::Brokers => self.inner.topology_brokers().await.map(TopologyAdminData::Brokers),
+                TopologySource::Topics => self.inner.topology_topics().await.map(TopologyAdminData::Topics),
+                TopologySource::Producers => self.inner.topology_producers().await.map(TopologyAdminData::Producers),
+                TopologySource::Consumers => self.inner.topology_consumers().await.map(TopologyAdminData::Consumers),
+                TopologySource::Replication => self
+                    .inner
+                    .topology_replication()
+                    .await
+                    .map(TopologyAdminData::Replication),
+                TopologySource::Config | TopologySource::Nameservers => {
+                    Err(unsupported_topic_session("topology_local_layer"))
+                }
+            }
+        })
+    }
     fn health(&self) -> SessionFuture<'_, AdminResult<()>> {
-        Box::pin(async { DashboardAdmin::dashboard_list_topics(&self.inner).await.map(|_| ()) })
+        Box::pin(async {
+            DashboardMetricsAdmin::dashboard_topic_names(&self.inner)
+                .await
+                .map(|_| ())
+        })
     }
 
     fn list_topics(&self) -> SessionFuture<'_, AdminResult<DashboardTopicList>> {
-        DashboardAdmin::dashboard_list_topics(&self.inner)
+        Box::pin(async move {
+            let names = DashboardMetricsAdmin::dashboard_topic_names(&self.inner).await?;
+            Ok(DashboardTopicList {
+                items: names
+                    .into_iter()
+                    .map(|topic| {
+                        let category =
+                            if rocketmq_admin_core::core::dashboard_metrics::is_dashboard_application_topic(&topic) {
+                                "NORMAL"
+                            } else {
+                                "SYSTEM"
+                            };
+                        rocketmq_admin_core::core::dashboard::DashboardTopicInfo {
+                            topic,
+                            category: category.into(),
+                            broker_name: None,
+                            read_queue_count: 0,
+                            write_queue_count: 0,
+                            perm: 0,
+                        }
+                    })
+                    .collect(),
+            })
+        })
     }
 
+    fn topic_rates<'a>(&'a self, topics: &'a [String]) -> SessionFuture<'a, AdminResult<Vec<DashboardTopicRates>>> {
+        DashboardMetricsAdmin::dashboard_topic_rates(&self.inner, topics)
+    }
+
+    fn consumer_summary(&self) -> SessionFuture<'_, AdminResult<DashboardConsumerSummary>> {
+        DashboardMetricsAdmin::dashboard_consumer_summary(&self.inner)
+    }
+
+    #[cfg(test)]
     fn topic_stats<'a>(&'a self, topic: &'a str) -> SessionFuture<'a, AdminResult<DashboardTopicStats>> {
         DashboardAdmin::dashboard_topic_stats(&self.inner, topic)
     }
 
+    #[cfg(test)]
     fn list_consumers(&self) -> SessionFuture<'_, AdminResult<DashboardConsumerList>> {
         DashboardAdmin::dashboard_list_consumers(&self.inner)
     }
@@ -438,6 +585,24 @@ impl DashboardQuerySession for RealQuerySession {
         ConsumerWorkspaceAdmin::producer_connections(&self.inner, request)
     }
 
+    fn query_messages<'a>(
+        &'a self,
+        request: &'a rocketmq_admin_core::core::dashboard::DashboardMessageQuery,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::dashboard::DashboardMessageList>> {
+        DashboardAdmin::dashboard_query_messages(&self.inner, request)
+    }
+    fn lookup_message<'a>(
+        &'a self,
+        request: &'a MessageLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageRecord>> {
+        MessageLookupReadAdmin::lookup_message(&self.inner, request)
+    }
+    fn message_trace<'a>(
+        &'a self,
+        request: &'a MessageTraceLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageTraceReadResult>> {
+        MessageTraceReadAdmin::message_trace(&self.inner, request)
+    }
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {
         Box::pin(async move { self.inner.shutdown().await })
     }
@@ -448,6 +613,13 @@ struct RealMutationSession {
 }
 
 impl DashboardMutationSession for RealMutationSession {
+    fn apply_acl<'a>(
+        &'a mut self,
+        address: &'a str,
+        request: &'a rocketmq_admin_core::core::acl_workspace::AclExactWrite,
+    ) -> SessionFuture<'a, AdminResult<()>> {
+        Box::pin(async move { self.inner.apply_acl_at(address, request).await })
+    }
     fn query_config_generation<'a>(
         &'a mut self,
         request: &'a QueryBrokerConfigGenerationRequest,
@@ -462,18 +634,11 @@ impl DashboardMutationSession for RealMutationSession {
         BrokerMutationAdmin::patch_config_if_generation(&mut self.inner, request)
     }
 
-    fn topic_config_cas_state<'a>(
+    fn patch_topic_fields<'a>(
         &'a mut self,
-        request: &'a QueryTopicConfigCasRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicConfigCasState>> {
-        TopicMutationPreflightAdmin::query_config_cas_state(&mut self.inner, request)
-    }
-
-    fn patch_topic_config<'a>(
-        &'a mut self,
-        request: &'a PatchTopicConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicConfigPatchResult>> {
-        TopicMutationAdmin::patch_config_if_version(&mut self.inner, request)
+        request: &'a TopicConfigFieldsPatchRequest,
+    ) -> SessionFuture<'a, AdminResult<TopicConfigFieldsPatchReport>> {
+        TopicConfigFieldsMutationAdmin::patch_topic_config_fields(&mut self.inner, request)
     }
 
     fn upsert_topic_batch<'a>(
@@ -534,11 +699,17 @@ impl DashboardMutationSession for RealMutationSession {
 
     fn patch_consumer_config<'a>(
         &'a mut self,
-        request: &'a PatchSubscriptionGroupConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<SubscriptionGroupConfigPatchResult>> {
-        ConsumerMutationAdmin::patch_config_if_version(&mut self.inner, request)
+        request: &'a PatchConsumerWorkspaceConfigRequest,
+    ) -> SessionFuture<'a, AdminResult<ConsumerWorkspaceConfigPatchResult>> {
+        ConsumerWorkspaceMutationAdmin::patch_consumer_workspace_config(&mut self.inner, request)
     }
 
+    fn consume_message_directly<'a>(
+        &'a mut self,
+        request: &'a DirectConsumeRequest,
+    ) -> SessionFuture<'a, AdminResult<DirectConsumeResult>> {
+        MessageScopedMutationAdmin::consume_scoped_message(&mut self.inner, request)
+    }
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {
         Box::pin(async move { self.inner.shutdown().await })
     }

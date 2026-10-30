@@ -16,7 +16,7 @@
 
 use std::time::SystemTime;
 
-use rocketmq_dashboard_common::{BrokerCurrentMetric, HistoryPoint, TopicCurrentMetric};
+use rocketmq_dashboard_common::{BrokerCurrentMetric, HistoryPoint, TopicCurrentLoad};
 
 use crate::{
     services::dashboard::DashboardOverviewLoad,
@@ -121,7 +121,8 @@ fn now_epoch_ms() -> Option<u64> {
 #[derive(Default)]
 pub struct DashboardStore {
     pub overview: ResourceSlot<DashboardOverviewLoad>,
-    pub topic_current: ResourceSlot<Vec<TopicCurrentMetric>>,
+    pub health: ResourceSlot<crate::infrastructure::history_health::HistoryCollectionHealth>,
+    pub topic_current: ResourceSlot<TopicCurrentLoad>,
     pub broker_current: ResourceSlot<Vec<BrokerCurrentMetric>>,
     pub topic_history: ResourceSlot<Vec<HistoryPoint>>,
     pub broker_history: ResourceSlot<Vec<HistoryPoint>>,

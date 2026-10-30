@@ -14,22 +14,25 @@
 
 //! Private Topic application seam and authoritative post-mutation reload rules.
 
+#[path = "topic_fields.rs"]
+mod fields;
 #[cfg(test)]
 #[path = "topics_test_support.rs"]
 pub(crate) mod test_support;
+pub(crate) use fields::{TopicFieldsPatchCommand, TopicFieldsPatchResult};
 
 use std::{fmt, future::Future, sync::Arc};
 
-use rocketmq_admin_core::core::topic::TopicConfigCasState;
 use rocketmq_dashboard_common::{
-    TopicConfigView, TopicConsumersView, TopicIdentity, TopicInventory, TopicMessageType, TopicPartialOutcome,
-    TopicPermission, TopicRouteView, TopicStatsView, TopicTargetIdentity,
+    AuditAcceptedOperation, AuditAction, OperationResource, TopicConfigView, TopicConsumersView, TopicIdentity,
+    TopicInventory, TopicMessageType, TopicPartialOutcome, TopicPermission, TopicRouteView, TopicStatsView,
+    TopicTargetIdentity,
 };
 
 use crate::{
     infrastructure::admin_provider::{
         GpuiAdminProvider, SafeTopicCreateRequest, SafeTopicDeleteBrokerRequest, SafeTopicDeleteRequest,
-        SafeTopicOffsetRequest, SafeTopicPatchOutcome, SafeTopicQueuePatchRequest, SafeTopicSendRequest,
+        SafeTopicOffsetRequest, SafeTopicSendRequest,
     },
     state::{UiError, UiErrorCode},
 };
@@ -61,26 +64,6 @@ impl fmt::Debug for TopicCreateCommand {
             .field("write_queue_count", &self.write_queue_count)
             .field("ordered", &self.ordered)
             .field("message_type", &self.message_type)
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct TopicQueuePatchCommand {
-    pub topic: TopicIdentity,
-    pub target: TopicTargetIdentity,
-    pub expected_version: u64,
-    pub read_queue_count: Option<u32>,
-    pub write_queue_count: Option<u32>,
-}
-
-impl fmt::Debug for TopicQueuePatchCommand {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("TopicQueuePatchCommand")
-            .field("expected_version", &self.expected_version)
-            .field("read_queue_count", &self.read_queue_count)
-            .field("write_queue_count", &self.write_queue_count)
             .finish_non_exhaustive()
     }
 }
@@ -228,76 +211,20 @@ impl fmt::Debug for TopicMutationResult {
     }
 }
 
-pub(crate) enum TopicQueuePatchResult {
-    Applied {
-        previous_version: u64,
-        version: u64,
-        configuration: Box<TopicConfigView>,
-        inventory: TopicInventory,
-        invalidations: Vec<TopicCacheInvalidation>,
-    },
-    AppliedReloadFailed {
-        previous_version: u64,
-        version: u64,
-        invalidations: Vec<TopicCacheInvalidation>,
-        error: UiError,
-    },
-    VersionConflict {
-        expected_version: u64,
-        actual_version: u64,
-        latest: TopicConfigCasState,
-    },
-}
-
-impl fmt::Debug for TopicQueuePatchResult {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Applied {
-                previous_version,
-                version,
-                ..
-            } => formatter
-                .debug_struct("Applied")
-                .field("previous_version", previous_version)
-                .field("version", version)
-                .finish_non_exhaustive(),
-            Self::AppliedReloadFailed {
-                previous_version,
-                version,
-                error,
-                ..
-            } => formatter
-                .debug_struct("AppliedReloadFailed")
-                .field("previous_version", previous_version)
-                .field("version", version)
-                .field("retryable", &error.is_retryable())
-                .finish_non_exhaustive(),
-            Self::VersionConflict {
-                expected_version,
-                actual_version,
-                ..
-            } => formatter
-                .debug_struct("VersionConflict")
-                .field("expected_version", expected_version)
-                .field("actual_version", actual_version)
-                .finish_non_exhaustive(),
-        }
-    }
-}
-
-pub(crate) enum BackendTopicQueuePatchResult {
-    Applied {
-        previous_version: u64,
-        version: u64,
-    },
-    VersionConflict {
-        expected_version: u64,
-        actual_version: u64,
-        latest: TopicConfigCasState,
-    },
-}
-
 pub(crate) trait TopicBackend: Send + Sync {
+    fn patch_fields(
+        &self,
+        _scope: TopicRequestScope,
+        _command: TopicFieldsPatchCommand,
+    ) -> ServiceFuture<'_, Result<rocketmq_dashboard_common::TopicConfigEditOutcome, UiError>> {
+        Box::pin(async {
+            Err(UiError::new(
+                "Topic field editing is unavailable.",
+                UiErrorCode::CapabilityUnavailable,
+                false,
+            ))
+        })
+    }
     fn inventory(&self, scope: TopicRequestScope) -> ServiceFuture<'_, Result<TopicInventory, UiError>>;
     fn route(
         &self,
@@ -324,11 +251,6 @@ pub(crate) trait TopicBackend: Send + Sync {
         scope: TopicRequestScope,
         command: TopicCreateCommand,
     ) -> ServiceFuture<'_, Result<TopicPartialOutcome, UiError>>;
-    fn patch_queue_counts(
-        &self,
-        scope: TopicRequestScope,
-        command: TopicQueuePatchCommand,
-    ) -> ServiceFuture<'_, Result<BackendTopicQueuePatchResult, UiError>>;
     fn delete(
         &self,
         scope: TopicRequestScope,
@@ -379,6 +301,13 @@ impl RealTopicBackend {
 }
 
 impl TopicBackend for RealTopicBackend {
+    fn patch_fields(
+        &self,
+        scope: TopicRequestScope,
+        command: TopicFieldsPatchCommand,
+    ) -> ServiceFuture<'_, Result<rocketmq_dashboard_common::TopicConfigEditOutcome, UiError>> {
+        self.edit_fields(scope, command)
+    }
     fn inventory(&self, scope: TopicRequestScope) -> ServiceFuture<'_, Result<TopicInventory, UiError>> {
         Box::pin(async move {
             self.provider()?
@@ -461,55 +390,6 @@ impl TopicBackend for RealTopicBackend {
                 )
                 .await
                 .map_err(mutation_error)
-        })
-    }
-
-    fn patch_queue_counts(
-        &self,
-        scope: TopicRequestScope,
-        command: TopicQueuePatchCommand,
-    ) -> ServiceFuture<'_, Result<BackendTopicQueuePatchResult, UiError>> {
-        Box::pin(async move {
-            let topic = command.topic.clone();
-            let target = command.target.clone();
-            let result = self
-                .provider()?
-                .patch_topic_queue_counts(
-                    scope.revision,
-                    SafeTopicQueuePatchRequest {
-                        topic,
-                        target: target.clone(),
-                        expected_version: command.expected_version,
-                        read_queue_count: command.read_queue_count,
-                        write_queue_count: command.write_queue_count,
-                    },
-                )
-                .await
-                .map_err(mutation_error)?;
-            Ok(match result {
-                SafeTopicPatchOutcome::Applied {
-                    previous_version,
-                    version,
-                } => BackendTopicQueuePatchResult::Applied {
-                    previous_version,
-                    version,
-                },
-                SafeTopicPatchOutcome::VersionConflict {
-                    expected_version,
-                    actual_version,
-                } => {
-                    let latest = self
-                        .provider()?
-                        .topic_config_preflight(scope.revision, command.topic, target)
-                        .await
-                        .map_err(query_error)?;
-                    BackendTopicQueuePatchResult::VersionConflict {
-                        expected_version,
-                        actual_version,
-                        latest,
-                    }
-                }
-            })
         })
     }
 
@@ -661,9 +541,18 @@ impl AppServices {
         command: TopicCreateCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic_mutation("gpui-service-topic-create", backend, scope, async move |backend| {
-            backend.create(scope, command).await
-        })
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicCreated,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_topic_mutation(
+            "gpui-service-topic-create",
+            operation,
+            backend,
+            scope,
+            async move |backend| backend.create(scope, command).await,
+        )
         .await
     }
 
@@ -673,9 +562,18 @@ impl AppServices {
         command: TopicDeleteCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic_mutation("gpui-service-topic-delete", backend, scope, async move |backend| {
-            backend.delete(scope, command).await
-        })
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicDeleted,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_topic_mutation(
+            "gpui-service-topic-delete",
+            operation,
+            backend,
+            scope,
+            async move |backend| backend.delete(scope, command).await,
+        )
         .await
     }
 
@@ -685,8 +583,14 @@ impl AppServices {
         command: TopicDeleteBrokerCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicBrokerDeleted,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
         self.run_topic_mutation(
             "gpui-service-topic-delete-broker",
+            operation,
             backend,
             scope,
             async move |backend| backend.delete_broker(scope, command).await,
@@ -694,58 +598,16 @@ impl AppServices {
         .await
     }
 
-    pub async fn patch_topic_queue_counts(
-        &self,
-        scope: TopicRequestScope,
-        command: TopicQueuePatchCommand,
-    ) -> Result<TopicQueuePatchResult, UiError> {
-        let backend = Arc::clone(&self.topics);
-        let topic = command.topic.clone();
-        let invalidations = mutation_invalidations(rocketmq_dashboard_common::TopicMutationKind::Edit, topic.clone());
-        self.run_topic("gpui-service-topic-edit", async move {
-            match backend.patch_queue_counts(scope, command).await? {
-                BackendTopicQueuePatchResult::Applied {
-                    previous_version,
-                    version,
-                } => {
-                    let configuration = backend.config(scope, topic).await;
-                    let inventory = backend.inventory(scope).await;
-                    match (configuration, inventory) {
-                        (Ok(configuration), Ok(inventory)) => Ok(TopicQueuePatchResult::Applied {
-                            previous_version,
-                            version,
-                            configuration: Box::new(configuration),
-                            inventory,
-                            invalidations,
-                        }),
-                        (Err(error), _) | (_, Err(error)) => Ok(TopicQueuePatchResult::AppliedReloadFailed {
-                            previous_version,
-                            version,
-                            invalidations,
-                            error,
-                        }),
-                    }
-                }
-                BackendTopicQueuePatchResult::VersionConflict {
-                    expected_version,
-                    actual_version,
-                    latest,
-                } => Ok(TopicQueuePatchResult::VersionConflict {
-                    expected_version,
-                    actual_version,
-                    latest,
-                }),
-            }
-        })
-        .await
-    }
-
     pub async fn send_topic_message(&self, scope: TopicRequestScope, command: TopicSendCommand) -> Result<(), UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic(
-            "gpui-service-topic-send",
-            async move { backend.send(scope, command).await },
-        )
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::TopicMessageSent,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_mutation("gpui-service-topic-send", operation, async move {
+            backend.send(scope, command).await
+        })
         .await
     }
 
@@ -755,9 +617,18 @@ impl AppServices {
         command: TopicOffsetCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic_mutation("gpui-service-topic-reset", backend, scope, async move |backend| {
-            backend.reset(scope, command).await
-        })
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::ConsumerOffsetReset,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_topic_mutation(
+            "gpui-service-topic-reset",
+            operation,
+            backend,
+            scope,
+            async move |backend| backend.reset(scope, command).await,
+        )
         .await
     }
 
@@ -767,9 +638,18 @@ impl AppServices {
         command: TopicOffsetCommand,
     ) -> Result<TopicMutationResult, UiError> {
         let backend = Arc::clone(&self.topics);
-        self.run_topic_mutation("gpui-service-topic-skip", backend, scope, async move |backend| {
-            backend.skip(scope, command).await
-        })
+        let operation = self.accept_operation(
+            scope.revision,
+            AuditAction::ConsumerBacklogSkipped,
+            OperationResource::Topic(command.topic.as_str().to_owned()),
+        )?;
+        self.run_topic_mutation(
+            "gpui-service-topic-skip",
+            operation,
+            backend,
+            scope,
+            async move |backend| backend.skip(scope, command).await,
+        )
         .await
     }
 
@@ -790,6 +670,7 @@ impl AppServices {
     async fn run_topic_mutation<F, Fut>(
         &self,
         name: &'static str,
+        operation: Option<AuditAcceptedOperation>,
         backend: Arc<dyn TopicBackend>,
         scope: TopicRequestScope,
         mutate: F,
@@ -798,7 +679,7 @@ impl AppServices {
         F: FnOnce(Arc<dyn TopicBackend>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<TopicPartialOutcome, UiError>> + Send + 'static,
     {
-        self.run_topic(name, async move {
+        self.run_mutation(name, operation, async move {
             let outcome = mutate(Arc::clone(&backend)).await?;
             if outcome.applied_count() == 0 {
                 return Ok(TopicMutationResult::Rejected(outcome));

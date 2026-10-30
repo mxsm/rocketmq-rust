@@ -28,7 +28,6 @@ mod route;
 mod services;
 mod state;
 mod theme;
-mod ui;
 
 use std::{error::Error as StdError, fmt, process::ExitCode, sync::Arc};
 
@@ -185,7 +184,8 @@ fn run() -> Result<(), AppError> {
         }
     };
     let auth = DesktopAuthState::from_process_environment();
-    let config_store = match DesktopConfigStore::from_environment(runtime.component("config-store")) {
+    // Storage stays available while application mutation jobs drain during shutdown.
+    let config_store = match DesktopConfigStore::from_environment(runtime.provider_component("config-store")) {
         Ok(store) => store,
         Err(failure) => {
             let mut error = match failure.into_operational() {
@@ -228,7 +228,7 @@ fn run() -> Result<(), AppError> {
 
         if let Err(error) = cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                window_bounds: Some(WindowBounds::Fullscreen(Bounds {
                     origin: Point {
                         x: px(100.0),
                         y: px(100.0),

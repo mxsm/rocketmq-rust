@@ -15,8 +15,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::{ConsumerAdmin as _, MQAdminReadExt as _};
+use rocketmq_client_rust::{ClientResult, ConsumerAdmin as _, MQAdminReadExt as _, SubscriptionGroupConfigVersioned};
 use rocketmq_model::version::RocketMqVersion;
+use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::wire_constants::MASTER_ID;
 use rocketmq_protocol::protocol::body::{
     broker_body::cluster_info::ClusterInfo, consumer_connection::ConsumerConnection,
@@ -30,7 +31,7 @@ use crate::{
     client_adapter::{lifecycle::AdminSession, services::consumer::ConsumerService},
     core::{
         consumer::{
-            DashboardConsumerConfigAttribute, DashboardConsumerRunningInfoRequest, SubscriptionGroupConfigCasState,
+            DashboardConsumerConfigAttribute, DashboardConsumerConnection, DashboardConsumerRunningInfoRequest,
         },
         consumer_workspace::{
             ConsumerClientsResult, ConsumerConfigPresence, ConsumerConfigPresenceResult, ConsumerConfigPresenceTarget,
@@ -58,7 +59,14 @@ impl ConsumerWorkspaceAdmin for AdminSession {
                 .examine_broker_cluster_info()
                 .await
                 .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
+            let targets = all_targets(&cluster_info);
+            let target_observation = if targets.is_empty() {
+                WorkspaceObservationState::Unknown
+            } else {
+                WorkspaceObservationState::Complete
+            };
             let discovery = discover_groups(&self.inner, &cluster_info).await;
+            let group_observation = observation_for_counts(discovery.successful_target_count, discovery.target_count);
             let forwarded_address = request
                 .forwarded_address
                 .as_deref()
@@ -152,7 +160,9 @@ impl ConsumerWorkspaceAdmin for AdminSession {
             items.sort_by(|left, right| left.group.cmp(&right.group));
             Ok(ConsumerInventoryResult {
                 items,
-                targets: all_targets(&cluster_info),
+                targets,
+                target_observation,
+                group_observation,
                 observation: observation_for_counts(successful_evidence, total_evidence),
                 failures,
             })
@@ -256,6 +266,7 @@ impl ConsumerWorkspaceAdmin for AdminSession {
                                     target,
                                     observation: WorkspaceObservation::Complete { value: state },
                                     entries: safe_config_entries(&state),
+                                    details: config_details(&config),
                                 }),
                                 None => {
                                     failures.push(WorkspaceTargetFailure {
@@ -270,6 +281,7 @@ impl ConsumerWorkspaceAdmin for AdminSession {
                                             reason: WorkspaceUnknownReason::InvalidResponse,
                                         },
                                         entries: Vec::new(),
+                                        details: Default::default(),
                                     });
                                 }
                             }
@@ -286,6 +298,7 @@ impl ConsumerWorkspaceAdmin for AdminSession {
                                     reason: WorkspaceUnknownReason::Unavailable,
                                 },
                                 entries: Vec::new(),
+                                details: Default::default(),
                             });
                         }
                     }
@@ -321,24 +334,15 @@ impl ConsumerWorkspaceAdmin for AdminSession {
             let mut targets = Vec::with_capacity(request.targets.len());
             let mut failures = Vec::new();
             for target in &request.targets {
-                let presence = match self
+                let read = self
                     .inner
                     .subscription_group_config_with_version(
                         CheetahString::from(required("brokerAddress", &target.broker_address)?),
                         CheetahString::from(group.as_str()),
                     )
-                    .await
-                {
-                    Ok(_) => ConsumerConfigPresence::Present,
-                    Err(error) => {
-                        failures.push(safe_failure(
-                            target.broker_name.clone(),
-                            WorkspaceFailureStage::Configuration,
-                            &error,
-                        ));
-                        ConsumerConfigPresence::Unknown
-                    }
-                };
+                    .await;
+                let (presence, failure) = config_presence_from_read(target, read);
+                failures.extend(failure);
                 targets.push(ConsumerConfigPresenceTarget {
                     target: target.clone(),
                     presence,
@@ -358,28 +362,15 @@ impl ConsumerWorkspaceAdmin for AdminSession {
             let mut targets = Vec::with_capacity(request.targets.len());
             let mut failures = Vec::new();
             for target in &request.targets {
-                let observation = match self
+                let read = self
                     .inner
                     .observe_consumer_connection_at(
                         CheetahString::from(group.as_str()),
                         CheetahString::from(required("brokerAddress", &target.broker_address)?),
                     )
-                    .await
-                {
-                    Ok(connection) => WorkspaceObservation::Complete {
-                        value: map_consumer_connection(&group, connection),
-                    },
-                    Err(error) => {
-                        failures.push(safe_failure(
-                            target.broker_name.clone(),
-                            WorkspaceFailureStage::Clients,
-                            &error,
-                        ));
-                        WorkspaceObservation::Unknown {
-                            reason: WorkspaceUnknownReason::Unavailable,
-                        }
-                    }
-                };
+                    .await;
+                let (observation, failure) = connection_observation_from_read(target, &group, read);
+                failures.extend(failure);
                 targets.push(ConsumerConnectionTarget {
                     target: target.clone(),
                     observation,
@@ -533,6 +524,60 @@ impl ConsumerWorkspaceAdmin for AdminSession {
     }
 }
 
+fn config_presence_from_read(
+    target: &ConsumerWorkspaceTarget,
+    read: ClientResult<SubscriptionGroupConfigVersioned>,
+) -> (ConsumerConfigPresence, Option<WorkspaceTargetFailure>) {
+    match read {
+        Ok(_) => (ConsumerConfigPresence::Present, None),
+        Err(error) if error.broker_response_code() == Some(ResponseCode::SubscriptionGroupNotExist.to_i32()) => {
+            (ConsumerConfigPresence::Absent, None)
+        }
+        Err(error) => (
+            ConsumerConfigPresence::Unknown,
+            Some(safe_failure(
+                target.broker_name.clone(),
+                WorkspaceFailureStage::Configuration,
+                &error,
+            )),
+        ),
+    }
+}
+
+fn connection_observation_from_read(
+    target: &ConsumerWorkspaceTarget,
+    group: &str,
+    read: ClientResult<ConsumerConnection>,
+) -> (
+    WorkspaceObservation<DashboardConsumerConnection>,
+    Option<WorkspaceTargetFailure>,
+) {
+    match read {
+        Ok(connection) => (
+            WorkspaceObservation::Complete {
+                value: map_consumer_connection(group, connection),
+            },
+            None,
+        ),
+        Err(error) if error.broker_response_code() == Some(ResponseCode::ConsumerNotOnline.to_i32()) => (
+            WorkspaceObservation::Complete {
+                value: map_consumer_connection(group, ConsumerConnection::default()),
+            },
+            None,
+        ),
+        Err(error) => (
+            WorkspaceObservation::Unknown {
+                reason: WorkspaceUnknownReason::Unavailable,
+            },
+            Some(safe_failure(
+                target.broker_name.clone(),
+                WorkspaceFailureStage::Clients,
+                &error,
+            )),
+        ),
+    }
+}
+
 type ProducerClientIdentity = (String, String, i32, i32);
 
 fn merge_producer_inventory_clients(
@@ -552,14 +597,14 @@ fn merge_producer_inventory_clients(
     }
 }
 
-struct GroupDiscovery {
-    groups: BTreeMap<String, ConsumerGroupMeta>,
+pub(super) struct GroupDiscovery {
+    pub(super) groups: BTreeMap<String, ConsumerGroupMeta>,
     successful_target_count: usize,
     target_count: usize,
-    failures: Vec<WorkspaceTargetFailure>,
+    pub(super) failures: Vec<WorkspaceTargetFailure>,
 }
 
-async fn discover_groups(
+pub(super) async fn discover_groups(
     admin: &rocketmq_client_rust::DefaultMQAdminExt,
     cluster_info: &ClusterInfo,
 ) -> GroupDiscovery {
@@ -709,7 +754,96 @@ fn observation_for_counts(successful: usize, total: usize) -> WorkspaceObservati
     }
 }
 
-fn safe_config_entries(state: &SubscriptionGroupConfigCasState) -> Vec<DashboardConsumerConfigAttribute> {
+fn config_details(
+    config: &rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig,
+) -> crate::core::consumer_configuration::ConsumerConfigDetails {
+    use crate::core::consumer_configuration::{ConsumerConfigDetails, ConsumerRetryPolicy};
+    use rocketmq_protocol::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
+    let mut truncated = false;
+    let policy = config.group_retry_policy();
+    let retry_policy = match policy.type_() {
+        GroupRetryPolicyType::Customized => match policy.customized_retry_policy() {
+            Some(policy) => {
+                truncated |= policy.next().len() > 256;
+                ConsumerRetryPolicy::Customized {
+                    delays_ms: policy.next().iter().take(256).copied().collect(),
+                }
+            }
+            None => ConsumerRetryPolicy::DefaultCustomized,
+        },
+        GroupRetryPolicyType::Exponential => match policy.exponential_retry_policy() {
+            Some(policy) => ConsumerRetryPolicy::Exponential {
+                initial_ms: policy.initial(),
+                maximum_ms: policy.max(),
+                multiplier: policy.multiplier(),
+            },
+            None => ConsumerRetryPolicy::DefaultFallback,
+        },
+    };
+    let mut subscribed_topics = config
+        .subscription_data_set()
+        .into_iter()
+        .flatten()
+        .map(|s| s.topic().to_string())
+        .collect::<Vec<_>>();
+    subscribed_topics.sort();
+    subscribed_topics.dedup();
+    truncated |= subscribed_topics.len() > 256;
+    subscribed_topics.truncate(256);
+    let mut attributes = config
+        .attributes()
+        .iter()
+        .filter(|(key, _)| {
+            let key = key
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>();
+            ![
+                "secret",
+                "password",
+                "passwd",
+                "credential",
+                "token",
+                "accesskey",
+                "privatekey",
+                "certificate",
+                "keystore",
+                "truststore",
+                "tls",
+                "ssl",
+            ]
+            .iter()
+            .any(|part| key.contains(part))
+        })
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect::<Vec<_>>();
+    attributes.sort();
+    truncated |= attributes.len() > 128;
+    attributes.truncate(128);
+    for (key, value) in &mut attributes {
+        for text in [key, value] {
+            if text.len() > 2048 {
+                let mut end = 2048;
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+                truncated = true;
+            }
+        }
+    }
+    ConsumerConfigDetails {
+        retry_policy,
+        subscribed_topics,
+        attributes,
+        truncated,
+    }
+}
+
+fn safe_config_entries(
+    state: &crate::core::consumer_configuration::ConsumerConfigValue,
+) -> Vec<DashboardConsumerConfigAttribute> {
     vec![
         config_entry("retryMaxTimes", state.retry_max_times),
         config_entry("retryQueueNums", state.retry_queue_nums),
@@ -735,10 +869,13 @@ fn config_entry(key: &str, value: impl ToString) -> DashboardConsumerConfigAttri
 fn checked_config_state(
     version: u64,
     config: &rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig,
-) -> Option<SubscriptionGroupConfigCasState> {
-    Some(SubscriptionGroupConfigCasState {
+) -> Option<crate::core::consumer_configuration::ConsumerConfigValue> {
+    if config.retry_max_times() < -1 || config.retry_queue_nums() < 0 || config.consume_timeout_minute() <= 0 {
+        return None;
+    }
+    Some(crate::core::consumer_configuration::ConsumerConfigValue {
         version,
-        retry_max_times: u32::try_from(config.retry_max_times()).ok()?,
+        retry_max_times: config.retry_max_times(),
         retry_queue_nums: u32::try_from(config.retry_queue_nums()).ok()?,
         consume_timeout_minutes: u32::try_from(config.consume_timeout_minute()).ok()?,
         consume_enable: config.consume_enable(),
@@ -833,6 +970,137 @@ mod tests {
     use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
 
     #[test]
+    fn consumer_create_presence_uses_the_sdk_exact_missing_group_broker_response() {
+        use rocketmq_client_rust::{client_broker_err, ClientError};
+        use rocketmq_protocol::{
+            protocol::subscription::subscription_group_config::SubscriptionGroupConfig, RemotingCommand,
+        };
+        let target = ConsumerWorkspaceTarget {
+            cluster_name: "cluster-a".into(),
+            broker_name: "broker-a".into(),
+            broker_address: "broker-a:10911".into(),
+        };
+        let present = config_presence_from_read(
+            &target,
+            Ok(SubscriptionGroupConfigVersioned {
+                version: 7,
+                config: SubscriptionGroupConfig::new("new-consumer".into()),
+            }),
+        );
+        assert_eq!(present, (ConsumerConfigPresence::Present, None));
+
+        // This is the same typed response and SDK error constructor used by the real
+        // get_subscription_group_config_with_version path for a Broker response.
+        let missing = RemotingCommand::create_response_command_with_code(ResponseCode::SubscriptionGroupNotExist);
+        let error = client_broker_err!(missing.code(), "not inspected", &target.broker_address);
+        let observed = config_presence_from_read(&target, Err(error));
+        assert_eq!(observed, (ConsumerConfigPresence::Absent, None));
+
+        for code in [
+            ResponseCode::SystemError,
+            ResponseCode::NoPermission,
+            ResponseCode::RequestCodeNotSupported,
+            ResponseCode::ConsumerNotOnline,
+            ResponseCode::TopicNotExist,
+        ] {
+            let response = RemotingCommand::create_response_command_with_code(code);
+            let error = client_broker_err!(response.code(), "No group in this broker", &target.broker_address);
+            let (presence, failure) = config_presence_from_read(&target, Err(error));
+            assert_eq!(presence, ConsumerConfigPresence::Unknown, "{code:?}");
+            assert!(matches!(
+                failure,
+                Some(WorkspaceTargetFailure {
+                    stage: WorkspaceFailureStage::Configuration,
+                    ..
+                })
+            ));
+        }
+        for error in [
+            ClientError::from_error(rocketmq_error::Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT)),
+            ClientError::response_process_failed(
+                "get_subscription_group_config_with_version",
+                "No group in this broker",
+            ),
+        ] {
+            let (presence, failure) = config_presence_from_read(&target, Err(error));
+            assert_eq!(presence, ConsumerConfigPresence::Unknown);
+            assert!(failure.is_some());
+        }
+    }
+
+    #[test]
+    fn consumer_delete_connections_use_only_the_sdk_exact_offline_broker_response() {
+        use rocketmq_client_rust::{client_broker_err, ClientError};
+        use rocketmq_protocol::{protocol::body::connection::Connection, RemotingCommand};
+        let target = ConsumerWorkspaceTarget {
+            cluster_name: "cluster-a".into(),
+            broker_name: "broker-a".into(),
+            broker_address: "broker-a:10911".into(),
+        };
+        let offline = RemotingCommand::create_response_command_with_code(ResponseCode::ConsumerNotOnline);
+        let (observed, failure) = connection_observation_from_read(
+            &target,
+            "orders",
+            Err(client_broker_err!(
+                offline.code(),
+                "not inspected",
+                &target.broker_address
+            )),
+        );
+        let WorkspaceObservation::Complete { value } = observed else {
+            panic!("exact Broker offline response must be a closed observation")
+        };
+        assert!(failure.is_none());
+        assert_eq!(value.consumer_group, "orders");
+        assert_eq!(value.connection_count, 0);
+        assert!(value.connections.is_empty());
+        assert_eq!(value.consume_type, "UNKNOWN");
+
+        let mut online = ConsumerConnection::new();
+        let mut client = Connection::new();
+        client.set_client_id("live-client".into());
+        client.set_client_addr("client:40000".into());
+        online.insert_connection(client);
+        let (observed, failure) = connection_observation_from_read(&target, "orders", Ok(online));
+        assert_eq!(observed.value().unwrap().connections.len(), 1);
+        assert!(failure.is_none());
+
+        for code in [
+            ResponseCode::SubscriptionGroupNotExist,
+            ResponseCode::NoPermission,
+            ResponseCode::SystemError,
+            ResponseCode::RequestCodeNotSupported,
+        ] {
+            let response = RemotingCommand::create_response_command_with_code(code);
+            let (observed, failure) = connection_observation_from_read(
+                &target,
+                "orders",
+                Err(client_broker_err!(
+                    response.code(),
+                    "consumer not online",
+                    &target.broker_address
+                )),
+            );
+            assert!(matches!(observed, WorkspaceObservation::Unknown { .. }), "{code:?}");
+            assert!(matches!(
+                failure,
+                Some(WorkspaceTargetFailure {
+                    stage: WorkspaceFailureStage::Clients,
+                    ..
+                })
+            ));
+        }
+        for error in [
+            ClientError::from_error(rocketmq_error::Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT)),
+            ClientError::response_process_failed("get_consumer_connection_list", "consumer not online"),
+        ] {
+            let (observed, failure) = connection_observation_from_read(&target, "orders", Err(error));
+            assert!(matches!(observed, WorkspaceObservation::Unknown { .. }));
+            assert!(failure.is_some());
+        }
+    }
+
+    #[test]
     fn observation_counts_never_turn_no_success_into_complete_empty() {
         assert_eq!(observation_for_counts(0, 2), WorkspaceObservationState::Unknown);
         assert_eq!(observation_for_counts(1, 2), WorkspaceObservationState::Partial);
@@ -924,9 +1192,11 @@ mod tests {
     fn malformed_negative_configuration_is_not_fabricated_as_zero() {
         let mut config =
             rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::default();
-        config.set_retry_max_times(-1);
+        config.set_retry_max_times(-2);
 
         assert!(checked_config_state(7, &config).is_none());
+        config.set_retry_max_times(-1);
+        assert_eq!(checked_config_state(7, &config).unwrap().retry_max_times, -1);
     }
 
     #[test]
@@ -951,5 +1221,48 @@ mod tests {
         );
         let observation = WorkspaceObservation::Complete { value: mapped };
         assert!(observation.value().expect("value").connections.is_empty());
+    }
+    #[test]
+    fn consumer_readonly_config_projects_retry_policy_topics_and_redacted_bounded_attributes() {
+        use rocketmq_protocol::protocol::subscription::{
+            simple_subscription_data::SimpleSubscriptionData, subscription_group_config::SubscriptionGroupConfig,
+        };
+        let mut config = SubscriptionGroupConfig::default();
+        config.set_group_retry_policy(
+            serde_json::from_value(
+                serde_json::json!({"type":"CUSTOMIZED","customizedRetryPolicy":{"next":[1000,5000]}}),
+            )
+            .unwrap(),
+        );
+        config.set_subscription_data_set(Some(std::collections::HashSet::from([SimpleSubscriptionData::new(
+            "orders".into(),
+            "TAG".into(),
+            "created".into(),
+            1,
+        )])));
+        let mut attributes = HashMap::new();
+        attributes.insert("custom".into(), "kept".into());
+        attributes.insert("access_key".into(), "private-credential".into());
+        attributes.insert("SSL.Certificate".into(), "private-certificate".into());
+        config.set_attributes(attributes);
+        let details = config_details(&config);
+        assert_eq!(
+            details.retry_policy,
+            crate::core::consumer_configuration::ConsumerRetryPolicy::Customized {
+                delays_ms: vec![1000, 5000]
+            }
+        );
+        assert_eq!(details.subscribed_topics, ["orders"]);
+        assert_eq!(details.attributes, [("custom".into(), "kept".into())]);
+        assert!(!details.truncated);
+        config.set_attributes(
+            (0..200)
+                .map(|index| (format!("custom-{index:03}").into(), "界".repeat(1000).into()))
+                .collect(),
+        );
+        let details = config_details(&config);
+        assert_eq!(details.attributes.len(), 128);
+        assert!(details.truncated);
+        assert!(details.attributes.iter().all(|(_, value)| value.len() <= 2048));
     }
 }

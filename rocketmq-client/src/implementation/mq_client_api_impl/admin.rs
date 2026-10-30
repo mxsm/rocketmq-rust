@@ -25,6 +25,8 @@ use rocketmq_transport::api::OutboundRequestRejectionReason;
 use rocketmq_transport::api::OutboundRequestStage;
 use serde::de::DeserializeOwned;
 
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+mod acl_workspace;
 #[cfg(feature = "admin-full")]
 mod compatibility;
 #[cfg(feature = "admin-read")]

@@ -1,4 +1,4 @@
-// Copyright 2025 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! UI components for the RocketMQ Dashboard
-
-// The former sample MessageView is intentionally not registered as production UI.
+use gpui::{ParentElement as _, Styled as _, div};
+pub(crate) fn lines(title: &'static str, lines: &[String]) -> gpui::Div {
+    div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .child(title)
+        .children(lines.iter().map(|line| {
+            div()
+                .w_full()
+                .min_w_0()
+                .whitespace_normal()
+                .text_xs()
+                .child(line.clone())
+        }))
+}

@@ -33,19 +33,32 @@ use super::{
     auth_state::{AuthRejection, DesktopAuthState},
 };
 
+#[path = "admin_provider/acl.rs"]
+mod acl;
 #[path = "admin_provider/consumers.rs"]
 mod consumers;
 #[path = "admin_provider/dashboard_broker.rs"]
 mod dashboard_broker;
+#[path = "admin_provider/dashboard_metrics.rs"]
+mod dashboard_metrics;
+#[path = "admin_provider/dlq.rs"]
+mod dlq;
+#[path = "admin_provider/message_trace.rs"]
+mod message_trace;
+#[path = "admin_provider/messages.rs"]
+mod messages;
 #[path = "admin_provider/topics.rs"]
 mod topics;
+#[path = "admin_provider/topology.rs"]
+mod topology;
 
 pub(crate) use dashboard_broker::{
     SafeBrokerInfo, SafeBrokerList, SafeBrokerTarget, SafeConfigPatchOutcome, SafeConfigPatchRequest,
 };
+pub(crate) use dashboard_metrics::SafeTopicRate;
 pub(crate) use topics::{
-    SafeTopicCreateRequest, SafeTopicDeleteBrokerRequest, SafeTopicDeleteRequest, SafeTopicOffsetRequest,
-    SafeTopicPatchOutcome, SafeTopicQueuePatchRequest, SafeTopicSendRequest,
+    SafeTopicCreateRequest, SafeTopicDeleteBrokerRequest, SafeTopicDeleteRequest, SafeTopicFieldsPatchRequest,
+    SafeTopicOffsetRequest, SafeTopicSendRequest,
 };
 
 struct CancelOnDrop(CancellationToken);
@@ -229,6 +242,18 @@ impl ProviderFailure {
                 | ProviderRejection::SessionUnavailable(summary),
             ) => summary,
             ProviderFailureKind::Operational(error) => error.inner.summary,
+        }
+    }
+
+    pub(crate) fn is_invalid_request(&self) -> bool {
+        match &self.kind {
+            ProviderFailureKind::Rejected(ProviderRejection::InvalidRequest(_)) => true,
+            ProviderFailureKind::Operational(error) => error
+                .inner
+                .source
+                .downcast_ref::<AdminError>()
+                .is_some_and(|source| source.failure() == AdminFailure::InvalidArgument),
+            _ => false,
         }
     }
 

@@ -17,11 +17,16 @@
 use std::time::SystemTime;
 
 use gpui::{
-    Context, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Task, Window,
-    div, prelude::FluentBuilder as _, px,
+    AnyWindowHandle, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, StyledExt as _, button::Button, scroll::ScrollableElement as _,
+    ActiveTheme as _, Disableable as _, StyledExt as _,
+    button::Button,
+    calendar::Date,
+    date_picker::{DatePicker, DatePickerEvent, DatePickerState},
+    scroll::ScrollableElement as _,
+    select::{SearchableVec, Select, SelectEvent, SelectState},
 };
 use rocketmq_dashboard_common::{BrokerIdentity, DashboardAction, HistoryMetricKind, Observed, dashboard_actions};
 
@@ -38,52 +43,9 @@ pub enum DashboardIntent {
     Navigate(AppRoute),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum HistoryRange {
-    Hour,
-    #[default]
-    Day,
-    Week,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HistoryPresentation {
-    Loading,
-    Warming,
-    Data,
-    Refreshing,
-    Error,
-    DataWithWarning,
-}
-
-fn history_presentation<T>(state: &Loadable<T>) -> HistoryPresentation {
-    match state {
-        Loadable::Idle | Loadable::InitialLoading => HistoryPresentation::Loading,
-        Loadable::Empty => HistoryPresentation::Warming,
-        Loadable::Ready(_) => HistoryPresentation::Data,
-        Loadable::Refreshing(_) => HistoryPresentation::Refreshing,
-        Loadable::Failed { previous: None, .. } => HistoryPresentation::Error,
-        Loadable::Failed { previous: Some(_), .. } => HistoryPresentation::DataWithWarning,
-    }
-}
-
-impl HistoryRange {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Hour => "Last 1 hour",
-            Self::Day => "Last 24 hours",
-            Self::Week => "Last 7 days",
-        }
-    }
-
-    fn duration_ms(self) -> u64 {
-        match self {
-            Self::Hour => 3_600_000,
-            Self::Day => 86_400_000,
-            Self::Week => 604_800_000,
-        }
-    }
-}
+#[path = "dashboard_history.rs"]
+mod history;
+use history::{TopicHistoryOption, utc_day_range};
 
 pub struct DashboardView {
     services: AppServices,
@@ -91,7 +53,15 @@ pub struct DashboardView {
     store: DashboardStore,
     selected_topic: Option<String>,
     selected_broker: Option<BrokerIdentity>,
-    history_range: HistoryRange,
+    history_date: chrono::NaiveDate,
+    date_picker: Entity<DatePickerState>,
+    topic_picker: Entity<SelectState<SearchableVec<TopicHistoryOption>>>,
+    window: AnyWindowHandle,
+    _subscriptions: Vec<Subscription>,
+    broker_metric: HistoryMetricKind,
+    topic_point_page: usize,
+    broker_point_page: usize,
+    health_task: Option<Task<()>>,
     overview_task: Option<Task<()>>,
     topic_current_task: Option<Task<()>>,
     broker_current_task: Option<Task<()>>,
@@ -102,14 +72,49 @@ pub struct DashboardView {
 impl EventEmitter<DashboardIntent> for DashboardView {}
 
 impl DashboardView {
-    pub fn new(services: AppServices, revision: u64, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, services: AppServices, revision: u64, cx: &mut Context<Self>) -> Self {
+        let history_date = chrono::Utc::now().date_naive();
+        let date_picker = cx.new(|cx| {
+            let mut state = DatePickerState::new(window, cx).date_format("%Y-%m-%d");
+            state.set_date(history_date, window, cx);
+            state
+        });
+        let topic_picker = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![TopicHistoryOption(None)]),
+                Some(gpui_component::IndexPath::default().row(0)),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
+        let subscriptions = vec![
+            cx.subscribe(&date_picker, |view, _, event, cx| {
+                if let DatePickerEvent::Change(Date::Single(Some(day))) = event {
+                    view.select_history_day(*day, cx);
+                }
+            }),
+            cx.subscribe(&topic_picker, |view, _, event, cx| {
+                if let SelectEvent::Confirm(Some(topic)) = event {
+                    view.select_history_topic(topic.clone(), cx);
+                }
+            }),
+        ];
         let mut view = Self {
             services,
             revision,
             store: DashboardStore::default(),
             selected_topic: None,
             selected_broker: None,
-            history_range: HistoryRange::default(),
+            history_date,
+            date_picker,
+            topic_picker,
+            window: window.window_handle(),
+            _subscriptions: subscriptions,
+            broker_metric: HistoryMetricKind::BrokerCount,
+            topic_point_page: 0,
+            broker_point_page: 0,
+            health_task: None,
             overview_task: None,
             topic_current_task: None,
             broker_current_task: None,
@@ -117,7 +122,13 @@ impl DashboardView {
             broker_history_task: None,
         };
         view.refresh(cx);
+        view.start_health_updates(cx);
         view
+    }
+
+    #[cfg(test)]
+    pub(crate) fn topic_history_for_test(&self) -> &Loadable<Vec<rocketmq_dashboard_common::HistoryPoint>> {
+        &self.store.topic_history.state
     }
 
     pub fn set_revision(&mut self, revision: u64, cx: &mut Context<Self>) {
@@ -126,7 +137,7 @@ impl DashboardView {
     }
 
     /// Discards the previous environment before its replacement provider is installed.
-    pub fn clear_for_environment(&mut self, revision: u64, cx: &mut Context<Self>) {
+    pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.revision = revision;
         self.overview_task = None;
         self.topic_current_task = None;
@@ -140,6 +151,10 @@ impl DashboardView {
         self.store.broker_history.clear();
         self.selected_topic = None;
         self.selected_broker = None;
+        self.sync_topic_picker(window, cx);
+        self.store.health.clear();
+        self.topic_point_page = 0;
+        self.broker_point_page = 0;
         cx.notify();
     }
 
@@ -184,18 +199,21 @@ impl DashboardView {
         };
         let services = self.services.clone();
         let revision = self.revision;
+        let window = self.window;
         self.topic_current_task = Some(cx.spawn(async move |this, cx| {
-            let result = services
-                .dashboard_topic_current(revision)
-                .await
-                .map(|items| (!items.is_empty()).then_some(items));
-            let _ = this.update(cx, |view, cx| {
-                view.store.topic_current.finish(request, view.revision, result);
-                if view.reconcile_topic_selection() {
-                    view.store.topic_history.invalidate();
-                    view.refresh_topic_history(cx);
-                }
-                cx.notify();
+            let result = services.dashboard_topic_current(revision).await.map(Some);
+            let _ = cx.update_window(window, |_, window, cx| {
+                this.update(cx, |view, cx| {
+                    if !view.store.topic_current.finish(request, view.revision, result) {
+                        return;
+                    }
+                    if view.reconcile_topic_selection() {
+                        view.store.topic_history.clear();
+                        view.refresh_topic_history(cx);
+                    }
+                    view.sync_topic_picker(window, cx);
+                    cx.notify();
+                })
             });
         }));
     }
@@ -212,8 +230,10 @@ impl DashboardView {
                 .await
                 .map(|items| (!items.is_empty()).then_some(items));
             let _ = this.update(cx, |view, cx| {
-                view.store.broker_current.finish(request, view.revision, result);
-                if view.reconcile_broker_selection() {
+                if !view.store.broker_current.finish(request, view.revision, result) {
+                    return;
+                }
+                if view.reconcile_broker_selection() && view.broker_metric != HistoryMetricKind::BrokerCount {
                     view.store.broker_history.invalidate();
                     view.refresh_broker_history(cx);
                 }
@@ -228,21 +248,36 @@ impl DashboardView {
         };
         let services = self.services.clone();
         let topic = self.selected_topic.clone();
-        let range = self.history_range;
+        let day = self.history_date;
         self.topic_history_task = Some(cx.spawn(async move |this, cx| {
             let result = async {
-                let Some(topic) = topic else {
-                    return Ok(None);
+                let (start, end) = utc_day_range(day)?;
+                let points = match topic {
+                    Some(topic) => {
+                        services
+                            .dashboard_topic_history(request.revision(), topic, start, end)
+                            .await?
+                    }
+                    None => {
+                        services
+                            .dashboard_count_history(request.revision(), HistoryMetricKind::TopicCount, start, end)
+                            .await?
+                    }
                 };
-                let (start, end) = history_range(range)?;
-                services
-                    .dashboard_topic_history(request.revision(), topic, start, end)
-                    .await
-                    .map(|points| (!points.is_empty()).then_some(points))
+                Ok((!points.is_empty()).then_some(points))
             }
             .await;
             let _ = this.update(cx, |view, cx| {
-                view.store.topic_history.finish(request, view.revision, result);
+                if !view.store.topic_history.finish(request, view.revision, result) {
+                    return;
+                }
+                let last_page = view
+                    .store
+                    .topic_history
+                    .state
+                    .value()
+                    .map_or(0, |points| points.len().saturating_sub(1) / 24);
+                view.topic_point_page = view.topic_point_page.min(last_page);
                 cx.notify();
             });
         }));
@@ -254,27 +289,36 @@ impl DashboardView {
         };
         let services = self.services.clone();
         let identity = self.selected_broker.clone();
-        let range = self.history_range;
+        let metric = self.broker_metric;
+        let day = self.history_date;
         self.broker_history_task = Some(cx.spawn(async move |this, cx| {
             let result = async {
-                let Some(identity) = identity else {
+                let (start, end) = utc_day_range(day)?;
+                let points = if metric == HistoryMetricKind::BrokerCount {
+                    services
+                        .dashboard_count_history(request.revision(), metric, start, end)
+                        .await?
+                } else if let Some(identity) = identity {
+                    services
+                        .dashboard_broker_history(request.revision(), metric, identity, start, end)
+                        .await?
+                } else {
                     return Ok(None);
                 };
-                let (start, end) = history_range(range)?;
-                services
-                    .dashboard_broker_history(
-                        request.revision(),
-                        HistoryMetricKind::BrokerProduceTps,
-                        identity,
-                        start,
-                        end,
-                    )
-                    .await
-                    .map(|points| (!points.is_empty()).then_some(points))
+                Ok((!points.is_empty()).then_some(points))
             }
             .await;
             let _ = this.update(cx, |view, cx| {
-                view.store.broker_history.finish(request, view.revision, result);
+                if !view.store.broker_history.finish(request, view.revision, result) {
+                    return;
+                }
+                let last_page = view
+                    .store
+                    .broker_history
+                    .state
+                    .value()
+                    .map_or(0, |points| points.len().saturating_sub(1) / 24);
+                view.broker_point_page = view.broker_point_page.min(last_page);
                 cx.notify();
             });
         }));
@@ -289,18 +333,18 @@ impl DashboardView {
     }
 
     fn reconcile_topic_selection(&mut self) -> bool {
-        let topics = self.store.topic_current.state.value();
-        let selected_is_present = self
-            .selected_topic
-            .as_ref()
-            .is_some_and(|selected| topics.is_some_and(|items| items.iter().any(|item| &item.topic == selected)));
-        if selected_is_present {
-            return false;
+        if self.selected_topic.as_ref().is_some_and(|selected| {
+            !self
+                .store
+                .topic_current
+                .state
+                .value()
+                .is_some_and(|load| load.available_topics.contains(selected))
+        }) {
+            self.selected_topic = None;
+            return true;
         }
-        let next = topics.and_then(|items| items.first()).map(|item| item.topic.clone());
-        let changed = self.selected_topic != next;
-        self.selected_topic = next;
-        changed
+        false
     }
 
     fn reconcile_broker_selection(&mut self) -> bool {
@@ -315,35 +359,6 @@ impl DashboardView {
         let changed = next != self.selected_broker;
         self.selected_broker = next;
         changed
-    }
-
-    fn select_next_topic(&mut self, cx: &mut Context<Self>) {
-        let Some(items) = self.store.topic_current.state.value() else {
-            return;
-        };
-        if items.is_empty() {
-            return;
-        }
-        let current = self
-            .selected_topic
-            .as_ref()
-            .and_then(|selected| items.iter().position(|item| &item.topic == selected))
-            .unwrap_or(0);
-        self.selected_topic = Some(items[(current + 1) % items.len()].topic.clone());
-        self.store.topic_history.invalidate();
-        self.refresh_topic_history(cx);
-    }
-
-    fn cycle_history_range(&mut self, cx: &mut Context<Self>) {
-        self.history_range = match self.history_range {
-            HistoryRange::Hour => HistoryRange::Day,
-            HistoryRange::Day => HistoryRange::Week,
-            HistoryRange::Week => HistoryRange::Hour,
-        };
-        self.store.topic_history.invalidate();
-        self.store.broker_history.invalidate();
-        self.refresh_topic_history(cx);
-        self.refresh_broker_history(cx);
     }
 
     fn render_overview(&self, layout: DashboardLayout, cx: &mut Context<Self>) -> gpui::Div {
@@ -422,7 +437,7 @@ impl DashboardView {
             )
             .when(load.has_warning(), |this| {
                 this.child(div().text_sm().text_color(theme.warning).child(format!(
-                    "Partial data — {} overview resources could not be loaded.",
+                    "Partial data — {} overview observations are unavailable.",
                     load.failed_resources
                 )))
             })
@@ -494,15 +509,35 @@ impl DashboardView {
                     .border_1()
                     .border_color(theme.border)
                     .child(div().font_semibold().child("Topic Current"))
-                    .children(topics.into_iter().flat_map(|items| items.iter().take(8)).map(|item| {
+                    .children(topics.into_iter().flat_map(|load| load.items.iter()).map(|item| {
                         div()
                             .py_2()
                             .flex()
                             .justify_between()
                             .child(item.topic.clone())
-                            .child(observed_u64(item.total_messages))
+                            .child(div().flex().flex_col().items_end()
+                                .child(format!("{} messages", observed_u64(item.total_messages)))
+                                .child(div().text_xs().text_color(theme.muted_foreground)
+                                    .child(format!("In: {} · Out: {}", observed_f64(item.produce_tps), observed_f64(item.consume_tps))))
+                                .children(topics.into_iter().flat_map(|load| load.failures.iter())
+                                    .filter(|failure| failure.topic == item.topic).map(|failure| {
+                                        let stage = match failure.stage {
+                                            rocketmq_dashboard_common::TopicCurrentStage::Rates => "Rates",
+                                            rocketmq_dashboard_common::TopicCurrentStage::Offsets => "Offsets",
+                                        };
+                                        div().text_xs().text_color(theme.warning)
+                                            .child(format!("{stage}: {} target observations unavailable", failure.failed_targets))
+                                    })))
                     }))
+                    .children(topics.filter(|load| load.failed_topics > 0 || load.omitted_topics > 0).map(|load|
+                        div().text_sm().text_color(theme.warning).child(format!(
+                            "Partial ranking: {} candidate Topics incomplete; {} application Topics outside the 200-candidate window. Up to 20 are sampled.",
+                            load.failed_topics, load.omitted_topics))))
                     .children(topic_status)
+                    .when(topics.is_some_and(|load| load.items.is_empty()), |this| {
+                        this.child(div().text_sm().text_color(theme.muted_foreground)
+                            .child("No application Topics are registered."))
+                    })
                     .when(topics.is_none(), |this| {
                         this.child(resource_message(
                             "Topic Current",
@@ -536,98 +571,6 @@ impl DashboardView {
                             theme.muted_foreground,
                         ))
                     }),
-            )
-    }
-
-    fn render_history(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let theme = cx.theme();
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        Button::new("dashboard-history-topic")
-                            .label(
-                                self.selected_topic
-                                    .clone()
-                                    .unwrap_or_else(|| "No Topic available".into()),
-                            )
-                            .outline()
-                            .disabled(self.selected_topic.is_none())
-                            .on_click(cx.listener(|view, _, _, cx| view.select_next_topic(cx))),
-                    )
-                    .child(
-                        Button::new("dashboard-history-range")
-                            .label(self.history_range.label())
-                            .outline()
-                            .on_click(cx.listener(|view, _, _, cx| view.cycle_history_range(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_4()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(320.))
-                            .child(div().font_semibold().child("Topic History"))
-                            .child(history_body(
-                                &self.store.topic_history.state,
-                                150_000,
-                                theme.foreground,
-                                theme.muted_foreground,
-                                theme.border,
-                            ))
-                            .when(
-                                matches!(
-                                    history_presentation(&self.store.topic_history.state),
-                                    HistoryPresentation::Error | HistoryPresentation::DataWithWarning
-                                ),
-                                |this| {
-                                    this.child(
-                                        Button::new("retry-topic-history")
-                                            .label("Retry")
-                                            .outline()
-                                            .on_click(cx.listener(|view, _, _, cx| view.refresh_topic_history(cx))),
-                                    )
-                                },
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(320.))
-                            .child(div().font_semibold().child("Broker History"))
-                            .child(history_body(
-                                &self.store.broker_history.state,
-                                150_000,
-                                theme.foreground,
-                                theme.muted_foreground,
-                                theme.border,
-                            ))
-                            .when(
-                                matches!(
-                                    history_presentation(&self.store.broker_history.state),
-                                    HistoryPresentation::Error | HistoryPresentation::DataWithWarning
-                                ),
-                                |this| {
-                                    this.child(
-                                        Button::new("retry-broker-history")
-                                            .label("Retry")
-                                            .outline()
-                                            .on_click(cx.listener(|view, _, _, cx| view.refresh_broker_history(cx))),
-                                    )
-                                },
-                            ),
-                    ),
             )
     }
 }
@@ -739,11 +682,10 @@ fn retained_resource_status<T>(
                     .child(div().debug_selector(|| retry_id.to_owned()).child(retry)),
             ),
         ),
-        Loadable::Idle
-        | Loadable::InitialLoading
-        | Loadable::Ready(_)
-        | Loadable::Empty
-        | Loadable::Failed { previous: None, .. } => None,
+        Loadable::Ready(_) => slot
+            .last_updated_epoch_ms()
+            .map(|updated| div().text_xs().text_color(muted).child(format_last_updated(updated))),
+        Loadable::Idle | Loadable::InitialLoading | Loadable::Empty | Loadable::Failed { previous: None, .. } => None,
     }
 }
 
@@ -782,343 +724,6 @@ fn observed_f64(value: Observed<f64>) -> String {
     }
 }
 
-fn history_body(
-    state: &Loadable<Vec<rocketmq_dashboard_common::HistoryPoint>>,
-    max_gap_ms: u64,
-    foreground: gpui::Hsla,
-    muted: gpui::Hsla,
-    border: gpui::Hsla,
-) -> gpui::Div {
-    match state {
-        Loadable::Idle | Loadable::InitialLoading => div().p_4().text_sm().text_color(muted).child("Loading…"),
-        Loadable::Empty => trend::render(&[], max_gap_ms, foreground, muted, border),
-        Loadable::Ready(points) => trend::render(points, max_gap_ms, foreground, muted, border),
-        Loadable::Refreshing(points) => div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(div().text_sm().text_color(muted).child("Refreshing…"))
-            .child(trend::render(points, max_gap_ms, foreground, muted, border)),
-        Loadable::Failed {
-            previous: Some(points),
-            error,
-        } => div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(div().text_sm().text_color(muted).child(error.summary().to_owned()))
-            .child(trend::render(points, max_gap_ms, foreground, muted, border)),
-        Loadable::Failed { previous: None, error } => div()
-            .p_4()
-            .text_sm()
-            .text_color(muted)
-            .child(error.summary().to_owned()),
-    }
-}
-
-fn history_range(range: HistoryRange) -> Result<(u64, u64), UiError> {
-    let end = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
-        .ok_or_else(|| UiError::new("System time is unavailable.", UiErrorCode::Unknown, true))?;
-    Ok((end.saturating_sub(range.duration_ms()), end))
-}
-
 #[cfg(test)]
-mod tests {
-    use std::{cell::RefCell, rc::Rc, sync::Arc};
-
-    use gpui::{AppContext as _, point, px, size};
-    use gpui_component::Root;
-    use rocketmq_dashboard_common::{
-        BrokerCurrentMetric, BrokerIdentity, DashboardOverview, HistoryPoint, TopicCurrentMetric,
-    };
-
-    use super::*;
-    use crate::services::{
-        dashboard::DashboardOverviewLoad, dashboard_broker::test_support::FakeDashboardBrokerOperations,
-    };
-
-    fn error() -> UiError {
-        UiError::new("History unavailable", UiErrorCode::Connection, true)
-    }
-
-    #[gpui::test]
-    fn environment_clear_discards_all_dashboard_values_and_rejects_old_requests(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
-        let (view, cx) = cx.add_window_view(|_, cx| DashboardView::new(AppServices::default(), 10, cx));
-        cx.run_until_parked();
-        cx.update(|_, app| {
-            view.update(app, |view, cx| {
-                view.store.overview.replace(DashboardOverviewLoad {
-                    overview: DashboardOverview::default(),
-                    failed_resources: 0,
-                });
-                view.store.topic_current.replace(Vec::new());
-                view.store.broker_current.replace(Vec::new());
-                view.store.topic_history.replace(Vec::new());
-                view.store.broker_history.replace(Vec::new());
-                view.selected_topic = Some("orders".into());
-                view.selected_broker = Some(BrokerIdentity {
-                    cluster: "a".into(),
-                    broker_name: "broker".into(),
-                    broker_id: 0,
-                    address: "first:10911".into(),
-                });
-                let old_request = view.store.topic_current.begin(10).unwrap();
-                view.clear_for_environment(11, cx);
-                assert!(view.store.overview.state.value().is_none());
-                assert!(view.store.topic_current.state.value().is_none());
-                assert!(view.store.broker_current.state.value().is_none());
-                assert!(view.store.topic_history.state.value().is_none());
-                assert!(view.store.broker_history.state.value().is_none());
-                assert!(view.selected_topic.is_none());
-                assert!(view.selected_broker.is_none());
-                assert!(!view.store.topic_current.finish(old_request, 11, Ok(Some(Vec::new()))));
-                assert!(matches!(view.store.topic_current.state, Loadable::Idle));
-            })
-        });
-    }
-
-    #[test]
-    fn failed_history_is_error_never_warming_and_refresh_retains_data() {
-        let failed: Loadable<Vec<u64>> = Loadable::Failed {
-            previous: None,
-            error: error(),
-        };
-        assert_eq!(history_presentation(&failed), HistoryPresentation::Error);
-        assert_ne!(history_presentation(&failed), HistoryPresentation::Warming);
-        let refreshing = Loadable::Refreshing(vec![1]);
-        assert_eq!(history_presentation(&refreshing), HistoryPresentation::Refreshing);
-        let retained_failure = Loadable::Failed {
-            previous: Some(vec![1]),
-            error: error(),
-        };
-        assert_eq!(
-            history_presentation(&retained_failure),
-            HistoryPresentation::DataWithWarning
-        );
-    }
-
-    #[test]
-    fn history_range_filter_uses_exact_selected_duration() {
-        assert_eq!(HistoryRange::Hour.duration_ms(), 3_600_000);
-        assert_eq!(HistoryRange::Day.duration_ms(), 86_400_000);
-        assert_eq!(HistoryRange::Week.duration_ms(), 604_800_000);
-    }
-
-    #[gpui::test]
-    fn retained_dashboard_resources_render_refresh_and_inline_error_retry_states(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
-        let services =
-            AppServices::default().with_dashboard_broker_operations(Arc::new(FakeDashboardBrokerOperations::default()));
-        let capture = Rc::new(RefCell::new(None));
-        let capture_view = capture.clone();
-        let (root, cx) = cx.add_window_view(move |window, cx| {
-            let view = cx.new(|cx| DashboardView::new(services, 11, cx));
-            capture_view.replace(Some(view.clone()));
-            Root::new(view, window, cx)
-        });
-        let view = capture.borrow_mut().take().expect("Dashboard entity");
-        cx.run_until_parked();
-
-        let (overview_request, topic_request, broker_request) = cx.update(|_, app| {
-            view.update(app, |view, cx| {
-                let overview = view.store.overview.begin(11).expect("overview ready request");
-                assert!(view.store.overview.finish(
-                    overview,
-                    11,
-                    Ok(Some(DashboardOverviewLoad {
-                        overview: DashboardOverview::default(),
-                        failed_resources: 0,
-                    }))
-                ));
-                let topic = view.store.topic_current.begin(11).expect("topic ready request");
-                assert!(view.store.topic_current.finish(
-                    topic,
-                    11,
-                    Ok(Some(vec![TopicCurrentMetric {
-                        topic: "orders".into(),
-                        total_messages: Observed::Observed(7),
-                        produce_tps: Observed::Unknown,
-                        consume_tps: Observed::Unknown,
-                    }]))
-                ));
-                let broker = view.store.broker_current.begin(11).expect("broker ready request");
-                assert!(view.store.broker_current.finish(
-                    broker,
-                    11,
-                    Ok(Some(vec![BrokerCurrentMetric::observed(
-                        BrokerIdentity {
-                            cluster: "cluster-a".into(),
-                            broker_name: "broker-a".into(),
-                            broker_id: 0,
-                            address: "127.0.0.1:10911".into(),
-                        },
-                        "5.3.2".into(),
-                        1.0,
-                        2.0,
-                    )]))
-                ));
-                assert!(view.store.overview.last_updated_epoch_ms().is_some());
-                assert!(view.store.topic_current.last_updated_epoch_ms().is_some());
-                assert!(view.store.broker_current.last_updated_epoch_ms().is_some());
-                let requests = (
-                    view.store.overview.begin(11).expect("overview refresh"),
-                    view.store.topic_current.begin(11).expect("topic refresh"),
-                    view.store.broker_current.begin(11).expect("broker refresh"),
-                );
-                cx.notify();
-                requests
-            })
-        });
-
-        cx.simulate_resize(size(px(1_440.), px(900.)));
-        cx.draw(point(px(0.), px(0.)), size(px(1_440.), px(900.)), |_, _| root.clone());
-        cx.read(|app| {
-            let view = view.read(app);
-            assert!(matches!(view.store.overview.state, Loadable::Refreshing(_)));
-            assert!(matches!(view.store.topic_current.state, Loadable::Refreshing(_)));
-            assert!(matches!(view.store.broker_current.state, Loadable::Refreshing(_)));
-        });
-        for selector in [
-            "dashboard-overview-refreshing",
-            "dashboard-topic-current-refreshing",
-            "dashboard-broker-current-refreshing",
-        ] {
-            assert!(cx.debug_bounds(selector).is_some(), "missing refresh state: {selector}");
-        }
-
-        cx.update(|_, app| {
-            view.update(app, |view, cx| {
-                let error = UiError::new("Current metrics unavailable", UiErrorCode::Connection, true);
-                assert!(view.store.overview.finish(overview_request, 11, Err(error.clone())));
-                assert!(view.store.topic_current.finish(topic_request, 11, Err(error.clone())));
-                assert!(view.store.broker_current.finish(broker_request, 11, Err(error)));
-                cx.notify();
-            });
-        });
-        cx.draw(point(px(0.), px(0.)), size(px(1_440.), px(900.)), |_, _| root.clone());
-        for selector in [
-            "dashboard-overview-error",
-            "dashboard-overview-last-updated",
-            "retry-dashboard-overview",
-            "dashboard-topic-current-error",
-            "dashboard-topic-current-last-updated",
-            "retry-dashboard-topic-current",
-            "dashboard-broker-current-error",
-            "dashboard-broker-current-last-updated",
-            "retry-dashboard-broker-current",
-        ] {
-            assert!(
-                cx.debug_bounds(selector).is_some(),
-                "missing retained error state: {selector}"
-            );
-        }
-        cx.read(|app| {
-            let view = view.read(app);
-            assert!(matches!(
-                view.store.overview.state,
-                Loadable::Failed { previous: Some(_), .. }
-            ));
-            assert!(view.store.topic_current.state.value().is_some());
-            assert!(view.store.broker_current.state.value().is_some());
-        });
-    }
-
-    #[gpui::test]
-    fn history_failure_and_topic_range_filters_stay_on_the_history_product_path(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
-        let fake = Arc::new(FakeDashboardBrokerOperations::default());
-        fake.queue_topic_current(Ok(vec![
-            TopicCurrentMetric {
-                topic: "orders-a".into(),
-                total_messages: Observed::Observed(1),
-                produce_tps: Observed::Unknown,
-                consume_tps: Observed::Unknown,
-            },
-            TopicCurrentMetric {
-                topic: "orders-b".into(),
-                total_messages: Observed::Observed(2),
-                produce_tps: Observed::Unknown,
-                consume_tps: Observed::Unknown,
-            },
-        ]));
-        fake.queue_topic_history(Err(error()));
-        fake.queue_topic_history(Ok(vec![HistoryPoint {
-            metric: HistoryMetricKind::TopicMessages,
-            series_identity: "orders-b".into(),
-            timestamp_epoch_ms: 2,
-            value: 2.0,
-            source_revision: 9,
-        }]));
-        fake.queue_topic_history(Ok(Vec::new()));
-        let broker_identity = BrokerIdentity {
-            cluster: "cluster-a".into(),
-            broker_name: "broker-a".into(),
-            broker_id: 0,
-            address: "127.0.0.1:10911".into(),
-        };
-        fake.queue_broker_current(Ok(vec![rocketmq_dashboard_common::BrokerCurrentMetric::observed(
-            broker_identity.clone(),
-            "5.3.2".into(),
-            1.0,
-            2.0,
-        )]));
-        for timestamp_epoch_ms in [1, 2] {
-            fake.queue_broker_history(Ok(vec![HistoryPoint {
-                metric: HistoryMetricKind::BrokerProduceTps,
-                series_identity: rocketmq_dashboard_common::broker_history_series_identity(&broker_identity),
-                timestamp_epoch_ms,
-                value: timestamp_epoch_ms as f64,
-                source_revision: 9,
-            }]));
-        }
-        let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
-        let (view, cx) = cx.add_window_view(move |_, cx| DashboardView::new(services, 9, cx));
-        cx.run_until_parked();
-
-        cx.read(|app| {
-            let view = view.read(app);
-            assert_eq!(view.selected_topic.as_deref(), Some("orders-a"));
-            assert_eq!(
-                history_presentation(&view.store.topic_history.state),
-                HistoryPresentation::Error
-            );
-            assert_ne!(
-                history_presentation(&view.store.topic_history.state),
-                HistoryPresentation::Warming
-            );
-        });
-        let baseline = fake.calls();
-        assert_eq!(baseline.overview_revisions, [9]);
-        assert_eq!(baseline.topic_current_revisions, [9]);
-        assert_eq!(baseline.broker_current_revisions, [9]);
-        assert_eq!(baseline.topic_history.len(), 1);
-        assert_eq!(baseline.broker_history.len(), 1);
-
-        cx.update(|_, app| view.update(app, |view, cx| view.select_next_topic(cx)));
-        cx.run_until_parked();
-        cx.read(|app| {
-            let view = view.read(app);
-            assert_eq!(view.selected_topic.as_deref(), Some("orders-b"));
-            assert!(matches!(view.store.topic_history.state, Loadable::Ready(_)));
-        });
-
-        cx.update(|_, app| view.update(app, |view, cx| view.cycle_history_range(cx)));
-        cx.run_until_parked();
-        let calls = fake.calls();
-        assert_eq!(calls.topic_history.len(), 3);
-        assert_eq!(calls.topic_history[0].0, "orders-a");
-        assert_eq!(calls.topic_history[1].0, "orders-b");
-        assert_eq!(calls.overview_revisions, [9]);
-        assert_eq!(calls.topic_current_revisions, [9]);
-        assert_eq!(calls.broker_current_revisions, [9]);
-        assert_eq!(calls.broker_history.len(), 2);
-        assert_eq!(
-            calls.topic_history[2].2.saturating_sub(calls.topic_history[2].1),
-            604_800_000
-        );
-    }
-}
+#[path = "dashboard_tests.rs"]
+mod tests;

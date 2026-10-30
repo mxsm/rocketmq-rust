@@ -43,6 +43,11 @@ an independent container's loopback address refers to that container instead.
 The configuration checks for Broker and Proxy share the NameServer namespace,
 which is why the commands start the parsed NameServer first.
 
+An [optional local governance profile](README.governance.md) reuses the existing
+Web Backend with File, SQLite, MySQL, or PostgreSQL storage. It provides server
+Sessions, Audit, and sanitized storage status; native GPUI remains independent
+and retains its own local data.
+
 ## Endpoints
 
 | Purpose | Host address |
@@ -97,6 +102,28 @@ Expect the registered Broker and host-reachable route, `SEND_OK`, and the exact
 unique token in the consumed message body. Offset zero is valid for the fresh
 Topic in this example. Reuse the returned offset or another fresh Topic on retries.
 Keep test resources until the corresponding Dashboard checks finish.
+
+The fixture explicitly enables the Broker's `traceTopicEnable` setting. On fresh
+state, startup creates the default `RMQ_SYS_TRACE_TOPIC`; general automatic Topic
+creation remains disabled. This is local fixture configuration and does not change
+the Broker's production defaults. Do not try to create that reserved system Topic
+through the ordinary Topic administration form.
+
+A retained volume can restore a Topic catalog without the default Trace Topic
+even when the startup setting is enabled. Check the actual Broker Topic catalog.
+If the Topic is missing, explicitly activate it through the supported Broker
+configuration update: disable and then re-enable `traceTopicEnable`, and recheck
+the authoritative catalog. Preserve the volumes and avoid ordinary reserved-Topic
+creation; the read-only Trace workspace does not perform this activation.
+
+To verify Trace, use a producer with SDK tracing enabled as well as its per-message
+Trace switch. GPUI Topic Send configures both from **Enable producer Trace** and flushes
+the SDK-owned dispatcher on producer shutdown. A producer with tracing disabled
+does not emit producer Trace records, while Consumer tracing remains independent.
+Disabling producer tracing therefore does not promise complete Trace absence.
+The Trace workspace accepts a custom Trace Topic;
+an operator must configure the producer and Broker for that Topic. The read-only
+workspace reports an absent Topic, empty records or an RPC failure honestly.
 
 Readiness is separate from message delivery. The commands above verify direct
 Broker administration and storage; they do not establish gRPC send/receive/ack

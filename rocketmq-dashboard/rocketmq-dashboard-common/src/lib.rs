@@ -17,17 +17,24 @@
 //! This crate provides shared functionality, data models, and business logic
 //! that can be reused across different dashboard implementations (GPUI, Tauri, etc.)
 
+mod acl_workspace;
 #[cfg(feature = "admin")]
 pub mod admin;
 pub mod api;
+pub use acl_workspace::*;
+pub mod audit;
 pub mod cluster;
 pub mod connection;
 pub mod consumer;
 pub mod dashboard;
+pub mod dashboard_metrics;
+pub mod dlq;
 pub mod environment;
 pub mod error;
 pub mod history;
 pub mod message;
+mod message_trace;
+pub mod message_workspace;
 pub mod models;
 pub mod nameserver;
 pub mod operation;
@@ -35,22 +42,31 @@ pub mod producer;
 pub mod proxy;
 pub mod service;
 pub mod topic;
+pub mod topology;
 
 #[cfg(feature = "admin")]
 pub use admin::*;
 pub use api::*;
+pub use audit::*;
+mod monitor;
 pub use cluster::*;
 pub use connection::*;
 pub use consumer::*;
 pub use dashboard::*;
+pub use dashboard_metrics::*;
+pub use dlq::*;
 pub use environment::*;
 pub use error::*;
 pub use history::*;
 pub use message::*;
+pub use message_trace::*;
+pub use message_workspace::*;
 pub use models::*;
+pub use monitor::*;
 pub use nameserver::*;
 pub use operation::*;
 pub use producer::*;
 pub use proxy::*;
 pub use service::*;
 pub use topic::*;
+pub use topology::*;
