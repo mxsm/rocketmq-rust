@@ -3622,6 +3622,25 @@ fn extract_delete_timer_identity(message: &MessageExt) -> Option<TimerDeleteIden
     })
 }
 
+/// The write of a due timer to its real topic, with its delivery token, or `None` when the
+/// timer names no real topic or an invalid real queue. The `native` engine converts its timers
+/// with this too, so a timer is delivered the same way whichever engine indexed it.
+pub(crate) fn real_topic_write(message: MessageExt, source_offset: i64) -> Option<MessageExtBrokerInner> {
+    let target = real_write_target(&message).ok()?;
+    let generation = timer_generation(&message);
+    let mut converted = TimerMessageStore::timer_write(message, target);
+    TimerMessageStore::ensure_delivery_token(&mut converted, source_offset, generation);
+    Some(converted)
+}
+
+/// Whether the recall carrying `recall_key` for `generation` cancels the timer of `message`,
+/// by the identities a slot's recalls are matched on.
+pub(crate) fn recall_cancels(message: &MessageExt, recall_key: &[u8], generation: u64) -> bool {
+    delete_identities_for_message(message)
+        .iter()
+        .any(|identity| identity.generation == generation && identity.key.as_bytes() == recall_key)
+}
+
 fn delete_identities_for_message(message: &MessageExt) -> Vec<TimerDeleteIdentity> {
     let Some(unique_key) = message.property(&CheetahString::from_static_str(
         MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,

@@ -21,11 +21,13 @@
 //! wheel when its minute does; delivery takes due timers from the wheel per lane, in
 //! `(due_ms, cq_offset)` order. Recalls go to the cancel log and an in-memory cancel set. A
 //! group commit checkpoints how far the Timer CQ is indexed and how far each lane delivered.
-//! Delivery and wiring into the timer store come in later changes; until then nothing outside
-//! this module uses it.
+//! Delivery reads each due timer's message, settles the recalled ones, and writes the rest to
+//! their real topics in the lane's order. Wiring into the timer store comes in a later change;
+//! until then nothing outside this module uses it.
 
 mod cancel_set;
 mod config;
+mod delivery;
 mod engine;
 mod near_wheel;
 
