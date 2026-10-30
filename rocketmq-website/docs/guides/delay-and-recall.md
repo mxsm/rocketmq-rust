@@ -136,7 +136,9 @@ Each timer is delivered by the engine that admitted it, so `timerStoreMode` can 
 - A recall reaches the engine that admitted its timer, whichever mode is active. Typed answers come only from the native mode.
 - A store that still holds native timers does not load in ExtendedTimeline mode.
 
-Current limits: a slave indexes native timers but does not yet follow its master's delivery progress, so a slave promoted to master can deliver again native timers its old master already delivered. Files of delivered timers and of recalls are not yet removed.
+In a master/slave group, a slave indexes native timers and follows its master's deliveries through the messages the master writes. A slave promoted to master therefore writes only the timers its old master had not written; as with the standard engine, a timer can still be delivered twice around a failover.
+
+Current limit: files of delivered timers and of recalls are not yet removed.
 
 ## Example and validation scope
 

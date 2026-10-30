@@ -201,6 +201,7 @@ use crate::timer::delivery::TimelineDeliveryCoordinator;
 use crate::timer::engine::TimerEngine;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::engine::WorkBudget;
+use crate::timer::native::NativeDeliveryFeed;
 use crate::timer::native::NativeRecallVerdict;
 use crate::timer::native::NativeServiceRole;
 use crate::timer::native::NativeTimerService;
@@ -667,6 +668,8 @@ pub struct LocalFileMessageStore {
     native_timer: Option<Arc<NativeTimerService>>,
     /// The lowest CommitLog offset the native timer engine still needs; `-1` without it.
     native_timer_cleanup_pin: Arc<AtomicI64>,
+    /// The native deliveries Reput dispatches while this Broker is a slave.
+    native_delivery_feed: Arc<NativeDeliveryFeed>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_cleanup_pin: Arc<AtomicI64>,
     #[cfg(feature = "extended_timeline")]

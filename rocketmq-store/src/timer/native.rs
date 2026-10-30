@@ -30,10 +30,12 @@ mod cancel_set;
 mod config;
 mod delivery;
 mod engine;
+mod feed;
 mod near_wheel;
 mod service;
 
 pub(crate) use engine::NativeRecallVerdict;
+pub(crate) use feed::NativeDeliveryFeed;
 pub(crate) use service::NativeServiceRole;
 pub(crate) use service::NativeTimerService;
 
