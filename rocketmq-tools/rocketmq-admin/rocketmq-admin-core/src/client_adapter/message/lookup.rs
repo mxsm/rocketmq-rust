@@ -71,14 +71,20 @@ mod tests {
     use rocketmq_model::common::message::message_ext::MessageExt;
     #[test]
     fn duplicate_producer_ids_resolve_newest_physical_message_with_stable_tie_break() {
-        let mut oldest = MessageExt::default();
-        oldest.store_timestamp = 1;
-        oldest.msg_id = "offset-0".into();
-        let mut newer_b = MessageExt::default();
-        newer_b.store_timestamp = 2;
-        newer_b.msg_id = "offset-b".into();
-        let mut newer_a = newer_b.clone();
-        newer_a.msg_id = "offset-a".into();
+        let oldest = MessageExt {
+            store_timestamp: 1,
+            msg_id: "offset-0".into(),
+            ..Default::default()
+        };
+        let newer_b = MessageExt {
+            store_timestamp: 2,
+            msg_id: "offset-b".into(),
+            ..Default::default()
+        };
+        let newer_a = MessageExt {
+            msg_id: "offset-a".into(),
+            ..newer_b.clone()
+        };
         assert_eq!(
             newest_unique_match(vec![&oldest, &newer_b, &newer_a])
                 .unwrap()
