@@ -35,6 +35,7 @@ use super::engine::NativeTimerSource;
 use super::near_wheel::ENTRY_MEMORY_BYTES;
 
 mod delivery;
+mod recall;
 
 const HOUR_MS: i64 = 3_600_000;
 const MINUTE_MS: i64 = 60_000;

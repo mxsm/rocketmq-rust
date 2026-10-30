@@ -45,6 +45,7 @@ use super::near_wheel::NearWheel;
 
 mod commit;
 mod promote;
+mod recall;
 
 /// A `native` timer engine that cannot open, index or load its timers.
 #[derive(Debug, Error)]
@@ -94,6 +95,17 @@ pub(crate) enum NativeRejection {
     /// Due beyond the mid horizon, but its record cannot be copied: an empty frame or real
     /// topic, or one too large for a payload segment.
     InvalidPayload,
+}
+
+/// What registering a recall decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeRecallVerdict {
+    /// The timer is not due yet, and every batch that may take it sees the recall. The caller
+    /// writes the tombstone, and withdraws the recall with
+    /// [`NativeTimerEngine::withdraw_recall`] when that fails.
+    Cancelled,
+    /// The timer may be delivered already, or in a batch being written; nothing is registered.
+    TooLate,
 }
 
 /// What one [`NativeTimerEngine::ingest`] did.
@@ -156,6 +168,9 @@ struct EngineState {
     /// to it once written, so a timer indexed later at or below it would fall below the
     /// watermark.
     taken: Vec<NativeDueCursor>,
+    /// The latest deadline a lane may have taken timers up to. A recall of a timer due at or
+    /// before it may come after the timer was taken.
+    taken_until_ms: i64,
     /// Every Timer CQ record visible before this is indexed, recalls included, so a timer due
     /// before it cannot be passed over by a recall still on its way. Nothing is delivered
     /// until the Source stage reports how far it got after the engine opens.
@@ -248,6 +263,11 @@ impl NativeTimerEngine {
                 cancels,
                 loaded_until_ms: i64::MIN,
                 taken: watermarks.clone(),
+                taken_until_ms: watermarks
+                    .iter()
+                    .map(|watermark| watermark.due_ms)
+                    .max()
+                    .unwrap_or(i64::MIN),
                 watermarks,
                 visible_through_ms: i64::MIN,
                 source_frontier: checkpoint.as_ref().map_or(0, |checkpoint| checkpoint.source_cq_offset),
@@ -417,6 +437,7 @@ impl NativeTimerEngine {
         let mut state = self.state.lock();
         self.load_near(&mut state, now_ms)?;
         let through_ms = now_ms.min(state.visible_through_ms);
+        state.taken_until_ms = state.taken_until_ms.max(through_ms);
         let due = state.wheel.take_due(lane, through_ms, max);
         if let (Some(last), Some(taken)) = (due.last(), state.taken.get_mut(usize::from(lane))) {
             *taken = (*taken).max(last.cursor());
