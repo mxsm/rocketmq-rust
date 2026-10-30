@@ -16,7 +16,11 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use bytes::Bytes;
 use parking_lot::Mutex;
+use rocketmq_store_api::TimerGeneration;
+use rocketmq_store_api::TimerId;
+use rocketmq_store_api::TimerSourceCqOffset;
 use rocketmq_store_local::timer::native_format::native_key_hash;
 use rocketmq_store_local::timer::native_format::native_lane;
 use rocketmq_store_local::timer::native_format::NativeBucketId;
@@ -26,8 +30,11 @@ use rocketmq_store_local::timer::native_format::NativeCheckpoint;
 use rocketmq_store_local::timer::native_format::NativeDueCursor;
 use rocketmq_store_local::timer::native_format::NativeIndexEntry;
 use rocketmq_store_local::timer::native_format::NativeLocator;
+use rocketmq_store_local::timer::native_format::NativePayloadSegment;
+use rocketmq_store_local::timer::native_storage::NativeStorageConfig;
 use rocketmq_store_local::timer::native_storage::NativeStorageError;
 use rocketmq_store_local::timer::native_storage::NativeTimerStorage;
+use rocketmq_store_local::timer::payload_record::TimerPayloadRecordV1;
 use thiserror::Error;
 
 use super::cancel_set::CancelSet;
@@ -45,8 +52,6 @@ pub(crate) enum NativeEngineError {
     InvalidConfig(&'static str),
     #[error(transparent)]
     Storage(#[from] NativeStorageError),
-    #[error("native bucket {0:?} was written by a newer engine")]
-    UnsupportedBucket(NativeBucketId),
     #[error("native checkpoint has {found} lane watermarks for {lanes} lanes")]
     WatermarkCount { found: usize, lanes: u16 },
     #[error("native hour bucket {0:?} comes before an hour already split into minute runs")]
@@ -65,6 +70,8 @@ pub(crate) struct NativeTimerSource {
     pub(crate) real_topic: String,
     pub(crate) real_queue_id: i32,
     pub(crate) kind: NativeSourceKind,
+    /// The complete CommitLog record, copied for a timer due beyond the mid horizon.
+    pub(crate) frame: Bytes,
 }
 
 #[derive(Clone, Debug)]
@@ -81,9 +88,9 @@ pub(crate) enum NativeRejection {
     InvalidDeadline,
     /// Later than the maximum delay.
     BeyondMaxDelay,
-    /// Later than the mid horizon. Such a timer needs a payload copy in a day bucket, which
-    /// this engine does not write yet, so admission must not send it here.
-    BeyondMidHorizon,
+    /// Due beyond the mid horizon, but its record cannot be copied: an empty frame or real
+    /// topic, or one too large for a payload segment.
+    InvalidPayload,
 }
 
 /// What one [`NativeTimerEngine::ingest`] did.
@@ -102,6 +109,8 @@ pub(crate) struct NativeEngineCounts {
     pub(crate) wheel: usize,
     /// Recalls in the cancel set.
     pub(crate) recalls: usize,
+    /// Day buckets not yet moved into hours.
+    pub(crate) days: usize,
     /// Hour buckets not yet split.
     pub(crate) hours: usize,
     /// Minute runs.
@@ -118,6 +127,11 @@ pub(crate) struct NativeDueTimer {
 struct EngineState {
     wheel: NearWheel,
     cancels: CancelSet,
+    /// Day buckets not yet moved into hours.
+    days: BTreeSet<NativeBucketId>,
+    /// Days starting before this are moved into hours: a copied timer due in one of them is
+    /// indexed with the timers that point into the CommitLog.
+    days_promoted_until_ms: i64,
     /// Hour buckets not yet split into minute runs.
     hours: BTreeSet<NativeBucketId>,
     /// Minute runs with a file.
@@ -125,8 +139,9 @@ struct EngineState {
     /// Hours starting before this are split into minute runs: a timer due in one of them is
     /// indexed into its minute run.
     promoted_until_ms: i64,
-    /// Hour buckets split into minute runs. The next checkpoint leaves them out, and then they
-    /// are deleted, so a restart finds either an hour bucket or its minute runs.
+    /// Day buckets moved into hours, and hour buckets split into minute runs. The next
+    /// checkpoint leaves them out, and then they are deleted, so a restart finds each timer's
+    /// entry in exactly one bucket.
     retired: BTreeSet<NativeBucketId>,
     /// Minute runs starting before this are in the wheel; a timer indexed into one of them goes
     /// into the wheel as well.
@@ -143,10 +158,11 @@ struct EngineState {
     opened_fence: Option<i64>,
 }
 
-/// The `native` engine's index for timers due within its mid horizon: hour buckets and minute
-/// runs on disk that point into the CommitLog, and the near wheel in memory that delivery takes
-/// due timers from. An hour bucket is split into minute runs once its hour starts within the
-/// near window, and a minute run is loaded into the wheel once its minute does.
+/// The `native` engine's index of timers: day buckets for timers due beyond the mid horizon,
+/// whose records are copied, hour buckets and minute runs for the rest, and the near wheel in
+/// memory that delivery takes due timers from. A day bucket is moved into hours once its day
+/// starts within the mid horizon, an hour bucket is split into minute runs once its hour starts
+/// within the near window, and a minute run is loaded into the wheel once its minute does.
 ///
 /// The engine is synchronous and does file I/O under its lock; callers run it off the async
 /// runtime. Bucket files are appended before the wheel changes, so the wheel never holds a
@@ -175,19 +191,20 @@ impl NativeTimerEngine {
         now_ms: i64,
     ) -> Result<(Self, Option<NativeCheckpoint>), NativeEngineError> {
         config.validate().map_err(NativeEngineError::InvalidConfig)?;
-        let (storage, checkpoint) = NativeTimerStorage::open(store_root, config.lane_count, now_ms)?;
+        let storage_config = NativeStorageConfig {
+            payload_segment_bytes: config.payload_segment_bytes,
+            ..NativeStorageConfig::new(config.lane_count)
+        };
+        let (storage, checkpoint) = NativeTimerStorage::open(store_root, storage_config, now_ms)?;
+        let mut days = BTreeSet::new();
         let mut hours = BTreeSet::new();
         let mut minutes = BTreeSet::new();
         for bucket in storage.buckets() {
             match bucket.bucket.kind() {
-                NativeBucketKind::Hour => {
-                    hours.insert(bucket.bucket);
-                }
-                NativeBucketKind::Minute => {
-                    minutes.insert(bucket.bucket);
-                }
-                NativeBucketKind::Day => return Err(NativeEngineError::UnsupportedBucket(bucket.bucket)),
-            }
+                NativeBucketKind::Day => days.insert(bucket.bucket),
+                NativeBucketKind::Hour => hours.insert(bucket.bucket),
+                NativeBucketKind::Minute => minutes.insert(bucket.bucket),
+            };
         }
         // Hours are split in order, and an hour bucket is deleted only after a checkpoint that
         // no longer names it, so no hour bucket comes before a minute run's hour.
@@ -226,6 +243,8 @@ impl NativeTimerEngine {
                     .as_ref()
                     .filter(|_| !hours.is_empty() || !minutes.is_empty())
                     .map(|checkpoint| checkpoint.commit_log_fence),
+                days,
+                days_promoted_until_ms: i64::MIN,
                 hours,
                 minutes,
                 promoted_until_ms,
@@ -247,7 +266,8 @@ impl NativeTimerEngine {
     /// Indexes `sources`, read in Timer CQ order at `now_ms` up to `next_source_offset`:
     /// timers into their hour buckets, or into their minute runs once their hour is split, and
     /// into the wheel when their minute is loaded; recalls into the cancel log and the cancel
-    /// set. Nothing is synced.
+    /// set. A timer due beyond the mid horizon is copied first, since the CommitLog may drop
+    /// its source before then, and indexed in its day bucket. Nothing is synced.
     ///
     /// A timer at or below its lane's watermark would be taken for delivered after a restart,
     /// so it is indexed at the watermark's deadline instead, right after it in the lane's
@@ -266,6 +286,7 @@ impl NativeTimerEngine {
     ) -> Result<NativeIngestReport, NativeEngineError> {
         let mut report = NativeIngestReport::default();
         let mut timers: BTreeMap<NativeBucketId, Vec<NativeIndexEntry>> = BTreeMap::new();
+        let mut copies: BTreeMap<i32, Vec<(Vec<u8>, NativeIndexEntry)>> = BTreeMap::new();
         let mut recalls = Vec::new();
         let mut state = self.state.lock();
         for source in sources {
@@ -286,18 +307,7 @@ impl NativeTimerEngine {
                     } else {
                         source.due_ms
                     };
-                    let kind = if due_ms < state.promoted_until_ms {
-                        NativeBucketKind::Minute
-                    } else {
-                        NativeBucketKind::Hour
-                    };
-                    let Ok(bucket) = NativeBucketId::containing(kind, due_ms) else {
-                        report
-                            .rejected
-                            .push((source.cq_offset, NativeRejection::InvalidDeadline));
-                        continue;
-                    };
-                    timers.entry(bucket).or_default().push(NativeIndexEntry {
+                    let entry = NativeIndexEntry {
                         due_ms,
                         cq_offset: source.cq_offset,
                         locator: NativeLocator::CommitLog {
@@ -307,7 +317,22 @@ impl NativeTimerEngine {
                         key_hash: native_key_hash(unique_key.as_bytes()),
                         size: source.size,
                         lane,
-                    });
+                    };
+                    // Due after the CommitLog may have dropped its source: copy the record.
+                    if due_ms >= now_ms.saturating_add(self.config.mid_horizon_ms) {
+                        match self.copy_of(source, &entry) {
+                            Ok((day, record)) => copies.entry(day).or_default().push((record, entry)),
+                            Err(rejection) => report.rejected.push((source.cq_offset, rejection)),
+                        }
+                        continue;
+                    }
+                    let Some(bucket) = state.near_bucket(due_ms) else {
+                        report
+                            .rejected
+                            .push((source.cq_offset, NativeRejection::InvalidDeadline));
+                        continue;
+                    };
+                    timers.entry(bucket).or_default().push(entry);
                 }
                 NativeSourceKind::Recall { key } => recalls.push(NativeCancelRecord {
                     due_ms: source.due_ms,
@@ -318,6 +343,22 @@ impl NativeTimerEngine {
             }
         }
 
+        // Copies first, so every entry that points at one is written after it.
+        for (day, day_copies) in copies {
+            let (records, entries): (Vec<_>, Vec<_>) = day_copies.into_iter().unzip();
+            let locations = self.storage.append_payloads(day, &records)?;
+            for (mut entry, location) in entries.into_iter().zip(locations) {
+                entry.locator = NativeLocator::Payload {
+                    segment_id: location.segment.segment_id,
+                    offset: location.offset,
+                };
+                // A copy is at most a segment, which `copy_of` checked fits an `i32`.
+                entry.size = location.length as i32;
+                if let Some(bucket) = state.copy_bucket(entry.due_ms) {
+                    timers.entry(bucket).or_default().push(entry);
+                }
+            }
+        }
         for (bucket, entries) in &mut timers {
             if bucket.kind() == NativeBucketKind::Minute {
                 // Minute runs are written as sorted frames.
@@ -394,6 +435,11 @@ impl NativeTimerEngine {
                 .div_euclid(precision)
                 .saturating_mul(precision)
         });
+        // Day buckets move into hours once their start is within the mid horizon.
+        let promote = state
+            .days
+            .first()
+            .map(|bucket| bucket.start_ms().saturating_sub(self.config.mid_horizon_ms));
         // Hour buckets and minute runs come in once their start is within the near window.
         let split = state.hours.first().map(|bucket| bucket.start_ms());
         let load = state
@@ -406,7 +452,7 @@ impl NativeTimerEngine {
             .flatten()
             .min()
             .map(|start| start.saturating_sub(self.config.near_window_ms));
-        [due, near].into_iter().flatten().min()
+        [due, near, promote].into_iter().flatten().min()
     }
 
     #[cfg(test)]
@@ -420,6 +466,7 @@ impl NativeTimerEngine {
         NativeEngineCounts {
             wheel: state.wheel.len(),
             recalls: state.cancels.len(),
+            days: state.days.len(),
             hours: state.hours.len(),
             minutes: state.minutes.len(),
         }
@@ -433,25 +480,62 @@ impl NativeTimerEngine {
         if due_ms > now_ms.saturating_add(self.config.max_delay_ms) {
             return Err(NativeRejection::BeyondMaxDelay);
         }
-        if due_ms >= now_ms.saturating_add(self.config.mid_horizon_ms) {
-            return Err(NativeRejection::BeyondMidHorizon);
-        }
         Ok(())
+    }
+
+    /// The UTC due day and the encoded copy of the timer `entry` indexes.
+    fn copy_of(&self, source: &NativeTimerSource, entry: &NativeIndexEntry) -> Result<(i32, Vec<u8>), NativeRejection> {
+        let day = NativePayloadSegment::due_day_of(entry.due_ms).ok_or(NativeRejection::InvalidDeadline)?;
+        let record = TimerPayloadRecordV1 {
+            due_time_ms: entry.due_ms,
+            lane: entry.lane,
+            timer_id: TimerId::new(u128::from(entry.cq_offset.unsigned_abs())),
+            generation: TimerGeneration::new(entry.generation),
+            source_cq_offset: TimerSourceCqOffset::new(entry.cq_offset),
+            source_physical_offset: source.commit_log_offset,
+            real_queue_id: source.real_queue_id,
+            real_topic: source.real_topic.clone(),
+            frame: source.frame.to_vec(),
+        }
+        .encode()
+        .ok_or(NativeRejection::InvalidPayload)?;
+        let fits = record.len() as u64 <= self.config.payload_segment_bytes && i32::try_from(record.len()).is_ok();
+        if !fits {
+            return Err(NativeRejection::InvalidPayload);
+        }
+        Ok((day, record))
     }
 }
 
 impl EngineState {
+    /// The bucket a timer due at `due_ms` is indexed in among the timers that point into the
+    /// CommitLog: its minute run once its hour is split, else its hour bucket.
+    fn near_bucket(&self, due_ms: i64) -> Option<NativeBucketId> {
+        let kind = if due_ms < self.promoted_until_ms {
+            NativeBucketKind::Minute
+        } else {
+            NativeBucketKind::Hour
+        };
+        NativeBucketId::containing(kind, due_ms).ok()
+    }
+
+    /// The bucket a copied timer due at `due_ms` is indexed in: its day bucket, or once its
+    /// day is moved into hours, the bucket [`Self::near_bucket`] picks.
+    fn copy_bucket(&self, due_ms: i64) -> Option<NativeBucketId> {
+        if due_ms >= self.days_promoted_until_ms {
+            NativeBucketId::containing(NativeBucketKind::Day, due_ms).ok()
+        } else {
+            self.near_bucket(due_ms)
+        }
+    }
+
     /// Records `entries`, just written to `bucket`, among the files and their lowest offsets.
     fn add_written(&mut self, bucket: NativeBucketId, entries: &[NativeIndexEntry]) {
         match bucket.kind() {
-            NativeBucketKind::Hour => {
-                self.hours.insert(bucket);
-            }
-            NativeBucketKind::Minute => {
-                self.minutes.insert(bucket);
-            }
-            NativeBucketKind::Day => {}
-        }
+            NativeBucketKind::Day => self.days.insert(bucket),
+            NativeBucketKind::Hour => self.hours.insert(bucket),
+            NativeBucketKind::Minute => self.minutes.insert(bucket),
+        };
         if let Some(lowest) = entries.iter().filter_map(commit_log_offset).min() {
             let min = self.bucket_min_offsets.entry(bucket).or_insert(lowest);
             *min = (*min).min(lowest);

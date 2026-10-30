@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::TimerGeneration;
+use rocketmq_store_api::TimerId;
+use rocketmq_store_api::TimerSourceCqOffset;
 use tempfile::tempdir;
 use tempfile::TempDir;
 
 use super::*;
 use crate::timer::native_format::NativeDueCursor;
 use crate::timer::native_format::NativeLocator;
+use crate::timer::payload_record::TimerPayloadRecordV1;
 
 const LANES: u16 = 4;
 const NOW_MS: i64 = 1_700_000_000_000;
@@ -62,7 +66,7 @@ fn cancel(key: &str) -> NativeCancelRecord {
 }
 
 fn open(root: &TempDir) -> (NativeTimerStorage, Option<NativeCheckpoint>) {
-    NativeTimerStorage::open(root.path(), LANES, NOW_MS).unwrap()
+    NativeTimerStorage::open(root.path(), NativeStorageConfig::new(LANES), NOW_MS).unwrap()
 }
 
 fn read(storage: &NativeTimerStorage, bucket: NativeBucketId) -> Vec<NativeIndexEntry> {
@@ -86,7 +90,7 @@ fn checkpoint(sequence: u64, synced: &NativeSyncedLengths) -> NativeCheckpoint {
         cancel_log_length: synced.cancel_log_length,
         lane_watermarks: vec![NativeDueCursor::START; usize::from(LANES)],
         buckets: synced.buckets.clone(),
-        payload_segments: Vec::new(),
+        payload_segments: synced.payload_segments.clone(),
     }
 }
 
@@ -108,7 +112,7 @@ fn a_new_directory_gets_a_format_and_keeps_its_lane_count() {
     // Reopening keeps the first FORMAT, and another lane count is refused.
     assert_eq!(open(&root).0.format().created_ms, NOW_MS);
     assert!(matches!(
-        NativeTimerStorage::open(root.path(), LANES * 2, NOW_MS),
+        NativeTimerStorage::open(root.path(), NativeStorageConfig::new(LANES * 2), NOW_MS),
         Err(NativeStorageError::LaneCountMismatch {
             found: LANES,
             configured: 8
@@ -123,7 +127,7 @@ fn timer_files_without_a_format_are_refused() {
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join(NATIVE_CANCEL_LOG_NAME), b"").unwrap();
     assert!(matches!(
-        NativeTimerStorage::open(root.path(), LANES, NOW_MS),
+        NativeTimerStorage::open(root.path(), NativeStorageConfig::new(LANES), NOW_MS),
         Err(NativeStorageError::MissingFormat(_))
     ));
 }
@@ -328,7 +332,7 @@ fn a_file_missing_bytes_its_checkpoint_made_durable_is_refused() {
     file.set_len(HEADER_LEN + 10).unwrap();
     drop(file);
     assert!(matches!(
-        NativeTimerStorage::open(root.path(), LANES, NOW_MS),
+        NativeTimerStorage::open(root.path(), NativeStorageConfig::new(LANES), NOW_MS),
         Err(NativeStorageError::ShorterThanCheckpoint { .. })
     ));
 }
@@ -353,4 +357,152 @@ fn a_deleted_bucket_is_gone_from_disk_and_from_the_list() {
     // Writing to it again starts a new file.
     storage.append_entries(hour(), &entries(5..6)).unwrap();
     assert_eq!(read(&storage, hour()), entries(5..6));
+}
+
+/// The encoded payload copy of timer `cq_offset`, due on `day`.
+fn payload(cq_offset: i64, day: i32) -> Vec<u8> {
+    TimerPayloadRecordV1 {
+        due_time_ms: i64::from(day) * 86_400_000 + cq_offset,
+        lane: 1,
+        timer_id: TimerId::new(cq_offset as u128),
+        generation: TimerGeneration::new(0),
+        source_cq_offset: TimerSourceCqOffset::new(cq_offset),
+        source_physical_offset: cq_offset * 100,
+        real_queue_id: 0,
+        real_topic: "TopicA".to_owned(),
+        frame: vec![cq_offset as u8; 40],
+    }
+    .encode()
+    .unwrap()
+}
+
+fn open_with_segment(root: &TempDir, payload_segment_bytes: u64) -> (NativeTimerStorage, Option<NativeCheckpoint>) {
+    let config = NativeStorageConfig {
+        payload_segment_bytes,
+        ..NativeStorageConfig::new(LANES)
+    };
+    NativeTimerStorage::open(root.path(), config, NOW_MS).unwrap()
+}
+
+const DAY: i32 = 20_000;
+
+#[test]
+fn payload_copies_fill_segments_in_turn_and_read_back() {
+    let root = tempdir().unwrap();
+    let record_len = payload(0, DAY).len() as u64;
+    let (storage, _) = open_with_segment(&root, 2 * record_len);
+    let records: Vec<_> = (0..5).map(|cq| payload(cq, DAY)).collect();
+    let locations = storage.append_payloads(DAY, &records).unwrap();
+    assert_eq!(
+        locations
+            .iter()
+            .map(|location| location.segment.segment_id)
+            .collect::<Vec<_>>(),
+        vec![0, 0, 1, 1, 2]
+    );
+    assert_eq!(locations[1].offset as u64, record_len);
+    for (cq, location) in locations.iter().enumerate() {
+        let record = storage.read_payload(*location).unwrap();
+        assert_eq!(record.source_cq_offset, TimerSourceCqOffset::new(cq as i64));
+    }
+    // The next append goes on in the day's last segment.
+    let next = storage.append_payloads(DAY, &[payload(5, DAY)]).unwrap();
+    assert_eq!((next[0].segment.segment_id, next[0].offset as u64), (2, record_len));
+    assert!(storage
+        .root()
+        .join(
+            NativePayloadSegment {
+                due_day_utc: DAY,
+                segment_id: 2
+            }
+            .relative_path()
+        )
+        .exists());
+}
+
+#[test]
+fn a_payload_larger_than_a_segment_or_read_past_its_end_is_refused() {
+    let root = tempdir().unwrap();
+    let (storage, _) = open_with_segment(&root, 64);
+    assert!(matches!(
+        storage.append_payloads(DAY, &[payload(1, DAY)]),
+        Err(NativeStorageError::PayloadTooLarge { segment_bytes: 64, .. })
+    ));
+    let missing = NativePayloadLocation {
+        segment: NativePayloadSegment {
+            due_day_utc: DAY,
+            segment_id: 0,
+        },
+        offset: 0,
+        length: 10,
+    };
+    assert!(matches!(
+        storage.read_payload(missing),
+        Err(NativeStorageError::CorruptPayload { .. })
+    ));
+    assert!(matches!(
+        NativeTimerStorage::open(
+            root.path(),
+            NativeStorageConfig {
+                payload_segment_bytes: 0,
+                ..NativeStorageConfig::new(LANES)
+            },
+            NOW_MS
+        ),
+        Err(NativeStorageError::InvalidSegmentSize(0))
+    ));
+}
+
+#[test]
+fn reopening_cuts_payload_segments_back_to_the_last_checkpoint() {
+    let root = tempdir().unwrap();
+    let record_len = payload(0, DAY).len() as u64;
+    let (storage, _) = open_with_segment(&root, 2 * record_len);
+    let kept = storage.append_payloads(DAY, &[payload(1, DAY)]).unwrap();
+    let synced = storage.sync().unwrap();
+    assert_eq!(
+        synced.payload_segments,
+        vec![NativePayloadSegmentLength {
+            due_day_utc: DAY,
+            segment_id: 0,
+            durable_length: record_len
+        }]
+    );
+    storage.write_checkpoint(&checkpoint(1, &synced)).unwrap();
+    // After the checkpoint: the rest of segment 0, segment 1, and another day.
+    let lost = storage
+        .append_payloads(DAY, &[payload(2, DAY), payload(3, DAY)])
+        .unwrap();
+    storage.append_payloads(DAY + 1, &[payload(4, DAY + 1)]).unwrap();
+    storage.sync().unwrap();
+    drop(storage);
+
+    let (storage, _) = open_with_segment(&root, 2 * record_len);
+    assert_eq!(
+        storage.read_payload(kept[0]).unwrap().source_cq_offset,
+        TimerSourceCqOffset::new(1)
+    );
+    assert!(matches!(
+        storage.read_payload(lost[0]),
+        Err(NativeStorageError::CorruptPayload { .. })
+    ));
+    assert_eq!(storage.written_lengths().payload_segments.len(), 1);
+    // Appends go on from the cut.
+    let again = storage.append_payloads(DAY, &[payload(2, DAY)]).unwrap();
+    assert_eq!(again[0], lost[0]);
+}
+
+#[test]
+fn a_checkpoint_naming_unsynced_payload_bytes_is_refused() {
+    let root = tempdir().unwrap();
+    let (storage, _) = open(&root);
+    storage.append_payloads(DAY, &[payload(1, DAY)]).unwrap();
+    let mut ahead = checkpoint(1, &NativeSyncedLengths::default());
+    ahead.payload_segments = storage.written_lengths().payload_segments;
+    assert!(matches!(
+        storage.write_checkpoint(&ahead),
+        Err(NativeStorageError::CheckpointAheadOfFiles { sequence: 1 })
+    ));
+    storage.sync().unwrap();
+    storage.write_checkpoint(&ahead).unwrap();
 }

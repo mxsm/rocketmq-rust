@@ -71,7 +71,7 @@ impl NativeTimerEngine {
             cancel_log_length: lengths.cancel_log_length,
             lane_watermarks,
             buckets: lengths.buckets,
-            payload_segments: Vec::new(),
+            payload_segments: lengths.payload_segments,
         };
         self.storage.write_checkpoint(&checkpoint)?;
         // No checkpoint names the retired hour buckets any more. One left behind by a failed

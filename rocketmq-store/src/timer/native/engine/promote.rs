@@ -12,14 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Bringing timers near: an hour bucket is split into minute runs once its hour comes within
-//! the near window, and a minute run is loaded into the wheel once its minute does.
+//! Bringing timers near: a day bucket is moved into hours once its day comes within the mid
+//! horizon, an hour bucket is split into minute runs once its hour comes within the near
+//! window, and a minute run is loaded into the wheel once its minute does.
 //!
-//! An hour bucket is read once, sorted, and rewritten as one minute run per minute, so the
-//! wheel holds about the near window of timers instead of whole hours. The split hour bucket is
-//! retired: the next checkpoint leaves it out, and only then is it deleted. Until that
-//! checkpoint, a restart recovers the hour bucket and drops the minute runs; after it, the
-//! other way round. Either way every timer is in exactly one place.
+//! Each step rewrites a timer's 48-byte entry once; a copied payload never moves. An hour
+//! bucket is sorted into one minute run per minute, so the wheel holds about the near window of
+//! timers instead of whole hours. A day or hour bucket that has been moved on is retired: the
+//! next checkpoint leaves it out, and only then is it deleted. Until that checkpoint, a restart
+//! recovers the bucket and drops what it was moved into; after it, the other way round. Either
+//! way every timer's entry is in exactly one place.
+
+use std::collections::BTreeMap;
 
 use rocketmq_store_local::timer::native_format::NativeBucketId;
 use rocketmq_store_local::timer::native_format::NativeBucketKind;
@@ -32,10 +36,12 @@ use super::NativeTimerEngine;
 
 impl NativeTimerEngine {
     /// Makes the wheel hold the timers due before the end of the minute the near window
-    /// reaches: splits the hour buckets starting before then, and loads the minute runs, oldest
-    /// first, leaving out timers their lanes delivered. Past the memory budget, only minutes
-    /// that have already started load, so due timers are never held back by later ones.
+    /// reaches: moves the day buckets starting within the mid horizon into hours, splits the
+    /// hour buckets starting before then, and loads the minute runs, oldest first, leaving out
+    /// timers their lanes delivered. Past the memory budget, only minutes that have already
+    /// started load, so due timers are never held back by later ones.
     pub(super) fn load_near(&self, state: &mut EngineState, now_ms: i64) -> Result<(), NativeEngineError> {
+        self.promote_days(state, now_ms.saturating_add(self.config.mid_horizon_ms))?;
         let minute_ms = NativeBucketKind::Minute.window_ms();
         let reach = now_ms.saturating_add(self.config.near_window_ms);
         let horizon = reach.div_euclid(minute_ms).saturating_add(1).saturating_mul(minute_ms);
@@ -63,6 +69,53 @@ impl NativeTimerEngine {
             state.loaded_until_ms = minute.end_ms();
         }
         state.loaded_until_ms = horizon;
+        Ok(())
+    }
+
+    /// Moves every day bucket starting at or before `reach` into the buckets its timers go to
+    /// now, hour buckets or minute runs, oldest first, and retires it. The day holding `reach`
+    /// and every earlier one then count as moved. Entries keep their payload locators.
+    ///
+    /// A failure part way leaves the day bucket in place, to be moved again; the hours may then
+    /// hold its timers twice, which the wheel adds once, keyed by their cursors.
+    fn promote_days(&self, state: &mut EngineState, reach: i64) -> Result<(), NativeEngineError> {
+        let days: Vec<_> = state
+            .days
+            .iter()
+            .copied()
+            .take_while(|day| day.start_ms() <= reach)
+            .collect();
+        for day in days {
+            let mut moved: BTreeMap<NativeBucketId, Vec<NativeIndexEntry>> = BTreeMap::new();
+            self.storage.visit_entries(day, |entries| {
+                for entry in entries {
+                    if entry.cursor() <= state.watermark(entry.lane) {
+                        continue;
+                    }
+                    if let Some(bucket) = state.near_bucket(entry.due_ms) {
+                        moved.entry(bucket).or_default().push(*entry);
+                    }
+                }
+                Ok(())
+            })?;
+            for (bucket, mut entries) in moved {
+                if bucket.kind() == NativeBucketKind::Minute {
+                    entries.sort_by_key(NativeIndexEntry::cursor);
+                }
+                self.storage.append_entries(bucket, &entries)?;
+                state.add_written(bucket, &entries);
+                if bucket.kind() == NativeBucketKind::Minute && bucket.start_ms() < state.loaded_until_ms {
+                    for entry in entries {
+                        state.insert_undelivered(entry);
+                    }
+                }
+            }
+            state.days.remove(&day);
+            state.retired.insert(day);
+        }
+        let day_ms = NativeBucketKind::Day.window_ms();
+        let day_end = reach.div_euclid(day_ms).saturating_add(1).saturating_mul(day_ms);
+        state.days_promoted_until_ms = state.days_promoted_until_ms.max(day_end);
         Ok(())
     }
 
