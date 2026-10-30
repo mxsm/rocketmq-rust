@@ -72,7 +72,9 @@ In the standard path, recall appends a timer deletion marker. Its response is ev
 
 In ExtendedTimeline mode, the current processor uses a typed cancellation operation. `Cancelled` and `AlreadyCancelled` map to success; `TooLate`/`NotFound` map to an illegal operation; `Retry` maps to service unavailable; `Quarantined`/`Unsupported` map to a system error. That explicit state result is different from the standard marker path.
 
-In either mode, recall does not undo a consumer's completed external side effect. Keep business cancellation state authoritative so a late reminder can be recognized and ignored or compensated according to the application's rules.
+With `timerStoreMode = "native"`, the Broker registers the recall with the native engine before it writes the deletion marker, so a delivery that starts in between still sees it. The answer is typed the same way: the recall succeeds only while the timer is not yet due, and a recall of a timer already due is refused as an illegal operation without writing a marker. If the marker cannot be written, the registration is withdrawn and the recall reports a system error.
+
+In any mode, recall does not undo a consumer's completed external side effect. Keep business cancellation state authoritative so a late reminder can be recognized and ignored or compensated according to the application's rules.
 
 ## Failure and recovery decisions
 
@@ -101,6 +103,40 @@ Two `[store]` keys decide what happens to a timer that cannot be delivered. They
 A timer or recall whose payload CommitLog cleanup has deleted, for example under disk pressure, is skipped with a warning whatever these keys say, as in Java: nothing can bring the payload back, and waiting for it would hold back every later timer. A skipped recall no longer cancels its timer.
 
 With `timerSkipUnknownError = false`, Java also drops a payload it cannot read and a rejected message; Rust keeps them. Quarantined timers are recorded in `timer-v2/quarantine.jsonl` under the store root.
+
+## Long delays with the native engine
+
+`timerStoreMode = "native"` admits timers of up to `timerNative.maxDelayDays` (400 days by default) to the native engine, a tiered log of time buckets under `timer-native/` in the store root. A timer due within the mid horizon points into the CommitLog; a later one is copied once, so CommitLog cleanup cannot remove it before it is due. Deadlines are rounded to `timerPrecisionMs` as in the standard engine, and the engine needs `timerWheelEnable = true`.
+
+```toml
+[store]
+timerWheelEnable = true
+timerStoreMode = "native"
+
+[store.timerNative]
+maxDelayDays = 400
+```
+
+| Key under `[store.timerNative]` | Default | Meaning |
+| --- | --- | --- |
+| `maxDelayDays` | `400` | Longest delay admitted |
+| `laneCount` | `16` | Delivery lanes; fixed once `timer-native/` exists |
+| `nearWindowSec` | `600` | Timers due within this many seconds are kept in memory |
+| `nearWheelMemoryBytes` | 256 MiB | Memory those timers may use |
+| `midHorizonHours` | `48` | Timers due later are copied; the engine uses at most `fileReservedTime` minus six hours |
+| `payloadSegmentBytes` | 256 MiB | Size of one segment of copied timers |
+| `checkpointIntervalMs` | `5000` | How often indexed timers and delivery progress are made durable |
+| `deliveryBatchMessages` | `512` | Due timers one lane delivers per batch |
+| `deliveryInflightWrites` | `32` | Writes one batch keeps in flight |
+
+Each timer is delivered by the engine that admitted it, so `timerStoreMode` can be switched in both directions:
+
+- After a switch to `native`, the standard engine keeps delivering the timers it admitted before.
+- After a switch away from `native`, the native engine keeps delivering its timers. Once a clean shutdown finds that it holds none, the store no longer runs it; switching back to `native` starts it again.
+- A recall reaches the engine that admitted its timer, whichever mode is active. Typed answers come only from the native mode.
+- A store that still holds native timers does not load in ExtendedTimeline mode.
+
+Current limits: a slave indexes native timers but does not yet follow its master's delivery progress, so a slave promoted to master can deliver again native timers its old master already delivered. Files of delivered timers and of recalls are not yet removed.
 
 ## Example and validation scope
 

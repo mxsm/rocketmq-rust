@@ -296,6 +296,27 @@ impl NativeTimerEngine {
         self.state.lock().source_frontier
     }
 
+    /// Moves the frontier up to `offset` when every Timer CQ record before it was admitted while
+    /// another engine was active, so none of them is a native timer.
+    pub(crate) fn start_source_at(&self, offset: i64) {
+        let mut state = self.state.lock();
+        state.source_frontier = state.source_frontier.max(offset);
+    }
+
+    /// Whether every timer indexed so far is delivered or cancelled: no day or hour bucket
+    /// waits, every minute run is loaded, and the wheel is empty. A batch being written holds
+    /// timers outside the wheel, so callers check that none is out.
+    pub(crate) fn holds_no_timers(&self) -> bool {
+        let state = self.state.lock();
+        state.days.is_empty()
+            && state.hours.is_empty()
+            && state.wheel.len() == 0
+            && state
+                .minutes
+                .iter()
+                .all(|minute| minute.start_ms() < state.loaded_until_ms)
+    }
+
     /// Indexes `sources`, read in Timer CQ order at `now_ms` up to `next_source_offset`:
     /// timers into their hour buckets, or into their minute runs once their hour is split, and
     /// into the wheel when their minute is loaded; recalls into the cancel log and the cancel

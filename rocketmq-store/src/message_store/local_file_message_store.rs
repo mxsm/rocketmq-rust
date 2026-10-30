@@ -202,6 +202,7 @@ use crate::timer::engine::TimerEngine;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::engine::WorkBudget;
 use crate::timer::native::NativeRecallVerdict;
+use crate::timer::native::NativeServiceRole;
 use crate::timer::native::NativeTimerService;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::role::TimerRoleState;

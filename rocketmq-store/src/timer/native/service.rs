@@ -22,7 +22,9 @@
 //! engine's fence.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicUsize;
@@ -47,8 +49,11 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerId;
+use rocketmq_store_api::TimerStoreMode;
+use rocketmq_store_local::timer::native_format::NATIVE_TIMER_DIR;
 use thiserror::Error;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use super::config::NativeTimerConfig;
@@ -89,6 +94,34 @@ use crate::timer::timer_message_store::TIMER_WRITE_ATTEMPTS;
 
 /// The native engine's delivery lease, beside the Java-compatible engine's.
 const ROLE_FILE: &str = "timer-native-role.meta";
+/// Marks a native engine that drained while another mode was active, so the store no longer
+/// opens it in that mode.
+const RETIRED_FILE: &str = "timer-native.retired";
+
+/// What the native engine does in a store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeServiceRole {
+    /// `timerStoreMode = native`: the Broker admits new timers to it.
+    Active,
+    /// Another mode is active, and the engine still delivers the timers it admitted before.
+    Draining,
+}
+
+impl NativeServiceRole {
+    /// The role of the native engine in a store opened with `config`, or `None` when the store
+    /// does not run it: another mode is active and the engine never ran, or it drained.
+    pub(crate) fn of(config: &MessageStoreConfig) -> Option<Self> {
+        if config.timer_store_mode == TimerStoreMode::Native {
+            return Some(Self::Active);
+        }
+        let store_root = Path::new(config.store_path_root_dir.as_str());
+        (store_root.join(NATIVE_TIMER_DIR).exists() && !retired_marker(store_root).exists()).then_some(Self::Draining)
+    }
+}
+
+fn retired_marker(store_root: &Path) -> PathBuf {
+    store_root.join("config").join(RETIRED_FILE)
+}
 
 /// Why the service could not open.
 #[derive(Debug, Error)]
@@ -148,6 +181,14 @@ pub(crate) struct NativeTimerService {
     /// Failed writes per delivery token, kept only while `timerEnableRetryUntilSuccess` is off.
     write_failures: Mutex<HashMap<CheetahString, u32>>,
     running: Mutex<Option<Running>>,
+    service_role: NativeServiceRole,
+    /// The engine never ran, or it drained: no Timer CQ record already there when the store
+    /// loads is a native timer.
+    starts_at_queue_end: bool,
+    retired_marker: PathBuf,
+    /// Due batches taken and not yet settled. A batch whose task was cancelled stays counted,
+    /// since its timers left the wheel without being delivered.
+    batches_out: AtomicUsize,
 }
 
 impl NativeTimerService {
@@ -164,9 +205,12 @@ impl NativeTimerService {
         context: TimerStoreContext,
         runtime_scope: StoreRuntimeScope,
         cleanup_pin: Arc<AtomicI64>,
+        service_role: NativeServiceRole,
     ) -> Result<Self, NativeServiceError> {
         let clock: Arc<dyn TimerClock> = Arc::new(SystemTimerClock::default());
         let store_root = config.store_path_root_dir.as_str();
+        let retired = retired_marker(Path::new(store_root));
+        let starts_at_queue_end = !Path::new(store_root).join(NATIVE_TIMER_DIR).exists() || retired.exists();
         let (engine, checkpoint) = NativeTimerEngine::open(
             Path::new(store_root),
             NativeTimerConfig::from_store(config),
@@ -210,7 +254,32 @@ impl NativeTimerService {
             blocked_at: Mutex::new(vec![None; usize::from(lane_count)]),
             write_failures: Mutex::new(HashMap::new()),
             running: Mutex::new(None),
+            service_role,
+            starts_at_queue_end,
+            retired_marker: retired,
+            batches_out: AtomicUsize::new(0),
         })
+    }
+
+    /// Finishes opening once the Timer CQ is recovered. An engine that never ran, or that
+    /// drained, starts after the records already there, which other engines admitted. An
+    /// active engine stops being retired, so another mode drains it again.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of removing the retirement marker; the store must not load then,
+    /// or another mode would leave the timers this engine admits undelivered.
+    pub(crate) fn load(&self) -> std::io::Result<()> {
+        if self.starts_at_queue_end {
+            self.engine.start_source_at(self.timer_queue_end());
+        }
+        if self.service_role == NativeServiceRole::Active {
+            match fs::remove_file(&self.retired_marker) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// Starts the pipeline that runs the Source, Due and checkpoint stages, woken by Reput and
@@ -278,11 +347,33 @@ impl NativeTimerService {
         Some(report)
     }
 
-    /// Makes what the stopped pipeline did durable. Blocking.
-    pub(crate) fn persist_at_shutdown(&self) {
+    /// Makes what the stopped pipeline did durable. A draining engine is retired once it holds
+    /// no timers and has indexed every Timer CQ record, with nothing left for Reput to dispatch
+    /// into the Timer CQ (`dispatched_everything`); the store no longer opens it in another
+    /// mode. Blocking.
+    pub(crate) fn persist_at_shutdown(&self, dispatched_everything: bool) {
         if let Err(error) = self.checkpoint_blocking() {
             error!("checkpoint the native timer engine at shutdown failed: {error}");
+            return;
         }
+        let drained = self.service_role == NativeServiceRole::Draining
+            && dispatched_everything
+            && self.batches_out.load(Ordering::Acquire) == 0
+            && self.engine.holds_no_timers()
+            && self.engine.source_frontier() >= self.timer_queue_end();
+        if !drained {
+            return;
+        }
+        match write_marker(&self.retired_marker) {
+            Ok(()) => info!("the native timer engine delivered every timer it admitted and is retired"),
+            Err(error) => warn!("retire the drained native timer engine failed: {error}"),
+        }
+    }
+
+    fn timer_queue_end(&self) -> i64 {
+        self.context
+            .find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
+            .map_or(0, |queue| queue.read().get_max_offset_in_queue())
     }
 
     /// Opens or closes delivery for this Broker; only a master delivers.
@@ -429,14 +520,23 @@ impl NativeTimerService {
         let claimed = self.claim_lanes();
         let service = Arc::clone(self);
         let lanes: Vec<u16> = claimed.iter().map(|claim| claim.lane).collect();
+        // Counted before any timer leaves the wheel; only a settled batch is uncounted.
+        self.batches_out.fetch_add(1, Ordering::AcqRel);
         let prepared = self
             .runtime_scope
             .spawn_io("timer-native-prepare", move || {
                 service.prepare_lanes(&lanes, now_ms, max_messages)
             })
-            .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?;
+            .await;
+        let prepared = match prepared {
+            Ok(Ok(prepared)) => prepared,
+            Ok(Err(error)) => {
+                // A failed load takes nothing from the wheel.
+                self.batches_out.fetch_sub(1, Ordering::AcqRel);
+                return Err(TimerEngineError::Storage(std::io::Error::other(error)));
+            }
+            Err(error) => return Err(TimerEngineError::Storage(std::io::Error::other(error))),
+        };
         let writer = NativeWriter { service: self };
         let written = join_all(
             prepared
@@ -454,6 +554,7 @@ impl NativeTimerService {
                 .saturating_add(report.cleaned_up)
                 .saturating_add(report.skipped);
         }
+        self.batches_out.fetch_sub(1, Ordering::AcqRel);
         drop(claimed);
         Ok(done)
     }
@@ -604,18 +705,31 @@ impl NativeTimerService {
     }
 }
 
-/// The source of a Timer CQ record the native engine owns, or `None` for a record of another
-/// engine or one without a deadline.
+/// Writes the retirement marker and makes it durable.
+fn write_marker(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::File::create(path)?.sync_all()
+}
+
+/// The source of a Timer CQ record the native engine indexes, or `None` for a timer of another
+/// engine or a record without a deadline. Recalls of every engine are indexed: Recall tags a
+/// tombstone for the engine that admits new timers, which after a switch of `timerStoreMode` is
+/// not always the engine that admitted the timer.
 fn native_source(unit: &CqUnit, frame: Bytes, message: &MessageExt) -> Option<NativeTimerSource> {
     let property = |name: &'static str| message.property(&CheetahString::from_static_str(name));
-    if property(MessageConst::TIMER_ENGINE_TYPE)?.as_str() != TimerEngineId::Native.as_str() {
+    let recall_key = property(TIMER_DELETE_UNIQUE_KEY);
+    let native = property(MessageConst::TIMER_ENGINE_TYPE)
+        .is_some_and(|engine| engine.as_str() == TimerEngineId::Native.as_str());
+    if recall_key.is_none() && !native {
         return None;
     }
     let Some(due_ms) = parse_deliver_time_ms(message) else {
         warn!("skip a native timer source without a valid deadline");
         return None;
     };
-    let (kind, frame) = match property(TIMER_DELETE_UNIQUE_KEY) {
+    let (kind, frame) = match recall_key {
         Some(key) => (NativeSourceKind::Recall { key: key.to_string() }, Bytes::new()),
         None => (
             NativeSourceKind::Timer {

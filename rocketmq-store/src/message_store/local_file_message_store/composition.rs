@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store_local::timer::native_format::NATIVE_TIMER_DIR;
-
 use super::*;
 use crate::config::timer_store_config::ValidatedTimerStoreConfig;
 #[cfg(feature = "tieredstore")]
@@ -473,7 +471,7 @@ impl LocalFileMessageStore {
             minimum_pinned_wal_segment
         };
 
-        let native_timer_enabled = message_store_config.timer_store_mode == TimerStoreMode::Native;
+        let native_timer_enabled = NativeServiceRole::of(message_store_config.as_ref()).is_some();
         let native_timer_cleanup_pin = Arc::new(AtomicI64::new(if native_timer_enabled { 0 } else { -1 }));
         let minimum_pinned_wal_segment = if native_timer_enabled {
             let existing_pin = minimum_pinned_wal_segment.clone();
@@ -943,15 +941,18 @@ impl LocalFileMessageStore {
             ));
             self.set_timer_message_store(timer_message_store);
         }
-        if self.message_store_config.is_timer_wheel_enable()
-            && self.message_store_config.timer_store_mode == TimerStoreMode::Native
-            && self.native_timer.is_none()
-        {
+        let native_role = NativeServiceRole::of(self.message_store_config.as_ref());
+        if let (true, Some(native_role), None) = (
+            self.message_store_config.is_timer_wheel_enable(),
+            native_role,
+            self.native_timer.as_ref(),
+        ) {
             let native_timer = NativeTimerService::open(
                 self.message_store_config.as_ref(),
                 self.timer_store_context(),
                 self.runtime_scope.clone(),
                 Arc::clone(&self.native_timer_cleanup_pin),
+                native_role,
             )
             .map_err(|error| {
                 store_read_error(StoreOperation::Load, "failed to open the native timer engine").with_source(error)
@@ -1060,21 +1061,24 @@ impl LocalFileMessageStore {
                 ));
             }
         }
-        if self.message_store_config.timer_store_mode == TimerStoreMode::Native {
-            if !self.message_store_config.is_timer_wheel_enable() {
+        match NativeServiceRole::of(self.message_store_config.as_ref()) {
+            Some(_) if !self.message_store_config.is_timer_wheel_enable() => {
                 return Err(store_config_error(
                     StoreOperation::Load,
-                    "timer_store_mode=native requires timer_wheel_enable=true".to_string(),
+                    "the native timer engine requires timer_wheel_enable=true, also while it drains the timers it admitted"
+                        .to_string(),
                 ));
             }
-        } else if Path::new(self.message_store_config.store_path_root_dir.as_str())
-            .join(NATIVE_TIMER_DIR)
-            .exists()
-        {
-            return Err(store_unsupported_error(
-                StoreOperation::Load,
-                "the store holds native timers; keep timer_store_mode=native so they are delivered".to_string(),
-            ));
+            Some(NativeServiceRole::Draining)
+                if self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline =>
+            {
+                return Err(store_unsupported_error(
+                    StoreOperation::Load,
+                    "the store holds native timers, which cannot drain beside the Extended Timeline; keep timer_store_mode=native or java_compat until they are delivered"
+                        .to_string(),
+                ));
+            }
+            _ => {}
         }
         if self.message_store_config.timer_rocksdb_enable && !self.message_store_config.is_enable_rocksdb_store() {
             return Err(store_unsupported_error(

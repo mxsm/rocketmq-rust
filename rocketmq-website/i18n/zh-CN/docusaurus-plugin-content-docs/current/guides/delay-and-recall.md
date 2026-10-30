@@ -72,6 +72,8 @@ Broker 的 `recallMessageEnable` 当前默认为 true，但仍适用实际部署
 
 ExtendedTimeline 模式中，当前处理器使用类型化取消操作。`Cancelled` 和 `AlreadyCancelled` 映射成功；`TooLate`、`NotFound` 映射非法操作；`Retry` 映射服务不可用；`Quarantined`、`Unsupported` 映射系统错误。这种显式状态结果与标准标记路径不同。
 
+`timerStoreMode = "native"` 时，Broker 先在 native 引擎中登记召回，再写入删除标记，因此两者之间开始的投递也能看到这次召回。召回结果同样是类型化的：只有定时消息尚未到期时召回才会成功；对已到期定时消息的召回会被拒绝，按非法操作返回，且不写入标记。如果标记写入失败，登记会被撤回，召回返回系统错误。
+
 任何模式的召回都不会撤销消费者已经完成的外部副作用。业务取消状态应保持权威，使迟到提醒可以按应用规则识别、忽略或补偿。
 
 ## 失败与恢复决策
@@ -101,6 +103,40 @@ ExtendedTimeline 模式中，当前处理器使用类型化取消操作。`Cance
 如果 CommitLog 清理（例如磁盘空间不足时）已删除某条定时消息或召回的消息体，无论这两个键如何设置，都会跳过它并记录告警日志，与 Java 一致：消息体已无法恢复，继续等待只会拖住之后所有的定时消息。被跳过的召回不再取消它的目标定时消息。
 
 即使 `timerSkipUnknownError = false`，Java 也会丢弃无法读取的消息体和被拒绝的消息，而 Rust 会保留它们。被隔离的定时消息记录在存储根目录下的 `timer-v2/quarantine.jsonl` 中。
+
+## 使用 native 引擎投递长延迟消息
+
+`timerStoreMode = "native"` 时，延迟不超过 `timerNative.maxDelayDays`（默认 400 天）的定时消息由 native 引擎接纳。该引擎是存储根目录下 `timer-native/` 中的分层时间桶日志。在中期范围内到期的定时消息直接引用 CommitLog；更晚到期的会被复制一次，因此在到期之前，CommitLog 清理不会删除它。到期时间与标准引擎一样按 `timerPrecisionMs` 取整，并且该引擎要求 `timerWheelEnable = true`。
+
+```toml
+[store]
+timerWheelEnable = true
+timerStoreMode = "native"
+
+[store.timerNative]
+maxDelayDays = 400
+```
+
+| `[store.timerNative]` 下的键 | 默认值 | 含义 |
+| --- | --- | --- |
+| `maxDelayDays` | `400` | 可接纳的最长延迟 |
+| `laneCount` | `16` | 投递通道数；`timer-native/` 创建后不可更改 |
+| `nearWindowSec` | `600` | 在此秒数内到期的定时消息保存在内存中 |
+| `nearWheelMemoryBytes` | 256 MiB | 这些定时消息可使用的内存 |
+| `midHorizonHours` | `48` | 晚于此范围到期的定时消息会被复制；引擎实际最多使用 `fileReservedTime` 减去六小时 |
+| `payloadSegmentBytes` | 256 MiB | 每个定时消息副本段的大小 |
+| `checkpointIntervalMs` | `5000` | 已索引的定时消息与投递进度落盘的间隔 |
+| `deliveryBatchMessages` | `512` | 每个通道每批投递的到期定时消息数 |
+| `deliveryInflightWrites` | `32` | 每批同时进行中的写入数 |
+
+每条定时消息都由接纳它的引擎投递，因此 `timerStoreMode` 可以双向切换：
+
+- 切换到 `native` 后，标准引擎继续投递切换前接纳的定时消息。
+- 从 `native` 切换到其他模式后，native 引擎继续投递它持有的定时消息。正常关闭时如果发现它已不再持有任何定时消息，存储就不再运行它；之后再切换回 `native` 会重新启动它。
+- 无论当前是哪种模式，召回都会送达接纳该定时消息的引擎。只有 native 模式会返回类型化结果。
+- 仍持有 native 定时消息的存储不能以 ExtendedTimeline 模式加载。
+
+当前限制：从节点会索引 native 定时消息，但尚未跟随主节点的投递进度，因此从节点被提升为主节点后，可能再次投递原主节点已经投递过的 native 定时消息。已投递定时消息和召回的文件暂不会被删除。
 
 ## 示例与验证范围
 
