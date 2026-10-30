@@ -46,6 +46,7 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store_api::TimerAdmissionRoute;
 use rocketmq_store_api::TimerEngineId;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_transport::api::error_response;
@@ -131,6 +132,27 @@ impl<MS: BrokerWriteStore> RecallMessageStoreCapability<MS> {
             .upgrade()
             .ok_or(MessageStoreUnavailable)?
             .recall_extended_timer(request)
+    }
+
+    fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .register_native_timer_recall(registration)
+    }
+
+    fn withdraw_native_timer_recall(&self, registration: &TimerRecallRegistration) {
+        let withdrawn = self
+            .escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)
+            .and_then(|bridge| bridge.withdraw_native_timer_recall(registration));
+        if withdrawn.is_err() {
+            warn!("withdraw a native timer recall failed; the timer stays cancelled until restart");
+        }
     }
 
     fn is_slave(&self) -> Result<bool, MessageStoreUnavailable> {
@@ -396,32 +418,46 @@ where
                 Ok(status) => status,
                 Err(MessageStoreUnavailable) => TimerRecallStatus::Retry,
             };
-            match status {
-                TimerRecallStatus::Cancelled | TimerRecallStatus::AlreadyCancelled => {
+            match refused_recall(status) {
+                None => {
                     response
                         .read_custom_header_mut::<RecallMessageResponseHeader>()
                         .ok_or_else(recall_response_header_missing)?
                         .set_msg_id(handle_message_id);
                     response.set_code_mut(ResponseCode::Success);
                 }
-                TimerRecallStatus::TooLate | TimerRecallStatus::NotFound => {
-                    response.set_code_mut(ResponseCode::IllegalOperation);
-                    response.set_remark_mut(CheetahString::from_static_str(
-                        "recall failed, timer is too late or absent",
-                    ));
-                }
-                TimerRecallStatus::Retry => {
-                    response.set_code_mut(ResponseCode::ServiceNotAvailable);
-                    response.set_remark_mut(CheetahString::from_static_str(
-                        "recall failed, timer state is not ready",
-                    ));
-                }
-                TimerRecallStatus::Quarantined | TimerRecallStatus::Unsupported => {
-                    response.set_code_mut(ResponseCode::SystemError);
-                    response.set_remark_mut(CheetahString::from_static_str("recall failed, timer state unavailable"));
+                Some((code, remark)) => {
+                    response.set_code_mut(code);
+                    response.set_remark_mut(CheetahString::from_static_str(remark));
                 }
             }
             return Ok(response);
+        }
+
+        let recall_key = build_canonical_delete_key(
+            handle_topic,
+            handle_message_id,
+            self.context.policy.timer_delete_key_with_topic,
+        );
+        // The native engine registers the recall before its tombstone is written, so a delivery
+        // batch taken in between still sees it, and says whether the timer can still be stopped.
+        let native_registration =
+            (self.context.policy.timer_route.engine == TimerEngineId::Native).then(|| TimerRecallRegistration {
+                key: recall_key.to_string(),
+                generation: 0,
+                deliver_ms: timestamp,
+            });
+        if let Some(registration) = native_registration.as_ref() {
+            let status = self
+                .context
+                .message_store
+                .register_native_timer_recall(registration)
+                .unwrap_or(TimerRecallStatus::Retry);
+            if let Some((code, remark)) = refused_recall(status) {
+                return Ok(response
+                    .set_code(code)
+                    .set_remark(CheetahString::from_static_str(remark)));
+            }
         }
 
         let msg_inner = self.build_message(
@@ -430,17 +466,26 @@ where
             handle_topic,
             handle_timestamp_str,
             handle_message_id,
+            recall_key,
         );
 
         let begin_time_millis = current_millis();
         let put_message_result = match self.context.message_store.put_message(msg_inner).await {
             Ok(put_message_result) => put_message_result,
             Err(MessageStoreUnavailable) => {
+                if let Some(registration) = native_registration.as_ref() {
+                    self.context.message_store.withdraw_native_timer_recall(registration);
+                }
                 return Ok(response
                     .set_code(ResponseCode::SystemError)
                     .set_remark(CheetahString::from_static_str("recall failed, execute error")));
             }
         };
+        if let Some(registration) = native_registration.as_ref() {
+            if !tombstone_written(&put_message_result) {
+                self.context.message_store.withdraw_native_timer_recall(registration);
+            }
+        }
 
         self.handle_put_message_result(
             put_message_result,
@@ -460,13 +505,8 @@ where
         handle_topic: &str,
         handle_timestamp_str: &str,
         handle_message_id: &str,
+        timer_del_uniqkey: CheetahString,
     ) -> MessageExtBrokerInner {
-        let timer_del_uniqkey = build_canonical_delete_key(
-            handle_topic,
-            handle_message_id,
-            self.context.policy.timer_delete_key_with_topic,
-        );
-
         let body = Bytes::from_static(b"0");
 
         let tags_code =
@@ -632,6 +672,36 @@ where
     }
 }
 
+/// The response to a typed recall the store refused, or `None` when it cancelled the timer.
+fn refused_recall(status: TimerRecallStatus) -> Option<(ResponseCode, &'static str)> {
+    match status {
+        TimerRecallStatus::Cancelled | TimerRecallStatus::AlreadyCancelled => None,
+        TimerRecallStatus::TooLate | TimerRecallStatus::NotFound => Some((
+            ResponseCode::IllegalOperation,
+            "recall failed, timer is too late or absent",
+        )),
+        TimerRecallStatus::Retry => Some((
+            ResponseCode::ServiceNotAvailable,
+            "recall failed, timer state is not ready",
+        )),
+        TimerRecallStatus::Quarantined | TimerRecallStatus::Unsupported => {
+            Some((ResponseCode::SystemError, "recall failed, timer state unavailable"))
+        }
+    }
+}
+
+/// Whether the recall's tombstone reached the CommitLog, which the response reports as success.
+fn tombstone_written(put_message_result: &PutMessageResult) -> bool {
+    put_message_result.append_message_result().is_some()
+        && matches!(
+            put_message_result.put_message_status(),
+            PutMessageStatus::PutOk
+                | PutMessageStatus::FlushDiskTimeout
+                | PutMessageStatus::FlushSlaveTimeout
+                | PutMessageStatus::SlaveNotAvailable
+        )
+}
+
 fn recall_response_header_missing() -> SharedError {
     crate::broker_error::response_process_failed("RECALL_MESSAGE", "response header is missing")
 }
@@ -696,6 +766,32 @@ mod tests {
             broker_stats_manager,
         );
         RecallMessageProcessor::new(context)
+    }
+
+    #[test]
+    fn a_refused_typed_recall_gets_the_response_of_its_status() {
+        let code = |status| refused_recall(status).map(|(code, _)| code);
+        assert_eq!(code(TimerRecallStatus::Cancelled), None);
+        assert_eq!(code(TimerRecallStatus::AlreadyCancelled), None);
+        assert_eq!(code(TimerRecallStatus::TooLate), Some(ResponseCode::IllegalOperation));
+        assert_eq!(code(TimerRecallStatus::NotFound), Some(ResponseCode::IllegalOperation));
+        assert_eq!(code(TimerRecallStatus::Retry), Some(ResponseCode::ServiceNotAvailable));
+        assert_eq!(code(TimerRecallStatus::Quarantined), Some(ResponseCode::SystemError));
+        assert_eq!(code(TimerRecallStatus::Unsupported), Some(ResponseCode::SystemError));
+    }
+
+    #[test]
+    fn a_tombstone_is_written_only_when_the_commit_log_took_it() {
+        let appended = |status| PutMessageResult::new(status, Some(Default::default()), false);
+        assert!(tombstone_written(&appended(PutMessageStatus::PutOk)));
+        assert!(tombstone_written(&appended(PutMessageStatus::FlushDiskTimeout)));
+        assert!(tombstone_written(&appended(PutMessageStatus::SlaveNotAvailable)));
+        assert!(!tombstone_written(&appended(PutMessageStatus::ServiceNotAvailable)));
+        assert!(!tombstone_written(&PutMessageResult::new(
+            PutMessageStatus::PutOk,
+            None,
+            false
+        )));
     }
 
     #[test]

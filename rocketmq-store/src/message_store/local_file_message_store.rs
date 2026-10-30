@@ -82,6 +82,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
@@ -200,6 +201,7 @@ use crate::timer::delivery::TimelineDeliveryCoordinator;
 use crate::timer::engine::TimerEngine;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::engine::WorkBudget;
+use crate::timer::native::NativeRecallVerdict;
 use crate::timer::native::NativeTimerService;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::role::TimerRoleState;
@@ -953,6 +955,35 @@ impl MessageStoreEngine for LocalFileMessageStore {
         {
             let _ = request;
             Ok(TimerRecallStatus::Unsupported)
+        }
+    }
+
+    fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, StoreError> {
+        if self.message_store_config.timer_store_mode != TimerStoreMode::Native {
+            return Ok(TimerRecallStatus::Unsupported);
+        }
+        let Some(native_timer) = self.native_timer.as_ref() else {
+            return Ok(TimerRecallStatus::Retry);
+        };
+        let verdict = native_timer.register_recall(
+            registration.key.as_bytes(),
+            registration.generation,
+            registration.deliver_ms,
+        );
+        Ok(match verdict {
+            Ok(NativeRecallVerdict::Cancelled) => TimerRecallStatus::Cancelled,
+            Ok(NativeRecallVerdict::TooLate) => TimerRecallStatus::TooLate,
+            // No timer the engine admits can have that deadline.
+            Err(_rejection) => TimerRecallStatus::NotFound,
+        })
+    }
+
+    fn withdraw_native_timer_recall(&self, registration: &TimerRecallRegistration) {
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            native_timer.withdraw_recall(registration.key.as_bytes(), registration.generation);
         }
     }
 

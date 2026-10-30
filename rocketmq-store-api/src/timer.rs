@@ -37,7 +37,19 @@ pub struct TimerRecallRequest {
     pub unique_key: String,
 }
 
-/// Stable outcome of an Extended Timer cancellation attempt.
+/// Broker-to-store registration of a native timer recall, made before its tombstone is
+/// written so a delivery batch taken in between still sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TimerRecallRegistration {
+    /// The key the tombstone carries in `TIMER_DEL_UNIQKEY`.
+    pub key: String,
+    /// The generation the tombstone carries.
+    pub generation: u64,
+    /// The deadline the Recall handle names.
+    pub deliver_ms: i64,
+}
+
+/// Stable outcome of a typed Timer cancellation attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimerRecallStatus {
     /// Pending/ready generation was atomically cancelled.

@@ -38,6 +38,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
@@ -412,6 +413,17 @@ macro_rules! message_store_methods {
 
     fn recall_extended_timer(&self, request: &TimerRecallRequest) -> Result<TimerRecallStatus, StoreError> {
         delegate_store!(self, recall_extended_timer(request))
+    }
+
+    fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, StoreError> {
+        delegate_store!(self, register_native_timer_recall(registration))
+    }
+
+    fn withdraw_native_timer_recall(&self, registration: &TimerRecallRegistration) {
+        delegate_store!(self, withdraw_native_timer_recall(registration))
     }
 
     fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {

@@ -54,6 +54,7 @@ use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreHealthSnapshot;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
@@ -234,6 +235,17 @@ pub trait BrokerWriteStore: BrokerReadStore {
         request: &TimerRecallRequest,
     ) -> Result<TimerRecallStatus, crate::store_error::StoreError> {
         MessageStoreEngine::recall_extended_timer(self.message_store(), request)
+    }
+
+    fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, crate::store_error::StoreError> {
+        MessageStoreEngine::register_native_timer_recall(self.message_store(), registration)
+    }
+
+    fn withdraw_native_timer_recall(&self, registration: &TimerRecallRegistration) {
+        MessageStoreEngine::withdraw_native_timer_recall(self.message_store(), registration);
     }
 }
 

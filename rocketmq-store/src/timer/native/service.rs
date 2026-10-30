@@ -34,6 +34,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures_util::future::join_all;
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
@@ -57,6 +58,8 @@ use super::delivery::NativeDueBatch;
 use super::delivery::NativeTimerWriter;
 use super::delivery::NativeWriteOutcome;
 use super::engine::NativeEngineError;
+use super::engine::NativeRecallVerdict;
+use super::engine::NativeRejection;
 use super::engine::NativeSourceKind;
 use super::engine::NativeTimerEngine;
 use super::engine::NativeTimerSource;
@@ -129,7 +132,7 @@ pub(crate) struct NativeTimerService {
     runtime_scope: StoreRuntimeScope,
     role: TimerRoleState,
     cleanup_pin: Arc<AtomicI64>,
-    clock: Arc<dyn TimerClock>,
+    clock: RwLock<Arc<dyn TimerClock>>,
     settings: Settings,
     /// The store's settings with the native engine's checkpoint interval and batch size, for
     /// its pipeline.
@@ -183,7 +186,7 @@ impl NativeTimerService {
             runtime_scope,
             role,
             cleanup_pin,
-            clock,
+            clock: RwLock::new(clock),
             settings: Settings {
                 lane_count,
                 batch_messages: native.delivery_batch_messages.max(1),
@@ -293,6 +296,30 @@ impl NativeTimerService {
         &self.engine
     }
 
+    /// Registers a recall of the timer due at `due_ms` that `key` names, before its tombstone
+    /// is written; see [`NativeTimerEngine::register_recall`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the rejection the engine would give a timer due at `due_ms`.
+    pub(crate) fn register_recall(
+        &self,
+        key: &[u8],
+        generation: u64,
+        due_ms: i64,
+    ) -> Result<NativeRecallVerdict, NativeRejection> {
+        self.engine.register_recall(key, generation, due_ms, self.now_ms())
+    }
+
+    /// Withdraws a registration whose tombstone could not be written.
+    pub(crate) fn withdraw_recall(&self, key: &[u8], generation: u64) {
+        self.engine.withdraw_recall(key, generation);
+    }
+
+    fn now_ms(&self) -> i64 {
+        self.clock.read().wall_time_ms()
+    }
+
     /// Indexes the next Timer CQ records the native engine owns, up to `max_messages` records
     /// and `max_bytes`, and returns how many records it passed. Blocking.
     ///
@@ -310,7 +337,7 @@ impl NativeTimerService {
             let queue = queue.read();
             (queue.get_min_offset_in_queue(), queue.get_max_offset_in_queue())
         };
-        let now_ms = self.clock.wall_time_ms();
+        let now_ms = self.now_ms();
         let frontier = self.engine.source_frontier();
         let mut next = frontier.max(min_offset);
         let mut units: Vec<CqUnit> = Vec::new();
@@ -375,7 +402,7 @@ impl NativeTimerService {
             }
             self.engine.set_visible_through(snapshot.observed_at_ms);
         }
-        let observed_at_ms = self.clock.wall_time_ms();
+        let observed_at_ms = self.now_ms();
         let max_offset = queue.map_or(0, |queue| queue.read().get_max_offset_in_queue());
         *pending = if frontier < max_offset {
             Some(VisibilitySnapshot {
@@ -395,7 +422,7 @@ impl NativeTimerService {
             return Ok(0);
         }
         self.advance_visibility();
-        let now_ms = self.clock.wall_time_ms();
+        let now_ms = self.now_ms();
         if self.engine.next_deadline_ms().is_none_or(|deadline| deadline > now_ms) {
             return Ok(0);
         }
@@ -531,7 +558,7 @@ impl NativeTimerService {
             .find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
             .and_then(|queue| queue.read().get(frontier))
             .map_or_else(|| self.context.commit_log().get_max_offset(), |unit| unit.pos);
-        let checkpoint = self.engine.checkpoint(source_fence, self.clock.wall_time_ms())?;
+        let checkpoint = self.engine.checkpoint(source_fence, self.now_ms())?;
         self.cleanup_pin.store(checkpoint.commit_log_fence, Ordering::Release);
         Ok(())
     }
@@ -539,6 +566,10 @@ impl NativeTimerService {
 
 #[cfg(test)]
 impl NativeTimerService {
+    pub(crate) fn set_clock(&self, clock: Arc<dyn TimerClock>) {
+        *self.clock.write() = clock;
+    }
+
     /// Indexes every Timer CQ record, then delivers what is due while this Broker delivers, and
     /// returns how many timers left the wheel.
     pub(crate) async fn process_once(self: &Arc<Self>) -> usize {

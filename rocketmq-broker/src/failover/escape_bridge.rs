@@ -44,6 +44,7 @@ use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use tracing::error;
@@ -280,6 +281,29 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
         self.message_store
             .with_store(|store| store.recall_extended_timer(request))?
             .map_err(|_| MessageStoreUnavailable)
+    }
+
+    pub(crate) fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, MessageStoreUnavailable>
+    where
+        MS: BrokerWriteStore,
+    {
+        self.message_store
+            .with_store(|store| store.register_native_timer_recall(registration))?
+            .map_err(|_| MessageStoreUnavailable)
+    }
+
+    pub(crate) fn withdraw_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerWriteStore,
+    {
+        self.message_store
+            .with_store(|store| store.withdraw_native_timer_recall(registration))
     }
 
     pub(crate) fn set_commitlog_read_mode(
