@@ -136,6 +136,8 @@ Each timer is delivered by the engine that admitted it, so `timerStoreMode` can 
 - A recall reaches the engine that admitted its timer, whichever mode is active. Typed answers come only from the native mode.
 - A store that still holds native timers does not load in ExtendedTimeline mode.
 
+Broker runtime info describes the native engine in three entries: `timerNativeRole` (`active` or `draining`), `timerNativeMetrics` and `timerNativePipelineMetrics`. `timerNativeMetrics` holds what the engine keeps, such as `wheelTimers`, `hourBuckets`, `minuteRuns`, `payloadDays`, `recalls` and `sourceBehind`, and what it has done since the Broker started, such as `indexed`, `written`, `recalled`, `dropped` and `skipped`, plus `followed` on a slave. The OpenTelemetry timer enqueue and dequeue totals count native timers as well.
+
 In a master/slave group, a slave indexes native timers and follows its master's deliveries through the messages the master writes. A slave promoted to master therefore writes only the timers its old master had not written; as with the standard engine, a timer can still be delivered twice around a failover.
 
 Once a checkpoint makes their delivery durable, the files of delivered timers and their payload copies are deleted, and the CommitLog files they referred to are released for cleanup. A recall is dropped from memory once the timer it names is delivered, but the recall log on disk is not yet compacted.

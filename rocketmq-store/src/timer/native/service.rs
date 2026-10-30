@@ -21,12 +21,14 @@
 //! delivery epoch. A checkpoint makes both durable and moves the CommitLog cleanup pin to the
 //! engine's fence.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -41,6 +43,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_observability::metrics::timer::TimerMetricsRecorder;
 use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -81,6 +84,7 @@ use crate::timer::engine::WorkBudget;
 use crate::timer::error::TimerEngineError;
 use crate::timer::error::TimerWorkResult;
 use crate::timer::pipeline::TimerPipeline;
+use crate::timer::pipeline::TimerPipelineDiagnostics;
 use crate::timer::request::EngineBatchProgress;
 use crate::timer::role::TimerRoleState;
 use crate::timer::source::read_timer_source_frames;
@@ -152,6 +156,26 @@ struct VisibilitySnapshot {
     queue_offset: i64,
 }
 
+/// What the service did since the store started.
+#[derive(Default)]
+struct Counters {
+    indexed: AtomicU64,
+    indexed_recalls: AtomicU64,
+    rejected: AtomicU64,
+    written: AtomicU64,
+    dropped: AtomicU64,
+    recalled: AtomicU64,
+    cleaned_up: AtomicU64,
+    skipped: AtomicU64,
+    followed: AtomicU64,
+}
+
+impl Counters {
+    fn add(counter: &AtomicU64, amount: usize) {
+        counter.fetch_add(u64::try_from(amount).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+}
+
 struct Running {
     group: TaskGroup,
     pipeline: Arc<TimerPipeline>,
@@ -192,6 +216,8 @@ pub(crate) struct NativeTimerService {
     batches_out: AtomicUsize,
     /// The deliveries of the master, while this Broker does not deliver.
     feed: Arc<NativeDeliveryFeed>,
+    metrics: TimerMetricsRecorder,
+    counters: Counters,
 }
 
 impl NativeTimerService {
@@ -210,6 +236,7 @@ impl NativeTimerService {
         cleanup_pin: Arc<AtomicI64>,
         service_role: NativeServiceRole,
         feed: Arc<NativeDeliveryFeed>,
+        metrics: TimerMetricsRecorder,
     ) -> Result<Self, NativeServiceError> {
         let clock: Arc<dyn TimerClock> = Arc::new(SystemTimerClock::default());
         let store_root = config.store_path_root_dir.as_str();
@@ -263,6 +290,8 @@ impl NativeTimerService {
             retired_marker: retired,
             batches_out: AtomicUsize::new(0),
             feed,
+            metrics,
+            counters: Counters::default(),
         })
     }
 
@@ -418,6 +447,61 @@ impl NativeTimerService {
         self.clock.read().wall_time_ms()
     }
 
+    /// `active` while the Broker admits new timers to the engine, `draining` otherwise.
+    pub(crate) fn role_name(&self) -> &'static str {
+        match self.service_role {
+            NativeServiceRole::Active => "active",
+            NativeServiceRole::Draining => "draining",
+        }
+    }
+
+    /// What the engine holds, how far it got, and what the service did since the store started,
+    /// by runtime-info name.
+    pub(crate) fn runtime_metrics(&self) -> BTreeMap<&'static str, i64> {
+        let counts = self.engine.counts();
+        let count = |value: usize| i64::try_from(value).unwrap_or(i64::MAX);
+        let total = |counter: &AtomicU64| i64::try_from(counter.load(Ordering::Relaxed)).unwrap_or(i64::MAX);
+        let counters = &self.counters;
+        let blocked_lanes = self
+            .blocked_at
+            .lock()
+            .iter()
+            .filter(|blocked| blocked.is_some())
+            .count();
+        BTreeMap::from([
+            ("wheelTimers", count(counts.wheel)),
+            ("dayBuckets", count(counts.days)),
+            ("hourBuckets", count(counts.hours)),
+            ("minuteRuns", count(counts.minutes)),
+            ("recalls", count(counts.recalls)),
+            ("payloadDays", count(self.engine.payload_days())),
+            (
+                "sourceBehind",
+                self.timer_queue_end()
+                    .saturating_sub(self.engine.source_frontier())
+                    .max(0),
+            ),
+            ("visibleThroughMs", counts.visible_through_ms),
+            ("collectedUntilMs", counts.collected_until_ms),
+            ("commitLogPin", self.cleanup_pin.load(Ordering::Acquire)),
+            ("blockedLanes", count(blocked_lanes)),
+            ("followedTokens", count(self.feed.len())),
+            ("indexed", total(&counters.indexed)),
+            ("indexedRecalls", total(&counters.indexed_recalls)),
+            ("rejected", total(&counters.rejected)),
+            ("written", total(&counters.written)),
+            ("dropped", total(&counters.dropped)),
+            ("recalled", total(&counters.recalled)),
+            ("cleanedUp", total(&counters.cleaned_up)),
+            ("skipped", total(&counters.skipped)),
+            ("followed", total(&counters.followed)),
+        ])
+    }
+
+    pub(crate) fn pipeline_diagnostics(&self) -> Option<TimerPipelineDiagnostics> {
+        self.running.lock().as_ref().map(|running| running.pipeline.snapshot())
+    }
+
     /// Indexes the next Timer CQ records the native engine owns, up to `max_messages` records
     /// and `max_bytes`, and returns how many records it passed. Blocking.
     ///
@@ -475,6 +559,18 @@ impl NativeTimerService {
             passed_through = unit.queue_offset.saturating_add(1);
         }
         let report = self.engine.ingest(&sources, passed_through, now_ms)?;
+        Counters::add(&self.counters.indexed, report.indexed);
+        Counters::add(&self.counters.indexed_recalls, report.recalls);
+        Counters::add(&self.counters.rejected, report.rejected.len());
+        for source in &sources {
+            let rejected = report
+                .rejected
+                .iter()
+                .any(|(cq_offset, _)| *cq_offset == source.cq_offset);
+            if matches!(source.kind, NativeSourceKind::Timer { .. }) && !rejected {
+                self.metrics.record_enqueue_total(Some(&source.real_topic));
+            }
+        }
         if !report.rejected.is_empty() {
             warn!(
                 rejected = report.rejected.len(),
@@ -567,12 +663,24 @@ impl NativeTimerService {
         let mut done = 0usize;
         for batch in written {
             let report = self.engine.settle(batch);
-            done = done
-                .saturating_add(report.written)
+            let settled = report
+                .written
                 .saturating_add(report.dropped)
                 .saturating_add(report.recalled)
                 .saturating_add(report.cleaned_up)
                 .saturating_add(report.skipped);
+            done = done.saturating_add(settled);
+            let counters = &self.counters;
+            match mode {
+                DueMode::Write { .. } => {
+                    Counters::add(&counters.written, report.written);
+                    Counters::add(&counters.dropped, report.dropped);
+                    Counters::add(&counters.recalled, report.recalled);
+                    Counters::add(&counters.cleaned_up, report.cleaned_up);
+                    Counters::add(&counters.skipped, report.skipped);
+                }
+                DueMode::Observe => Counters::add(&counters.followed, settled),
+            }
         }
         self.batches_out.fetch_sub(1, Ordering::AcqRel);
         drop(claimed);
@@ -807,8 +915,13 @@ impl NativeTimerWriter for NativeWriter<'_> {
         if token.as_ref().is_some_and(|token| self.service.feed.take(token)) {
             return NativeWriteOutcome::Written;
         }
+        let topic = message.get_topic().clone();
         let result = self.service.context.put_message(message).await;
-        self.service.accept(token, &result)
+        let outcome = self.service.accept(token, &result);
+        if outcome == NativeWriteOutcome::Written {
+            self.service.metrics.record_dequeue_total(topic.as_str());
+        }
+        outcome
     }
 }
 

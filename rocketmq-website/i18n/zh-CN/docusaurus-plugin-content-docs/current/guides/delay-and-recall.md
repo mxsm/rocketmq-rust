@@ -136,6 +136,8 @@ maxDelayDays = 400
 - 无论当前是哪种模式，召回都会送达接纳该定时消息的引擎。只有 native 模式会返回类型化结果。
 - 仍持有 native 定时消息的存储不能以 ExtendedTimeline 模式加载。
 
+Broker 运行时信息用三项描述 native 引擎：`timerNativeRole`（`active` 或 `draining`）、`timerNativeMetrics` 和 `timerNativePipelineMetrics`。`timerNativeMetrics` 包含引擎当前持有的内容，例如 `wheelTimers`、`hourBuckets`、`minuteRuns`、`payloadDays`、`recalls` 和 `sourceBehind`，以及 Broker 启动以来的处理量，例如 `indexed`、`written`、`recalled`、`dropped` 和 `skipped`；从节点上还有 `followed`。OpenTelemetry 的定时消息入队与出队总数同样统计 native 定时消息。
+
 在主从部署中，从节点会索引 native 定时消息，并通过主节点写入的消息跟随其投递进度。因此从节点被提升为主节点后，只会写入原主节点尚未写入的定时消息；与标准引擎一样，故障切换前后仍可能重复投递一条定时消息。
 
 checkpoint 使投递进度落盘后，已投递定时消息的文件及其副本会被删除，它们引用的 CommitLog 文件也可以被正常清理。召回在其目标定时消息投递后会从内存中移除，但磁盘上的召回日志暂不会压缩。

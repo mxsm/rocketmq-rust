@@ -54,6 +54,11 @@ impl NativeDeliveryFeed {
         self.observing.store(observing, Ordering::Release);
     }
 
+    /// Tokens kept and not yet taken.
+    pub(crate) fn len(&self) -> usize {
+        self.tokens.lock().len()
+    }
+
     /// Takes `token` when the message it names was dispatched.
     pub(crate) fn take(&self, token: &CheetahString) -> bool {
         self.tokens.lock().remove(token)

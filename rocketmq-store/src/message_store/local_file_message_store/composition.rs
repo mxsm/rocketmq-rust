@@ -964,6 +964,7 @@ impl LocalFileMessageStore {
                 Arc::clone(&self.native_timer_cleanup_pin),
                 native_role,
                 Arc::clone(&self.native_delivery_feed),
+                self.telemetry.timer().clone(),
             )
             .map_err(|error| {
                 store_read_error(StoreOperation::Load, "failed to open the native timer engine").with_source(error)

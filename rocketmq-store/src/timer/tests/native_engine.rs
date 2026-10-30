@@ -15,6 +15,7 @@
 //! The native engine as the store runs it under `timerStoreMode = native`, beside the
 //! Java-compatible engine, which still delivers the timers it admitted.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::AtomicI64;
@@ -413,6 +414,7 @@ async fn a_draining_native_engine_holding_timers_is_not_retired() {
         let native_timer = store.native_timer().cloned().expect("the native engine drains");
         native_timer.set_delivering(true);
         assert_eq!(native_timer.process_once().await, 0);
+        assert_eq!(runtime_info(&store, "timerNativeRole"), "draining");
         drop(native_timer);
         close(store).await;
     }
@@ -509,6 +511,11 @@ async fn a_slave_follows_its_master_and_a_promotion_writes_only_what_the_master_
     // The master wrote n0 and n2; its write of n1 failed and stays.
     put_all(&mut store, vec![delivered_by_master("n0"), delivered_by_master("n2")]).await;
     assert_eq!(native_timer.process_once().await, 0);
+    let metrics = native_metrics(&store);
+    assert_eq!(
+        (metrics["followed"], metrics["followedTokens"], metrics["written"]),
+        (1, 1, 0)
+    );
 
     // Promoted, the slave writes n1, and not n2, which its old master wrote.
     native_timer.set_delivering(true);
@@ -550,5 +557,68 @@ async fn a_slave_keeps_the_delivery_it_followed_across_a_restart() {
     store.reput_once().await;
     assert_eq!(delivered_in_order(&store), ["n0", "n1"]);
     drop(native_timer);
+    close(store).await;
+}
+
+fn runtime_info(store: &LocalFileMessageStore, key: &str) -> String {
+    MessageStoreEngine::get_runtime_info(store)
+        .remove(key)
+        .unwrap_or_else(|| panic!("runtime info has {key}"))
+}
+
+fn native_metrics(store: &LocalFileMessageStore) -> HashMap<String, i64> {
+    serde_json::from_str(&runtime_info(store, "timerNativeMetrics")).unwrap()
+}
+
+#[tokio::test]
+async fn runtime_info_reports_what_the_native_engine_holds_and_did() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    let now_ms = current_millis() as i64;
+    put_all(
+        &mut store,
+        vec![
+            native(timer_message(now_ms - 1_000, "n0")),
+            native(timer_message(now_ms - 1_000, "n1")),
+            recall_of("n1", now_ms - 1_000),
+            native(timer_message(now_ms + 2 * HOUR_MS, "n2")),
+        ],
+    )
+    .await;
+    native_timer.set_delivering(true);
+    assert_eq!(native_timer.process_once().await, 2);
+
+    assert_eq!(runtime_info(&store, "timerNativeRole"), "active");
+    let metrics = native_metrics(&store);
+    for (key, value) in [
+        ("indexed", 3),
+        ("indexedRecalls", 1),
+        ("written", 1),
+        ("recalled", 1),
+        ("dropped", 0),
+        ("followed", 0),
+        ("hourBuckets", 1),
+        ("wheelTimers", 0),
+        ("recalls", 1),
+        ("sourceBehind", 0),
+        ("blockedLanes", 0),
+    ] {
+        assert_eq!(metrics[key], value, "{key}");
+    }
+    assert!(metrics["visibleThroughMs"] >= now_ms);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn runtime_info_leaves_out_a_native_engine_the_store_does_not_run() {
+    let root = tempdir().unwrap();
+    let store = open(root.path(), TimerStoreMode::JavaCompat).await.unwrap();
+    let info = MessageStoreEngine::get_runtime_info(&store);
+    assert!(!info.contains_key("timerNativeRole"));
+    assert!(!info.contains_key("timerNativeMetrics"));
     close(store).await;
 }
