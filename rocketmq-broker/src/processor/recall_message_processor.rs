@@ -20,7 +20,6 @@ use crate::config::broker_config::BrokerConfig;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::SharedError;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -311,10 +310,9 @@ where
         remote_address: std::net::SocketAddr,
         request: &mut RemotingCommand,
     ) -> crate::broker_error::BrokerResult<RemotingCommand> {
-        let mut response = self
-            .context
-            .command_factory
-            .create_success_response_command_with_header(RecallMessageResponseHeader::default());
+        // The response header is required to carry the recalled message's ID, so only a recall
+        // that succeeds gets one; a refusal with an empty ID could not be encoded at all.
+        let mut response = self.context.command_factory.create_success_response_command();
         response.set_opaque_mut(request.opaque());
 
         let region_id = self.context.policy.region_id.clone();
@@ -420,10 +418,7 @@ where
             };
             match refused_recall(status) {
                 None => {
-                    response
-                        .read_custom_header_mut::<RecallMessageResponseHeader>()
-                        .ok_or_else(recall_response_header_missing)?
-                        .set_msg_id(handle_message_id);
+                    response.set_command_custom_header_ref(RecallMessageResponseHeader::new(handle_message_id));
                     response.set_code_mut(ResponseCode::Success);
                 }
                 Some((code, remark)) => {
@@ -639,26 +634,14 @@ where
                     .broker_stats_manager
                     .inc_topic_put_latency(&topic, 0, latency);
 
-                {
-                    let response_header = response
-                        .read_custom_header_mut::<RecallMessageResponseHeader>()
-                        .ok_or_else(recall_response_header_missing)?;
-
-                    response_header.set_msg_id(message_id.as_str());
-                }
+                response.set_command_custom_header_ref(RecallMessageResponseHeader::new(message_id.clone()));
 
                 response.set_code_mut(ResponseCode::Success);
             }
             PutMessageStatus::FlushDiskTimeout
             | PutMessageStatus::FlushSlaveTimeout
             | PutMessageStatus::SlaveNotAvailable => {
-                {
-                    let response_header = response
-                        .read_custom_header_mut::<RecallMessageResponseHeader>()
-                        .ok_or_else(recall_response_header_missing)?;
-
-                    response_header.set_msg_id(message_id.as_str());
-                }
+                response.set_command_custom_header_ref(RecallMessageResponseHeader::new(message_id.clone()));
 
                 response.set_code_mut(ResponseCode::Success);
             }
@@ -700,10 +683,6 @@ fn tombstone_written(put_message_result: &PutMessageResult) -> bool {
                 | PutMessageStatus::FlushSlaveTimeout
                 | PutMessageStatus::SlaveNotAvailable
         )
-}
-
-fn recall_response_header_missing() -> SharedError {
-    crate::broker_error::response_process_failed("RECALL_MESSAGE", "response header is missing")
 }
 
 #[cfg(test)]
@@ -830,16 +809,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_recall_message_tag_constant() {
-        assert_eq!(RECALL_MESSAGE_TAG, "_RECALL_TAG_");
+    #[tokio::test]
+    async fn a_refused_recall_gets_a_response_that_encodes() {
+        let processor = test_processor();
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::RecallMessage,
+            RecallMessageRequestHeader::new("TopicA", "not-a-handle", None::<CheetahString>),
+        );
+        request.make_custom_header_to_net();
+        // Without a message store the Broker cannot recall, and says so.
+        let response = processor
+            .process_recall_message("127.0.0.1:9876".parse().expect("valid address"), &mut request)
+            .await
+            .expect("a refused recall still gets a response");
+        assert_ne!(response.code(), ResponseCode::Success as i32);
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let mut response = response.clone().set_serialize_type(serialize_type);
+            let mut encoded = bytes::BytesMut::new();
+            response
+                .try_fast_header_encode(&mut encoded)
+                .expect("a refused recall's response encodes");
+        }
     }
 
     #[test]
-    fn recall_response_header_missing_uses_response_process_failed_kind() {
-        let error = recall_response_header_missing();
-
-        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
+    fn test_recall_message_tag_constant() {
+        assert_eq!(RECALL_MESSAGE_TAG, "_RECALL_TAG_");
     }
 
     #[test]
