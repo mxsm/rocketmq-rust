@@ -22,14 +22,18 @@
 //! `(due_ms, cq_offset)` order. Recalls go to the cancel log and an in-memory cancel set. A
 //! group commit checkpoints how far the Timer CQ is indexed and how far each lane delivered.
 //! Delivery reads each due timer's message, settles the recalled ones, and writes the rest to
-//! their real topics in the lane's order. Wiring into the timer store comes in a later change;
-//! until then nothing outside this module uses it.
+//! their real topics in the lane's order. The store runs the engine under `timerStoreMode =
+//! native` through [`NativeTimerService`], beside the Java-compatible engine, which still
+//! delivers the timers it admitted before the switch.
 
 mod cancel_set;
 mod config;
 mod delivery;
 mod engine;
 mod near_wheel;
+mod service;
+
+pub(crate) use service::NativeTimerService;
 
 #[cfg(test)]
 mod tests;

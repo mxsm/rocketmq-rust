@@ -20,10 +20,6 @@ pub(crate) mod error;
 pub(crate) mod format_registry;
 pub(crate) mod index;
 pub(crate) mod java_compat;
-#[allow(
-    dead_code,
-    reason = "the native engine is wired into the timer store by a later change; its tests use it until then"
-)]
 pub(crate) mod native;
 pub(crate) mod payload_cursor;
 pub(crate) mod pipeline;

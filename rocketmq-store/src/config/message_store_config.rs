@@ -31,6 +31,7 @@ use rocketmq_store_local::config::local_store::LocalReputConfig;
 use rocketmq_store_local::config::local_store::LocalStoreConfig;
 use serde::Deserialize;
 
+use super::timer_native_config::TimerNativeConfig;
 use super::timer_store_config::TimerStoreConfig;
 
 use crate::base::store_enum::StoreType;
@@ -782,6 +783,10 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub timer_store_config: TimerStoreConfig,
 
+    /// Settings of the native timer engine, used under `timerStoreMode = native`.
+    #[serde(default)]
+    pub timer_native: TimerNativeConfig,
+
     #[serde(default = "defaults::timer_pipeline_queue_messages")]
     pub timer_pipeline_queue_messages: usize,
 
@@ -1505,6 +1510,7 @@ impl Default for MessageStoreConfig {
             timer_extended_activation_epoch: 0,
             timer_extended_admission_horizon_days: defaults::timer_extended_admission_horizon_days(),
             timer_store_config: TimerStoreConfig::default(),
+            timer_native: TimerNativeConfig::default(),
             timer_pipeline_queue_messages: defaults::timer_pipeline_queue_messages(),
             timer_pipeline_queue_bytes: defaults::timer_pipeline_queue_bytes(),
             timer_source_batch_messages: defaults::timer_source_batch_messages(),
@@ -1766,6 +1772,7 @@ impl MessageStoreConfig {
             self.timer_max_delay_sec,
             self.timer_extended_admission_horizon_days,
             self.timer_extended_admission_enable,
+            self.timer_native.max_delay_days,
         )
     }
 

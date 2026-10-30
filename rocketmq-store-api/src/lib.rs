@@ -95,6 +95,7 @@ pub use timer::TimerStoreMode;
 pub use timer::TimerTimelineCursor;
 pub use timer::EXTENDED_TIMELINE_FORMAT_VERSION;
 pub use timer::JAVA_COMPAT_TIMER_FORMAT_VERSION;
+pub use timer::NATIVE_TIMER_FORMAT_VERSION;
 pub use timer_snapshot::TimerSnapshotFile;
 pub use timer_snapshot::TimerSnapshotManifest;
 pub use timer_snapshot::TimerTimelineIndexKind;

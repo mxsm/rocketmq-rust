@@ -410,6 +410,7 @@ mod tests {
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::PutMessageStatus;
     use rocketmq_store::TIMER_TOPIC;
+    use rocketmq_store_api::TimerEngineId;
     use rocketmq_store_api::TimerStoreMode;
 
     use super::*;
@@ -719,6 +720,38 @@ mod tests {
                 &mut beyond_horizon
             )
             .map(|result| result.put_message_status()),
+            Some(PutMessageStatus::WheelTimerMsgIllegal)
+        );
+    }
+
+    #[test]
+    fn native_route_admits_its_horizon_and_stamps_its_engine() {
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
+        let native_config = MessageStoreConfig {
+            timer_store_mode: TimerStoreMode::Native,
+            ..MessageStoreConfig::default()
+        };
+        // A year is beyond every other engine's horizon but inside the native 400 days.
+        let mut msg = timer_message_due_in(365 * 86_400_000);
+
+        let result = HookUtils::transform_timer_message(&timer_message_store, &native_config, &mut msg);
+
+        assert!(result.is_none());
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE))
+                .as_deref(),
+            Some(TimerEngineId::Native.as_str())
+        );
+        assert!(msg
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            ))
+            .is_some_and(|token| token.starts_with("N:1:")));
+
+        let mut beyond_horizon = timer_message_due_in(401 * 86_400_000);
+        assert_eq!(
+            HookUtils::transform_timer_message(&timer_message_store, &native_config, &mut beyond_horizon)
+                .map(|result| result.put_message_status()),
             Some(PutMessageStatus::WheelTimerMsgIllegal)
         );
     }

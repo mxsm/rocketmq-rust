@@ -15,6 +15,7 @@
 mod cleaned_up_payloads;
 mod failure_switches;
 mod java_file_format;
+mod native_engine;
 mod overdue_timers;
 mod slot_drain_batches;
 mod support;
