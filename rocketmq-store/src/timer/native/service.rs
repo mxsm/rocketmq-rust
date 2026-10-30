@@ -68,6 +68,7 @@ use super::engine::NativeRejection;
 use super::engine::NativeSourceKind;
 use super::engine::NativeTimerEngine;
 use super::engine::NativeTimerSource;
+use super::feed::NativeDeliveryFeed;
 use crate::base::message_result::PutMessageResult;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::queue::CqUnit;
@@ -189,6 +190,8 @@ pub(crate) struct NativeTimerService {
     /// Due batches taken and not yet settled. A batch whose task was cancelled stays counted,
     /// since its timers left the wheel without being delivered.
     batches_out: AtomicUsize,
+    /// The deliveries of the master, while this Broker does not deliver.
+    feed: Arc<NativeDeliveryFeed>,
 }
 
 impl NativeTimerService {
@@ -206,6 +209,7 @@ impl NativeTimerService {
         runtime_scope: StoreRuntimeScope,
         cleanup_pin: Arc<AtomicI64>,
         service_role: NativeServiceRole,
+        feed: Arc<NativeDeliveryFeed>,
     ) -> Result<Self, NativeServiceError> {
         let clock: Arc<dyn TimerClock> = Arc::new(SystemTimerClock::default());
         let store_root = config.store_path_root_dir.as_str();
@@ -258,6 +262,7 @@ impl NativeTimerService {
             starts_at_queue_end,
             retired_marker: retired,
             batches_out: AtomicUsize::new(0),
+            feed,
         })
     }
 
@@ -376,8 +381,10 @@ impl NativeTimerService {
             .map_or(0, |queue| queue.read().get_max_offset_in_queue())
     }
 
-    /// Opens or closes delivery for this Broker; only a master delivers.
+    /// Opens or closes delivery for this Broker; only a master delivers. A Broker that does not
+    /// deliver follows the deliveries its master writes.
     pub(crate) fn set_delivering(&self, delivering: bool) {
+        self.feed.set_observing(!delivering);
         if let Err(error) = self.role.transition(delivering) {
             error!("native timer role transition failed closed; delivery remains fenced: {error}");
         }
@@ -506,11 +513,14 @@ impl NativeTimerService {
         };
     }
 
-    /// Delivers the due timers of each lane without a batch out, up to `max_messages` in all,
-    /// while `epoch` stays current, and returns how many timers left the wheel.
-    async fn deliver_due(self: &Arc<Self>, epoch: u64, max_messages: usize) -> Result<usize, TimerEngineError> {
-        if !self.role.is_current_delivery_epoch(epoch) {
-            return Ok(0);
+    /// Takes the due timers of each lane without a batch out, up to `max_messages` in all, and
+    /// returns how many left the wheel: written while `epoch` stays current, or, on a Broker
+    /// that does not deliver, counted delivered as far as its master wrote them.
+    async fn deliver_due(self: &Arc<Self>, mode: DueMode, max_messages: usize) -> Result<usize, TimerEngineError> {
+        if let DueMode::Write { epoch } = mode {
+            if !self.role.is_current_delivery_epoch(epoch) {
+                return Ok(0);
+            }
         }
         self.advance_visibility();
         let now_ms = self.now_ms();
@@ -537,13 +547,23 @@ impl NativeTimerService {
             }
             Err(error) => return Err(TimerEngineError::Storage(std::io::Error::other(error))),
         };
-        let writer = NativeWriter { service: self };
-        let written = join_all(
-            prepared
-                .into_iter()
-                .map(|batch| batch.write(&writer, epoch, self.settings.inflight_writes)),
-        )
-        .await;
+        let written = match mode {
+            DueMode::Write { epoch } => {
+                let writer = NativeWriter { service: self };
+                join_all(
+                    prepared
+                        .into_iter()
+                        .map(|batch| batch.write(&writer, epoch, self.settings.inflight_writes)),
+                )
+                .await
+            }
+            DueMode::Observe => {
+                // One at a time: a token taken behind a timer the master did not write would be
+                // lost when that timer goes back into the wheel.
+                let writer = ObservingWriter { feed: &self.feed };
+                join_all(prepared.into_iter().map(|batch| batch.write(&writer, 0, 1))).await
+            }
+        };
         let mut done = 0usize;
         for batch in written {
             let report = self.engine.settle(batch);
@@ -783,9 +803,40 @@ impl NativeTimerWriter for NativeWriter<'_> {
         let token = message.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
         ));
+        // Written by the old master before this Broker was promoted.
+        if token.as_ref().is_some_and(|token| self.service.feed.take(token)) {
+            return NativeWriteOutcome::Written;
+        }
         let result = self.service.context.put_message(message).await;
         self.service.accept(token, &result)
     }
+}
+
+/// Counts a due timer delivered once its master's message for it was dispatched here.
+struct ObservingWriter<'a> {
+    feed: &'a NativeDeliveryFeed,
+}
+
+impl NativeTimerWriter for ObservingWriter<'_> {
+    async fn write(&self, message: MessageExtBrokerInner, _epoch: u64) -> NativeWriteOutcome {
+        let token = message.property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        ));
+        if token.is_some_and(|token| self.feed.take(&token)) {
+            NativeWriteOutcome::Written
+        } else {
+            NativeWriteOutcome::Stays
+        }
+    }
+}
+
+/// How a Due batch takes its timers out of the wheel.
+#[derive(Clone, Copy)]
+enum DueMode {
+    /// Write them, while this Broker holds delivery epoch `epoch`.
+    Write { epoch: u64 },
+    /// Follow the master's writes.
+    Observe,
 }
 
 /// A lane claimed for one Due batch, released when dropped.
@@ -853,6 +904,10 @@ impl TimerEngine for NativeTimerHandle {
                 service.index_source_batch(budget.max_messages, budget.max_bytes)
             })
             .await?;
+        // Only a master runs Due batches; a slave follows its master's deliveries here.
+        if !self.0.role.is_active() {
+            self.0.deliver_due(DueMode::Observe, budget.max_messages).await?;
+        }
         Ok(EngineBatchProgress {
             messages,
             bytes: 0,
@@ -872,7 +927,10 @@ impl TimerEngine for NativeTimerHandle {
                 ..EngineBatchProgress::empty()
             });
         }
-        let messages = self.0.deliver_due(epoch.get(), budget.max_messages).await?;
+        let messages = self
+            .0
+            .deliver_due(DueMode::Write { epoch: epoch.get() }, budget.max_messages)
+            .await?;
         Ok(EngineBatchProgress {
             messages,
             bytes: 0,

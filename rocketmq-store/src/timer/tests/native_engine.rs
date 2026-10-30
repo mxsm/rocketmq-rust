@@ -21,11 +21,15 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerRecallRegistration;
@@ -93,9 +97,48 @@ async fn close(mut store: LocalFileMessageStore) {
     store.shutdown().await;
 }
 
-/// A timer the Broker admitted to the native engine.
+/// A timer the Broker admitted to the native engine, with the delivery token it gives it.
 fn native(message: MessageExtBrokerInner) -> MessageExtBrokerInner {
-    with_property(message, MessageConst::TIMER_ENGINE_TYPE, TimerEngineId::Native.as_str())
+    let unique_key = message
+        .property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+        ))
+        .map(|key| key.to_string())
+        .unwrap_or_default();
+    let message = with_property(message, MessageConst::TIMER_ENGINE_TYPE, TimerEngineId::Native.as_str());
+    with_property(
+        message,
+        MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        native_token(&unique_key),
+    )
+}
+
+fn native_token(unique_key: &str) -> String {
+    format!("N:1:{unique_key}:0:0")
+}
+
+/// The message a master wrote for native timer `unique_key`, as its slave receives it.
+fn delivered_by_master(unique_key: &str) -> MessageExtBrokerInner {
+    let mut message = MessageExtBrokerInner::default();
+    message.set_topic(CheetahString::from_static_str(REAL_TOPIC));
+    message.message_ext_inner.queue_id = 0;
+    message.set_body(Bytes::from_static(b"timer-test-body"));
+    for (key, value) in [
+        (
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+            unique_key.to_owned(),
+        ),
+        (MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN, native_token(unique_key)),
+    ] {
+        message.put_property(CheetahString::from_static_str(key), CheetahString::from_string(value));
+    }
+    message.properties_string = message_properties_to_string(message.get_properties());
+    message
+}
+
+/// The unique keys of the messages in the real topic, in queue order, repeats included.
+fn delivered_in_order(store: &LocalFileMessageStore) -> Vec<String> {
+    delivered(store).into_iter().map(|(key, _)| key).collect()
 }
 
 /// A timer the Broker admitted to the Java-compatible engine, with the route envelope it
@@ -441,6 +484,71 @@ async fn a_native_engine_that_never_ran_starts_after_the_records_already_there()
     assert_eq!(native_timer.process_once().await, 0);
     // The recall the Java-compatible engine took before the switch is not the native engine's.
     assert_eq!(native_timer.engine().counts().recalls, 0);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_slave_follows_its_master_and_a_promotion_writes_only_what_the_master_did_not() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(
+        &mut store,
+        vec![
+            native(timer_message(due_ms, "n0")),
+            native(timer_message(due_ms, "n1")),
+            native(timer_message(due_ms, "n2")),
+        ],
+    )
+    .await;
+    // The master wrote n0 and n2; its write of n1 failed and stays.
+    put_all(&mut store, vec![delivered_by_master("n0"), delivered_by_master("n2")]).await;
+    assert_eq!(native_timer.process_once().await, 0);
+
+    // Promoted, the slave writes n1, and not n2, which its old master wrote.
+    native_timer.set_delivering(true);
+    assert_eq!(native_timer.process_once().await, 2);
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["n0", "n2", "n1"]);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_slave_keeps_the_delivery_it_followed_across_a_restart() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(
+        &mut store,
+        vec![
+            native(timer_message(due_ms, "n0")),
+            native(timer_message(due_ms, "n1")),
+            delivered_by_master("n0"),
+        ],
+    )
+    .await;
+    assert_eq!(native_timer.process_once().await, 0);
+    drop(native_timer);
+    close(store).await;
+
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("reopen the native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(true);
+    assert_eq!(native_timer.process_once().await, 1);
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["n0", "n1"]);
     drop(native_timer);
     close(store).await;
 }

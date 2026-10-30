@@ -360,6 +360,15 @@ impl LocalFileMessageStore {
             }
             dispatcher_vec
         };
+        // Reput hands the native engine its master's deliveries while this Broker is a slave.
+        let native_delivery_feed = Arc::new(NativeDeliveryFeed::default());
+        let dispatcher_vec = {
+            let mut dispatcher_vec = dispatcher_vec;
+            if NativeServiceRole::of(message_store_config.as_ref()).is_some() {
+                dispatcher_vec.push(native_delivery_feed.clone());
+            }
+            dispatcher_vec
+        };
         let mut dispatcher = CommitLogDispatcherDefault::with_dispatchers(dispatcher_vec);
 
         let memory_lock_budget_bytes = Self::effective_linux_memory_lock_budget_bytes(message_store_config.as_ref());
@@ -565,6 +574,7 @@ impl LocalFileMessageStore {
             timer_source_wake: Arc::new(TimerSourceWake::default()),
             native_timer: None,
             native_timer_cleanup_pin,
+            native_delivery_feed,
             #[cfg(feature = "extended_timeline")]
             extended_timeline_cleanup_pin,
             #[cfg(feature = "extended_timeline")]
@@ -953,6 +963,7 @@ impl LocalFileMessageStore {
                 self.runtime_scope.clone(),
                 Arc::clone(&self.native_timer_cleanup_pin),
                 native_role,
+                Arc::clone(&self.native_delivery_feed),
             )
             .map_err(|error| {
                 store_read_error(StoreOperation::Load, "failed to open the native timer engine").with_source(error)
