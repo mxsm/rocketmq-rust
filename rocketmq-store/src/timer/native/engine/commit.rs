@@ -44,7 +44,7 @@ impl NativeTimerEngine {
         // Indexing holds the state lock, so the frontier and the written lengths taken together
         // describe the same sources: the checkpoint never keeps bytes of a source it would
         // also replay.
-        let (source_cq_offset, lengths, lane_watermarks, commit_log_fence) = {
+        let (source_cq_offset, mut lengths, lane_watermarks, commit_log_fence, retired) = {
             let state = self.state.lock();
             let fence = state
                 .bucket_min_offsets
@@ -57,8 +57,11 @@ impl NativeTimerEngine {
                 self.storage.written_lengths(),
                 state.watermarks.clone(),
                 fence,
+                state.retired.clone(),
             )
         };
+        // A split hour's timers are in its minute runs, which this checkpoint names.
+        lengths.buckets.retain(|bucket| !retired.contains(&bucket.bucket));
         self.storage.sync()?;
         let checkpoint = NativeCheckpoint {
             sequence: self.storage.last_checkpoint_sequence() + 1,
@@ -71,6 +74,13 @@ impl NativeTimerEngine {
             payload_segments: Vec::new(),
         };
         self.storage.write_checkpoint(&checkpoint)?;
+        // No checkpoint names the retired hour buckets any more. One left behind by a failed
+        // delete is deleted after the next checkpoint, or by recovery.
+        let mut state = self.state.lock();
+        for hour in retired {
+            self.storage.delete_bucket(hour)?;
+            state.retired.remove(&hour);
+        }
         Ok(checkpoint)
     }
 }
