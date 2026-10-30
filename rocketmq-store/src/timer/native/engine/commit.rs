@@ -44,7 +44,7 @@ impl NativeTimerEngine {
         // Indexing holds the state lock, so the frontier and the written lengths taken together
         // describe the same sources: the checkpoint never keeps bytes of a source it would
         // also replay.
-        let (source_cq_offset, mut lengths, lane_watermarks, commit_log_fence, retired) = {
+        let (source_cq_offset, mut lengths, lane_watermarks, commit_log_fence, retired, retired_days) = {
             let state = self.state.lock();
             let fence = state
                 .bucket_min_offsets
@@ -58,10 +58,15 @@ impl NativeTimerEngine {
                 state.watermarks.clone(),
                 fence,
                 state.retired.clone(),
+                state.retired_payload_days.clone(),
             )
         };
-        // A split hour's timers are in its minute runs, which this checkpoint names.
+        // A split hour's timers are in its minute runs, which this checkpoint names; a collected
+        // run's and a retired payload day's timers are delivered.
         lengths.buckets.retain(|bucket| !retired.contains(&bucket.bucket));
+        lengths
+            .payload_segments
+            .retain(|segment| !retired_days.contains(&segment.due_day_utc));
         self.storage.sync()?;
         let checkpoint = NativeCheckpoint {
             sequence: self.storage.last_checkpoint_sequence() + 1,
@@ -74,13 +79,18 @@ impl NativeTimerEngine {
             payload_segments: lengths.payload_segments,
         };
         self.storage.write_checkpoint(&checkpoint)?;
-        // No checkpoint names the retired hour buckets any more. One left behind by a failed
-        // delete is deleted after the next checkpoint, or by recovery.
+        // No checkpoint names the retired buckets and payload days any more. One left behind by a
+        // failed delete is deleted after the next checkpoint, or by recovery.
         let mut state = self.state.lock();
-        for hour in retired {
-            self.storage.delete_bucket(hour)?;
-            state.retired.remove(&hour);
+        for bucket in retired {
+            self.storage.delete_bucket(bucket)?;
+            state.retired.remove(&bucket);
         }
+        for day in retired_days {
+            self.storage.delete_payload_day(day)?;
+            state.retired_payload_days.remove(&day);
+        }
+        self.collect(&mut state, &checkpoint.lane_watermarks, now_ms);
         Ok(checkpoint)
     }
 }

@@ -127,6 +127,48 @@ impl NativeTimerStorage {
         TimerPayloadRecordV1::decode(&bytes).ok_or(corrupt)
     }
 
+    /// The UTC due days that hold payload segments, in order.
+    pub fn payload_days(&self) -> Vec<i32> {
+        let state = self.state.lock();
+        let mut days: Vec<i32> = state.payloads.keys().map(|segment| segment.due_day_utc).collect();
+        days.dedup();
+        days
+    }
+
+    /// Deletes every payload segment of `due_day_utc` and the day's directory. The next
+    /// checkpoint must no longer name the segments; recovery deletes any it does not name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when a segment cannot be deleted; the segments before it are gone.
+    pub fn delete_payload_day(&self, due_day_utc: i32) -> Result<(), NativeStorageError> {
+        let mut state = self.state.lock();
+        let segments: Vec<_> = state
+            .payloads
+            .range(day_range(due_day_utc))
+            .map(|(segment, _)| *segment)
+            .collect();
+        let mut day_dir = None;
+        for segment in segments {
+            state.payload_handles.remove(&segment);
+            let path = self.root.join(segment.relative_path());
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            state.payloads.remove(&segment);
+            day_dir = path.parent().map(Path::to_path_buf);
+        }
+        if let Some(day_dir) = day_dir {
+            // A directory still holding a name that is not a segment is left alone.
+            if fs::remove_dir(&day_dir).is_ok() {
+                state.changed_dirs.insert(self.root.join(NATIVE_PAYLOAD_DIR));
+            }
+        }
+        Ok(())
+    }
+
     /// Payload segments written since the last sync, with their lengths and handles to sync.
     pub(super) fn unsynced_payloads(
         &self,

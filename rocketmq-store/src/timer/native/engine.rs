@@ -43,6 +43,7 @@ use super::cancel_set::NativeRecall;
 use super::config::NativeTimerConfig;
 use super::near_wheel::NearWheel;
 
+mod collect;
 mod commit;
 mod promote;
 mod recall;
@@ -182,6 +183,18 @@ struct EngineState {
     /// The fence of the checkpoint the engine opened from. It stands in for the buckets found
     /// on disk, whose lowest offsets were not read.
     opened_fence: Option<i64>,
+    /// The hour buckets and minute runs found on disk at open, which the opened fence stands in
+    /// for; once all are gone, so is the fence.
+    opened_buckets: BTreeSet<NativeBucketId>,
+    /// Per loaded minute run, the last entry each lane has in it. Once every lane's durable
+    /// watermark has passed them, the run holds nothing left to deliver.
+    run_tails: BTreeMap<NativeBucketId, Vec<NativeDueCursor>>,
+    /// Minute runs ending at or before this are collected: retired, and deleted after the next
+    /// checkpoint. A timer due in one is indexed at this time instead.
+    collected_until_ms: i64,
+    /// Payload days whose timers are all collected; the next checkpoint leaves them out, and
+    /// then they are deleted.
+    retired_payload_days: BTreeSet<i32>,
 }
 
 /// The `native` engine's index of timers: day buckets for timers due beyond the mid horizon,
@@ -244,8 +257,10 @@ impl NativeTimerEngine {
         }
         let mut cancels = CancelSet::default();
         for record in storage.read_cancels()? {
-            cancels.insert(&record);
+            // Indexed before now, which stands in for when.
+            cancels.insert(&record, record.due_ms.max(now_ms));
         }
+        let opened_buckets: BTreeSet<_> = hours.iter().chain(&minutes).copied().collect();
         let lanes = usize::from(config.lane_count);
         let watermarks = match &checkpoint {
             Some(checkpoint) if checkpoint.lane_watermarks.len() != lanes => {
@@ -282,6 +297,10 @@ impl NativeTimerEngine {
                 minutes,
                 promoted_until_ms,
                 retired: BTreeSet::new(),
+                opened_buckets,
+                run_tails: BTreeMap::new(),
+                collected_until_ms: i64::MIN,
+                retired_payload_days: BTreeSet::new(),
             }),
             config,
             storage,
@@ -358,6 +377,9 @@ impl NativeTimerEngine {
                         cq_offset: source.cq_offset,
                     };
                     let due_ms = if cursor <= taken { taken.due_ms } else { source.due_ms };
+                    // A collected minute run is deleted after the next checkpoint; a timer due in
+                    // one goes to the first minute not collected, which has passed as well.
+                    let due_ms = due_ms.max(state.collected_until_ms);
                     let entry = NativeIndexEntry {
                         due_ms,
                         cq_offset: source.cq_offset,
@@ -430,7 +452,7 @@ impl NativeTimerEngine {
             }
         }
         for recall in &recalls {
-            state.cancels.insert(recall);
+            state.cancels.insert(recall, recall.due_ms.max(now_ms));
         }
         report.recalls = recalls.len();
         let after_last = sources.iter().map(|source| source.cq_offset.saturating_add(1)).max();
@@ -633,6 +655,30 @@ impl EngineState {
         if let Some(lowest) = entries.iter().filter_map(commit_log_offset).min() {
             let min = self.bucket_min_offsets.entry(bucket).or_insert(lowest);
             *min = (*min).min(lowest);
+        }
+        if bucket.kind() == NativeBucketKind::Minute && bucket.start_ms() < self.loaded_until_ms {
+            self.extend_tails(bucket, entries);
+        }
+    }
+
+    /// Records `entries` of a loaded minute run among the last entries of their lanes in it.
+    fn extend_tails(&mut self, run: NativeBucketId, entries: &[NativeIndexEntry]) {
+        let lanes = self.watermarks.len();
+        let tails = self
+            .run_tails
+            .entry(run)
+            .or_insert_with(|| vec![NativeDueCursor::START; lanes]);
+        for entry in entries {
+            if let Some(tail) = tails.get_mut(usize::from(entry.lane)) {
+                *tail = (*tail).max(entry.cursor());
+            }
+        }
+    }
+
+    /// Notes that `bucket`, which may have been on disk at open, is gone.
+    fn forget_opened(&mut self, bucket: NativeBucketId) {
+        if self.opened_buckets.remove(&bucket) && self.opened_buckets.is_empty() {
+            self.opened_fence = None;
         }
     }
 

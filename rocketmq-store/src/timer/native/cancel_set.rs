@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use rocketmq_store_local::timer::native_format::native_key_hash;
@@ -39,24 +40,59 @@ pub(crate) struct NativeRecall {
 pub(crate) struct CancelSet {
     by_key: HashMap<u64, Vec<NativeRecall>>,
     recalls: HashMap<NativeRecall, RecallHolds>,
+    /// Indexed recalls by the time after which they can no longer cancel anything.
+    by_expiry: BTreeMap<i64, Vec<NativeRecall>>,
 }
 
-#[derive(Default)]
 struct RecallHolds {
-    /// Its tombstone is indexed, so it stays.
+    /// Its tombstone is indexed, so it stays until it expires.
     logged: bool,
     /// Registrations whose tombstones are still on their way.
     registered: usize,
+    /// The time after which the timer it names is no longer indexed in the future.
+    expires_ms: i64,
+}
+
+impl Default for RecallHolds {
+    fn default() -> Self {
+        Self {
+            logged: false,
+            registered: 0,
+            expires_ms: i64::MIN,
+        }
+    }
 }
 
 impl CancelSet {
-    /// Adds a recall whose tombstone is indexed; adding the same recall again changes nothing.
-    pub(crate) fn insert(&mut self, record: &NativeCancelRecord) {
+    /// Adds a recall whose tombstone is indexed. The timer it names was indexed before it, at
+    /// a time no later than `expires_ms`, so once every timer due by then is delivered the
+    /// recall can be dropped. Adding the same recall again keeps the later expiry.
+    pub(crate) fn insert(&mut self, record: &NativeCancelRecord, expires_ms: i64) {
         let recall = NativeRecall {
             key: record.key.clone(),
             generation: record.generation,
         };
-        self.add(recall).logged = true;
+        let holds = self.add(recall.clone());
+        holds.logged = true;
+        if expires_ms > holds.expires_ms {
+            holds.expires_ms = expires_ms;
+            self.by_expiry.entry(expires_ms).or_default().push(recall);
+        }
+    }
+
+    /// Drops the indexed recalls that expire before `through_ms`, unless a registration still
+    /// holds one.
+    pub(crate) fn expire(&mut self, through_ms: i64) {
+        let live = self.by_expiry.split_off(&through_ms);
+        let expired = std::mem::replace(&mut self.by_expiry, live);
+        for recall in expired.into_values().flatten() {
+            let Some(holds) = self.recalls.get(&recall) else {
+                continue;
+            };
+            if holds.registered == 0 && holds.expires_ms < through_ms {
+                self.remove(&recall);
+            }
+        }
     }
 
     /// Holds a recall registered ahead of its tombstone.
@@ -74,6 +110,10 @@ impl CancelSet {
         if holds.logged || holds.registered > 0 {
             return;
         }
+        self.remove(recall);
+    }
+
+    fn remove(&mut self, recall: &NativeRecall) {
         self.recalls.remove(recall);
         for unique_key in named_unique_keys(&recall.key) {
             let hash = native_key_hash(unique_key);
@@ -179,7 +219,7 @@ mod tests {
             build_canonical_delete_key("Topic_A", UNIQUE_KEY, true).to_string(),
         ] {
             let mut cancels = CancelSet::default();
-            cancels.insert(&recall(&key, DUE_MS));
+            cancels.insert(&recall(&key, DUE_MS), DUE_MS);
             let candidates = cancels.candidates(&timer(UNIQUE_KEY, DUE_MS + 1));
             assert_eq!(candidates.len(), 1, "{key}");
             assert_eq!(candidates[0].key, key.as_bytes());
@@ -189,7 +229,7 @@ mod tests {
     #[test]
     fn a_recall_reaches_its_timer_wherever_the_timer_was_indexed() {
         let mut cancels = CancelSet::default();
-        cancels.insert(&recall(UNIQUE_KEY, DUE_MS));
+        cancels.insert(&recall(UNIQUE_KEY, DUE_MS), DUE_MS);
         // A timer moved up to its lane's watermark, into a later hour, is still found.
         assert_eq!(cancels.candidates(&timer(UNIQUE_KEY, DUE_MS + 3_600_000)).len(), 1);
         assert!(cancels.candidates(&timer("another-key", DUE_MS)).is_empty());
@@ -199,8 +239,8 @@ mod tests {
     fn the_same_recall_twice_is_one_recall() {
         let mut cancels = CancelSet::default();
         let key = build_delete_key("TopicA", UNIQUE_KEY).to_string();
-        cancels.insert(&recall(&key, DUE_MS));
-        cancels.insert(&recall(&key, DUE_MS));
+        cancels.insert(&recall(&key, DUE_MS), DUE_MS);
+        cancels.insert(&recall(&key, DUE_MS), DUE_MS);
         assert_eq!(cancels.len(), 1);
         assert_eq!(cancels.candidates(&timer(UNIQUE_KEY, DUE_MS)).len(), 1);
     }
@@ -222,9 +262,33 @@ mod tests {
 
         // Once its tombstone is indexed, withdrawing a registration leaves it in place.
         cancels.hold(held());
-        cancels.insert(&recall(UNIQUE_KEY, DUE_MS));
+        cancels.insert(&recall(UNIQUE_KEY, DUE_MS), DUE_MS);
         cancels.release(&held());
         assert_eq!(cancels.candidates(&timer(UNIQUE_KEY, DUE_MS)).len(), 1);
+    }
+
+    #[test]
+    fn an_indexed_recall_is_dropped_once_it_expires_unless_a_registration_holds_it() {
+        let mut cancels = CancelSet::default();
+        cancels.insert(&recall(UNIQUE_KEY, DUE_MS), DUE_MS);
+        cancels.insert(&recall("held", DUE_MS), DUE_MS);
+        cancels.insert(&recall("later", DUE_MS), DUE_MS);
+        // Indexed again later, it expires later.
+        cancels.insert(&recall("later", DUE_MS), DUE_MS + 10);
+        cancels.hold(NativeRecall {
+            key: b"held".to_vec(),
+            generation: 0,
+        });
+        cancels.expire(DUE_MS);
+        assert_eq!(cancels.len(), 3);
+
+        cancels.expire(DUE_MS + 1);
+        assert!(cancels.candidates(&timer(UNIQUE_KEY, DUE_MS)).is_empty());
+        assert_eq!(cancels.candidates(&timer("held", DUE_MS)).len(), 1);
+        assert_eq!(cancels.candidates(&timer("later", DUE_MS)).len(), 1);
+        cancels.expire(DUE_MS + 11);
+        assert!(cancels.candidates(&timer("later", DUE_MS)).is_empty());
+        assert_eq!(cancels.len(), 1);
     }
 
     #[test]
