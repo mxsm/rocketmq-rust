@@ -58,14 +58,23 @@ const HOUR_MS: i64 = 3_600_000;
 
 /// Opens a store under `root` in `mode`, or `None` when it does not load.
 async fn open(root: &Path, mode: TimerStoreMode) -> Option<LocalFileMessageStore> {
+    open_with(
+        root,
+        mode,
+        TimerNativeConfig {
+            lane_count: 4,
+            ..TimerNativeConfig::default()
+        },
+    )
+    .await
+}
+
+async fn open_with(root: &Path, mode: TimerStoreMode, native: TimerNativeConfig) -> Option<LocalFileMessageStore> {
     let config = MessageStoreConfig {
         store_path_root_dir: CheetahString::from_string(root.to_string_lossy().into_owned()),
         read_uncommitted: true,
         timer_store_mode: mode,
-        timer_native: TimerNativeConfig {
-            lane_count: 4,
-            ..TimerNativeConfig::default()
-        },
+        timer_native: native,
         ..MessageStoreConfig::default()
     };
     let topic_config_table = Arc::new(DashMap::new());
@@ -660,6 +669,34 @@ async fn a_native_timer_is_never_delivered_before_its_deadline() {
     native_timer.set_clock(clock_at(due_ms));
     // Without the original deadline, a timer is due at the end of its slot.
     assert_eq!(native_timer.process_once().await, 2);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn one_due_batch_keeps_delivering_while_a_lane_comes_back_full() {
+    let root = tempdir().unwrap();
+    let native_config = TimerNativeConfig {
+        lane_count: 4,
+        delivery_batch_messages: 2,
+        ..TimerNativeConfig::default()
+    };
+    let mut store = open_with(root.path(), TimerStoreMode::Native, native_config)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(
+        &mut store,
+        (0..5)
+            .map(|key| native(timer_message(due_ms, &format!("n{key}"))))
+            .collect(),
+    )
+    .await;
+    native_timer.index_all().await;
+    native_timer.set_delivering(true);
+    // Every timer is in one lane, which takes two a batch.
+    assert_eq!(native_timer.deliver_once(1_000).await, 5);
     drop(native_timer);
     close(store).await;
 }
