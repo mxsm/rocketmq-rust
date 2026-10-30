@@ -118,7 +118,7 @@ pub(crate) struct NativeIngestReport {
     pub(crate) rejected: Vec<(i64, NativeRejection)>,
 }
 
-/// What a [`NativeTimerEngine`] holds.
+/// What a [`NativeTimerEngine`] holds, and how far it got.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NativeEngineCounts {
     /// Timers in the near wheel.
@@ -131,6 +131,10 @@ pub(crate) struct NativeEngineCounts {
     pub(crate) hours: usize,
     /// Minute runs.
     pub(crate) minutes: usize,
+    /// Every Timer CQ record visible before this is indexed.
+    pub(crate) visible_through_ms: i64,
+    /// Minute runs ending at or before this are collected.
+    pub(crate) collected_until_ms: i64,
 }
 
 /// A due timer and the recalls that may cancel it, to check once its message is read.
@@ -576,7 +580,12 @@ impl NativeTimerEngine {
         &self.storage
     }
 
-    /// What the engine holds.
+    /// UTC days whose payload copies are on disk.
+    pub(crate) fn payload_days(&self) -> usize {
+        self.storage.payload_days().len()
+    }
+
+    /// What the engine holds, and how far it got.
     pub(crate) fn counts(&self) -> NativeEngineCounts {
         let state = self.state.lock();
         NativeEngineCounts {
@@ -585,6 +594,8 @@ impl NativeTimerEngine {
             days: state.days.len(),
             hours: state.hours.len(),
             minutes: state.minutes.len(),
+            visible_through_ms: state.visible_through_ms,
+            collected_until_ms: state.collected_until_ms,
         }
     }
 

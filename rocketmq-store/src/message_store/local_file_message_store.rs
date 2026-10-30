@@ -1560,6 +1560,19 @@ impl MessageStoreEngine for LocalFileMessageStore {
             "timerStoreMode".to_string(),
             self.message_store_config.timer_store_mode.as_str().to_string(),
         );
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            result.insert("timerNativeRole".to_string(), native_timer.role_name().to_string());
+            if let Ok(native_metrics) = serde_json::to_string(&native_timer.runtime_metrics()) {
+                result.insert("timerNativeMetrics".to_string(), native_metrics);
+            }
+            if let Some(pipeline_snapshot) = native_timer.pipeline_diagnostics() {
+                if let Ok(pipeline_metrics) = serde_json::to_string(
+                    &crate::timer::timer_metrics::TimerMetrics::pipeline_runtime_metrics(pipeline_snapshot),
+                ) {
+                    result.insert("timerNativePipelineMetrics".to_string(), pipeline_metrics);
+                }
+            }
+        }
         result.insert(
             "timerFileFormat".to_string(),
             self.message_store_config.timer_file_format.as_str().to_string(),
