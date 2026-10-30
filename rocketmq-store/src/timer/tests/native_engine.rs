@@ -106,6 +106,12 @@ fn native(message: MessageExtBrokerInner) -> MessageExtBrokerInner {
         ))
         .map(|key| key.to_string())
         .unwrap_or_default();
+    // The Broker keeps the deadline itself beside `TIMER_OUT_MS`; here they are the same.
+    let deadline = message
+        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
+        .map(|deadline| deadline.to_string())
+        .unwrap_or_default();
+    let message = with_property(message, MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS, deadline);
     let message = with_property(message, MessageConst::TIMER_ENGINE_TYPE, TimerEngineId::Native.as_str());
     with_property(
         message,
@@ -620,5 +626,40 @@ async fn runtime_info_leaves_out_a_native_engine_the_store_does_not_run() {
     let info = MessageStoreEngine::get_runtime_info(&store);
     assert!(!info.contains_key("timerNativeRole"));
     assert!(!info.contains_key("timerNativeMetrics"));
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_native_timer_is_never_delivered_before_its_deadline() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    let due_ms = (current_millis() as i64 / 1_000 + 5) * 1_000;
+    // As the Broker admits it: `TIMER_OUT_MS` holds the start of the precision slot.
+    let admitted = with_property(
+        native(timer_message(due_ms - 1_000, "n0")),
+        MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
+        due_ms.to_string(),
+    );
+    let without_deadline = with_property(
+        with_property(
+            timer_message(due_ms - 1_000, "n1"),
+            MessageConst::TIMER_ENGINE_TYPE,
+            TimerEngineId::Native.as_str(),
+        ),
+        MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        native_token("n1"),
+    );
+    put_all(&mut store, vec![admitted, without_deadline]).await;
+    native_timer.set_delivering(true);
+
+    native_timer.set_clock(clock_at(due_ms - 1));
+    assert_eq!(native_timer.process_once().await, 0);
+    native_timer.set_clock(clock_at(due_ms));
+    // Without the original deadline, a timer is due at the end of its slot.
+    assert_eq!(native_timer.process_once().await, 2);
+    drop(native_timer);
     close(store).await;
 }

@@ -89,7 +89,7 @@ use crate::timer::request::EngineBatchProgress;
 use crate::timer::role::TimerRoleState;
 use crate::timer::source::read_timer_source_frames;
 use crate::timer::source::TimerSourceRead;
-use crate::timer::timer_message_store::parse_deliver_time_ms;
+use crate::timer::timer_message_store::original_deliver_time_ms;
 use crate::timer::timer_message_store::timer_generation;
 use crate::timer::timer_message_store::TimerStoreContext;
 use crate::timer::timer_message_store::MIN_SCHEDULER_INTERVAL_MS;
@@ -146,6 +146,7 @@ struct Settings {
     skip_unknown_error: bool,
     retry_until_success: bool,
     tick_ms: u64,
+    precision_ms: i64,
 }
 
 /// A wall time and the Timer CQ max offset read after it: once the Source has indexed through
@@ -269,6 +270,7 @@ impl NativeTimerService {
                 skip_unknown_error: config.timer_skip_unknown_error,
                 retry_until_success: config.timer_enable_retry_until_success,
                 tick_ms: (config.timer_precision_ms / 10).max(MIN_SCHEDULER_INTERVAL_MS),
+                precision_ms: i64::try_from(config.timer_precision_ms).unwrap_or(i64::MAX),
             },
             pipeline_config: MessageStoreConfig {
                 timer_flush_interval_ms: usize::try_from(native.checkpoint_interval_ms).unwrap_or(usize::MAX),
@@ -547,7 +549,9 @@ impl NativeTimerService {
         let mut passed_through = units.first().map_or(next, |unit| unit.queue_offset);
         for (unit, frame) in units.iter().zip(frames) {
             match frame {
-                TimerSourceRead::Frame { bytes, message } => sources.extend(native_source(unit, bytes, &message)),
+                TimerSourceRead::Frame { bytes, message } => {
+                    sources.extend(native_source(unit, bytes, &message, self.settings.precision_ms));
+                }
                 _ if self.settings.skip_unknown_error => {
                     warn!("skip an unreadable native timer source; timerSkipUnknownError is on");
                 }
@@ -845,7 +849,7 @@ fn write_marker(path: &Path) -> std::io::Result<()> {
 /// engine or a record without a deadline. Recalls of every engine are indexed: Recall tags a
 /// tombstone for the engine that admits new timers, which after a switch of `timerStoreMode` is
 /// not always the engine that admitted the timer.
-fn native_source(unit: &CqUnit, frame: Bytes, message: &MessageExt) -> Option<NativeTimerSource> {
+fn native_source(unit: &CqUnit, frame: Bytes, message: &MessageExt, precision_ms: i64) -> Option<NativeTimerSource> {
     let property = |name: &'static str| message.property(&CheetahString::from_static_str(name));
     let recall_key = property(TIMER_DELETE_UNIQUE_KEY);
     let native = property(MessageConst::TIMER_ENGINE_TYPE)
@@ -853,7 +857,8 @@ fn native_source(unit: &CqUnit, frame: Bytes, message: &MessageExt) -> Option<Na
     if recall_key.is_none() && !native {
         return None;
     }
-    let Some(due_ms) = parse_deliver_time_ms(message) else {
+    // `TIMER_OUT_MS` is the start of the precision slot, which can come before the deadline.
+    let Some(due_ms) = original_deliver_time_ms(message, precision_ms) else {
         warn!("skip a native timer source without a valid deadline");
         return None;
     };
