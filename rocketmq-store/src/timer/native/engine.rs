@@ -31,6 +31,7 @@ use rocketmq_store_local::timer::native_format::NativeDueCursor;
 use rocketmq_store_local::timer::native_format::NativeIndexEntry;
 use rocketmq_store_local::timer::native_format::NativeLocator;
 use rocketmq_store_local::timer::native_format::NativePayloadSegment;
+use rocketmq_store_local::timer::native_storage::NativePayloadLocation;
 use rocketmq_store_local::timer::native_storage::NativeStorageConfig;
 use rocketmq_store_local::timer::native_storage::NativeStorageError;
 use rocketmq_store_local::timer::native_storage::NativeTimerStorage;
@@ -56,6 +57,8 @@ pub(crate) enum NativeEngineError {
     WatermarkCount { found: usize, lanes: u16 },
     #[error("native hour bucket {0:?} comes before an hour already split into minute runs")]
     UnsplitHour(NativeBucketId),
+    #[error("native timer {0} has no readable copy")]
+    NotCopied(i64),
 }
 
 /// One Timer CQ record for the engine to index, its properties already read.
@@ -149,6 +152,14 @@ struct EngineState {
     /// Per lane, the last timer delivered in an unbroken run of the lane's order. A restart
     /// takes every timer at or below it for delivered.
     watermarks: Vec<NativeDueCursor>,
+    /// Per lane, the last timer taken for delivery. A batch in flight moves the watermark up
+    /// to it once written, so a timer indexed later at or below it would fall below the
+    /// watermark.
+    taken: Vec<NativeDueCursor>,
+    /// Every Timer CQ record visible before this is indexed, recalls included, so a timer due
+    /// before it cannot be passed over by a recall still on its way. Nothing is delivered
+    /// until the Source stage reports how far it got after the engine opens.
+    visible_through_ms: i64,
     /// The Timer CQ offset after the last batch indexed.
     source_frontier: i64,
     /// The lowest CommitLog offset of each hour bucket written to since the engine opened.
@@ -236,7 +247,9 @@ impl NativeTimerEngine {
                 wheel: NearWheel::new(config.lane_count),
                 cancels,
                 loaded_until_ms: i64::MIN,
+                taken: watermarks.clone(),
                 watermarks,
+                visible_through_ms: i64::MIN,
                 source_frontier: checkpoint.as_ref().map_or(0, |checkpoint| checkpoint.source_cq_offset),
                 bucket_min_offsets: BTreeMap::new(),
                 opened_fence: checkpoint
@@ -269,9 +282,10 @@ impl NativeTimerEngine {
     /// set. A timer due beyond the mid horizon is copied first, since the CommitLog may drop
     /// its source before then, and indexed in its day bucket. Nothing is synced.
     ///
-    /// A timer at or below its lane's watermark would be taken for delivered after a restart,
-    /// so it is indexed at the watermark's deadline instead, right after it in the lane's
-    /// order. That only delivers it later than its deadline, as it already is.
+    /// A timer at or below the last timer its lane took for delivery would be taken for
+    /// delivered after a restart, once that batch moves the watermark, so it is indexed at that
+    /// timer's deadline instead, right after it in the lane's order. That only delivers it
+    /// later than its deadline, as it already is.
     ///
     /// # Errors
     ///
@@ -297,16 +311,12 @@ impl NativeTimerEngine {
             match &source.kind {
                 NativeSourceKind::Timer { unique_key } => {
                     let lane = native_lane(&source.real_topic, source.real_queue_id, self.config.lane_count);
-                    let watermark = state.watermark(lane);
+                    let taken = state.taken_through(lane);
                     let cursor = NativeDueCursor {
                         due_ms: source.due_ms,
                         cq_offset: source.cq_offset,
                     };
-                    let due_ms = if cursor <= watermark {
-                        watermark.due_ms
-                    } else {
-                        source.due_ms
-                    };
+                    let due_ms = if cursor <= taken { taken.due_ms } else { source.due_ms };
                     let entry = NativeIndexEntry {
                         due_ms,
                         cq_offset: source.cq_offset,
@@ -390,9 +400,10 @@ impl NativeTimerEngine {
         Ok(report)
     }
 
-    /// Takes up to `max` timers of `lane` due at or before `now_ms`, in `(due_ms, cq_offset)`
-    /// order, after loading the hour buckets that have come near. A taken timer counts as
-    /// delivered once [`Self::advance_delivered`] passes it.
+    /// Takes up to `max` timers of `lane` due at or before `now_ms` and before the visibility
+    /// watermark, in `(due_ms, cq_offset)` order, after loading the buckets that have come
+    /// near. A taken timer counts as delivered once [`Self::advance_delivered`] passes it; one
+    /// that must wait goes back with [`Self::requeue`]. A lane takes one batch at a time.
     ///
     /// # Errors
     ///
@@ -405,7 +416,11 @@ impl NativeTimerEngine {
     ) -> Result<Vec<NativeDueTimer>, NativeEngineError> {
         let mut state = self.state.lock();
         self.load_near(&mut state, now_ms)?;
-        let due = state.wheel.take_due(lane, now_ms, max);
+        let through_ms = now_ms.min(state.visible_through_ms);
+        let due = state.wheel.take_due(lane, through_ms, max);
+        if let (Some(last), Some(taken)) = (due.last(), state.taken.get_mut(usize::from(lane))) {
+            *taken = (*taken).max(last.cursor());
+        }
         Ok(due
             .into_iter()
             .map(|entry| NativeDueTimer {
@@ -413,6 +428,43 @@ impl NativeTimerEngine {
                 entry,
             })
             .collect())
+    }
+
+    /// Records that every Timer CQ record visible before `visible_ms` is indexed, so timers due
+    /// before it may be delivered. The watermark never moves back.
+    pub(crate) fn set_visible_through(&self, visible_ms: i64) {
+        let mut state = self.state.lock();
+        state.visible_through_ms = state.visible_through_ms.max(visible_ms);
+    }
+
+    /// Puts taken timers back, for a later batch of their lanes.
+    pub(crate) fn requeue(&self, entries: impl IntoIterator<Item = NativeIndexEntry>) {
+        let mut state = self.state.lock();
+        for entry in entries {
+            state.insert_undelivered(entry);
+        }
+    }
+
+    /// Reads the copy a copied timer's entry points at.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the entry points nowhere readable.
+    pub(crate) fn read_payload(&self, entry: &NativeIndexEntry) -> Result<TimerPayloadRecordV1, NativeEngineError> {
+        let NativeLocator::Payload { segment_id, offset } = entry.locator else {
+            return Err(NativeEngineError::NotCopied(entry.cq_offset));
+        };
+        let due_day_utc =
+            NativePayloadSegment::due_day_of(entry.due_ms).ok_or(NativeEngineError::NotCopied(entry.cq_offset))?;
+        let location = NativePayloadLocation {
+            segment: NativePayloadSegment {
+                due_day_utc,
+                segment_id,
+            },
+            offset,
+            length: u32::try_from(entry.size).map_err(|_| NativeEngineError::NotCopied(entry.cq_offset))?,
+        };
+        Ok(self.storage.read_payload(location)?)
     }
 
     /// Records that `lane` delivered every timer up to `through`, in its order. The watermark
@@ -547,6 +599,12 @@ impl EngineState {
             .get(usize::from(lane))
             .copied()
             .unwrap_or(NativeDueCursor::START)
+    }
+
+    /// The last timer `lane` took for delivery, or delivered.
+    fn taken_through(&self, lane: u16) -> NativeDueCursor {
+        let taken = self.taken.get(usize::from(lane)).copied();
+        taken.map_or(self.watermark(lane), |taken| taken.max(self.watermark(lane)))
     }
 
     /// Adds `entry` to the wheel unless its lane delivered it.

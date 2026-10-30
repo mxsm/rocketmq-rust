@@ -34,6 +34,8 @@ use super::engine::NativeTimerEngine;
 use super::engine::NativeTimerSource;
 use super::near_wheel::ENTRY_MEMORY_BYTES;
 
+mod delivery;
+
 const HOUR_MS: i64 = 3_600_000;
 const MINUTE_MS: i64 = 60_000;
 const DAY_MS: i64 = 24 * HOUR_MS;
@@ -92,7 +94,9 @@ fn lane() -> u16 {
     native_lane(TOPIC, 0, LANES)
 }
 
+/// Takes the due timers, everything before `now_ms` indexed.
 fn due(engine: &NativeTimerEngine, now_ms: i64) -> Vec<NativeDueTimer> {
+    engine.set_visible_through(now_ms);
     engine.poll_due(lane(), now_ms, 1_000).unwrap()
 }
 
