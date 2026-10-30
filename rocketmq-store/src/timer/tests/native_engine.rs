@@ -121,6 +121,20 @@ fn recall_of(target: &str, deliver_ms: i64) -> MessageExtBrokerInner {
     ))
 }
 
+/// The recall of `target` as the Broker writes it while the Java-compatible engine is active.
+fn java_recall_of(target: &str, deliver_ms: i64) -> MessageExtBrokerInner {
+    java(with_property(
+        timer_message(deliver_ms, &format!("recall-{target}")),
+        MessageConst::PROPERTY_TIMER_DEL_UNIQKEY,
+        build_delete_key(REAL_TOPIC, target).to_string(),
+    ))
+}
+
+/// A clock standing at `time_ms`.
+fn clock_at(time_ms: i64) -> Arc<ManualClock> {
+    Arc::new(ManualClock(AtomicI64::new(time_ms)))
+}
+
 fn keys(keys: &[&str]) -> HashSet<String> {
     keys.iter().map(|key| (*key).to_owned()).collect()
 }
@@ -242,21 +256,6 @@ async fn delivered_native_timers_stay_delivered_across_a_restart() {
     close(store).await;
 }
 
-#[tokio::test]
-async fn a_store_holding_native_timers_loads_only_in_native_mode() {
-    let root = tempdir().unwrap();
-    let store = open(root.path(), TimerStoreMode::Native)
-        .await
-        .expect("open a native store");
-    close(store).await;
-
-    assert!(open(root.path(), TimerStoreMode::JavaCompat).await.is_none());
-    let store = open(root.path(), TimerStoreMode::Native)
-        .await
-        .expect("reopen the native store");
-    close(store).await;
-}
-
 fn registration(target: &str, deliver_ms: i64) -> TimerRecallRegistration {
     TimerRecallRegistration {
         key: build_delete_key(REAL_TOPIC, target).to_string(),
@@ -310,5 +309,138 @@ async fn native_recalls_are_unsupported_in_other_modes() {
         MessageStoreEngine::register_native_timer_recall(&store, &registration("j0", deliver_ms)).unwrap(),
         TimerRecallStatus::Unsupported
     );
+    close(store).await;
+}
+
+/// Opens a store in native mode that indexed `timers`, then closes it.
+async fn native_store_holding(root: &Path, timers: Vec<MessageExtBrokerInner>) {
+    let mut store = open(root, TimerStoreMode::Native).await.expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    put_all(&mut store, timers).await;
+    assert_eq!(native_timer.process_once().await, 0);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn switching_away_from_native_drains_its_timers_then_retires_it() {
+    let root = tempdir().unwrap();
+    let due_ms = current_millis() as i64 + 2 * HOUR_MS;
+    native_store_holding(root.path(), vec![native(timer_message(due_ms, "n0"))]).await;
+
+    let mut store = open(root.path(), TimerStoreMode::JavaCompat)
+        .await
+        .expect("another mode drains the native timers");
+    let native_timer = store.native_timer().cloned().expect("the native engine drains");
+    native_timer.set_clock(clock_at(due_ms + 1_000));
+    native_timer.set_delivering(true);
+    assert_eq!(native_timer.process_once().await, 1);
+    store.reput_once().await;
+    assert_eq!(delivered_keys(&store), keys(&["n0"]));
+    drop(native_timer);
+    close(store).await;
+
+    // Drained and retired: another mode no longer runs it.
+    let store = open(root.path(), TimerStoreMode::JavaCompat).await.unwrap();
+    assert!(store.native_timer().is_none());
+    close(store).await;
+
+    // Native again, it starts after the records already there and is drained again later.
+    let mut store = open(root.path(), TimerStoreMode::Native).await.unwrap();
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(true);
+    assert_eq!(native_timer.process_once().await, 0);
+    put_all(&mut store, vec![native(timer_message(due_ms, "n1"))]).await;
+    assert_eq!(native_timer.process_once().await, 0);
+    drop(native_timer);
+    close(store).await;
+    let store = open(root.path(), TimerStoreMode::JavaCompat).await.unwrap();
+    assert!(store.native_timer().is_some(), "an engine holding timers drains again");
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_draining_native_engine_holding_timers_is_not_retired() {
+    let root = tempdir().unwrap();
+    let due_ms = current_millis() as i64 + 2 * HOUR_MS;
+    native_store_holding(root.path(), vec![native(timer_message(due_ms, "n0"))]).await;
+
+    for _ in 0..2 {
+        let store = open(root.path(), TimerStoreMode::JavaCompat).await.unwrap();
+        let native_timer = store.native_timer().cloned().expect("the native engine drains");
+        native_timer.set_delivering(true);
+        assert_eq!(native_timer.process_once().await, 0);
+        drop(native_timer);
+        close(store).await;
+    }
+}
+
+#[tokio::test]
+async fn a_java_recall_cancels_a_timer_the_native_engine_drains() {
+    let root = tempdir().unwrap();
+    let due_ms = current_millis() as i64 + 2 * HOUR_MS;
+    native_store_holding(
+        root.path(),
+        vec![native(timer_message(due_ms, "n0")), native(timer_message(due_ms, "n1"))],
+    )
+    .await;
+
+    let mut store = open(root.path(), TimerStoreMode::JavaCompat).await.unwrap();
+    let native_timer = store.native_timer().cloned().unwrap();
+    put_all(&mut store, vec![java_recall_of("n0", due_ms)]).await;
+    native_timer.set_clock(clock_at(due_ms + 1_000));
+    native_timer.set_delivering(true);
+    assert_eq!(native_timer.process_once().await, 2);
+    store.reput_once().await;
+    assert_eq!(delivered_keys(&store), keys(&["n1"]));
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_native_recall_cancels_a_timer_the_java_engine_admitted() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let timer_store = store.get_timer_message_store().cloned().unwrap();
+    let now_ms = current_millis() as i64;
+    let due_ms = now_ms + 60_000;
+    put_all(
+        &mut store,
+        vec![
+            java(timer_message(due_ms, "j0")),
+            java(timer_message(due_ms, "j1")),
+            recall_of("j0", due_ms),
+        ],
+    )
+    .await;
+
+    timer_store.set_clock(clock_at(due_ms + 5_000));
+    timer_store.set_should_running_dequeue(true);
+    process_until_idle(&timer_store).await;
+    store.reput_once().await;
+    assert_eq!(delivered_keys(&store), keys(&["j1"]));
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_native_engine_that_never_ran_starts_after_the_records_already_there() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::JavaCompat).await.unwrap();
+    let due_ms = current_millis() as i64 + 60_000;
+    put_all(
+        &mut store,
+        vec![java(timer_message(due_ms, "j0")), java_recall_of("j0", due_ms)],
+    )
+    .await;
+    close(store).await;
+
+    let store = open(root.path(), TimerStoreMode::Native).await.unwrap();
+    let native_timer = store.native_timer().cloned().unwrap();
+    assert_eq!(native_timer.process_once().await, 0);
+    // The recall the Java-compatible engine took before the switch is not the native engine's.
+    assert_eq!(native_timer.engine().counts().recalls, 0);
+    drop(native_timer);
     close(store).await;
 }

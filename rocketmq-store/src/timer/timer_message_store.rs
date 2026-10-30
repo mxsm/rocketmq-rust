@@ -2339,13 +2339,12 @@ impl TimerMessageStore {
                     break;
                 }
             };
-            if message
-                .property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE))
-                .is_some_and(|engine| {
-                    engine.as_str() == TimerEngineId::ExtendedTimeline.as_str()
-                        || engine.as_str() == TimerEngineId::Native.as_str()
-                })
-            {
+            let engine = message.property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE));
+            let foreign = engine.as_ref().is_some_and(|engine| {
+                engine.as_str() == TimerEngineId::ExtendedTimeline.as_str()
+                    || engine.as_str() == TimerEngineId::Native.as_str()
+            });
+            if foreign && !self.may_recall_own_timer(&message, wall_time_ms) {
                 // The Extended materializer or the native engine owns this source. Advancing the
                 // Java-compatible enqueue cursor is safe because each keeps its own cleanup pin
                 // until the sources it indexed are durable.
@@ -2353,7 +2352,7 @@ impl TimerMessageStore {
                 owned_elsewhere = owned_elsewhere.saturating_add(1);
                 continue;
             }
-            if let Err(reason) = validate_timer_source_route(&message) {
+            if let (false, Err(reason)) = (foreign, validate_timer_source_route(&message)) {
                 self.quarantine_source(cq_unit.queue_offset, reason);
                 if self.message_store_config.timer_skip_unknown_error {
                     warn!("skip a timer source with invalid routing data; timerSkipUnknownError is on");
@@ -2462,6 +2461,22 @@ impl TimerMessageStore {
             processed: indexed + owned_elsewhere + cleaned_up,
             overdue: overdue_timers,
         }
+    }
+
+    /// Whether `message`, a record of the native engine, is a recall that may name a timer this
+    /// engine admitted. Recall tags a tombstone for the engine that admits new timers, so after a
+    /// switch to `native` the recall of a timer admitted here carries the native tag. Only a
+    /// recall due within this engine's maximum delay can name one of its timers.
+    fn may_recall_own_timer(&self, message: &MessageExt, wall_time_ms: i64) -> bool {
+        let native = message
+            .property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE))
+            .is_some_and(|engine| engine.as_str() == TimerEngineId::Native.as_str());
+        let horizon_ms =
+            i64::try_from(self.message_store_config.timer_max_delay_sec.saturating_mul(1_000)).unwrap_or(i64::MAX);
+        native
+            && is_delete_timer_message(message)
+            && parse_deliver_time_ms(message)
+                .is_some_and(|deliver_ms| deliver_ms <= wall_time_ms.saturating_add(horizon_ms))
     }
 
     fn quarantine_source(&self, source_offset: i64, reason: CorruptionReason) {

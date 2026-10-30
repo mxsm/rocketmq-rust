@@ -525,6 +525,12 @@ impl LocalFileMessageStore {
             if let Some(timer_message_store) = self.timer_message_store.as_ref() {
                 result &= timer_message_store.load();
             }
+            if let Some(native_timer) = self.native_timer.as_ref() {
+                if let Err(error) = native_timer.load() {
+                    error!("load the native timer engine failed: {error}");
+                    result = false;
+                }
+            }
             #[cfg(feature = "extended_timeline")]
             if let Some(materializer) = self.extended_timeline_materializer.as_ref() {
                 if let Err(error) = materializer.refresh_cleanup_fence() {
@@ -869,7 +875,7 @@ impl LocalFileMessageStore {
                 if let Some(native_timer) = self.native_timer.clone() {
                     let _ = native_timer.stop_gracefully().await;
                     if persist_timer_storage {
-                        native_timer.persist_at_shutdown();
+                        native_timer.persist_at_shutdown(self.dispatch_behind_bytes() <= 0);
                     }
                 }
             }
