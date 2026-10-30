@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use rocketmq_store_local::timer::native_format::native_lane;
+use rocketmq_store_local::timer::native_format::NativeBucketId;
+use rocketmq_store_local::timer::native_format::NativeBucketKind;
 use rocketmq_store_local::timer::native_format::NativeDueCursor;
 use tempfile::tempdir;
 use tempfile::TempDir;
@@ -127,26 +129,36 @@ fn due_timers_come_out_in_deadline_then_timer_cq_order_and_never_early() {
 }
 
 #[test]
-fn an_hour_bucket_loads_once_its_hour_comes_within_the_near_window() {
+fn an_hour_is_split_into_minute_runs_and_a_minute_loads_once_it_comes_near() {
     let root = tempdir().unwrap();
     let engine = open(&root, config(), H0);
     ingest(
         &engine,
-        &[timer(1, H0 + 5 * MINUTE_MS), timer(2, H0 + 3 * HOUR_MS + 1)],
+        &[
+            timer(1, H0 + 5 * MINUTE_MS),
+            timer(2, H0 + 3 * HOUR_MS + 1),
+            timer(4, H0 + 3 * HOUR_MS + 30 * MINUTE_MS),
+        ],
         H0,
     );
     assert_eq!(offsets(&due(&engine, H0 + 5 * MINUTE_MS)), vec![1]);
-    assert_eq!(engine.counts(), (0, 0, 2));
-    // The later bucket waits in its file until ten minutes before its hour.
+    let counts = engine.counts();
+    assert_eq!((counts.wheel, counts.hours, counts.minutes), (0, 1, 1));
+    // The later hour waits in its bucket until ten minutes before it starts.
     assert_eq!(engine.next_deadline_ms(), Some(H0 + 3 * HOUR_MS - 10 * MINUTE_MS));
     assert!(due(&engine, H0 + 3 * HOUR_MS - 10 * MINUTE_MS - 1).is_empty());
-    assert_eq!(engine.counts().0, 0);
+    assert_eq!(engine.counts().hours, 1);
     assert!(due(&engine, H0 + 3 * HOUR_MS - 10 * MINUTE_MS).is_empty());
-    assert_eq!(engine.counts().0, 1);
+    // Split into its two minutes; only the first is near enough to load.
+    let counts = engine.counts();
+    assert_eq!((counts.wheel, counts.hours, counts.minutes), (1, 0, 3));
+    assert_eq!(engine.next_deadline_ms(), Some(H0 + 3 * HOUR_MS + 1_000));
 
-    // A timer indexed into a loaded hour goes straight to the wheel.
+    // A timer indexed into a loaded minute goes straight to the wheel.
     ingest(&engine, &[timer(3, H0 + 3 * HOUR_MS)], H0 + 2 * HOUR_MS);
     assert_eq!(offsets(&due(&engine, H0 + 3 * HOUR_MS + 1)), vec![3, 2]);
+    assert_eq!(engine.counts().wheel, 0);
+    assert_eq!(offsets(&due(&engine, H0 + 3 * HOUR_MS + 30 * MINUTE_MS)), vec![4]);
 }
 
 #[test]
@@ -201,7 +213,7 @@ fn sources_past_the_mid_horizon_or_the_maximum_delay_are_not_indexed() {
 }
 
 #[test]
-fn past_the_memory_budget_only_started_hours_load() {
+fn past_the_memory_budget_only_started_minutes_load() {
     let root = tempdir().unwrap();
     let config = NativeTimerConfig {
         near_window_ms: 3 * HOUR_MS,
@@ -213,18 +225,18 @@ fn past_the_memory_budget_only_started_hours_load() {
     sources.extend((4..=6).map(|cq| timer(cq, H0 + 2 * HOUR_MS + cq)));
     ingest(&engine, &sources, H0);
 
-    // Both hours are within the window, but the first fills the budget.
+    // Both minutes are within the window, but the first fills the budget.
     assert!(due(&engine, H0 + 10 * MINUTE_MS).is_empty());
-    assert_eq!(engine.counts().0, 3);
+    assert_eq!(engine.counts().wheel, 3);
     assert!(due(&engine, H0 + HOUR_MS - 1).is_empty());
-    assert_eq!(engine.counts().0, 3);
-    // Once its hour has started, a bucket loads whatever the budget says, so undelivered
+    assert_eq!(engine.counts().wheel, 3);
+    // Once its minute has started, a run loads whatever the budget says, so undelivered
     // earlier timers never hold back due ones.
     assert_eq!(offsets(&due(&engine, H0 + 2 * HOUR_MS + 10)), vec![1, 2, 3, 4, 5, 6]);
 }
 
 #[test]
-fn delivered_timers_free_the_budget_for_the_next_hour() {
+fn delivered_timers_free_the_budget_for_the_next_minute() {
     let root = tempdir().unwrap();
     let config = NativeTimerConfig {
         near_window_ms: 3 * HOUR_MS,
@@ -238,7 +250,7 @@ fn delivered_timers_free_the_budget_for_the_next_hour() {
 
     assert_eq!(offsets(&due(&engine, H0 + HOUR_MS + 10)), vec![1, 2, 3]);
     assert!(due(&engine, H0 + HOUR_MS + 20).is_empty());
-    assert_eq!(engine.counts().0, 3);
+    assert_eq!(engine.counts().wheel, 3);
 }
 
 #[test]
@@ -268,7 +280,7 @@ fn a_crash_replays_the_sources_after_the_checkpoint_and_redelivers_no_delivered_
     let (engine, recovered) = NativeTimerEngine::open(root.path(), config(), H0 + 3_000).unwrap();
     assert_eq!(recovered, Some(checkpoint));
     assert_eq!(engine.source_frontier(), 5);
-    assert_eq!(engine.counts().1, 1);
+    assert_eq!(engine.counts().recalls, 1);
     // The replay of the Timer CQ from the checkpoint brings back what it did not cover.
     ingest(&engine, &[timer(5, H0 + 5_000), timer(6, H0 + 6_000)], H0 + 3_000);
     let due = due(&engine, H0 + 10_000);
@@ -332,6 +344,78 @@ fn a_lane_watermark_never_moves_back() {
         engine.checkpoint(0, H0).unwrap().lane_watermarks[usize::from(lane())],
         ahead
     );
+}
+
+/// The file of the hour bucket starting at `start_ms`.
+fn hour_file(engine: &NativeTimerEngine, start_ms: i64) -> std::path::PathBuf {
+    let hour = NativeBucketId::starting_at(NativeBucketKind::Hour, start_ms).unwrap();
+    engine.storage().root().join(hour.relative_path())
+}
+
+#[test]
+fn a_split_hour_bucket_is_deleted_only_once_a_checkpoint_leaves_it_out() {
+    let root = tempdir().unwrap();
+    let engine = open(&root, config(), H0);
+    ingest(
+        &engine,
+        &[timer(1, H0 + HOUR_MS + 1_000), timer(2, H0 + HOUR_MS + 61_000)],
+        H0,
+    );
+    assert!(due(&engine, H0 + HOUR_MS - 10 * MINUTE_MS).is_empty());
+    assert_eq!(engine.counts().minutes, 2);
+    // Split and retired, but the last checkpoint may still name it.
+    assert!(hour_file(&engine, H0 + HOUR_MS).exists());
+
+    let checkpoint = engine.checkpoint(COMMIT_LOG_END, H0).unwrap();
+    assert!(checkpoint
+        .buckets
+        .iter()
+        .all(|bucket| bucket.bucket.kind() == NativeBucketKind::Minute));
+    assert_eq!(checkpoint.buckets.len(), 2);
+    assert!(!hour_file(&engine, H0 + HOUR_MS).exists());
+    drop(engine);
+
+    let engine = open(&root, config(), H0 + HOUR_MS);
+    let counts = engine.counts();
+    assert_eq!((counts.hours, counts.minutes), (0, 2));
+    assert_eq!(offsets(&due(&engine, H0 + HOUR_MS + 61_000)), vec![1, 2]);
+}
+
+#[test]
+fn a_crash_before_the_checkpoint_that_drops_a_split_hour_recovers_the_hour_bucket() {
+    let root = tempdir().unwrap();
+    let engine = open(&root, config(), H0);
+    ingest(
+        &engine,
+        &[timer(1, H0 + HOUR_MS + 1_000), timer(2, H0 + HOUR_MS + 61_000)],
+        H0,
+    );
+    engine.checkpoint(COMMIT_LOG_END, H0).unwrap();
+    // Split after the checkpoint, then lost.
+    assert!(due(&engine, H0 + HOUR_MS - 10 * MINUTE_MS).is_empty());
+    drop(engine);
+
+    let engine = open(&root, config(), H0 + HOUR_MS);
+    let counts = engine.counts();
+    assert_eq!((counts.hours, counts.minutes), (1, 0));
+    // Split again, and every timer comes out once.
+    assert_eq!(offsets(&due(&engine, H0 + HOUR_MS + 61_000)), vec![1, 2]);
+}
+
+#[test]
+fn a_timer_of_a_split_hour_goes_to_its_minute_run() {
+    let root = tempdir().unwrap();
+    let engine = open(&root, config(), H0);
+    ingest(&engine, &[timer(1, H0 + 1_000)], H0);
+    assert_eq!(offsets(&due(&engine, H0 + 1_000)), vec![1]);
+    // The hour is split, but this minute is beyond the near window.
+    ingest(&engine, &[timer(2, H0 + 40 * MINUTE_MS)], H0);
+    let counts = engine.counts();
+    assert_eq!((counts.wheel, counts.hours, counts.minutes), (0, 0, 2));
+    assert!(due(&engine, H0 + 30 * MINUTE_MS - 1).is_empty());
+    assert!(due(&engine, H0 + 30 * MINUTE_MS).is_empty());
+    assert_eq!(engine.counts().wheel, 1);
+    assert_eq!(offsets(&due(&engine, H0 + 40 * MINUTE_MS)), vec![2]);
 }
 
 #[test]
