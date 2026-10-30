@@ -62,7 +62,6 @@ use tracing::warn;
 use super::config::NativeTimerConfig;
 use super::delivery::NativeCommitLogRead;
 use super::delivery::NativeCommitLogReader;
-use super::delivery::NativeDueBatch;
 use super::delivery::NativeTimerWriter;
 use super::delivery::NativeWriteOutcome;
 use super::engine::NativeEngineError;
@@ -155,6 +154,15 @@ struct Settings {
 struct VisibilitySnapshot {
     observed_at_ms: i64,
     queue_offset: i64,
+}
+
+/// What one round of Due batches did.
+#[derive(Default)]
+struct Round {
+    /// Timers that left the wheel.
+    settled: usize,
+    /// Whether a lane took a full batch, so more may be due.
+    full_lane: bool,
 }
 
 /// What the service did since the store started.
@@ -617,41 +625,77 @@ impl NativeTimerService {
     /// returns how many left the wheel: written while `epoch` stays current, or, on a Broker
     /// that does not deliver, counted delivered as far as its master wrote them.
     async fn deliver_due(self: &Arc<Self>, mode: DueMode, max_messages: usize) -> Result<usize, TimerEngineError> {
+        let mut done = 0usize;
+        // Rounds go on while a lane comes back with a full batch: the pipeline runs another Due
+        // batch only after a full one, and fewer lanes than configured may hold due timers.
+        while done < max_messages {
+            let round = self.deliver_round(mode, max_messages - done).await?;
+            done = done.saturating_add(round.settled);
+            if !round.full_lane || round.settled == 0 {
+                break;
+            }
+        }
+        Ok(done)
+    }
+
+    /// One batch of each lane without a batch out, the lanes prepared in parallel.
+    async fn deliver_round(self: &Arc<Self>, mode: DueMode, max_messages: usize) -> Result<Round, TimerEngineError> {
         if let DueMode::Write { epoch } = mode {
             if !self.role.is_current_delivery_epoch(epoch) {
-                return Ok(0);
+                return Ok(Round::default());
             }
         }
         self.advance_visibility();
         let now_ms = self.now_ms();
         if self.engine.next_deadline_ms().is_none_or(|deadline| deadline > now_ms) {
-            return Ok(0);
+            return Ok(Round::default());
         }
         let claimed = self.claim_lanes();
-        let service = Arc::clone(self);
-        let lanes: Vec<u16> = claimed.iter().map(|claim| claim.lane).collect();
+        if claimed.is_empty() {
+            return Ok(Round::default());
+        }
+        let per_lane = self
+            .settings
+            .batch_messages
+            .min(max_messages.div_ceil(claimed.len()))
+            .max(1);
         // Counted before any timer leaves the wheel; only a settled batch is uncounted.
         self.batches_out.fetch_add(1, Ordering::AcqRel);
-        let prepared = self
-            .runtime_scope
-            .spawn_io("timer-native-prepare", move || {
-                service.prepare_lanes(&lanes, now_ms, max_messages)
+        let prepared = join_all(claimed.iter().map(|claim| {
+            let service = Arc::clone(self);
+            let lane = claim.lane;
+            self.runtime_scope.spawn_io("timer-native-prepare", move || {
+                let batch = service.engine.prepare_due(
+                    lane,
+                    now_ms,
+                    per_lane,
+                    &service.context,
+                    service.settings.skip_unknown_error,
+                );
+                if let Ok(batch) = &batch {
+                    service.note_blocked(lane, batch.blocked_at);
+                }
+                batch
             })
-            .await;
-        let prepared = match prepared {
-            Ok(Ok(prepared)) => prepared,
-            Ok(Err(error)) => {
-                // A failed load takes nothing from the wheel.
-                self.batches_out.fetch_sub(1, Ordering::AcqRel);
-                return Err(TimerEngineError::Storage(std::io::Error::other(error)));
+        }))
+        .await;
+        let mut batches = Vec::with_capacity(prepared.len());
+        let mut failure = None;
+        for result in prepared {
+            // A lane that failed to load took nothing from the wheel; the others still deliver.
+            match result {
+                Ok(Ok(batch)) if !batch.is_empty() => batches.push(batch),
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => failure = Some(TimerEngineError::Storage(std::io::Error::other(error))),
+                Err(error) => failure = Some(TimerEngineError::Storage(std::io::Error::other(error))),
             }
-            Err(error) => return Err(TimerEngineError::Storage(std::io::Error::other(error))),
-        };
+        }
+        let full_lane = batches.iter().any(|batch| batch.len() >= per_lane);
         let written = match mode {
             DueMode::Write { epoch } => {
                 let writer = NativeWriter { service: self };
                 join_all(
-                    prepared
+                    batches
                         .into_iter()
                         .map(|batch| batch.write(&writer, epoch, self.settings.inflight_writes)),
                 )
@@ -661,10 +705,10 @@ impl NativeTimerService {
                 // One at a time: a token taken behind a timer the master did not write would be
                 // lost when that timer goes back into the wheel.
                 let writer = ObservingWriter { feed: &self.feed };
-                join_all(prepared.into_iter().map(|batch| batch.write(&writer, 0, 1))).await
+                join_all(batches.into_iter().map(|batch| batch.write(&writer, 0, 1))).await
             }
         };
-        let mut done = 0usize;
+        let mut settled_total = 0usize;
         for batch in written {
             let report = self.engine.settle(batch);
             let settled = report
@@ -673,7 +717,7 @@ impl NativeTimerService {
                 .saturating_add(report.recalled)
                 .saturating_add(report.cleaned_up)
                 .saturating_add(report.skipped);
-            done = done.saturating_add(settled);
+            settled_total = settled_total.saturating_add(settled);
             let counters = &self.counters;
             match mode {
                 DueMode::Write { .. } => {
@@ -688,36 +732,13 @@ impl NativeTimerService {
         }
         self.batches_out.fetch_sub(1, Ordering::AcqRel);
         drop(claimed);
-        Ok(done)
-    }
-
-    /// Prepares a batch of each of `lanes`, up to `max_messages` in all. Blocking.
-    fn prepare_lanes(
-        &self,
-        lanes: &[u16],
-        now_ms: i64,
-        max_messages: usize,
-    ) -> Result<Vec<NativeDueBatch>, NativeEngineError> {
-        let mut remaining = max_messages;
-        let mut batches = Vec::new();
-        for &lane in lanes {
-            if remaining == 0 {
-                break;
-            }
-            let batch = self.engine.prepare_due(
-                lane,
-                now_ms,
-                remaining.min(self.settings.batch_messages),
-                &self.context,
-                self.settings.skip_unknown_error,
-            )?;
-            self.note_blocked(lane, batch.blocked_at);
-            remaining = remaining.saturating_sub(batch.len());
-            if !batch.is_empty() {
-                batches.push(batch);
-            }
+        match failure {
+            Some(error) if settled_total == 0 => Err(error),
+            _ => Ok(Round {
+                settled: settled_total,
+                full_lane,
+            }),
         }
-        Ok(batches)
     }
 
     /// Claims each lane without a batch out, starting after the lane the last call started at,
@@ -815,7 +836,7 @@ impl NativeTimerService {
             )
             .expect("a non-empty budget")
         };
-        while handle.enqueue_source(budget()).await.expect("index sources").messages > 0 {}
+        self.index_all().await;
         let Some(epoch) = self.role.capture_delivery_epoch() else {
             return 0;
         };
@@ -830,6 +851,30 @@ impl NativeTimerService {
             }
             delivered += progress.messages;
         }
+    }
+
+    /// Indexes every Timer CQ record.
+    pub(crate) async fn index_all(self: &Arc<Self>) {
+        let handle = NativeTimerHandle(Arc::clone(self));
+        let budget = || {
+            WorkBudget::try_new(
+                1_024,
+                64 * 1024 * 1024,
+                std::time::Instant::now() + Duration::from_secs(10),
+            )
+            .expect("a non-empty budget")
+        };
+        while handle.enqueue_source(budget()).await.expect("index sources").messages > 0 {}
+    }
+
+    /// Runs one Due batch of up to `max_messages` while this Broker delivers.
+    pub(crate) async fn deliver_once(self: &Arc<Self>, max_messages: usize) -> usize {
+        let Some(epoch) = self.role.capture_delivery_epoch() else {
+            return 0;
+        };
+        self.deliver_due(DueMode::Write { epoch }, max_messages)
+            .await
+            .expect("deliver due timers")
     }
 
     pub(crate) fn checkpoint_now(&self) {
