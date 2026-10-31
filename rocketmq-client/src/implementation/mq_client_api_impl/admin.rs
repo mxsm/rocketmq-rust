@@ -224,15 +224,6 @@ impl MQClientAPIImpl {
         }
     }
 
-    pub(crate) async fn get_kv_config_value(
-        &self,
-        namespace: CheetahString,
-        key: CheetahString,
-        timeout_millis: u64,
-    ) -> ClientResult<Option<CheetahString>> {
-        self.get_kvconfig_value(namespace, key, timeout_millis).await
-    }
-
     #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_kvconfig_value(
         &self,
@@ -281,16 +272,6 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
-    #[cfg(feature = "admin-mutation")]
-    pub(crate) async fn delete_kv_config_value(
-        &self,
-        namespace: CheetahString,
-        key: CheetahString,
-        timeout_millis: u64,
-    ) -> ClientResult<()> {
-        self.delete_kvconfig_value(namespace, key, timeout_millis).await
-    }
-
     pub(crate) async fn get_kvlist_by_namespace(
         &self,
         namespace: CheetahString,
@@ -327,14 +308,6 @@ impl MQClientAPIImpl {
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
-    }
-
-    pub(crate) async fn get_kv_list_by_namespace(
-        &self,
-        namespace: CheetahString,
-        timeout_millis: u64,
-    ) -> ClientResult<rocketmq_protocol::protocol::body::kv_table::KVTable> {
-        self.get_kvlist_by_namespace(namespace, timeout_millis).await
     }
 
     #[cfg(feature = "admin-mutation")]
@@ -384,17 +357,6 @@ impl MQClientAPIImpl {
             ));
         }
         Ok(())
-    }
-
-    #[cfg(feature = "admin-mutation")]
-    pub(crate) async fn put_kv_config_value(
-        &self,
-        namespace: CheetahString,
-        key: CheetahString,
-        value: CheetahString,
-        timeout_millis: u64,
-    ) -> ClientResult<()> {
-        self.put_kvconfig_value(namespace, key, value, timeout_millis).await
     }
 
     #[cfg(feature = "admin-mutation")]
