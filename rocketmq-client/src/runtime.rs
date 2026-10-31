@@ -624,31 +624,6 @@ where
         .map_err(io::Error::other)
 }
 
-pub(crate) fn spawn_delayed_client_action_with_context<F>(
-    context: &ChildServiceContext,
-    task_name: &'static str,
-    delay: Duration,
-    action: F,
-) where
-    F: FnOnce() + Send + 'static,
-{
-    if delay.is_zero() {
-        action();
-        return;
-    }
-
-    if let Err(error) = spawn_background_client_task_with_context(
-        context,
-        task_name,
-        Box::pin(async move {
-            tokio::time::sleep(delay).await;
-            action();
-        }),
-    ) {
-        tracing::error!(%error, task_name, "failed to spawn delayed client action");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicUsize;
