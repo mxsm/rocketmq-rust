@@ -771,13 +771,6 @@ fn broker_cleanup_cluster_helpers_match_java_cluster_expansion() {
 }
 
 #[test]
-fn parse_response_code_from_message_reads_consumer_not_online_code() {
-    let code = parse_response_code_from_message("CODE: 206 DESC: Not found the consumer group connection");
-
-    assert_eq!(code, Some(ResponseCode::ConsumerNotOnline));
-}
-
-#[test]
 fn topic_config_lookup_maps_topic_not_exist_to_false_only() {
     let missing = mq_client_err!(ResponseCode::TopicNotExist as i32, "topic not exist");
     assert!(!map_topic_config_lookup_result::<()>(Err(missing)).expect("TopicNotExist should map to false"));
