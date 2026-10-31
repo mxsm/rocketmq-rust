@@ -75,7 +75,7 @@ Unofficial Rust implementation of Apache RocketMQ
 rust-version = "1.95.0"
 [workspace.dependencies]
 rocketmq-admin-core  = { version = "1.1.0", path = "./rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
-rocketmq-runtime     = { version = "1.1.0", path = "./rocketmq-runtime" }
+rocketmq-runtime     = { version = "1.1.0", path = "./rocketmq-runtime", default-features = false }
 rocketmq-macros      = { version = "1.1.0", path = "./rocketmq-macros" }
 rocketmq-filter      = { version = "1.1.0", path = "./rocketmq-filter" }
 rocketmq-store       = { version = "1.1.0", path = "./rocketmq-store", default-features = true }

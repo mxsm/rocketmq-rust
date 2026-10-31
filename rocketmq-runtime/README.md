@@ -13,6 +13,17 @@ persistence, and shutdown diagnostics.
 
 [Unreleased API migration and contract corrections](MIGRATION.md)
 
+## Features
+
+The default-enabled `config-file` feature provides `common::parse_config_file`,
+including file parsing and safe configuration-error diagnostics. Consumers that
+only need runtime services can disable default features to omit the `config`
+dependency and its format parsers. Consumers already disabling default features
+must explicitly enable `config-file` if they use that module.
+
+The root workspace disables runtime default features. Broker, NameServer, and
+Controller explicitly enable `config-file` to preserve their configuration loading
+and diagnostics. Supported configuration formats are unchanged.
 
 ## Runtime Model
 
