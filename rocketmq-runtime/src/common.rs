@@ -14,7 +14,8 @@
 
 /// File utils types and operations.
 pub mod file_utils;
-/// Parse config file types and operations.
+/// File configuration parsing and safe error diagnostics, available with `config-file`.
+#[cfg(feature = "config-file")]
 pub mod parse_config_file;
 /// System clock types and operations.
 pub mod system_clock;

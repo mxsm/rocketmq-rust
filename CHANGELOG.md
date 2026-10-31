@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(runtime):** Make file configuration helpers optional behind the default-enabled `config-file` feature, preserving Broker, NameServer, and Controller configuration support while removing format parsers from runtime-only consumers. Consumers using `common::parse_config_file` with default features disabled must enable `config-file` explicitly.
 - **improve(dashboard-tauri):** Refresh the desktop icon with RocketMQ-Rust branding across PNG, ICO, ICNS, the sidebar, and the favicon, preserving square sidebar sizing at compact widths ([#11880](https://github.com/mxsm/rocketmq-rust/issues/11880)).
 - **refactor(proxy):** Rename the private listener readiness gate to `ListenerReadinessGate`, document its reporting contract, and align the production-readiness source policy with the renamed counter ([#11828](https://github.com/mxsm/rocketmq-rust/issues/11828)).
 - **refactor(proxy):** Rename optional Broker Remoting handler wiring to `broker_remoting_handler` and add `ProxyRuntimeBuilder::with_broker_remoting_handler`; adapter selection, dispatch behavior, diagnostics, and shutdown ordering are unchanged ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
