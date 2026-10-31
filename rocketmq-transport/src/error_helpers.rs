@@ -31,6 +31,7 @@ pub(crate) enum TransportStage {
     Writing,
     AwaitingResponse,
     Read,
+    #[cfg(any(feature = "http-discovery", test))]
     Write,
     Closed,
 }
@@ -44,6 +45,7 @@ impl TransportStage {
             Self::Writing => "writing",
             Self::AwaitingResponse => "awaiting_response",
             Self::Read => "read",
+            #[cfg(any(feature = "http-discovery", test))]
             Self::Write => "write",
             Self::Closed => "closed",
         }
@@ -243,6 +245,7 @@ pub(crate) fn argument_invalid() -> SharedError {
     )
 }
 
+#[cfg(feature = "http-discovery")]
 #[track_caller]
 pub(crate) fn argument_invalid_caused_by(source: impl StdError + Send + Sync + 'static) -> SharedError {
     caused_by(
