@@ -105,8 +105,6 @@ cheetah-string = { workspace = true }
 dashmap        = { workspace = true }
 arc-swap       = "1.9"
 
-crossbeam-skiplist = "0.1"
-
 futures = "0.3.32"
 
 [dev-dependencies]

@@ -83,11 +83,8 @@ rocketmq-error = { workspace = true }
 rocketmq-model = { workspace = true }
 rocketmq-runtime = { workspace = true }
 
-anyhow.workspace = true
 cheetah-string.workspace = true
 chrono = "0.4.45"
-chrono-tz = "0.10.4"
-iana-time-zone = "0.1.64"
 dashmap.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
@@ -99,7 +96,6 @@ tracing.workspace = true
 tracing-appender.workspace = true
 tracing-log.workspace = true
 tracing-subscriber.workspace = true
-time = "0.3.47"
 
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
