@@ -45,3 +45,30 @@ impl AdminSession {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::{
+        acl_workspace::{classify_acl_failure, AclRemoteFailure},
+        AdminError,
+    };
+
+    #[test]
+    fn acl_sdk_failure_promotion_keeps_wire_code_classification_and_redacts_details() {
+        for (code, expected) in [
+            (16, AclRemoteFailure::AccessDenied),
+            (3, AclRemoteFailure::Unsupported),
+            (1, AclRemoteFailure::Unconfirmed),
+        ] {
+            let sdk = rocketmq_client_rust::ClientError::broker_operation_failed(
+                "acl_workspace",
+                code,
+                "private-acl-material",
+            );
+            let error = AdminError::from_error("acl_workspace", crate::IntoCanonicalError::into_canonical_error(sdk));
+            assert_eq!(classify_acl_failure(&error), expected);
+            assert!(!format!("{error:?} {error}").contains("private-acl-material"));
+            assert!(std::error::Error::source(&error).is_some());
+        }
+    }
+}
