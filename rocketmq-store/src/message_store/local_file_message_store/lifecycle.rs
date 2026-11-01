@@ -529,6 +529,8 @@ impl LocalFileMessageStore {
                 if let Err(error) = native_timer.load() {
                     error!("load the native timer engine failed: {error}");
                     result = false;
+                } else if let Some(start) = native_timer.replay_start() {
+                    self.replay_native_deliveries(start);
                 }
             }
             #[cfg(feature = "extended_timeline")]
@@ -602,6 +604,8 @@ impl LocalFileMessageStore {
                 tiered_store.start().await?;
             }
 
+            // Before Reput starts: a slave keeps the delivery tokens from the first message on.
+            self.sync_native_timer_role();
             self.reput_message_service
                 .set_reput_from_offset(self.commit_log.get_confirm_offset());
             self.ensure_root_dependencies_wired("start")?;

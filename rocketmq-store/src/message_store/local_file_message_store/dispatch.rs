@@ -310,6 +310,78 @@ impl LocalFileMessageStore {
         }
     }
 
+    /// Reads the native timer's deliveries back from the CommitLog, from `start` to the confirm
+    /// offset, into the feed that lost them with the last run. A slave then follows the timers
+    /// they name, and a master does not write those messages again.
+    pub(super) fn replay_native_deliveries(&self, start: i64) {
+        let commit_log = self.commit_log.read_handle();
+        let end = commit_log.get_confirm_offset();
+        let mut offset = start.max(commit_log.get_min_offset());
+        if end.saturating_sub(offset) > NATIVE_REPLAY_MAX_BYTES {
+            offset = commit_log.roll_next_file(end - NATIVE_REPLAY_MAX_BYTES);
+            warn!(
+                start,
+                offset, "the native timer deliveries start too far back; reading only the latest ones"
+            );
+        }
+        let read_bytes = reput_read_max_bytes(self.message_store_config.as_ref());
+        let mut replayed = 0usize;
+        while offset < end {
+            let Some(mut result) = commit_log.get_data_bounded(offset, read_bytes) else {
+                break;
+            };
+            offset = result.start_offset() as i64;
+            let batch_start = offset;
+            let mut read_size = 0i32;
+            while read_size < result.size() && offset < end {
+                let Some(bytes) = result.bytes_mut() else {
+                    break;
+                };
+                if !reput_record_is_complete(bytes) {
+                    break;
+                }
+                let segment_remaining =
+                    usize::try_from(commit_log.roll_next_file(offset).saturating_sub(offset)).unwrap_or(0);
+                let request = commit_log::check_message_and_return_size_in_segment(
+                    commit_log::CommitLogRecordWindow {
+                        bytes,
+                        segment_remaining,
+                    },
+                    false,
+                    false,
+                    false,
+                    &self.message_store_config,
+                    self.max_delay_level,
+                    self.delay_level_table_ref(),
+                );
+                if !request.success {
+                    warn!(offset, "stop reading the native timer deliveries back at a bad record");
+                    return;
+                }
+                if request.msg_size == 0 {
+                    offset = commit_log.roll_next_file(offset);
+                    break;
+                }
+                let size = if request.buffer_size == -1 {
+                    request.msg_size
+                } else {
+                    request.buffer_size
+                };
+                self.native_delivery_feed.replay(&request);
+                replayed += 1;
+                offset += i64::from(size);
+                read_size += size;
+            }
+            if offset == batch_start {
+                break;
+            }
+        }
+        info!(
+            start,
+            end, replayed, "read the native timer deliveries back from the CommitLog"
+        );
+    }
+
     pub(super) fn do_recheck_reput_offset_from_dispatchers(&self) {
         let Some(reput_from_offset) = self.reput_message_service.reput_from_offset.as_ref() else {
             return;
@@ -384,6 +456,12 @@ impl CommitLogDispatcherDefault {
             published,
             published_frontier: Arc::new(AtomicI64::new(-1)),
         }
+    }
+
+    /// The end of what every dispatcher has seen, -1 before the first dispatch.
+    #[inline]
+    pub(crate) fn published_frontier_handle(&self) -> Arc<AtomicI64> {
+        Arc::clone(&self.published_frontier)
     }
 
     #[inline]
@@ -938,6 +1016,10 @@ pub(super) struct ReputMessageServiceInner {
     pub(super) notify_message_arrive_in_batch: bool,
     pub(super) runtime_context: ReputRuntimeContext,
 }
+
+/// What a start reads back of the CommitLog at most for the native timer. A slave further behind
+/// its master's deliveries than this writes the rest again if it is promoted.
+const NATIVE_REPLAY_MAX_BYTES: i64 = 1 << 30;
 
 const MIN_REPUT_READ_BYTES: usize = 1024 * 1024;
 const COMMIT_LOG_RECORD_OVERHEAD_BUDGET: i32 = 64 * 1024;
