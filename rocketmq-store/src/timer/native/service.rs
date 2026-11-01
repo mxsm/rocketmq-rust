@@ -71,6 +71,7 @@ use super::engine::NativeSourceKind;
 use super::engine::NativeTimerEngine;
 use super::engine::NativeTimerSource;
 use super::feed::NativeDeliveryFeed;
+use super::feed::NativeFeedMark;
 use crate::base::message_result::PutMessageResult;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::queue::CqUnit;
@@ -225,6 +226,12 @@ pub(crate) struct NativeTimerService {
     batches_out: AtomicUsize,
     /// The deliveries of the master, while this Broker does not deliver.
     feed: Arc<NativeDeliveryFeed>,
+    /// Where the next start reads the deliveries back from.
+    feed_mark: NativeFeedMark,
+    /// The mark this run wrote last.
+    written_feed_mark: AtomicI64,
+    /// The end of what every CommitLog dispatcher has seen, -1 before the first dispatch.
+    dispatched: Arc<AtomicI64>,
     metrics: TimerMetricsRecorder,
     counters: Counters,
 }
@@ -245,6 +252,7 @@ impl NativeTimerService {
         cleanup_pin: Arc<AtomicI64>,
         service_role: NativeServiceRole,
         feed: Arc<NativeDeliveryFeed>,
+        dispatched: Arc<AtomicI64>,
         metrics: TimerMetricsRecorder,
     ) -> Result<Self, NativeServiceError> {
         let clock: Arc<dyn TimerClock> = Arc::new(SystemTimerClock::default());
@@ -300,6 +308,9 @@ impl NativeTimerService {
             retired_marker: retired,
             batches_out: AtomicUsize::new(0),
             feed,
+            feed_mark: NativeFeedMark::new(store_root),
+            written_feed_mark: AtomicI64::new(-1),
+            dispatched,
             metrics,
             counters: Counters::default(),
         })
@@ -324,6 +335,12 @@ impl NativeTimerService {
             }
         }
         Ok(())
+    }
+
+    /// The CommitLog offset this Broker's deliveries are read back from, if an earlier run left
+    /// one.
+    pub(crate) fn replay_start(&self) -> Option<i64> {
+        self.feed_mark.read()
     }
 
     /// Starts the pipeline that runs the Source, Due and checkpoint stages, woken by Reput and
@@ -815,6 +832,15 @@ impl NativeTimerService {
     /// Makes indexed timers and delivery progress durable and moves the CommitLog cleanup pin
     /// to the engine's fence. Blocking.
     fn checkpoint_blocking(&self) -> Result<(), NativeEngineError> {
+        // Read in this order and before the checkpoint: a token kept after the frontier lies at
+        // or past it, and a token taken before the checkpoint is behind its watermark.
+        let dispatched = self.dispatched.load(Ordering::Acquire);
+        let feed_mark = self
+            .feed
+            .lowest_offset()
+            .into_iter()
+            .chain((dispatched >= 0).then_some(dispatched))
+            .min();
         // A Source batch may index past this frontier before the checkpoint takes its own; the
         // fence then stays lower than it needs to, which only keeps more of the CommitLog.
         let frontier = self.engine.source_frontier();
@@ -825,6 +851,14 @@ impl NativeTimerService {
             .map_or_else(|| self.context.commit_log().get_max_offset(), |unit| unit.pos);
         let checkpoint = self.engine.checkpoint(source_fence, self.now_ms())?;
         self.cleanup_pin.store(checkpoint.commit_log_fence, Ordering::Release);
+        // Only now: the mark must not pass what the checkpoint on disk has not settled.
+        if let Some(feed_mark) = feed_mark {
+            if self.written_feed_mark.swap(feed_mark, Ordering::AcqRel) != feed_mark {
+                if let Err(error) = self.feed_mark.write(feed_mark) {
+                    warn!(%error, "save where the native timer deliveries restart failed");
+                }
+            }
+        }
         Ok(())
     }
 }

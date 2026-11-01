@@ -566,6 +566,99 @@ async fn a_slave_follows_a_due_batch_in_one_source_batch() {
 }
 
 #[tokio::test]
+async fn a_slave_follows_both_copies_of_a_timer_sent_twice() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(
+        &mut store,
+        vec![native(timer_message(due_ms, "n0")), native(timer_message(due_ms, "n0"))],
+    )
+    .await;
+    native_timer.index_all().await;
+    put_all(&mut store, vec![delivered_by_master("n0"), delivered_by_master("n0")]).await;
+
+    native_timer.source_once(64).await;
+
+    let metrics = native_metrics(&store);
+    assert_eq!((metrics["followed"], metrics["wheelTimers"]), (2, 0));
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_restarted_slave_reads_the_deliveries_it_had_not_followed_back() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    let keys = ["n0", "n1", "n2"];
+    put_all(&mut store, keys.map(|key| native(timer_message(due_ms, key))).into()).await;
+    native_timer.index_all().await;
+    put_all(&mut store, keys.map(delivered_by_master).into()).await;
+    assert_eq!(native_metrics(&store)["followedTokens"], 3);
+    native_timer.checkpoint_now();
+    drop(native_timer);
+    close(store).await;
+
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("reopen the native store");
+    store.reput_once().await;
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    assert_eq!(native_metrics(&store)["followedTokens"], 3);
+
+    native_timer.source_once(64).await;
+
+    let metrics = native_metrics(&store);
+    assert_eq!(
+        (metrics["followed"], metrics["followedTokens"], metrics["wheelTimers"]),
+        (3, 0, 0)
+    );
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_promoted_slave_that_restarted_does_not_write_what_its_master_wrote() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    let timers = ["n0", "n1"].map(|key| native(timer_message(due_ms, key)));
+    put_all(&mut store, timers.into()).await;
+    native_timer.index_all().await;
+    put_all(&mut store, vec![delivered_by_master("n0")]).await;
+    native_timer.checkpoint_now();
+    drop(native_timer);
+    close(store).await;
+
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("reopen the native store");
+    store.reput_once().await;
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(true);
+
+    assert_eq!(native_timer.process_once().await, 2);
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["n0", "n1"]);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
 async fn a_slave_keeps_the_delivery_it_followed_across_a_restart() {
     let root = tempdir().unwrap();
     let mut store = open(root.path(), TimerStoreMode::Native)
