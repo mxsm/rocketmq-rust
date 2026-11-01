@@ -878,6 +878,20 @@ impl NativeTimerService {
         while handle.enqueue_source(budget()).await.expect("index sources").messages > 0 {}
     }
 
+    /// Runs one Source batch of up to `max_messages` records.
+    pub(crate) async fn source_once(self: &Arc<Self>, max_messages: usize) {
+        let budget = WorkBudget::try_new(
+            max_messages,
+            64 * 1024 * 1024,
+            std::time::Instant::now() + Duration::from_secs(10),
+        )
+        .expect("a non-empty budget");
+        NativeTimerHandle(Arc::clone(self))
+            .enqueue_source(budget)
+            .await
+            .expect("run a Source batch");
+    }
+
     /// Runs one Due batch of up to `max_messages` while this Broker delivers.
     pub(crate) async fn deliver_once(self: &Arc<Self>, max_messages: usize) -> usize {
         let Some(epoch) = self.role.capture_delivery_epoch() else {
@@ -1089,9 +1103,12 @@ impl TimerEngine for NativeTimerHandle {
                 service.index_source_batch(budget.max_messages, budget.max_bytes)
             })
             .await?;
-        // Only a master runs Due batches; a slave follows its master's deliveries here.
+        // Only a master runs Due batches; a slave follows its master's deliveries here, by a
+        // Due batch at a time: a Source batch holds far fewer timers than a master delivers.
         if !self.0.role.is_active() {
-            self.0.deliver_due(DueMode::Observe, budget.max_messages).await?;
+            self.0
+                .deliver_due(DueMode::Observe, self.0.pipeline_config.timer_due_batch_messages)
+                .await?;
         }
         Ok(EngineBatchProgress {
             messages,
