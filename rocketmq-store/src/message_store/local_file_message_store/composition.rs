@@ -546,6 +546,7 @@ impl LocalFileMessageStore {
                 reput_from_offset: None,
                 dispatch_tx: None,
                 inner: None,
+                started: Arc::new(parking_lot::Mutex::new(None)),
                 task_group: None,
             },
             background_index_rebuild_service: BackgroundIndexRebuildService::new(),
