@@ -423,10 +423,21 @@ impl NativeTimerService {
     /// Opens or closes delivery for this Broker; only a master delivers. A Broker that does not
     /// deliver follows the deliveries its master writes.
     pub(crate) fn set_delivering(&self, delivering: bool) {
-        self.feed.set_observing(!delivering);
-        if let Err(error) = self.role.transition(delivering) {
+        if let Err(error) = self.change_delivery_role(delivering, 0) {
             error!("native timer role transition failed closed; delivery remains fenced: {error}");
         }
+    }
+
+    /// Opens or closes delivery under the controller's `external_term`, so the delivery epoch
+    /// follows the controller's terms. A new term fences every batch still out, also when this
+    /// Broker stays master.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of persisting the epoch; delivery stays fenced then.
+    pub(crate) fn change_delivery_role(&self, delivering: bool, external_term: u64) -> std::io::Result<u64> {
+        self.feed.set_observing(!delivering);
+        self.role.transition_with_term(delivering, external_term)
     }
 
     pub(crate) fn engine(&self) -> &NativeTimerEngine {
@@ -872,6 +883,17 @@ impl NativeTimerService {
         let Some(epoch) = self.role.capture_delivery_epoch() else {
             return 0;
         };
+        self.deliver_due(DueMode::Write { epoch }, max_messages)
+            .await
+            .expect("deliver due timers")
+    }
+
+    pub(crate) fn delivery_epoch(&self) -> u64 {
+        self.role.epoch()
+    }
+
+    /// Runs one Due batch under `epoch`, current or not.
+    pub(crate) async fn deliver_under(self: &Arc<Self>, epoch: u64, max_messages: usize) -> usize {
         self.deliver_due(DueMode::Write { epoch }, max_messages)
             .await
             .expect("deliver due timers")
