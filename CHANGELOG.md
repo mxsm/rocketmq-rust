@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix(protocol):** Support flexible JSON headers from non-Java remoting clients by accepting missing serializeTypeCurrentRPC, numeric and case-insensitive languageCode, and serializeType aliases ([#12090](https://github.com/mxsm/rocketmq-rust/issues/12090)).
+
 ### Changed
 
 - **refactor(runtime):** Make file configuration helpers optional behind the default-enabled `config-file` feature, preserving Broker, NameServer, and Controller configuration support while removing format parsers from runtime-only consumers. Consumers using `common::parse_config_file` with default features disabled must enable `config-file` explicitly.

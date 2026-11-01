@@ -163,3 +163,64 @@ fn ext_key_length_matches_java_signed_short_boundary() {
         Some("value")
     );
 }
+
+#[test]
+fn non_java_remoting_client_route_query_decodes_successfully() {
+    use bytes::BufMut;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+
+    // Classic non-Java remoting client payload (e.g. EventHorizon.RocketMQ 0.6.2 .NET):
+    // - languageCode as integer (2 for DOTNET)
+    // - serializeTypeCurrentRPC omitted
+    let json_header = br#"{"code":105,"languageCode":2,"version":317,"opaque":1,"flag":0,"remark":null,"extFields":{"topic":"AttributionTest"}}"#;
+
+    let mut frame = BytesMut::with_capacity(8 + json_header.len());
+    frame.put_i32(i32::try_from(4 + json_header.len()).unwrap());
+    frame.put_i32(RemotingCommand::mark_serialize_type(
+        i32::try_from(json_header.len()).unwrap(),
+        SerializeType::JSON,
+    ));
+    frame.extend_from_slice(json_header);
+
+    let decoded = RemotingCommand::decode(&mut frame)
+        .expect("decoding must succeed")
+        .expect("frame must be complete");
+
+    assert_eq!(decoded.code(), 105);
+    assert_eq!(decoded.language(), LanguageCode::DOTNET);
+    assert_eq!(decoded.version(), 317);
+    assert_eq!(decoded.opaque(), 1);
+    assert_eq!(decoded.get_serialize_type(), SerializeType::JSON);
+
+    let header = decoded
+        .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+        .expect("GetRouteInfoRequestHeader must decode from ext_fields");
+    assert_eq!(header.topic.as_str(), "AttributionTest");
+}
+
+#[test]
+fn language_code_and_serialize_type_deserialize_flexible_shapes() {
+    // Integer languageCode and omitted serializeType
+    let cmd1: RemotingCommand = serde_json::from_str(
+        r#"{"code":105,"languageCode":2,"version":317,"opaque":1,"flag":0,"remark":null,"extFields":{"topic":"TopicA"}}"#,
+    )
+    .expect("should deserialize integer languageCode and default serializeType");
+    assert_eq!(cmd1.code(), 105);
+    assert_eq!(cmd1.language(), LanguageCode::DOTNET);
+    assert_eq!(cmd1.get_serialize_type(), SerializeType::JSON);
+
+    // Case-insensitive string languageCode and serializeType
+    let cmd2: RemotingCommand = serde_json::from_str(
+        r#"{"code":105,"languageCode":"Dotnet","version":317,"opaque":1,"flag":0,"serializeType":"json","extFields":{"topic":"TopicA"}}"#,
+    )
+    .expect("should deserialize mixed-case languageCode and serializeType alias");
+    assert_eq!(cmd2.code(), 105);
+    assert_eq!(cmd2.language(), LanguageCode::DOTNET);
+    assert_eq!(cmd2.get_serialize_type(), SerializeType::JSON);
+
+    // Unknown language code gracefully falls back to OTHER
+    let cmd3: RemotingCommand =
+        serde_json::from_str(r#"{"code":105,"language":99,"version":0,"opaque":1,"flag":0,"extFields":null}"#)
+            .expect("unknown language code should map to OTHER");
+    assert_eq!(cmd3.language(), LanguageCode::OTHER);
+}

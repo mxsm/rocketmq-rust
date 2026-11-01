@@ -32,7 +32,7 @@ const FLAG: u8 = 1 << 4;
 const REMARK: u8 = 1 << 5;
 const EXT_FIELDS: u8 = 1 << 6;
 const SERIALIZE_TYPE: u8 = 1 << 7;
-const REQUIRED_FIELDS: u8 = CODE | LANGUAGE | VERSION | OPAQUE | FLAG | SERIALIZE_TYPE;
+const REQUIRED_FIELDS: u8 = CODE | OPAQUE;
 
 struct JsonHeaderParser<'a> {
     src: &'a [u8],
@@ -671,10 +671,21 @@ fn try_parse_flexible_json_header(src: &[u8]) -> Option<ParsedJsonHeader> {
                 mark_seen(&mut seen, CODE)?;
                 code = parser.parse_i32()?;
             }
-            b"language" => {
+            b"language" | b"languageCode" => {
                 mark_seen(&mut seen, LANGUAGE)?;
-                let value = parser.parse_string()?;
-                language_code = language(&parser.src[value])?;
+                parser.skip_whitespace();
+                if parser.src.get(parser.cursor) == Some(&b'"') {
+                    let value = parser.parse_string()?;
+                    let slice = &parser.src[value];
+                    language_code = language(slice).or_else(|| {
+                        std::str::from_utf8(slice)
+                            .ok()
+                            .and_then(LanguageCode::get_code_from_name)
+                    })?;
+                } else {
+                    let raw_code = parser.parse_i32()?;
+                    language_code = LanguageCode::value_of(raw_code as u8).unwrap_or(LanguageCode::OTHER);
+                }
             }
             b"version" => {
                 mark_seen(&mut seen, VERSION)?;
@@ -706,10 +717,16 @@ fn try_parse_flexible_json_header(src: &[u8]) -> Option<ParsedJsonHeader> {
                     ext_fields = Some(parser.parse_extension_fields()?);
                 }
             }
-            b"serializeTypeCurrentRPC" => {
+            b"serializeTypeCurrentRPC" | b"serializeType" => {
                 mark_seen(&mut seen, SERIALIZE_TYPE)?;
-                let value = parser.parse_string()?;
-                rpc_serialize_type = serialize_type(&parser.src[value])?;
+                parser.skip_whitespace();
+                if parser.src.get(parser.cursor) == Some(&b'"') {
+                    let value = parser.parse_string()?;
+                    rpc_serialize_type = serialize_type(&parser.src[value])?;
+                } else {
+                    let raw_type = parser.parse_i32()?;
+                    rpc_serialize_type = SerializeType::value_of(raw_type as u8)?;
+                }
             }
             _ => return None,
         }
