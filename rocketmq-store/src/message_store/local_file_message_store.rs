@@ -2181,6 +2181,17 @@ impl MessageStoreEngine for LocalFileMessageStore {
         if !self.sync_extended_timeline_controller_role(previous_role, broker_role, external_term)? {
             return Ok(false);
         }
+        // Before the CommitLog role, as Extended does: a failed epoch write keeps the old role
+        // with delivery fenced. `sync_timer_message_store_role` below then finds it in place.
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            native_timer
+                .change_delivery_role(broker_role != BrokerRole::Slave, external_term)
+                .map_err(|error| {
+                    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
+                        .with_detail("failed to persist the native timer delivery epoch")
+                        .with_source(error)
+                })?;
+        }
         self.commit_log.sync_broker_role(broker_role);
         self.refresh_controller_confirm_offset_after_role_change();
         self.sync_timer_message_store_role();

@@ -26,6 +26,7 @@ use bytes::Bytes;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
@@ -697,6 +698,60 @@ async fn one_due_batch_keeps_delivering_while_a_lane_comes_back_full() {
     native_timer.set_delivering(true);
     // Every timer is in one lane, which takes two a batch.
     assert_eq!(native_timer.deliver_once(1_000).await, 5);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn controller_terms_become_delivery_epochs_and_fence_older_batches() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    assert!(store.sync_broker_role_with_term(BrokerRole::Slave, 7).unwrap());
+    assert_eq!(native_timer.delivery_epoch(), 7);
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(
+        &mut store,
+        vec![
+            native(timer_message(due_ms, "n0")),
+            native(timer_message(due_ms, "n1")),
+            delivered_by_master("n0"),
+        ],
+    )
+    .await;
+    assert_eq!(native_timer.process_once().await, 0);
+    assert_eq!(native_metrics(&store)["followed"], 1);
+
+    assert!(store.sync_broker_role_with_term(BrokerRole::SyncMaster, 9).unwrap());
+    assert_eq!(native_timer.delivery_epoch(), 9, "the epoch is the term, not one more");
+    // Elected again under a new term: what the old term took no longer writes.
+    assert!(store.sync_broker_role_with_term(BrokerRole::SyncMaster, 12).unwrap());
+    assert_eq!(native_timer.deliver_under(9, 100).await, 0);
+    assert_eq!(native_timer.deliver_under(12, 100).await, 1);
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["n0", "n1"]);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_role_change_whose_epoch_cannot_persist_fails_and_stays_fenced() {
+    let root = tempdir().unwrap();
+    let store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(true);
+    let lease = root.path().join("config").join("timer-native-role.meta");
+    std::fs::remove_file(&lease).unwrap();
+    std::fs::create_dir(&lease).unwrap();
+
+    assert!(store.sync_broker_role_with_term(BrokerRole::Slave, 20).is_err());
+    let epoch = native_timer.delivery_epoch();
+    assert_eq!(native_timer.deliver_under(epoch, 100).await, 0);
+    std::fs::remove_dir(&lease).unwrap();
     drop(native_timer);
     close(store).await;
 }
