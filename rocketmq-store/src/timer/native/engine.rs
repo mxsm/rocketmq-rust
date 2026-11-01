@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::path::Path;
 
 use bytes::Bytes;
@@ -216,6 +217,9 @@ pub(crate) struct NativeTimerEngine {
     state: Mutex<EngineState>,
     /// Serializes group commits.
     commit: Mutex<()>,
+    /// Timer CQ offsets of the timers in the wheel whose message already landed. A write in
+    /// front of them stayed, so they went back with it to keep the lane's order.
+    pub(super) landed: Mutex<HashSet<i64>>,
 }
 
 impl NativeTimerEngine {
@@ -309,6 +313,7 @@ impl NativeTimerEngine {
             config,
             storage,
             commit: Mutex::new(()),
+            landed: Mutex::new(HashSet::new()),
         };
         Ok((engine, checkpoint))
     }

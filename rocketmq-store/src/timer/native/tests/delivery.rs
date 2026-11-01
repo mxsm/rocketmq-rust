@@ -253,7 +253,7 @@ async fn a_write_that_stays_puts_it_back_with_every_timer_after_it() {
     let commit_log = CommitLog::of(1..=4);
     let writer = Writer::default();
     writer.stays.lock().insert("key-2".to_owned());
-    // Timers 3 and 4 were in flight with timer 2 and land, yet go back with it.
+    // Timers 3 and 4 were in flight with timer 2 and land, and go back with it.
     let (report, _) = run(&engine, H0 + 1_000, &commit_log, &writer, false, 4).await;
     assert_eq!((report.written, report.requeued), (1, 3));
     assert_eq!(writer.keys(), ["key-1", "key-2", "key-3", "key-4"]);
@@ -265,18 +265,48 @@ async fn a_write_that_stays_puts_it_back_with_every_timer_after_it() {
         }
     );
 
-    // One write at a time: none starts after the one that stays.
+    // The timers that landed stay behind timer 2 while it stays.
     let writer = Writer::default();
-    writer.stays.lock().insert("key-3".to_owned());
-    let (report, _) = run(&engine, H0 + 1_000, &commit_log, &writer, false, 1).await;
-    assert_eq!((report.written, report.requeued), (1, 2));
-    assert_eq!(writer.keys(), ["key-2", "key-3"]);
+    writer.stays.lock().insert("key-2".to_owned());
+    let (report, _) = run(&engine, H0 + 1_000, &commit_log, &writer, false, 4).await;
+    assert_eq!((report.written, report.requeued), (0, 3));
+    assert_eq!(writer.keys(), ["key-2"]);
 
+    // They are not written again, and leave with it.
     let writer = Writer::default();
     let (report, _) = run(&engine, H0 + 1_000, &commit_log, &writer, false, 4).await;
-    assert_eq!((report.written, report.requeued), (2, 0));
-    assert_eq!(writer.keys(), ["key-3", "key-4"]);
+    assert_eq!((report.written, report.requeued), (3, 0));
+    assert_eq!(writer.keys(), ["key-2"]);
     assert_eq!(engine.counts().wheel, 0);
+    assert_eq!(
+        watermark(&engine, H0 + 1_000),
+        NativeDueCursor {
+            due_ms: H0 + 1_000,
+            cq_offset: 4,
+        }
+    );
+}
+
+#[tokio::test]
+async fn no_write_starts_after_the_one_that_stays() {
+    let root = tempdir().unwrap();
+    let engine = open(&root, config(), H0);
+    ingest(
+        &engine,
+        &(1..=3).map(|cq| timer(cq, H0 + 1_000)).collect::<Vec<_>>(),
+        H0,
+    );
+    let commit_log = CommitLog::of(1..=3);
+    let writer = Writer::default();
+    writer.stays.lock().insert("key-2".to_owned());
+    let (report, _) = run(&engine, H0 + 1_000, &commit_log, &writer, false, 1).await;
+    assert_eq!((report.written, report.requeued), (1, 2));
+    assert_eq!(writer.keys(), ["key-1", "key-2"]);
+
+    let writer = Writer::default();
+    let (report, _) = run(&engine, H0 + 1_000, &commit_log, &writer, false, 1).await;
+    assert_eq!((report.written, report.requeued), (2, 0));
+    assert_eq!(writer.keys(), ["key-2", "key-3"]);
 }
 
 #[tokio::test]
