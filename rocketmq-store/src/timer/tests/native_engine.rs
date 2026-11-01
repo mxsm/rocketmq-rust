@@ -543,6 +543,29 @@ async fn a_slave_follows_its_master_and_a_promotion_writes_only_what_the_master_
 }
 
 #[tokio::test]
+async fn a_slave_follows_a_due_batch_in_one_source_batch() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    let keys = ["n0", "n1", "n2", "n3", "n4"];
+    let timers = keys.map(|key| native(timer_message(due_ms, key)));
+    put_all(&mut store, timers.into()).await;
+    native_timer.index_all().await;
+    put_all(&mut store, keys.map(delivered_by_master).into()).await;
+
+    native_timer.source_once(1).await;
+
+    let metrics = native_metrics(&store);
+    assert_eq!((metrics["followed"], metrics["followedTokens"]), (5, 0));
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
 async fn a_slave_keeps_the_delivery_it_followed_across_a_restart() {
     let root = tempdir().unwrap();
     let mut store = open(root.path(), TimerStoreMode::Native)
