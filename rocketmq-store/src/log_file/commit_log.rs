@@ -3373,6 +3373,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_lease_renewed_during_an_append_leaves_it_accepted() {
+        for batch in [false, true] {
+            let directory = tempfile::TempDir::new().unwrap();
+            let mut store = new_test_message_store_with_config(
+                directory.path(),
+                MessageStoreConfig {
+                    mapped_file_size_commit_log: 4096,
+                    ha_listen_port: 0,
+                    ..Default::default()
+                },
+                BrokerRole::AsyncMaster,
+                false,
+            );
+            store.init().await.unwrap();
+            let log = store.get_commit_log();
+            let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+            let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+            let renewed = WriteLeaseToken::try_new(authority, 2).unwrap();
+            assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
+            let lease = log.controller_write_lease_state();
+            *log.after_append.lock() = Some(Box::new(move || {
+                assert!(lease.install(renewed, Duration::from_secs(60)));
+            }));
+            let result = if batch {
+                let mut item = rocketmq_model::common::message::message_single::Message::default();
+                item.set_body(Some(Bytes::from_static(b"renewed")));
+                let mut message = append_test_message("renewal-topic", b"unused");
+                message.set_body(rocketmq_protocol::common::message::message_decoder::encode_messages(&[
+                    item,
+                ]));
+                log.put_messages(MessageExtBatch {
+                    message_ext_broker_inner: message,
+                    ..Default::default()
+                })
+                .await
+            } else {
+                log.put_message(append_test_message("renewal-topic", b"renewed")).await
+            };
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+        }
+    }
+
+    #[tokio::test]
     async fn append_execution_evidence_survives_post_append_lease_fence_and_renewal() {
         for batch in [false, true] {
             for replace_lease in [false, true] {
@@ -3400,8 +3443,9 @@ mod tests {
                 assert!(!denied.canonical().unwrap().is_accepted());
 
                 let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+                let next_authority = WriteAuthority::try_new(0, MasterEpoch::try_from(2).unwrap()).unwrap();
                 let token = WriteLeaseToken::try_new(authority, 1).unwrap();
-                let next_token = WriteLeaseToken::try_new(authority, 2).unwrap();
+                let next_token = WriteLeaseToken::try_new(next_authority, 2).unwrap();
                 assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
                 let lease = log.controller_write_lease_state();
                 *log.after_append.lock() = Some(Box::new(move || {

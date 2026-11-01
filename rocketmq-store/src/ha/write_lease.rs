@@ -77,6 +77,9 @@ impl ControllerWriteLeaseState {
             .ok_or(())
     }
 
+    /// Whether a write captured under `expected` still stands: the same authority holds an
+    /// unexpired lease. A renewal raises the generation and leaves the authority as it is, so it
+    /// does not fail the writes in flight under the lease it replaced.
     pub(crate) fn validate(&self, expected: Option<WriteLeaseToken>) -> bool {
         if !self.required {
             return expected.is_none();
@@ -87,7 +90,7 @@ impl ControllerWriteLeaseState {
         self.active
             .lock()
             .as_ref()
-            .is_some_and(|lease| lease.token == expected && Instant::now() < lease.deadline)
+            .is_some_and(|lease| lease.token.authority() == expected.authority() && Instant::now() < lease.deadline)
     }
 
     pub(crate) fn is_write_permitted(&self) -> bool {
@@ -105,7 +108,11 @@ mod tests {
     use super::*;
 
     fn token(generation: u64) -> WriteLeaseToken {
-        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(3).unwrap()).unwrap();
+        token_of_epoch(3, generation)
+    }
+
+    fn token_of_epoch(epoch: i32, generation: u64) -> WriteLeaseToken {
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(epoch).unwrap()).unwrap();
         WriteLeaseToken::try_new(authority, generation).unwrap()
     }
 
@@ -127,6 +134,24 @@ mod tests {
         assert!(state.install(token(4), Duration::from_secs(1)));
         let captured = state.capture().unwrap();
         state.fence();
+        assert!(!state.validate(captured));
+    }
+
+    #[test]
+    fn a_renewal_leaves_a_write_in_flight_standing() {
+        let state = ControllerWriteLeaseState::new(true);
+        assert!(state.install(token(4), Duration::from_secs(60)));
+        let captured = state.capture().unwrap();
+        assert!(state.install(token(5), Duration::from_secs(60)));
+        assert!(state.validate(captured));
+    }
+
+    #[test]
+    fn a_new_authority_fails_a_write_in_flight() {
+        let state = ControllerWriteLeaseState::new(true);
+        assert!(state.install(token_of_epoch(3, 4), Duration::from_secs(60)));
+        let captured = state.capture().unwrap();
+        assert!(state.install(token_of_epoch(4, 5), Duration::from_secs(60)));
         assert!(!state.validate(captured));
     }
 }
