@@ -21,6 +21,90 @@ use rocketmq_dashboard_common::{
 fn second_target() -> ConsumerTargetIdentity {
     ConsumerTargetIdentity::parse("cluster-a", "broker-b", "127.0.0.1:10912").unwrap()
 }
+
+#[gpui::test]
+fn offset_actions_initial_failure_exposes_actual_retry_without_loading_progress(cx: &mut gpui::TestAppContext) {
+    let backend = Arc::new(FakeConsumerBackend::default());
+    backend.queue_inventory(Ok(inventory(vec![group_observation()])));
+    let (root, cx, view) = mount(cx, AppServices::default().with_consumer_backend(backend.clone()));
+    cx.run_until_parked();
+    backend.queue_progress(Err(UiError::new(
+        "Offset query unavailable",
+        UiErrorCode::Connection,
+        true,
+    )));
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.open_route(group().as_str(), ConsumerTab::OffsetActions, window, cx)
+        })
+    });
+    draw(&root, cx, 1440., 1100.);
+    let detail = cx.read(|app| view.read(app).detail_for_test().unwrap());
+    assert!(cx.read(|app| matches!(detail.read(app).store.progress.state, Loadable::Idle)));
+    backend.queue_progress(Ok(progress(-3)));
+    click_debug(cx, "retry-consumer-tab");
+    draw(&root, cx, 1440., 1100.);
+    assert_eq!(backend.calls().progress.len(), 2);
+    assert!(cx.read(|app| matches!(detail.read(app).store.offset_actions.state, Loadable::Ready(_))));
+    assert!(cx.read(|app| matches!(detail.read(app).store.progress.state, Loadable::Idle)));
+    assert!(cx.debug_bounds("consumer-reset-offset-0").is_some());
+}
+
+#[gpui::test]
+fn offset_actions_retained_failure_uses_its_own_warning_and_retry_controls(cx: &mut gpui::TestAppContext) {
+    let backend = Arc::new(FakeConsumerBackend::default());
+    backend.queue_inventory(Ok(inventory(vec![group_observation()])));
+    let (root, cx, view) = mount(cx, AppServices::default().with_consumer_backend(backend.clone()));
+    cx.run_until_parked();
+    backend.queue_progress(Ok(progress(-3)));
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.open_route(group().as_str(), ConsumerTab::OffsetActions, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let detail = cx.read(|app| view.read(app).detail_for_test().unwrap());
+    cx.update(|_, app| {
+        detail.update(app, |detail, cx| {
+            let refresh = detail.store.offset_actions.begin(7).unwrap();
+            assert!(detail.store.offset_actions.finish(
+                refresh,
+                7,
+                Err(UiError::new(
+                    "Offset refresh unavailable",
+                    UiErrorCode::Connection,
+                    true
+                ))
+            ));
+            detail.store.progress.state = Loadable::ready(progress(12)).fail(UiError::new(
+                "Unrelated Progress error",
+                UiErrorCode::Validation,
+                false,
+            ));
+            cx.notify();
+        })
+    });
+    draw(&root, cx, 1440., 1100.);
+    assert!(cx.debug_bounds("consumer-tab-refresh-warning").is_some());
+    assert!(
+        cx.debug_bounds("consumer-reset-offset-0").is_some(),
+        "Retained offset rows remain visible"
+    );
+    backend.queue_progress(Ok(progress(-4)));
+    click_debug(cx, "retry-consumer-tab-refresh");
+    draw(&root, cx, 1440., 1100.);
+    assert_eq!(backend.calls().progress.len(), 2);
+    assert!(cx.read(|app| matches!(detail.read(app).store.offset_actions.state, Loadable::Ready(_))));
+    assert!(cx.read(|app| matches!(detail.read(app).store.progress.state, Loadable::Failed { .. })));
+    // Direct-draw bounds retain removed selectors, so check absence in a fresh render surface.
+    let (fresh_root, fresh_cx) = cx.add_window_view(move |window, cx| Root::new(detail, window, cx));
+    draw(&fresh_root, fresh_cx, 1440., 1100.);
+    assert!(
+        fresh_cx.debug_bounds("consumer-tab-refresh-warning").is_none(),
+        "Offset success must not inherit Progress failure"
+    );
+    assert!(fresh_cx.debug_bounds("retry-consumer-tab-refresh").is_none());
+}
 fn two_target_inventory() -> ConsumerInventory {
     let mut value = inventory(vec![group_observation()]);
     value.targets.push(second_target());
