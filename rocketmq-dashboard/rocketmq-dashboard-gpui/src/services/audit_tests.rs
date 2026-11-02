@@ -127,6 +127,144 @@ fn applied_broker() -> BrokerConfigMutationResult {
 }
 
 #[test]
+fn audit_recovery_warning_tracks_only_unresolved_startup_requests_after_peer_completion() {
+    let fixture = Fixture::new();
+    let executed = Arc::new(AtomicUsize::new(0));
+    fixture.runtime.block_on(async {
+        let capture = || {
+            fixture
+                .services
+                .accept_operation(
+                    0,
+                    AuditAction::MessageConsumed,
+                    OperationResource::Message("opaque-id".into()),
+                )
+                .unwrap()
+                .unwrap()
+        };
+        let old_unresolved = capture();
+        fixture
+            .services
+            .audit
+            .as_ref()
+            .unwrap()
+            .store
+            .accept(old_unresolved.clone())
+            .await
+            .unwrap();
+        let operation = capture();
+        let (started, release) = fixture.services.hold_next_audit_terminal();
+        let observed = executed.clone();
+        let mut completing = Box::pin(fixture.services.run_mutation(
+            "peer-held-terminal",
+            Some(operation),
+            async move {
+                observed.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        ));
+        tokio::select! {
+            result = &mut completing => panic!("terminal completed before release: {result:?}"),
+            result = started => result.unwrap(),
+        }
+        // Two desktop services share one opened file authority, just as SQL peers share a journal.
+        let peer = AppServices::desktop_with_fake_provider(
+            fixture.store.clone(),
+            fixture.auth.clone(),
+            fixture.runtime.root_context().component("peer-services"),
+            fixture.runtime.root_context().component("peer-history"),
+            fixture.runtime.root_context().component("peer-monitor"),
+        );
+        peer.bootstrap().await.unwrap();
+        let mut changes = peer.audit_changes().unwrap();
+        assert_eq!(*changes.borrow_and_update(), 2);
+        assert!(peer.audit_recovery_warning());
+        let query = || AuditQuery {
+            filter: AuditFilter::recent(now_epoch_ms().unwrap()),
+            limit: 200,
+            cursor: None,
+        };
+        peer.query_audit(query()).await.unwrap();
+        assert!(
+            !changes.has_changed().unwrap(),
+            "Unresolved startup requests do not cause refresh notification loops"
+        );
+        let newly_pending = capture();
+        fixture
+            .services
+            .audit
+            .as_ref()
+            .unwrap()
+            .store
+            .accept(newly_pending.clone())
+            .await
+            .unwrap();
+        peer.query_audit(query()).await.unwrap();
+        assert!(
+            !changes.has_changed().unwrap(),
+            "New peer work is not a recovered startup request"
+        );
+        assert_eq!(*changes.borrow_and_update(), 2);
+
+        release.send(()).unwrap();
+        completing.await.unwrap();
+        peer.query_audit(query()).await.unwrap();
+        assert!(
+            peer.audit_recovery_warning(),
+            "The other old request remains unresolved"
+        );
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(*changes.borrow_and_update(), 1);
+        fixture
+            .services
+            .audit
+            .as_ref()
+            .unwrap()
+            .store
+            .finish(
+                old_unresolved,
+                AuditOutcome::Unknown,
+                AuditFacts::default(),
+                now_epoch_ms().unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let backup = fixture.directory.path().join("read-failure-backup.json");
+        std::fs::rename(fixture.store.path(), &backup).unwrap();
+        std::fs::create_dir(fixture.store.path()).unwrap();
+        assert!(peer.query_audit(query()).await.is_err());
+        assert!(peer.audit_pending().await.is_err());
+        assert!(
+            peer.audit_recovery_warning(),
+            "Failed reads cannot prove old requests resolved"
+        );
+        assert_eq!(*changes.borrow(), 1);
+        assert!(!changes.has_changed().unwrap());
+        std::fs::remove_dir(fixture.store.path()).unwrap();
+        std::fs::rename(backup, fixture.store.path()).unwrap();
+        let pending = peer.audit_pending().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].context.request_id, newly_pending.context.request_id);
+        assert!(
+            !peer.audit_recovery_warning(),
+            "A successful pending read clears the last resolved startup warning"
+        );
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(*changes.borrow_and_update(), 0);
+        peer.query_audit(query()).await.unwrap();
+        assert!(!changes.has_changed().unwrap());
+        assert_eq!(
+            fixture.services.audit_pending().await.unwrap(),
+            pending,
+            "Warning reconciliation must not remove actual pending records"
+        );
+    });
+    assert_eq!(executed.load(Ordering::Acquire), 1, "Recovery never replays peer work");
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
+}
+
+#[test]
 fn audit_dropped_waiter_signout_and_owned_shutdown_preserve_the_accepted_actor_and_terminal() {
     let mut fixture = Fixture::new();
     fixture

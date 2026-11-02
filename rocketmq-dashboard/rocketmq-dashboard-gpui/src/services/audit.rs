@@ -15,11 +15,11 @@
 //! Application-owned mutation attribution, terminal writes, and audit-only recovery.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::SystemTime,
 };
@@ -74,7 +74,7 @@ pub(super) struct AuditService {
     // reserved slot retains its logout fact without displacing any admitted Broker outcome.
     failed_logout: parking_lot::Mutex<Option<FailedTerminalWrite>>,
     changes: tokio::sync::watch::Sender<usize>,
-    recovery_loaded: AtomicBool,
+    recovered_pending_ids: parking_lot::Mutex<Option<BTreeSet<String>>>,
     recovered_pending: AtomicUsize,
     #[cfg(test)]
     terminal_gate: parking_lot::Mutex<Option<TerminalGate>>,
@@ -90,7 +90,7 @@ impl AuditService {
             failed_writes: parking_lot::Mutex::new(BTreeMap::new()),
             failed_logout: parking_lot::Mutex::new(None),
             changes,
-            recovery_loaded: AtomicBool::new(false),
+            recovered_pending_ids: parking_lot::Mutex::new(None),
             recovered_pending: AtomicUsize::new(0),
             #[cfg(test)]
             terminal_gate: parking_lot::Mutex::new(None),
@@ -98,17 +98,63 @@ impl AuditService {
     }
 
     pub(super) async fn recover_pending(&self) {
-        if !self.recovery_loaded.load(Ordering::Acquire) {
-            let Ok(pending) = self.store.pending().await else {
-                return;
-            };
-            if self.recovery_loaded.swap(true, Ordering::AcqRel) {
+        if self.recovered_pending_ids.lock().is_some() {
+            return;
+        }
+        let Ok(pending) = self.store.pending().await else {
+            return;
+        };
+        let changed = {
+            let mut recovered = self.recovered_pending_ids.lock();
+            if recovered.is_some() {
                 return;
             }
-            let count = pending.len();
-            self.recovered_pending.store(count, Ordering::Release);
-            self.changes.send_replace(count);
+            let ids: BTreeSet<_> = pending
+                .into_iter()
+                .take(crate::infrastructure::audit_store::MAX_PENDING)
+                .map(|operation| operation.context.request_id)
+                .collect();
+            let count = ids.len();
+            *recovered = Some(ids);
+            self.recovered_pending.swap(count, Ordering::AcqRel) != count
+        };
+        if changed {
+            self.notify_recovery_change();
         }
+    }
+
+    fn reconcile_recovered_pending(&self, pending: &[AuditAcceptedOperation]) {
+        let changed = {
+            let mut recovered = self.recovered_pending_ids.lock();
+            let Some(recovered) = recovered.as_mut() else {
+                return;
+            };
+            let pending: BTreeSet<_> = pending
+                .iter()
+                .map(|operation| operation.context.request_id.as_str())
+                .collect();
+            // Only startup requests can be recovered; another desktop's new work is not a crash.
+            recovered.retain(|request_id| pending.contains(request_id.as_str()));
+            self.recovered_pending.swap(recovered.len(), Ordering::AcqRel) != recovered.len()
+        };
+        if changed {
+            self.notify_recovery_change();
+        }
+    }
+
+    fn notify_recovery_change(&self) {
+        // Publish the current count even if another successful read reconciled first.
+        let _recovered = self.recovered_pending_ids.lock();
+        let count = self.failed_writes.lock().len()
+            + usize::from(self.failed_logout.lock().is_some())
+            + self.recovered_pending.load(Ordering::Acquire);
+        self.changes.send_if_modified(|current| {
+            if *current == count {
+                return false;
+            }
+            *current = count;
+            true
+        });
     }
 
     fn capture(
@@ -552,7 +598,7 @@ impl AppServices {
             .ok_or_else(|| UiError::new("Local audit is unavailable.", UiErrorCode::CapabilityUnavailable, false))?;
         let store = audit.store.clone();
         let work = async move {
-            store.query(query).await.map_err(|error| {
+            store.query_with_pending(query).await.map_err(|error| {
                 super::config_ui_error_with_summary(
                     error,
                     "Audit records could not be read. Restart the applied query if its retained page expired.",
@@ -567,7 +613,10 @@ impl AppServices {
                 true,
             ));
         }
-        result
+        result.map(|(page, pending)| {
+            audit.reconcile_recovered_pending(&pending);
+            page
+        })
     }
 
     pub(crate) async fn audit_pending(&self) -> Result<Vec<AuditAcceptedOperation>, UiError> {
@@ -585,7 +634,7 @@ impl AppServices {
                 true,
             ));
         }
-        result
+        result.inspect(|pending| audit.reconcile_recovered_pending(pending))
     }
 }
 
