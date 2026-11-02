@@ -676,19 +676,6 @@ impl CommitLog {
         )
     }
 
-    fn ensure_active_mapped_file_locked(&self, mapped_file: &DefaultMappedFile) -> StoreResult<()> {
-        let target = self.active_memory_lock_target(mapped_file);
-        let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
-        Self::ensure_active_mapped_file_locked_parts(
-            active_memory_lock,
-            active_memory_lock_present,
-            target,
-            mapped_file.get_file_from_offset(),
-            |manager, target| mapped_file.lock_region(manager, target.category, target.offset, target.len),
-            MemoryLockManager::unlock_region,
-        )
-    }
-
     fn ensure_active_mapped_file_locked_with<F, G>(
         &self,
         mapped_file: &DefaultMappedFile,
@@ -758,10 +745,6 @@ impl CommitLog {
             active_memory_lock_present,
             |manager, handle| manager.unlock_owned_region_with(handle, &mut unlocker),
         )
-    }
-
-    fn release_active_memory_lock(&self) -> StoreResult<()> {
-        self.release_active_memory_lock_with(MemoryLockManager::unlock_region)
     }
 
     fn release_active_memory_lock_with<U>(&self, unlock_region: U) -> StoreResult<()>
