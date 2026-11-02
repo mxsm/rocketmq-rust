@@ -80,7 +80,7 @@ pub(crate) async fn exercise_contract(store: &DashboardStore, peer: &DashboardSt
         StorageErrorKind::Conflict
     );
     let mut loaded = peer.load_desktop().await.unwrap().unwrap();
-    assert_eq!(loaded.document.audit.pending(), &[operation.clone()]);
+    assert_eq!(loaded.document.audit.pending(), std::slice::from_ref(&operation));
     assert!(!loaded.document.settings.authentication_enabled);
 
     let mut monitor = operation.context.clone();
@@ -415,9 +415,11 @@ fn legacy_migration_and_import_failures_preserve_unattributed_data_and_original_
     let runtime = runtime();
     runtime.block_on(async {
         let path = directory.path().join("config.json");
-        let mut legacy = DesktopConfig::default();
-        legacy.schema_version = 1;
-        legacy.revision = 8;
+        let legacy = DesktopConfig {
+            schema_version: 1,
+            revision: 8,
+            ..Default::default()
+        };
         let config_bytes = serde_json::to_vec(&legacy).unwrap();
         std::fs::write(&path, &config_bytes).unwrap();
         let history_bytes = serde_json::to_vec(&serde_json::json!({ "schemaVersion": 1, "points": [point(100, 2.5)] })).unwrap();
