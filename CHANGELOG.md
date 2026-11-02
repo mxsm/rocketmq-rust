@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(client):** Remove four unused crate-private KV API aliases while preserving public Admin methods and request behavior ([#12078](https://github.com/mxsm/rocketmq-rust/issues/12078)).
 - **refactor(store):** Remove unused private CommitLog memory lock wrappers; active append and memory lock lifecycle paths are unchanged ([#12064](https://github.com/mxsm/rocketmq-rust/issues/12064)).
 - **refactor(client):** Remove the obsolete internal admin error text parser; response codes continue to use structured errors ([#12063](https://github.com/mxsm/rocketmq-rust/issues/12063)).
 - **refactor(broker):** Remove unused legacy PopLite command assembly; current response and deferred reply paths are unchanged ([#12062](https://github.com/mxsm/rocketmq-rust/issues/12062)).
