@@ -546,6 +546,7 @@ impl LocalFileMessageStore {
                 reput_from_offset: None,
                 dispatch_tx: None,
                 inner: None,
+                started: Arc::new(parking_lot::Mutex::new(None)),
                 task_group: None,
             },
             background_index_rebuild_service: BackgroundIndexRebuildService::new(),
@@ -964,6 +965,7 @@ impl LocalFileMessageStore {
                 Arc::clone(&self.native_timer_cleanup_pin),
                 native_role,
                 Arc::clone(&self.native_delivery_feed),
+                self.dispatcher.published_frontier_handle(),
                 self.telemetry.timer().clone(),
             )
             .map_err(|error| {
@@ -1219,6 +1221,10 @@ impl LocalFileMessageStore {
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
             timer_message_store.set_should_running_dequeue(self.should_run_timer_dequeue());
         }
+        self.sync_native_timer_role();
+    }
+
+    pub(super) fn sync_native_timer_role(&self) {
         if let Some(native_timer) = self.native_timer.as_ref() {
             native_timer.set_delivering(self.store_runtime_state.broker_role() != BrokerRole::Slave);
         }
