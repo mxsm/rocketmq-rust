@@ -43,6 +43,7 @@ members = [
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
   "rocketmq-tools/rocketmq-store-inspect",
   "rocketmq-dashboard/rocketmq-dashboard-common",
+  "rocketmq-dashboard/rocketmq-dashboard-storage",
 ]
 exclude = [
   "rocketmq-ai/rocketmq-mcp",
