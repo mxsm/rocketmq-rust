@@ -1185,8 +1185,14 @@ fn sign_out_clears_history_sensitive_state_and_rebuilds_page_entities(cx: &mut g
         },
         FakeAuthService::authenticated(),
     );
-    let (dashboard, cx) =
-        cx.add_window_view(move |window, cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
 
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
@@ -1972,6 +1978,155 @@ fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destin
     for (route, capability) in implemented {
         assert_eq!(route.page_capability(), capability);
     }
+}
+
+#[gpui::test]
+fn consumer_logout_clears_retained_jstack_and_sheet_before_audit_completes(cx: &mut gpui::TestAppContext) {
+    consumer_logout_diagnostic_cleanup(cx, false);
+}
+
+#[gpui::test]
+fn consumer_logout_rejects_a_late_diagnostic_reply_while_audit_is_held(cx: &mut gpui::TestAppContext) {
+    consumer_logout_diagnostic_cleanup(cx, true);
+}
+
+fn consumer_logout_diagnostic_cleanup(cx: &mut gpui::TestAppContext, delayed: bool) {
+    use crate::{
+        features::audit::tests::Fixture,
+        route::ConsumerTab,
+        services::{consumers::test_support::FakeConsumerBackend, dlq::test_support::group_inventory},
+        state::Loadable,
+    };
+    use rocketmq_dashboard_common::{ConsumerClientIdentity, ConsumerDiagnosticKind, ConsumerDiagnosticPayload};
+    let fixture = Fixture::new(true);
+    fixture.auth.authenticate("operator", "test-password").unwrap();
+    let backend = Arc::new(FakeConsumerBackend::default());
+    let (sender, completion) = std::sync::mpsc::channel();
+    let services = fixture
+        .services
+        .clone()
+        .with_consumer_backend(backend.clone())
+        .with_runtime_completion(sender);
+    cx.update(gpui_component::init);
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    let completed = |name| {
+        assert_eq!(
+            completion.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+            name
+        )
+    };
+    completed("gpui-bootstrap");
+    cx.run_until_parked();
+    let consumers = cx.read(|app| dashboard.read(app).legacy_pages.consumers.clone());
+    cx.update(|window, app| {
+        consumers.update(app, |view, cx| {
+            view.store.inventory.replace(group_inventory());
+            view.open_route("group-a", ConsumerTab::Clients, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    completed("gpui-service-consumer-clients");
+    cx.run_until_parked();
+    let detail = cx.read(|app| consumers.read(app).detail_for_test().unwrap());
+    let payload = || ConsumerDiagnosticPayload::new(Vec::new(), Some("private-jstack".into()), false);
+    let diagnostic_started = backend.observe_next_diagnostic();
+    let reply = if delayed {
+        Some(backend.queue_pending_diagnostic())
+    } else {
+        backend.queue_diagnostic(Ok(payload()));
+        None
+    };
+    cx.update(|_, app| {
+        detail.update(app, |view, cx| {
+            view.load_diagnostic_for_test(
+                ConsumerClientIdentity::parse("client-a").unwrap(),
+                ConsumerDiagnosticKind::Jstack,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), diagnostic_started)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    if !delayed {
+        completed("gpui-service-consumer-diagnostic");
+        cx.run_until_parked();
+        assert_eq!(
+            cx.read(|app| detail
+                .read(app)
+                .store
+                .diagnostic
+                .state
+                .value()
+                .unwrap()
+                .text()
+                .map(str::to_owned)),
+            Some("private-jstack".into())
+        );
+    }
+    assert!(cx.update(|window, app| window.has_active_sheet(app)));
+    let (logout_started, logout_release) = fixture.services.hold_next_audit_terminal();
+    cx.update(|window, app| dashboard.update(app, |view, cx| view.request_sign_out(window, cx)));
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    let confirm = cx.debug_bounds("confirm-dialog-ok").unwrap();
+    cx.simulate_click(confirm.center(), gpui::Modifiers::default());
+    assert!(
+        cx.read(|app| matches!(detail.read(app).store.diagnostic.state, Loadable::Idle)),
+        "Retained detail must clear before logout persistence"
+    );
+    assert!(
+        !cx.update(|window, app| window.has_active_sheet(app)),
+        "Root must release the sheet at logout confirmation"
+    );
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), logout_started)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    assert!(!fixture.auth.session().is_authenticated());
+    if let Some(mut reply) = reply {
+        // Read-only work is cancelled when its view task is discarded; accepted mutations
+        // use a separate application owner. A delayed diagnostic must lose its receiver.
+        fixture.runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), reply.closed())
+                .await
+                .unwrap();
+        });
+        assert!(reply.send(Ok(payload())).is_err());
+        completed("gpui-service-consumer-diagnostic");
+        cx.run_until_parked();
+        assert!(cx.read(|app| matches!(detail.read(app).store.diagnostic.state, Loadable::Idle)));
+    }
+    assert!(
+        completion.try_recv().is_err(),
+        "Logout is still awaiting the held audit write"
+    );
+    logout_release.send(()).unwrap();
+    completed("gpui-sign-out");
+    cx.run_until_parked();
+    assert!(cx.read(|app| matches!(detail.read(app).store.diagnostic.state, Loadable::Idle)));
+    assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+    assert_eq!(
+        fixture
+            .persisted_events()
+            .iter()
+            .filter(|event| event.operation.action == rocketmq_dashboard_common::AuditAction::LocalLogout)
+            .count(),
+        1
+    );
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
 }
 
 #[gpui::test]
