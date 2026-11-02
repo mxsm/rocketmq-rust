@@ -54,12 +54,18 @@ impl AuditStore {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn query(&self, query: AuditQuery) -> Result<AuditPage, ConfigStoreFailure> {
-        self.config
-            .audit_snapshot()
-            .await?
-            .query(query)
-            .map_err(ConfigStoreFailure::from)
+        self.query_with_pending(query).await.map(|(page, _)| page)
+    }
+
+    pub(crate) async fn query_with_pending(
+        &self,
+        query: AuditQuery,
+    ) -> Result<(AuditPage, Vec<AuditAcceptedOperation>), ConfigStoreFailure> {
+        let snapshot = self.config.audit_snapshot().await?;
+        let page = snapshot.query(query).map_err(ConfigStoreFailure::from)?;
+        Ok((page, snapshot.pending().to_vec()))
     }
 
     pub(crate) async fn pending(&self) -> Result<Vec<AuditAcceptedOperation>, ConfigStoreFailure> {
