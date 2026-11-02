@@ -14,7 +14,10 @@
 
 use std::{fmt, path::PathBuf};
 
+use rocketmq_runtime::ChildServiceContext;
 use serde::{Deserialize, Serialize};
+
+use crate::{atomic_file::write_json_atomically, StorageError, StorageErrorKind};
 
 /// The persisted choice is safe to display and contains no database credentials.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +47,38 @@ impl StorageEngine {
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct StorageSelection {
     pub engine: StorageEngine,
+}
+
+impl StorageSelection {
+    /// Reads only the nonsecret next-launch choice. Missing files have no saved choice.
+    /// Invalid input is reported without modifying or formatting its contents.
+    pub async fn load(path: PathBuf, context: ChildServiceContext) -> Result<Option<Self>, StorageError> {
+        context
+            .storage_io()
+            .spawn_io("native-storage-selection-read", move || {
+                let bytes = match std::fs::read(&path) {
+                    Ok(bytes) => bytes,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(error) => return Err(StorageError::io("read selection", path, error)),
+                };
+                serde_json::from_slice(&bytes)
+                    .map(Some)
+                    .map_err(|error| StorageError::invalid_document(path, error))
+            })
+            .await
+            .map_err(|_| StorageError::new(StorageErrorKind::Runtime))?
+    }
+
+    /// Atomically saves an explicit engine choice; no connection input can be serialized here.
+    pub async fn save(self, path: PathBuf, context: ChildServiceContext) -> Result<(), StorageError> {
+        context
+            .storage_io()
+            .spawn_io("native-storage-selection-write", move || {
+                write_json_atomically(&path, &self)
+            })
+            .await
+            .map_err(|_| StorageError::new(StorageErrorKind::Runtime))?
+    }
 }
 
 /// An external connection input. It cannot be serialized or printed with credentials.
@@ -94,5 +129,39 @@ mod tests {
             assert_eq!(serde_json::to_value(&selection).unwrap(), value);
             assert_eq!(serde_json::from_value::<StorageSelection>(value).unwrap(), selection);
         }
+    }
+
+    #[test]
+    fn saved_selection_preserves_invalid_source_until_explicit_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("storage-selection.json");
+        let runtime = crate::contracts_tests::runtime();
+        runtime.block_on(async {
+            let context = runtime.root_context().component("selection-test");
+            assert_eq!(
+                StorageSelection::load(path.clone(), context.clone()).await.unwrap(),
+                None
+            );
+            let invalid = br#"{"engine":"postgres","databaseUrl":"PRIVATE-CONNECTION"}"#;
+            std::fs::write(&path, invalid).unwrap();
+            let error = StorageSelection::load(path.clone(), context.clone()).await.unwrap_err();
+            assert_eq!(error.kind(), StorageErrorKind::InvalidDocument);
+            assert!(!format!("{error:?} {error}").contains("PRIVATE-CONNECTION"));
+            assert_eq!(std::fs::read(&path).unwrap(), invalid);
+            StorageSelection {
+                engine: StorageEngine::File,
+            }
+            .save(path.clone(), context.clone())
+            .await
+            .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap(),
+                serde_json::json!({"engine":"file"})
+            );
+            assert_eq!(
+                StorageSelection::load(path, context).await.unwrap().unwrap().engine,
+                StorageEngine::File
+            );
+        });
     }
 }

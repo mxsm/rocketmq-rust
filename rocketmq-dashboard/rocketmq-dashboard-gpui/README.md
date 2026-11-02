@@ -46,15 +46,29 @@ History uses the same opened storage authority. SQL builds enable optional
 cargo build --no-default-features --features storage-sqlite
 ```
 
-For this adapter delivery, `ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE` explicitly selects
-`file`, `sqlite`, `mysql` or `postgres` (absent means `file`). SQL connection input comes
+OPS Storage offers File and the compiled SQL engines. Save choice for next launch writes
+only the engine to `<configured config path>.storage-selection.json`; for the default path
+this is `config.json.storage-selection.json`. Quit and reopen Dashboard to apply it.
+The active authority stays fixed for the entire process, including connection retries.
+`ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE` explicitly selects `file`, `sqlite`, `mysql` or
+`postgres` ahead of the saved choice; when it is present, change or remove it externally
+before changing engines. With neither input, the default remains File. SQL connection input comes
 from external `ROCKETMQ_DASHBOARD_GPUI_DATABASE_URL`; it is never persisted in a native
 configuration or Audit event. `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` retains its existing
 file/import location. A SQL connection failure or unavailable driver is an explicit
-error and cannot switch authority. A fresh SQL workspace requires explicit initialization
-or import through the shared storage API; startup does not infer either action.
-Visible selection/setup/import controls and engine-aware OPS status remain subsequent
-deliveries. Persistent native Sessions are described below; E02 remains incomplete.
+error and cannot switch authority. Database URL values are never shown in the UI or choice file.
+
+When startup fails, Storage setup provides current engine status and recovery. A connected
+SQL authority with no native workspace offers Initialize workspace or Import legacy workspace,
+both with confirmation. PostgreSQL and MySQL databases must already exist at the external URL;
+initializing creates native Dashboard records, not a database. Import defaults to the configured
+legacy file path and also supports a native configuration-file chooser. It imports environments,
+configuration, Monitor, Audit, History and Sessions together, preserving the source files and
+rejecting an occupied target atomically. Close any file-mode instance owning the source directory
+before import. No automatic initialization or import occurs. If the result is not confirmed,
+refresh status before another attempt; an initialized target offers Continue startup instead.
+Successful setup returns through normal bootstrap and authentication. Persistent native Sessions
+are described below; automated controls do not substitute for platform manual checks.
 
 SQL reads refresh authoritative documents. Storage revisions advance independently
 of configuration revisions, so a peer Audit/Monitor write cannot be overwritten by a
@@ -346,7 +360,7 @@ attribution apply to both count and resource series; missing samples are not fil
 
 In file mode, OPS Storage reports the local file backend and actual directory-writer ownership. Refresh status
 reads and validates current files without migrating data or probing writes. Read failure or unknown
-state remains visible independently of the last persistence attempt. Successful-write timestamps
+state remains visible independently of the last persistence attempt. File successful-write timestamps
 describe observations in the current process; schema and filesystem dates do not prove write health.
 The configuration file holds settings, Monitor rules and Audit; metric history uses its own file.
 Collector state separates unavailable sampling, failed persistence, no observations and successfully
@@ -354,6 +368,12 @@ stored samples for the active environment. Samples rejected by validation or ful
 retention do not advance the latest stored sample time; successful empty-file writes still count as
 storage writes. Scope labels retain the configured Direct/Proxy boundary.
 Open config directory continues to use the native desktop action.
+
+For SQL, OPS shows fresh engine and workspace state, storage/document schema, actual pool and
+idle connection counts, and the authority's recorded last write, which may come from another
+desktop sharing that database. File-only writer and filesystem health are omitted for SQL.
+A status failure replaces previously displayed authority health. History worker ownership and
+collection health are separate; Standby means waiting for the shared collection lease.
 
 Unsaved History inputs survive failed operations and revision conflicts. A stale draft shows current
 saved settings and requires an explicit choice to keep it against the current revision or discard it.

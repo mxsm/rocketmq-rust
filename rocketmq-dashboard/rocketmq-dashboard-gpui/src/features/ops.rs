@@ -86,6 +86,7 @@ pub struct OpsView {
     error: Option<UiError>,
     task: Option<Task<()>>,
     storage: storage::OpsStorage,
+    native_storage: Entity<super::storage_setup::StorageSetupView>,
 }
 
 impl EventEmitter<ConfigUpdated> for OpsView {}
@@ -99,6 +100,13 @@ impl OpsView {
         let state = services.connection_state();
         let config = state.config;
         let storage = storage::OpsStorage::new(&config, window, cx);
+        let native_storage = cx.new(|cx| {
+            super::storage_setup::StorageSetupView::new(
+                services.clone(),
+                super::storage_setup::StorageSetupMode::Preferences,
+                cx,
+            )
+        });
         Self {
             services,
             endpoint_input,
@@ -116,6 +124,7 @@ impl OpsView {
             error: None,
             task: None,
             storage,
+            native_storage,
         }
     }
 
@@ -1018,7 +1027,11 @@ fn section_button(
         .on_click(listener)
 }
 
-fn key_values<const N: usize>(values: [(&'static str, String); N], border: gpui::Hsla, muted: gpui::Hsla) -> gpui::Div {
+pub(super) fn key_values<const N: usize>(
+    values: [(&'static str, String); N],
+    border: gpui::Hsla,
+    muted: gpui::Hsla,
+) -> gpui::Div {
     div()
         .rounded(px(8.))
         .border_1()

@@ -30,6 +30,7 @@ use rocketmq_dashboard_storage::{StorageError, StorageErrorKind};
 mod authority;
 pub use authority::DesktopConfigStore;
 pub(crate) use authority::NativeConfigurationChange;
+pub(crate) use authority::{NativeStorageSetup, SelectionSource, WorkspaceSetupAction};
 
 /// Existing portable configuration path override.
 pub const CONFIG_PATH_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH";
@@ -106,6 +107,10 @@ enum ConfigValidation {
     StorageEngine,
     #[error("external database connection configuration is required for the selected engine")]
     DatabaseConnection,
+    #[error("the external storage engine override must be changed before saving a local choice")]
+    StorageEngineOverride,
+    #[error("the selected engine was not compiled into this application")]
+    StorageDriverUnavailable,
 }
 
 impl ConfigStoreFailure {
@@ -271,6 +276,12 @@ impl ConfigStoreFailure {
                     }
                     Some(ConfigValidation::DatabaseConnection) => {
                         "External database connection configuration is required for the selected engine."
+                    }
+                    Some(ConfigValidation::StorageEngineOverride) => {
+                        "The engine is controlled by ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE. Change or remove that external override and restart."
+                    }
+                    Some(ConfigValidation::StorageDriverUnavailable) => {
+                        "The selected native storage engine is unavailable in this application build."
                     }
                     _ => "The local dashboard configuration could not be loaded or updated.",
                 }

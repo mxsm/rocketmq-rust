@@ -25,7 +25,7 @@ use super::{AppServices, DesktopBackend, config_ui_error};
 use crate::{
     infrastructure::{
         config_store::{FoundationFlags, HISTORY_MAX_POINTS_CAP, HISTORY_MAX_SERIES_CAP, HISTORY_MAX_TOTAL_POINTS_CAP},
-        history_health::HistoryCollectionHealth,
+        history_health::{CollectionStatus, HistoryCollectionHealth},
         local_storage_status::LocalFileStatus,
     },
     state::{UiError, UiErrorCode},
@@ -95,6 +95,8 @@ pub(crate) struct LocalRuntimeStatus {
     pub scope: ConnectionScope,
     pub collection: HistoryCollectionHealth,
     pub collector_running: bool,
+    pub native_storage: super::storage_setup::StorageSetupSnapshot,
+    pub collection_status: Option<CollectionStatus>,
 }
 
 impl AppServices {
@@ -115,6 +117,8 @@ impl DesktopBackend {
         let configuration = self.store.inspect_storage().await;
         let history = self.history_store.inspect_storage().await;
         let collection = self.history_store.collection_health().map_err(config_ui_error)?;
+        let native_storage = self.store.storage_setup_snapshot().await.into();
+        let collection_status = super::storage_setup::now_epoch_ms().map(|now| collection.status(now));
         if self.store.environment_snapshot().map_err(config_ui_error)? != snapshot {
             return Err(UiError::new(
                 "The environment changed while local storage status was checked. Refresh status.",
@@ -135,6 +139,8 @@ impl DesktopBackend {
             scope: snapshot.connection.scope,
             collection,
             collector_running,
+            native_storage,
+            collection_status,
         })
     }
 }

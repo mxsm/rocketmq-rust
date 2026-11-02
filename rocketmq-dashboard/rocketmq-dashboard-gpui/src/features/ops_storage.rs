@@ -22,7 +22,7 @@ use super::*;
 use crate::{
     infrastructure::{
         config_store::{HISTORY_MAX_POINTS_CAP, HISTORY_MAX_SERIES_CAP, HISTORY_MAX_TOTAL_POINTS_CAP},
-        history_health::{CollectionAttempt, CollectionSideHealth},
+        history_health::{CollectionAttempt, CollectionSideHealth, CollectionStatus},
         local_storage_status::{FileReadState, FileWriteState, LocalFileStatus},
     },
     services::local_storage::{HistorySettings, LocalRuntimeStatus},
@@ -159,10 +159,14 @@ impl OpsView {
                 }
                 match result {
                     Ok(status) => {
+                        view.native_storage
+                            .update(cx, |view, cx| view.sync_snapshot(status.native_storage.clone(), cx));
                         view.storage.status = Some(status);
                         view.storage.status_error = None;
                     }
                     Err(error) => {
+                        view.native_storage
+                            .update(cx, |view, cx| view.status_failed(error.clone(), cx));
                         view.storage.status = None;
                         view.storage.status_error = Some(error);
                     }
@@ -213,11 +217,13 @@ impl OpsView {
 
     pub(super) fn render_storage(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = cx.theme();
-        let mut status = div().flex().flex_col().gap_3()
-            .child("Local file backend · single-writer directory mode. Observed ownership, reads and persistence are reported separately.")
-            .child("Successful-write times below are observed in this process; they are not inferred from file dates or schema versions.");
+        let mut status = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child("Storage authority, collection ownership and persistence evidence are reported separately.");
         if self.storage.loading {
-            status = status.child("Checking current local files…");
+            status = status.child("Checking current storage and collection status…");
         }
         if let Some(error) = &self.storage.status_error {
             status = status.child(
@@ -267,8 +273,22 @@ impl OpsView {
                             ("Topic collection", collection_label(snapshot.collection.topics)),
                             ("Broker collection", collection_label(snapshot.collection.brokers)),
                             (
+                                "Collection health",
+                                match snapshot.collection_status {
+                                    Some(CollectionStatus::Disabled) => "Disabled",
+                                    Some(CollectionStatus::Standby) => "Standby — waiting for collection ownership",
+                                    Some(CollectionStatus::Warming) => "Warming up",
+                                    Some(CollectionStatus::Normal) => "Collecting normally",
+                                    Some(CollectionStatus::Stale) => "Stale collection",
+                                    Some(CollectionStatus::Partial) => "Partial collection",
+                                    None => "Unknown — clock unavailable",
+                                }
+                                .into(),
+                            ),
+                            (
                                 "Monitor",
-                                "Rules are local; evaluation and notifications are not implemented".into(),
+                                "Rules use the selected authority; evaluation and notifications are not implemented"
+                                    .into(),
                             ),
                         ],
                         theme.border,
@@ -276,7 +296,7 @@ impl OpsView {
                     )),
             );
         } else if !self.storage.loading {
-            status = status.child("Local runtime status has not been read.");
+            status = status.child("Runtime status has not been read.");
         }
         let fields = [
             (
@@ -310,8 +330,9 @@ impl OpsView {
                 .child(Button::new("reload-storage").debug_selector(|| "reload-storage".into()).label("Reload configuration").outline().disabled(self.busy).on_click(cx.listener(|view, _, window, cx| view.reload(window, cx))))
                 .child(Button::new("ops-open-config-directory").debug_selector(|| "ops-open-config-directory".into()).label("Open config directory").outline().disabled(self.busy).on_click(cx.listener(|view, _, window, cx| view.open_config_directory(window, cx)))))
             .child(status)
+            .child(self.native_storage.clone())
             .child(div().font_semibold().child("History collection settings"))
-            .child("These settings apply to this desktop. Samples keep their environment identity. Proxy scope can limit sampling capabilities; the collection results above report actual attempts.")
+            .child("These settings use the selected authority and are shared by desktops connected to the same database. Samples keep their environment identity. Proxy scope can limit sampling capabilities; the collection results above report actual attempts.")
             .child(Checkbox::new("ops-history-enabled").debug_selector(|| "ops-history-enabled".into()).label("Enable History collection").checked(self.storage.enabled).disabled(self.busy).on_click(cx.listener(|view, enabled, _, cx| { view.storage.enabled = *enabled; view.storage.dirty = view.storage.read(cx) != Ok(view.storage.original); cx.notify(); })))
             .child(div().flex().flex_wrap().gap_3().children(fields.into_iter().map(|(id, label, hint, input)| div().flex_1().min_w(px(240.)).child(label).child(div().debug_selector(move || id.into()).child(Input::new(input).disabled(self.busy))).child(div().text_xs().text_color(theme.muted_foreground).child(hint)))))
             .child(div().text_sm().child(format!("Retention limits: up to {HISTORY_MAX_POINTS_CAP} points per series, {HISTORY_MAX_SERIES_CAP} series and {HISTORY_MAX_TOTAL_POINTS_CAP} total points.")))
@@ -332,7 +353,8 @@ impl OpsView {
             .child(div().flex().flex_wrap().gap_2()
                 .child(Button::new("ops-save-history").debug_selector(|| "ops-save-history".into()).label("Save History settings").disabled(self.busy || !self.storage.dirty).on_click(cx.listener(|view, _, window, cx| view.save_history_settings(window, cx))))
                 .child(Button::new("ops-discard-history").debug_selector(|| "ops-discard-history".into()).label("Discard History draft").outline().disabled(self.busy || !self.storage.dirty).on_click(cx.listener(|view, _, window, cx| { view.storage.reset(&view.config, window, cx); view.error = None; cx.notify(); }))))
-            .children(self.storage.status.as_ref().map(|snapshot| div().flex().flex_col().gap_4()
+            .children(self.storage.status.as_ref().filter(|snapshot| snapshot.native_storage.current_engine == Some(rocketmq_dashboard_storage::StorageEngine::File)).map(|snapshot| div().flex().flex_col().gap_4()
+                .child("File mode uses one directory writer. Read health and process-observed persistence below are independent; file dates do not prove a successful write.")
                 .child(render_file("Configuration / Monitor / Audit", &snapshot.configuration, cx))
                 .child(render_file("History observations", &snapshot.history, cx))))
     }

@@ -38,6 +38,8 @@ pub mod login;
 
 #[path = "features/ops.rs"]
 pub mod ops;
+#[path = "features/storage_setup.rs"]
+pub(crate) mod storage_setup;
 
 #[path = "features/monitor_dialog.rs"]
 pub mod monitor_dialog;
