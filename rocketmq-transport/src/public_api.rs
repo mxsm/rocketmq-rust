@@ -62,8 +62,11 @@ pub use crate::config::TlsServerConfig;
 pub use crate::config_support::network_util::NetworkUtil;
 pub use crate::connection::ConnectionState;
 pub use crate::deadline::RequestDeadline;
+#[cfg(feature = "http-discovery")]
 pub use crate::discovery::default_top_addressing::DefaultTopAddressing;
+#[cfg(feature = "http-discovery")]
 pub use crate::discovery::http_tiny_client::HttpResult;
+#[cfg(feature = "http-discovery")]
 pub use crate::discovery::http_tiny_client::HttpTinyClient;
 pub use crate::discovery::name_server_update_callback::NameServerUpdateCallback;
 pub use crate::discovery::top_addressing::TopAddressing;
