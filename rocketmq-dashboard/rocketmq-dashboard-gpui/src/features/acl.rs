@@ -380,6 +380,16 @@ impl AclView {
                         .ok_text("Confirm once")
                         .cancel_text("Close"),
                 )
+                .footer(|ok, cancel, window, cx| {
+                    vec![
+                        div()
+                            .debug_selector(|| "acl-dialog-close".into())
+                            .child(cancel(window, cx)),
+                        div()
+                            .debug_selector(|| "acl-dialog-confirm".into())
+                            .child(ok(window, cx)),
+                    ]
+                })
                 .child(child)
                 .on_ok(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| view.submit(window, cx));
