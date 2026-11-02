@@ -1567,17 +1567,27 @@ impl RocketmqDashboard {
         div()
             .debug_selector(|| "page-content".to_owned())
             .flex_1()
+            .min_w_0()
             .min_h_0()
             .overflow_hidden()
             .flex()
             .flex_col()
-            .child(div().px_6().pt_5().pb_3().child(page_header::render(
-                route.title(),
-                description,
-                theme.foreground,
-                theme.muted_foreground,
-            )))
-            .child(div().flex_1().min_h_0().overflow_hidden().child(body))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .px_6()
+                    .pt_5()
+                    .pb_3()
+                    .child(page_header::render(
+                        route.title(),
+                        description,
+                        theme.foreground,
+                        theme.muted_foreground,
+                    )),
+            )
+            .child(div().flex_1().min_w_0().min_h_0().overflow_hidden().child(body))
     }
 }
 
