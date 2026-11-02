@@ -314,12 +314,14 @@ impl ConsumerDetail {
             let retryable = match self.store.active_tab {
                 ConsumerTab::Overview => failed_retryable(&self.store.overview.state),
                 ConsumerTab::Clients => failed_retryable(&self.store.clients.state),
-                ConsumerTab::Progress | ConsumerTab::OffsetActions => failed_retryable(&self.store.progress.state),
+                ConsumerTab::Progress => failed_retryable(&self.store.progress.state),
+                ConsumerTab::OffsetActions => failed_retryable(&self.store.offset_actions.state),
                 ConsumerTab::Configuration => failed_retryable(&self.store.configuration.state),
             };
             return div().flex().flex_col().gap_3().child(summary).when(retryable, |this| {
                 this.child(
                     Button::new("retry-consumer-tab")
+                        .debug_selector(|| "retry-consumer-tab".into())
                         .label("Retry")
                         .on_click(cx.listener(|detail, _, _, cx| detail.retry_active(cx))),
                 )
@@ -335,7 +337,8 @@ impl ConsumerDetail {
         let refresh_failure = match self.store.active_tab {
             ConsumerTab::Overview => retained_failure(&self.store.overview.state),
             ConsumerTab::Clients => retained_failure(&self.store.clients.state),
-            ConsumerTab::Progress | ConsumerTab::OffsetActions => retained_failure(&self.store.progress.state),
+            ConsumerTab::Progress => retained_failure(&self.store.progress.state),
+            ConsumerTab::OffsetActions => retained_failure(&self.store.offset_actions.state),
             ConsumerTab::Configuration => retained_failure(&self.store.configuration.state),
         };
         div()
@@ -348,6 +351,7 @@ impl ConsumerDetail {
             .when_some(refresh_failure, |this, (summary, retryable)| {
                 this.child(
                     div()
+                        .debug_selector(|| "consumer-tab-refresh-warning".into())
                         .p_3()
                         .rounded_md()
                         .bg(cx.theme().warning.opacity(0.12))
@@ -355,6 +359,7 @@ impl ConsumerDetail {
                         .when(retryable, |this| {
                             this.child(
                                 Button::new("retry-consumer-tab-refresh")
+                                    .debug_selector(|| "retry-consumer-tab-refresh".into())
                                     .label("Retry")
                                     .on_click(cx.listener(|detail, _, _, cx| detail.retry_active(cx))),
                             )
