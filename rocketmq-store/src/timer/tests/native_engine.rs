@@ -26,6 +26,7 @@ use bytes::Bytes;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
@@ -542,6 +543,122 @@ async fn a_slave_follows_its_master_and_a_promotion_writes_only_what_the_master_
 }
 
 #[tokio::test]
+async fn a_slave_follows_a_due_batch_in_one_source_batch() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    let keys = ["n0", "n1", "n2", "n3", "n4"];
+    let timers = keys.map(|key| native(timer_message(due_ms, key)));
+    put_all(&mut store, timers.into()).await;
+    native_timer.index_all().await;
+    put_all(&mut store, keys.map(delivered_by_master).into()).await;
+
+    native_timer.source_once(1).await;
+
+    let metrics = native_metrics(&store);
+    assert_eq!((metrics["followed"], metrics["followedTokens"]), (5, 0));
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_slave_follows_both_copies_of_a_timer_sent_twice() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(
+        &mut store,
+        vec![native(timer_message(due_ms, "n0")), native(timer_message(due_ms, "n0"))],
+    )
+    .await;
+    native_timer.index_all().await;
+    put_all(&mut store, vec![delivered_by_master("n0"), delivered_by_master("n0")]).await;
+
+    native_timer.source_once(64).await;
+
+    let metrics = native_metrics(&store);
+    assert_eq!((metrics["followed"], metrics["wheelTimers"]), (2, 0));
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_restarted_slave_reads_the_deliveries_it_had_not_followed_back() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    let keys = ["n0", "n1", "n2"];
+    put_all(&mut store, keys.map(|key| native(timer_message(due_ms, key))).into()).await;
+    native_timer.index_all().await;
+    put_all(&mut store, keys.map(delivered_by_master).into()).await;
+    assert_eq!(native_metrics(&store)["followedTokens"], 3);
+    native_timer.checkpoint_now();
+    drop(native_timer);
+    close(store).await;
+
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("reopen the native store");
+    store.reput_once().await;
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    assert_eq!(native_metrics(&store)["followedTokens"], 3);
+
+    native_timer.source_once(64).await;
+
+    let metrics = native_metrics(&store);
+    assert_eq!(
+        (metrics["followed"], metrics["followedTokens"], metrics["wheelTimers"]),
+        (3, 0, 0)
+    );
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_promoted_slave_that_restarted_does_not_write_what_its_master_wrote() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    let timers = ["n0", "n1"].map(|key| native(timer_message(due_ms, key)));
+    put_all(&mut store, timers.into()).await;
+    native_timer.index_all().await;
+    put_all(&mut store, vec![delivered_by_master("n0")]).await;
+    native_timer.checkpoint_now();
+    drop(native_timer);
+    close(store).await;
+
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("reopen the native store");
+    store.reput_once().await;
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(true);
+
+    assert_eq!(native_timer.process_once().await, 2);
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["n0", "n1"]);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
 async fn a_slave_keeps_the_delivery_it_followed_across_a_restart() {
     let root = tempdir().unwrap();
     let mut store = open(root.path(), TimerStoreMode::Native)
@@ -697,6 +814,60 @@ async fn one_due_batch_keeps_delivering_while_a_lane_comes_back_full() {
     native_timer.set_delivering(true);
     // Every timer is in one lane, which takes two a batch.
     assert_eq!(native_timer.deliver_once(1_000).await, 5);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn controller_terms_become_delivery_epochs_and_fence_older_batches() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    assert!(store.sync_broker_role_with_term(BrokerRole::Slave, 7).unwrap());
+    assert_eq!(native_timer.delivery_epoch(), 7);
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(
+        &mut store,
+        vec![
+            native(timer_message(due_ms, "n0")),
+            native(timer_message(due_ms, "n1")),
+            delivered_by_master("n0"),
+        ],
+    )
+    .await;
+    assert_eq!(native_timer.process_once().await, 0);
+    assert_eq!(native_metrics(&store)["followed"], 1);
+
+    assert!(store.sync_broker_role_with_term(BrokerRole::SyncMaster, 9).unwrap());
+    assert_eq!(native_timer.delivery_epoch(), 9, "the epoch is the term, not one more");
+    // Elected again under a new term: what the old term took no longer writes.
+    assert!(store.sync_broker_role_with_term(BrokerRole::SyncMaster, 12).unwrap());
+    assert_eq!(native_timer.deliver_under(9, 100).await, 0);
+    assert_eq!(native_timer.deliver_under(12, 100).await, 1);
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["n0", "n1"]);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_role_change_whose_epoch_cannot_persist_fails_and_stays_fenced() {
+    let root = tempdir().unwrap();
+    let store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(true);
+    let lease = root.path().join("config").join("timer-native-role.meta");
+    std::fs::remove_file(&lease).unwrap();
+    std::fs::create_dir(&lease).unwrap();
+
+    assert!(store.sync_broker_role_with_term(BrokerRole::Slave, 20).is_err());
+    let epoch = native_timer.delivery_epoch();
+    assert_eq!(native_timer.deliver_under(epoch, 100).await, 0);
+    std::fs::remove_dir(&lease).unwrap();
     drop(native_timer);
     close(store).await;
 }

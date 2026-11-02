@@ -441,6 +441,26 @@ impl HAReplicaStoreHandle {
         // In controller mode the reput service stops at the confirm offset.
         self.reput_notify.notify_dispatchable();
     }
+
+    /// Cuts off a record the old master did not finish sending, and returns the new end of the
+    /// log if it cut anything. Replication frames end at any byte.
+    pub(crate) async fn cut_unfinished_record(&self) -> Result<Option<i64>, StoreError> {
+        // The consume queues end at a record boundary, and nothing behind them is dispatched yet.
+        let start = self
+            .consume_queue_store
+            .get_max_phy_offset_in_consume_queue_global()
+            .max(self.commit_log.get_min_offset())
+            .max(0);
+        self.commit_log
+            .cut_unfinished_record(start, dispatch::reput_read_max_bytes(&self.message_store_config))
+            .await
+    }
+
+    /// Waits until the dispatchers saw all that is dispatchable, or `timeout` passes, and says
+    /// which came first.
+    pub(crate) async fn wait_until_dispatched(&self, timeout: Duration) -> bool {
+        self.reput_notify.wait_until_dispatched(timeout).await
+    }
 }
 
 /// Narrow Local Store write capability used by Timer redelivery.
@@ -2180,6 +2200,17 @@ impl MessageStoreEngine for LocalFileMessageStore {
         #[cfg(feature = "extended_timeline")]
         if !self.sync_extended_timeline_controller_role(previous_role, broker_role, external_term)? {
             return Ok(false);
+        }
+        // Before the CommitLog role, as Extended does: a failed epoch write keeps the old role
+        // with delivery fenced. `sync_timer_message_store_role` below then finds it in place.
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            native_timer
+                .change_delivery_role(broker_role != BrokerRole::Slave, external_term)
+                .map_err(|error| {
+                    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
+                        .with_detail("failed to persist the native timer delivery epoch")
+                        .with_source(error)
+                })?;
         }
         self.commit_log.sync_broker_role(broker_role);
         self.refresh_controller_confirm_offset_after_role_change();

@@ -1562,6 +1562,36 @@ fn owned_root_wiring_scheduled_lifecycle_probe_has_no_shared_owner() {
 }
 
 #[tokio::test]
+async fn the_wait_for_dispatch_lasts_until_the_last_batch_reached_the_dispatchers() {
+    let temp_dir = tempdir().unwrap();
+    let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+    let mut inner = reput_inner_for_store(&store);
+    inner.set_reput_from_offset(0);
+    let service = ReputMessageService {
+        shutdown_token: CancellationToken::new(),
+        new_message_notify: Arc::new(tokio::sync::Notify::new()),
+        dispatch_progress_notify: Arc::new(tokio::sync::Notify::new()),
+        pending_messages: Arc::new(AtomicI64::new(0)),
+        inflight_dispatch_batches: Arc::new(AtomicU64::new(1)),
+        reput_from_offset: None,
+        dispatch_tx: None,
+        inner: None,
+        started: Arc::new(parking_lot::Mutex::new(Some(inner))),
+        task_group: None,
+    };
+    let handle = service.notify_handle();
+
+    assert!(!handle.wait_until_dispatched(Duration::from_millis(20)).await);
+
+    service.inflight_dispatch_batches.store(0, Ordering::Release);
+    assert!(handle.wait_until_dispatched(Duration::from_millis(20)).await);
+
+    service.started.lock().take();
+    service.inflight_dispatch_batches.store(1, Ordering::Release);
+    assert!(handle.wait_until_dispatched(Duration::from_millis(20)).await);
+}
+
+#[tokio::test]
 async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
     let temp_dir = tempdir().unwrap();
     let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
@@ -1577,6 +1607,7 @@ async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
         reput_from_offset: None,
         dispatch_tx: None,
         inner: None,
+        started: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
     let reput_from_offset = inner.reput_from_offset.clone();
@@ -1613,6 +1644,7 @@ async fn release_checkpoint_waits_for_inflight_dispatch_batch_completion() {
         reput_from_offset: None,
         dispatch_tx: None,
         inner: Some(reput_inner_for_store(&store)),
+        started: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
 
@@ -1645,6 +1677,7 @@ async fn reput_shutdown_releases_the_runtime_context() {
             reput_from_offset,
             ..reput_inner_for_store(&store)
         }),
+        started: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
 
