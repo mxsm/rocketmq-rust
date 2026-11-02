@@ -106,11 +106,13 @@ on the same machine are not coordinated, which matches `cargo test`.
 
 The `cluster-port-blocks` group runs its 11 tests one at a time. In the default-features run their
 durations add up to 53 s (the longest takes 8 s), while the whole nextest run took 85 s on a 4 vCPU
-runner. On a machine with more cores, the other tests finish sooner but this chain does not, so it
-sets a floor on nextest's wall time. `cargo test` runs the six `multi_node_cluster_test` tests in
-parallel within their binary, so on such a machine nextest can be slower than `cargo test`. The
-measurements in this document are from 4 vCPU runners only. Giving those tests port allocation that
-is safe across processes would let the group be removed; that is a test change outside this pilot.
+runner. `cargo test` runs the six `multi_node_cluster_test` tests in parallel within their binary, so
+this group can cost nextest time. Giving those tests port allocation that is safe across processes
+would let the group be removed; that is a test change outside this pilot.
+
+An earlier revision of this document said the group was the likely reason nextest could be slower on
+larger machines. The [20-thread measurement](#20-thread-workstation) does not support that: the group
+totalled 57-65 s there, while the slowest tests were trybuild suites at 186-280 s.
 
 ## Local commands
 
@@ -147,8 +149,8 @@ python scripts/nextest_pilot_compare.py --logs <artifact-dir> --runs 3
 
 ## Results
 
-Measured on GitHub-hosted `ubuntu-latest` runners (4 vCPU, 15 GiB RAM) with nextest 0.9.146, on
-the commit proposed in this pull request. Each round runs both runners on the same build, after one
+Unless noted otherwise, measured on GitHub-hosted `ubuntu-latest` runners (4 vCPU, 15 GiB RAM) with
+nextest 0.9.146, on the commit first proposed in this pull request. Each round runs both runners on the same build, after one
 untimed warm-up run, alternating which runner goes first. Times are wall-clock seconds.
 
 **Default features**
@@ -185,6 +187,29 @@ The one failure under both runners is
 `rocketmq-observability::architecture_guards::metric_name_constants_are_declared_only_in_canonical_or_legacy_files`,
 which also fails on `main` at the time of measurement and is unrelated to this evaluation.
 
+### 20-thread workstation
+
+Contributed in the pull request review by @WaterWhisperer: Ubuntu 24.04.5, i7-13700H (14 cores / 20
+threads), 31 GiB usable RAM, Rust 1.95.0, nextest 0.9.146, default features, `CARGO_BUILD_JOBS=8`,
+and default test concurrency. Tests were prebuilt, and both runners completed a warm-up first.
+
+| Round | First | `cargo test` | nextest + doctests |
+| --- | --- | ---: | ---: |
+| 1 | cargo test | 226.6 | 306.8 |
+| 2 | nextest | 270.9 | 213.6 |
+| 3 | cargo test | 344.4 | 304.2 |
+| **Median** | | **270.9** | **304.2** |
+
+Both runners selected 10,419 tests and 135 doctests. In round 3, nextest had one failure, a
+producer-start cancellation test in `rocketmq-proxy-cluster`; five focused reruns with each runner then
+passed. Each runner's times vary by more than 90 s between rounds, so three rounds do not show that
+either runner is consistently faster on this machine. They do show that the 4 vCPU saving does not
+carry over, and that wall time here is dominated by something other than the test runner.
+
+The slowest nextest tests were trybuild suites at 186-280 s, even after a warm-up. The cause has not
+been established. In particular, it is not known whether alternating runners invalidates the compile
+cache these suites keep under `target/tests`.
+
 **Costs outside test execution (same jobs)**
 
 | | Default features | All features |
@@ -207,8 +232,8 @@ warm. A per-test breakdown of the cold run on Linux was not collected. `Build & 
   of about 55 s (35%) per run.
 - **Limit:** in CI that saving is small next to the 35-50 minute build and the 25-40 minute first,
   cold test run. On the measured `Build & Test` job, it would save well under 5% of the job time.
-  On machines with more cores, the serialized `cluster-port-blocks` group can make nextest slower
-  than `cargo test` (see [Machine size and serialized groups](#machine-size-and-serialized-groups)).
+  The saving did not reproduce on a [20-thread workstation](#20-thread-workstation), where the median
+  was slower under nextest and the results varied too much to rank the runners.
 
 Recommendation: **narrow the rollout and defer migrating the required job.**
 
@@ -216,8 +241,9 @@ Recommendation: **narrow the rollout and defer migrating the required job.**
 2. Keep `.config/nextest.toml` and the non-blocking pilot, which runs only on scheduled and manual
    runs and when its configuration changes, so nextest compatibility keeps being checked.
 3. Developers can use nextest locally, where builds are warm and the shorter test runs add up.
-4. Before any migration, make the cluster tests' port allocation safe across processes so that the
-   `cluster-port-blocks` group can be removed, and repeat the measurement on a larger machine.
+4. Before any migration, find out why the trybuild suites stay slow after a warm-up, make the cluster
+   tests' port allocation safe across processes so that the `cluster-port-blocks` group can be removed,
+   and repeat the measurement on a larger machine with more rounds.
 5. Revisit migration if the build and cold-test costs come down. The first, cold test run is the
    larger lever: it takes about 23 minutes (default features) to 38 minutes (all features) longer
    than a warm run, compared with about one minute saved by the runner. Profiling which
