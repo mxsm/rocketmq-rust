@@ -21,9 +21,8 @@ use gpui::{
     div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
-    Disableable as _,
+    Disableable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
-    form::{Field, Form},
     input::{Input, InputState},
 };
 
@@ -220,7 +219,7 @@ impl LoginForm {
         self.password.update(cx, |password, cx| password.focus(window, cx));
     }
 
-    /// Renders the official component form around the two stable editor entities.
+    /// Renders native labels and component inputs around the two stable editor entities.
     pub fn render(
         &self,
         error_color: gpui::Hsla,
@@ -228,27 +227,74 @@ impl LoginForm {
     ) -> impl IntoElement {
         div()
             .w_full()
+            .min_w_0()
+            .h_auto()
+            .flex_shrink_0()
             .flex()
             .flex_col()
             .gap_4()
             .child(
-                Form::vertical()
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
                     .child(
-                        Field::new()
-                            .label("Username")
-                            .required(true)
-                            .child(Input::new(&self.username)),
+                        div()
+                            .w_full()
+                            .flex_shrink_0()
+                            .flex()
+                            .gap_1()
+                            .text_sm()
+                            .font_medium()
+                            .child("Username")
+                            .child(div().text_color(error_color).child("*")),
                     )
                     .child(
-                        Field::new()
-                            .label("Password")
-                            .required(true)
-                            .child(Input::new(&self.password).mask_toggle()),
+                        Input::new(&self.username)
+                            .w_full()
+                            .min_w_0()
+                            .min_h(gpui::px(36.))
+                            .flex_shrink_0(),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w_full()
+                            .flex_shrink_0()
+                            .flex()
+                            .gap_1()
+                            .text_sm()
+                            .font_medium()
+                            .child("Password")
+                            .child(div().text_color(error_color).child("*")),
+                    )
+                    .child(
+                        Input::new(&self.password)
+                            .w_full()
+                            .min_w_0()
+                            .min_h(gpui::px(36.))
+                            .flex_shrink_0()
+                            .mask_toggle(),
                     ),
             )
             .when_some(self.error.as_ref(), |this, error| {
                 this.child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_shrink_0()
+                        .whitespace_normal()
                         .text_sm()
                         .text_color(error_color)
                         .child(error.summary().to_owned()),
@@ -264,6 +310,7 @@ impl LoginForm {
                     })
                     .primary()
                     .w_full()
+                    .flex_shrink_0()
                     .disabled(self.is_submitting())
                     .on_click(submit),
             )

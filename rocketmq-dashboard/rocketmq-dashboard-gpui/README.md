@@ -25,6 +25,11 @@ The application starts in native fullscreen. Use the **Exit fullscreen** / **Ent
 button to switch between fullscreen and the normal window. The button is keyboard accessible;
 **Escape** continues to close dialogs and navigation drawers.
 
+For development smoke checks, set the per-process `ROCKETMQ_DASHBOARD_GPUI_SMOKE_WIDTH`
+and `ROCKETMQ_DASHBOARD_GPUI_SMOKE_HEIGHT` to choose the restored window size, for example
+`960` and `640`. Defaults are 1440 × 900; invalid, non-finite, or below-minimum values
+fall back to the defaults (minimum width 640, height 480). Startup remains fullscreen.
+
 The Windows executable embeds its application icon from [assets/app-icon.ico](assets/app-icon.ico).
 The original artwork and generation prompts are kept in [assets/](assets/app-icon.md).
 

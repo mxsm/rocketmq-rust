@@ -33,13 +33,13 @@ pub(super) fn engine_label(engine: StorageEngine) -> &'static str {
 
 impl Render for StorageSetupView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = div().id("storage-setup-content").debug_selector(|| "storage-setup-content".into()).w_full().min_w_0().whitespace_normal().flex().flex_col().gap_3()
-            .child(div().font_semibold().child(if self.mode == StorageSetupMode::Recovery { "Storage setup" } else { "Storage engine" }))
-            .child("The chosen authority stores configuration, environments, History, Monitor, Sessions and Audit. Engine changes apply after restarting Dashboard.")
-            .child("Database connection details come only from ROCKETMQ_DASHBOARD_GPUI_DATABASE_URL. Set it externally before starting Dashboard. Its value is never displayed or saved here.");
+        let mut body = div().id("storage-setup-content").debug_selector(|| "storage-setup-content".into()).w_full().min_w_0().h_auto().flex_shrink_0().whitespace_normal().flex().flex_col().gap_3()
+            .child(paragraph(if self.mode == StorageSetupMode::Recovery { "Storage setup" } else { "Storage engine" }).font_semibold())
+            .child(paragraph("The chosen authority stores configuration, environments, History, Monitor, Sessions and Audit. Engine changes apply after restarting Dashboard."))
+            .child(paragraph("Database connection details come only from ROCKETMQ_DASHBOARD_GPUI_DATABASE_URL. Set it externally before starting Dashboard. Its value is never displayed or saved here."));
         if let Some(snapshot) = &self.snapshot {
             body = body
-                .child(format!(
+                .child(paragraph(format!(
                     "Current engine: {} · selection source: {}",
                     snapshot.current_engine.map_or("Unavailable", engine_label),
                     match snapshot.source {
@@ -48,24 +48,30 @@ impl Render for StorageSetupView {
                         SelectionSource::Environment => "external environment override",
                         SelectionSource::Injected => "injected authority",
                     }
-                ))
-                .child(format!(
+                )))
+                .child(paragraph(format!(
                     "Saved next-launch choice: {}",
                     snapshot.saved_engine.map_or("None (File by default)", engine_label)
-                ))
-                .child(format!("Choice file: {}", snapshot.selection_path.display()));
+                )))
+                .child(paragraph(format!("Choice file: {}", snapshot.selection_path.display())));
             if snapshot.source == SelectionSource::Environment {
-                body = body.child("ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE overrides the saved choice. Change or remove that external override and restart to use a different engine.");
+                body = body.child(paragraph("ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE overrides the saved choice. Change or remove that external override and restart to use a different engine."));
             }
             if let Some(error) = &snapshot.selection_error {
-                body = body.child(div().text_color(cx.theme().danger).child(format!(
-                    "The saved choice could not be read. {} An explicit Save choice replaces it.",
-                    error.summary()
-                )));
+                body = body.child(
+                    paragraph(format!(
+                        "The saved choice could not be read. {} An explicit Save choice replaces it.",
+                        error.summary()
+                    ))
+                    .text_color(cx.theme().danger),
+                );
             }
             body = match &snapshot.status {
                 Ok(status) => body.child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_shrink_0()
                         .debug_selector(|| "storage-authority-status".into())
                         .child(key_values(
                             [
@@ -115,10 +121,9 @@ impl Render for StorageSetupView {
                         )),
                 ),
                 Err(error) => body.child(
-                    div()
+                    paragraph(format!("Current authority status unavailable. {}", error.summary()))
                         .debug_selector(|| "storage-authority-error".into())
-                        .text_color(cx.theme().danger)
-                        .child(format!("Current authority status unavailable. {}", error.summary())),
+                        .text_color(cx.theme().danger),
                 ),
             };
         }
@@ -131,6 +136,9 @@ impl Render for StorageSetupView {
         body = body
             .child(
                 div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
                     .flex()
                     .flex_wrap()
                     .gap_3()
@@ -168,6 +176,9 @@ impl Render for StorageSetupView {
             )
             .child(
                 div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
                     .flex()
                     .flex_wrap()
                     .gap_2()
@@ -198,33 +209,37 @@ impl Render for StorageSetupView {
                     }),
             );
         if self.loading {
-            body = body.child("Reading selected authority…");
+            body = body.child(paragraph("Reading selected authority…"));
         }
         if self.busy {
-            body = body.child("Saving… This accepted operation remains owned by the application if this view closes.");
+            body = body.child(paragraph(
+                "Saving… This accepted operation remains owned by the application if this view closes.",
+            ));
         }
         if let Some(notice) = &self.notice {
-            body = body.child(notice.clone());
+            body = body.child(paragraph(notice.clone()));
         }
         if let Some(error) = &self.error {
             body = body.child(
-                div()
+                paragraph(error.summary().to_owned())
                     .debug_selector(|| "storage-setup-error".into())
-                    .text_color(cx.theme().danger)
-                    .child(error.summary().to_owned()),
+                    .text_color(cx.theme().danger),
             );
         }
         if self.must_refresh {
-            body = body.child("Workspace setup was not confirmed. Source files remain unchanged. Refresh status to check the destination before another attempt.");
+            body = body.child(paragraph("Workspace setup was not confirmed. Source files remain unchanged. Refresh status to check the destination before another attempt."));
         }
         if self.mode == StorageSetupMode::Recovery {
             body = body
-                .child(format!(
+                .child(paragraph(format!(
                     "Legacy configuration source: {}. History and Sessions are read from the same directory.",
                     self.source_path.display()
-                ))
+                )))
                 .child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_shrink_0()
                         .flex()
                         .flex_wrap()
                         .gap_2()
@@ -264,7 +279,11 @@ impl Render for StorageSetupView {
                 )
                 .child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_shrink_0()
                         .flex()
+                        .flex_wrap()
                         .gap_2()
                         .child(
                             Button::new("storage-continue")
@@ -299,6 +318,17 @@ impl Render for StorageSetupView {
             body.into_any_element()
         }
     }
+}
+
+// Wrapped text must keep its measured height rather than share the flex column's shrink budget.
+fn paragraph(text: impl Into<gpui::SharedString>) -> gpui::Div {
+    div()
+        .w_full()
+        .min_w_0()
+        .h_auto()
+        .flex_shrink_0()
+        .whitespace_normal()
+        .child(text.into())
 }
 
 fn time_label(value: Option<u64>) -> String {
