@@ -442,21 +442,6 @@ pub(super) fn map_topic_config_lookup_result<T>(result: crate::ClientResult<T>) 
     }
 }
 
-pub(super) fn parse_response_code_from_message(message: &str) -> Option<ResponseCode> {
-    let code_start = message.find("CODE:")?;
-    let digits = message[code_start + "CODE:".len()..]
-        .trim_start()
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit() || *ch == '-')
-        .collect::<String>();
-
-    if digits.is_empty() {
-        return None;
-    }
-
-    digits.parse::<i32>().ok().map(ResponseCode::from)
-}
-
 pub(super) fn track_exception_desc(error: &ClientError) -> String {
     if let Some(code) = response_code_from_error(error) {
         format!("CODE:{} DESC:{}", code.to_i32(), error.descriptor().public_message())
