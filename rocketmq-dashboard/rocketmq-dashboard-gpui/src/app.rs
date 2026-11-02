@@ -887,6 +887,11 @@ impl RocketmqDashboard {
     }
 
     fn finish_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let revision = self.services.connection_state().config.revision;
+        self.legacy_pages
+            .consumers
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        window.close_sheet(cx);
         self.legacy_pages.acl.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages
             .audit
@@ -1011,6 +1016,11 @@ impl RocketmqDashboard {
     fn begin_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Logout persistence can outlive session revocation. Drop protected UI at confirmation;
         // accepted service mutations retain their application-owned runtime work and attribution.
+        let revision = self.services.connection_state().config.revision;
+        self.legacy_pages
+            .consumers
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        window.close_sheet(cx);
         self.legacy_pages
             .audit
             .update(cx, |view, cx| view.clear_context(window, cx));

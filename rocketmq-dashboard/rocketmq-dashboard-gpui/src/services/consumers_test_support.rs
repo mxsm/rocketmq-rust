@@ -67,6 +67,8 @@ pub(crate) struct FakeConsumerBackend {
     next_producer_completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     next_patch_result: Mutex<Option<tokio::sync::oneshot::Receiver<Result<ConsumerConfigPatchOutcome, UiError>>>>,
     next_patch_started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    next_diagnostic_result: Mutex<Option<tokio::sync::oneshot::Receiver<Result<ConsumerDiagnosticPayload, UiError>>>>,
+    next_diagnostic_started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 macro_rules! queue_method {
@@ -82,6 +84,18 @@ macro_rules! queue_method {
 }
 
 impl FakeConsumerBackend {
+    pub fn observe_next_diagnostic(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_diagnostic_started.lock().expect("diagnostic started") = Some(sender);
+        receiver
+    }
+
+    pub fn queue_pending_diagnostic(&self) -> tokio::sync::oneshot::Sender<Result<ConsumerDiagnosticPayload, UiError>> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_diagnostic_result.lock().expect("diagnostic result") = Some(receiver);
+        sender
+    }
+
     pub fn observe_next_patch(&self) -> tokio::sync::oneshot::Receiver<()> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         *self.next_patch_started.lock().expect("patch started") = Some(sender);
@@ -215,6 +229,12 @@ impl ConsumerBackend for FakeConsumerBackend {
             .expect("Consumer fake calls")
             .diagnostic
             .push((scope, request));
+        if let Some(started) = self.next_diagnostic_started.lock().expect("diagnostic started").take() {
+            let _ = started.send(());
+        }
+        if let Some(receiver) = self.next_diagnostic_result.lock().expect("diagnostic result").take() {
+            return Box::pin(async move { receiver.await.expect("release diagnostic result") });
+        }
         Box::pin(std::future::ready(pop_result!(self, diagnostic, "diagnostic")))
     }
 
