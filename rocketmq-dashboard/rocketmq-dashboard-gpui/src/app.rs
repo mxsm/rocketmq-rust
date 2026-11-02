@@ -39,6 +39,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, Root, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     input::InputEvent,
+    scroll::ScrollableElement as _,
     sidebar::{Sidebar, SidebarGroup as GpuiSidebarGroup, SidebarMenu, SidebarMenuItem},
 };
 use rocketmq_dashboard_common::EnvironmentId;
@@ -1154,61 +1155,74 @@ impl RocketmqDashboard {
 
     fn render_login(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = cx.theme();
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(theme.background)
-            .child(
+        div().size_full().bg(theme.background).child(
+            div().size_full().overflow_y_scrollbar().child(
                 div()
-                    .w(px(440.))
-                    .max_w_full()
-                    .p_6()
-                    .rounded(theme.radius_lg)
-                    .bg(theme.popover)
-                    .border_1()
-                    .border_color(theme.border)
+                    .w_full()
+                    .min_h_full()
                     .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(page_header::render(
-                        "Sign in",
-                        "Use the configured local authentication service.",
-                        theme.foreground,
-                        theme.muted_foreground,
-                    ))
-                    .child(self.login.render(
-                        theme.danger,
-                        cx.listener(|this, _, window, cx| this.submit_login(window, cx)),
-                    ))
+                    .items_center()
+                    .justify_center()
+                    .p_4()
                     .child(
                         div()
+                            .w(px(440.))
+                            .max_w_full()
+                            .min_w_0()
+                            .h_auto()
+                            .flex_shrink_0()
+                            .text_color(theme.foreground)
+                            .p_6()
+                            .rounded(theme.radius_lg)
+                            .bg(theme.popover)
+                            .border_1()
+                            .border_color(theme.border)
                             .flex()
-                            .gap_2()
+                            .flex_col()
+                            .gap_5()
+                            .child(page_header::render(
+                                "Sign in",
+                                "Use the configured local authentication service.",
+                                theme.foreground,
+                                theme.muted_foreground,
+                            ))
+                            .child(self.login.render(
+                                theme.danger,
+                                cx.listener(|this, _, window, cx| this.submit_login(window, cx)),
+                            ))
                             .child(
-                                Button::new("login-back")
-                                    .label("Back")
-                                    .ghost()
-                                    .on_click(cx.listener(|_, _, window, _| window.remove_window())),
-                            )
-                            .child(
-                                Button::new("login-security")
-                                    .label("Security settings")
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _, _, cx| this.open_login_security(cx))),
-                            )
-                            .child(
-                                Button::new("login-disable-auth")
-                                    .label("Disable Auth")
-                                    .danger()
-                                    .disabled(self.login.is_submitting())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.disable_auth_from_login(window, cx);
-                                    })),
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("login-back")
+                                            .label("Back")
+                                            .ghost()
+                                            .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                                    )
+                                    .child(
+                                        Button::new("login-security")
+                                            .label("Security settings")
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _, _, cx| this.open_login_security(cx))),
+                                    )
+                                    .child(
+                                        Button::new("login-disable-auth")
+                                            .label("Disable Auth")
+                                            .danger()
+                                            .disabled(self.login.is_submitting())
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.disable_auth_from_login(window, cx);
+                                            })),
+                                    ),
                             ),
                     ),
-            )
+            ),
+        )
     }
 
     fn render_login_security(&self, cx: &mut Context<Self>) -> gpui::Div {
