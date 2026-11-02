@@ -15,10 +15,14 @@
 use crate::route::{AppRoute, BrokerTab, ConsumerTab, RouteKey, TopicTab};
 use rocketmq_dashboard_common::*;
 
+#[path = "topology_sphere_store.rs"]
+mod sphere;
+
 #[derive(Default)]
 pub(crate) struct TopologyStore {
     pub cache: TopologyCache,
     pub layout: TopologyLayout,
+    pub sphere: sphere::TopologySphereStore,
     pub selection: Option<TopologySelection>,
     pub cluster: Option<String>,
     pub clusters: Vec<String>,
@@ -154,6 +158,8 @@ impl TopologyStore {
             .as_ref()
             .filter(|selection| selection.context == snapshot.context)
             .and_then(|selection| self.layout.nodes.iter().find(|node| node.node.id == selection.node));
+        self.sphere
+            .rebuild(&self.layout, selected.map(|placed| &placed.node.id));
         self.detail.clear();
         self.route = None;
         let Some(selected) = selected else {

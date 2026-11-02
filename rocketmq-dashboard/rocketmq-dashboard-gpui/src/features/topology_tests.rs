@@ -156,6 +156,176 @@ fn loop_finished(completed: &mpsc::Receiver<&'static str>) {
         }
     }
 }
+
+fn draw_sphere_size(root: &Entity<Root>, cx: &mut gpui::VisualTestContext, width: f32, height: f32) {
+    let viewport = size(px(width), px(height));
+    cx.simulate_resize(viewport);
+    for _ in 0..3 {
+        cx.draw(point(px(0.), px(0.)), viewport, |_, _| root.clone());
+        cx.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn topology_sphere_actual_camera_controls_node_click_and_keyboard_picker_share_the_map_selection(
+    cx: &mut gpui::TestAppContext,
+) {
+    use rocketmq_dashboard_common::topology::sphere::SphereCamera;
+    let backend = Arc::new(FakeTopologyBackend::default());
+    let (root, view, cx) = open(cx, AppServices::default().with_topology_backend(backend.clone()));
+    draw(&root, cx);
+    choose(cx, "topology-node-picker", "orders");
+    let selected = cx.read(|app| view.read(app).store.selection.clone().unwrap());
+    let calls = backend.calls().len();
+    click(cx, "topology-sphere");
+    draw_sphere_size(&root, cx, 1440., 900.);
+    let initial = cx.read(|app| view.read(app).store.sphere.projection.as_ref().unwrap().clone());
+    assert_eq!(
+        initial.nodes.len(),
+        cx.read(|app| view.read(app).store.layout.nodes.len())
+    );
+    cx.simulate_keystrokes("alt-left");
+    draw(&root, cx);
+    assert_ne!(
+        cx.read(|app| view.read(app).store.sphere.camera),
+        SphereCamera::default(),
+        "the focused node picker must provide the equivalent camera keyboard path"
+    );
+    cx.simulate_keystrokes("alt-r");
+    draw(&root, cx);
+    assert_eq!(
+        cx.read(|app| view.read(app).store.sphere.camera),
+        SphereCamera::default()
+    );
+    click(cx, "topology-sphere-turn-1");
+    draw(&root, cx);
+    assert_ne!(
+        initial,
+        cx.read(|app| view.read(app).store.sphere.projection.as_ref().unwrap().clone())
+    );
+    let before_zoom = cx.read(|app| view.read(app).store.sphere.camera.scale());
+    click(cx, "topology-zoom-in");
+    assert!(cx.read(|app| view.read(app).store.sphere.camera.scale()) > before_zoom);
+    click(cx, "topology-sphere-focus");
+    draw(&root, cx);
+    cx.read(|app| {
+        let projection = view.read(app).store.sphere.projection.as_ref().unwrap();
+        let selected_node = projection
+            .nodes
+            .iter()
+            .find(|node| node.placed.node.id == selected.node)
+            .unwrap();
+        assert!(selected_node.front);
+        assert_eq!(projection.labels[0].id, selected.node);
+    });
+    click(cx, "topology-sphere-reset");
+    draw(&root, cx);
+    assert_eq!(
+        cx.read(|app| view.read(app).store.sphere.camera),
+        SphereCamera::default()
+    );
+    assert_eq!(
+        backend.calls().len(),
+        calls,
+        "camera controls must not collect another snapshot"
+    );
+    let clicked = cx.read(|app| {
+        view.read(app).store.sphere.projection.as_ref().unwrap().nodes[0]
+            .placed
+            .node
+            .id
+            .clone()
+    });
+    click(cx, "topology-sphere-node-0");
+    draw(&root, cx);
+    assert_eq!(
+        cx.read(|app| view.read(app).store.selection.as_ref().unwrap().node.clone()),
+        clicked
+    );
+    click(cx, "topology-list");
+    draw(&root, cx);
+    assert_eq!(
+        cx.read(|app| view.read(app).store.selection.as_ref().unwrap().node.clone()),
+        clicked
+    );
+    choose(cx, "topology-node-picker", "orders");
+    assert_eq!(cx.read(|app| view.read(app).store.selection.clone()), Some(selected));
+    assert_eq!(backend.calls().len(), calls);
+}
+
+#[gpui::test]
+fn topology_sphere_uses_actual_canvas_resize_and_recovers_from_map_fallback_without_changing_filter_or_selection(
+    cx: &mut gpui::TestAppContext,
+) {
+    use rocketmq_dashboard_common::topology::sphere::SphereUnavailable;
+    let backend = Arc::new(FakeTopologyBackend::default());
+    let (root, view, cx) = open(cx, AppServices::default().with_topology_backend(backend.clone()));
+    draw(&root, cx);
+    choose(cx, "topology-cluster", "a");
+    draw(&root, cx);
+    choose(cx, "topology-node-picker", "orders");
+    let selected = cx.read(|app| view.read(app).store.selection.clone().unwrap());
+    let calls = backend.calls().len();
+    click(cx, "topology-sphere");
+    draw_sphere_size(&root, cx, 960., 640.);
+    let wide = cx.read(|app| view.read(app).store.sphere.viewport);
+    assert_eq!(
+        wide.width,
+        f32::from(cx.debug_bounds("topology-viewport").unwrap().size.width)
+    );
+    assert_eq!(wide.height, 400.);
+    assert!(cx.read(|app| view.read(app).store.sphere.projection.is_ok()));
+    draw_sphere_size(&root, cx, 440., 640.);
+    cx.read(|app| {
+        let view = view.read(app);
+        assert_eq!(view.presentation, Presentation::Sphere);
+        assert_eq!(
+            view.store.sphere.projection.as_ref().unwrap_err(),
+            &SphereUnavailable::SmallViewport
+        );
+        assert_eq!(view.store.selection.as_ref(), Some(&selected));
+        assert_eq!(view.store.cluster.as_deref(), Some("a"));
+    });
+    assert!(cx.debug_bounds("topology-sphere-fallback").is_some());
+    assert!(
+        cx.debug_bounds("topology-node-0").is_some(),
+        "fallback must render the actual 2D map"
+    );
+    let map_width = cx.read(|app| view.read(app).store.layout.width);
+    let camera = cx.read(|app| view.read(app).store.sphere.camera);
+    click(cx, "topology-zoom-in");
+    draw_sphere_size(&root, cx, 440., 640.);
+    assert!(cx.read(|app| view.read(app).store.layout.width) > map_width);
+    assert_eq!(cx.read(|app| view.read(app).store.sphere.camera), camera);
+    draw_sphere_size(&root, cx, 930., 620.);
+    cx.read(|app| {
+        let view = view.read(app);
+        let projection = view.store.sphere.projection.as_ref().unwrap();
+        assert_ne!(projection.viewport, wide);
+        assert_eq!(view.store.selection.as_ref(), Some(&selected));
+        assert_eq!(view.store.cluster.as_deref(), Some("a"));
+        let map_ids = view
+            .store
+            .layout
+            .nodes
+            .iter()
+            .map(|node| &node.node.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let sphere_ids = projection
+            .nodes
+            .iter()
+            .map(|node| &node.placed.node.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(map_ids, sphere_ids);
+    });
+    assert!(cx.debug_bounds("topology-sphere-surface").is_some());
+    assert_eq!(
+        backend.calls().len(),
+        calls,
+        "resize and fallback must not query another source"
+    );
+}
+
 #[gpui::test]
 fn topology_actual_page_leave_activation_and_context_clear_cancel_one_owned_refresh_loop(
     cx: &mut gpui::TestAppContext,
@@ -185,6 +355,9 @@ fn topology_actual_page_leave_activation_and_context_clear_cancel_one_owned_refr
     loop_finished(&completed);
     draw(&root, cx);
     assert!(cx.read(|app| view.read(app).store.cache.snapshot().is_some()));
+    click(cx, "topology-sphere");
+    draw_sphere_size(&root, cx, 1440., 900.);
+    assert!(cx.read(|app| view.read(app).store.sphere.projection.is_ok()));
     let (started, _release, finished) = backend.hold(TopologySource::Brokers);
     click(cx, "topology-interval-1");
     runtime.block_on(started).unwrap();
@@ -226,6 +399,7 @@ fn topology_actual_page_leave_activation_and_context_clear_cancel_one_owned_refr
     cx.read(|app| {
         let store = &view.read(app).store;
         assert!(store.cache.snapshot().is_none() && store.layout.edges.is_empty() && store.selection.is_none());
+        assert!(store.sphere.scene.nodes.is_empty() && store.sphere.scene.edges.is_empty());
     });
     assert!(runtime.shutdown_runtime_blocking().unwrap().is_healthy());
 }
