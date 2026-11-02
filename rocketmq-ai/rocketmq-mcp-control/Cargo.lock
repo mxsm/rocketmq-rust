@@ -2839,7 +2839,6 @@ dependencies = [
  "rocketmq-runtime",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2",
  "smallvec",
  "thiserror",
