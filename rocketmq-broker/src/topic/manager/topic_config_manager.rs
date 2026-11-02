@@ -1080,64 +1080,6 @@ impl TopicConfigManager {
         false
     }
 
-    pub fn create_topic_if_absent(
-        &self,
-        mut topic_config: TopicConfig,
-        register: bool,
-        state_machine_version: i64,
-    ) -> Option<TopicConfigCreation> {
-        if topic_config.topic_name.is_none() {
-            error!("createTopicIfAbsent: TopicName cannot be None");
-            return None;
-        }
-
-        let topic_name = topic_config.topic_name.as_ref().unwrap().clone();
-
-        if let Some(config) = self.get_topic_config(topic_name.as_str()) {
-            return Some(TopicConfigCreation {
-                topic_config: config,
-                update: None,
-                register: false,
-                created: false,
-            });
-        }
-
-        let update = {
-            let mut data_version = self.metadata_transition.lock();
-            if let Some(config) = self
-                .topic_config_table
-                .get(&topic_name)
-                .map(|entry| entry.value().clone())
-            {
-                return Some(TopicConfigCreation {
-                    topic_config: config,
-                    update: None,
-                    register: false,
-                    created: false,
-                });
-            }
-
-            info!("Create new topic [{}] config:[{:?}]", topic_name, topic_config);
-            topic_config.topic_name = Some(topic_name.clone());
-            let topic_config = Arc::new(topic_config);
-            self.topic_config_table.insert(topic_name, topic_config.clone());
-            data_version.next_version_with(state_machine_version);
-            self.rebuild_topic_config_snapshot_locked();
-            TopicConfigUpdate {
-                topic_config,
-                data_version: data_version.clone(),
-                changed: true,
-            }
-        };
-
-        Some(TopicConfigCreation {
-            topic_config: update.topic_config.clone(),
-            update: Some(update),
-            register,
-            created: true,
-        })
-    }
-
     pub fn update_topic_unit_flag(
         &self,
         topic: &str,
