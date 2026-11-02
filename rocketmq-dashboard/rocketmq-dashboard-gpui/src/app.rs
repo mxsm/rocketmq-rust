@@ -430,7 +430,9 @@ impl RocketmqDashboard {
                 let route = snapshot.destination();
                 self.history.replace(route.clone());
                 self.startup_state = StartupState::Ready(ReadyScreen::from_route(&route));
-                self.legacy_pages.ops.update(cx, |view, cx| view.sync_from_services(cx));
+                self.legacy_pages
+                    .ops
+                    .update(cx, |view, cx| view.sync_from_services(window, cx));
                 self.legacy_pages.ops.update(cx, |view, cx| {
                     view.sync_local_session(self.session.is_authenticated(), cx);
                 });
@@ -749,7 +751,9 @@ impl RocketmqDashboard {
             }
             self.sync_message_route(window, cx);
         }
-        self.legacy_pages.ops.update(cx, |view, cx| view.sync_from_services(cx));
+        self.legacy_pages
+            .ops
+            .update(cx, |view, cx| view.sync_from_services(window, cx));
         self.legacy_pages
             .proxy
             .update(cx, |view, cx| view.sync_from_services(cx));
@@ -1435,6 +1439,11 @@ impl RocketmqDashboard {
     }
 
     fn sync_monitor_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.history.current(), AppRoute::OpsSettings) {
+            self.legacy_pages
+                .ops
+                .update(cx, |view, cx| view.refresh_visible_storage(window, cx));
+        }
         self.sync_acl_route(window, cx);
         self.legacy_pages.audit.update(cx, |view, cx| {
             view.set_active(matches!(self.history.current(), AppRoute::Audit), window, cx)

@@ -15,6 +15,8 @@
 
 pub(crate) mod audit;
 mod audit_outcomes;
+#[path = "services/local_storage.rs"]
+pub(crate) mod local_storage;
 
 #[path = "services/acl.rs"]
 pub(crate) mod acl;
@@ -37,15 +39,7 @@ pub(crate) mod topics;
 #[path = "services/topology.rs"]
 pub(crate) mod topology;
 
-use std::{
-    fmt,
-    future::Future,
-    io,
-    path::{Path, PathBuf},
-    pin::Pin,
-    process::Command,
-    sync::Arc,
-};
+use std::{fmt, future::Future, io, path::Path, pin::Pin, process::Command, sync::Arc};
 
 use rocketmq_dashboard_common::{
     AdminSessionStatus, AdminSessionSummary, AuditAction, ConnectionScope, CredentialSourceKind, EndpointHealth,
@@ -321,6 +315,11 @@ impl GlobalConnectionState {
 /// Typed configuration mutation. No write operation is replayed after it completes.
 #[derive(Clone, PartialEq, Eq)]
 pub enum ConfigMutation {
+    /// Saves the existing global History settings against the reviewed configuration revision.
+    SaveHistorySettings {
+        expected_revision: u64,
+        settings: local_storage::HistorySettings,
+    },
     /// Creates and selects a distinct, initially empty environment profile.
     CreateEnvironment(String),
     /// Explicitly selects a persisted environment, independently of endpoint editing.
@@ -372,6 +371,7 @@ impl ConfigMutation {
 impl fmt::Debug for ConfigMutation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match self {
+            Self::SaveHistorySettings { .. } => "SaveHistorySettings",
             Self::CreateEnvironment(_) => "CreateEnvironment",
             Self::SwitchEnvironment(_) => "SwitchEnvironment",
             Self::AddNameServer(_) => "AddNameServer",
@@ -536,6 +536,13 @@ impl ConnectionProvider for ProductFakeConnectionProvider {
 }
 
 trait ApplicationBackend: Send + Sync {
+    fn local_runtime_status(&self) -> ServiceFuture<'_, Result<local_storage::LocalRuntimeStatus, UiError>> {
+        Box::pin(std::future::ready(Err(UiError::new(
+            "Local storage status is unavailable for this backend.",
+            UiErrorCode::CapabilityUnavailable,
+            false,
+        ))))
+    }
     fn bootstrap(&self) -> ServiceFuture<'_, Result<StartupSnapshot, UiError>>;
     fn authenticate<'a>(
         &'a self,
@@ -551,7 +558,6 @@ trait ApplicationBackend: Send + Sync {
     ) -> ServiceFuture<'_, Result<ConfigUpdate, UiError>>;
     fn check_all_nameservers(&self) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, UiError>>;
     fn connection_state(&self) -> GlobalConnectionState;
-    fn config_path(&self) -> Option<PathBuf>;
     fn open_config_location(&self) -> ServiceFuture<'_, Result<(), UiError>>;
 }
 
@@ -826,11 +832,6 @@ impl AppServices {
         self.backend.connection_state()
     }
 
-    /// Returns the local configuration path when backed by the desktop store.
-    pub fn config_path(&self) -> Option<PathBuf> {
-        self.backend.config_path()
-    }
-
     /// Opens the configuration location used by the startup error page.
     pub async fn open_config_location(&self) -> Result<(), UiError> {
         let Some(runtime) = self.runtime_bridge.as_ref() else {
@@ -886,7 +887,8 @@ impl DesktopBackend {
             let existing = {
                 let mut lifecycle = self.history_lifecycle.lock();
                 if lifecycle.as_ref().is_some_and(|lifecycle| {
-                    lifecycle.matches_settings(foundations.history_interval_seconds, history_retention)
+                    lifecycle.is_running()
+                        && lifecycle.matches_settings(foundations.history_interval_seconds, history_retention)
                 }) {
                     None
                 } else {
@@ -1049,6 +1051,9 @@ impl DesktopBackend {
 }
 
 impl ApplicationBackend for DesktopBackend {
+    fn local_runtime_status(&self) -> ServiceFuture<'_, Result<local_storage::LocalRuntimeStatus, UiError>> {
+        Box::pin(self.inspect_local_runtime())
+    }
     fn bootstrap(&self) -> ServiceFuture<'_, Result<StartupSnapshot, UiError>> {
         Box::pin(async move {
             let config = self.store.load().await.map_err(config_ui_error)?;
@@ -1235,10 +1240,6 @@ impl ApplicationBackend for DesktopBackend {
         self.state.read().clone()
     }
 
-    fn config_path(&self) -> Option<PathBuf> {
-        Some(self.store.path().to_path_buf())
-    }
-
     fn open_config_location(&self) -> ServiceFuture<'_, Result<(), UiError>> {
         Box::pin(async move {
             let path = self.store.path().to_path_buf();
@@ -1322,6 +1323,20 @@ fn open_platform_location(path: &Path) -> io::Result<()> {
 
 fn apply_mutation(config: &mut DesktopConfig, mutation: &ConfigMutation) -> Result<(), UiError> {
     let result = match mutation {
+        ConfigMutation::SaveHistorySettings {
+            expected_revision,
+            settings,
+        } => {
+            if config.revision != *expected_revision {
+                return Err(UiError::new(
+                    "History settings changed after this draft was opened. Review the current settings, then explicitly keep the draft with the current revision or discard it.",
+                    UiErrorCode::Configuration,
+                    true,
+                ));
+            }
+            settings.validate()?.apply(&mut config.foundations);
+            Ok(())
+        }
         ConfigMutation::AddNameServer(address) => add_endpoint(
             &mut config.nameservers,
             &mut config.current_nameserver,
@@ -1527,10 +1542,6 @@ impl ApplicationBackend for InjectedBackend {
 
     fn connection_state(&self) -> GlobalConnectionState {
         GlobalConnectionState::default()
-    }
-
-    fn config_path(&self) -> Option<PathBuf> {
-        None
     }
 
     fn open_config_location(&self) -> ServiceFuture<'_, Result<(), UiError>> {

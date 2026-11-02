@@ -34,6 +34,18 @@ pub struct CollectionSideHealth {
     pub last_success_epoch_ms: Option<u64>,
     pub failed_resources: usize,
     pub failed: bool,
+    pub last_attempt: Option<CollectionAttempt>,
+    pub last_attempt_epoch_ms: Option<u64>,
+}
+
+/// Sampling and persistence are separate evidence; an empty response proves no stored sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollectionAttempt {
+    NoObservations,
+    NotRetained,
+    SamplingFailed,
+    PersistenceFailed,
+    Persisted,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

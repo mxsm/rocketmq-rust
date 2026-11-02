@@ -22,7 +22,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::state::UiError;
 
-use super::{config_store::ConfigStoreFailure, history_health::CollectionSide, history_store::HistoryStore};
+use super::{
+    config_store::ConfigStoreFailure,
+    history_health::{CollectionAttempt, CollectionSide},
+    history_store::{HistoryAppendOutcome, HistoryStore},
+};
 
 /// Boxed sampling operation implemented by the Dashboard service boundary.
 pub type HistorySampleFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<HistoryPoint>, UiError>> + Send + 'a>>;
@@ -123,6 +127,19 @@ impl HistoryLifecycle {
         self.task.is_some()
     }
 
+    pub fn is_running(&self) -> bool {
+        self.task.as_ref().is_some_and(|task| !task.is_finished())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn finish_for_test(&mut self) {
+        self.cancellation.as_ref().expect("started collector").cancel();
+        // Keep the completed handle, as happens when a worker exits before reconciliation.
+        while !self.task.as_ref().expect("owned task").is_finished() {
+            tokio::task::yield_now().await;
+        }
+    }
+
     /// Returns whether the running collector already uses the requested bounded settings.
     pub fn matches_settings(&self, interval_seconds: u64, retention: HistoryRetention) -> bool {
         self.interval_seconds == interval_seconds && self.retention == retention
@@ -183,7 +200,13 @@ async fn persist_side(
 ) {
     match result {
         Ok(sample) if sample.points.is_empty() => {
-            store.record_collection(sample.environment_id, side, epoch_ms(), sample.failed_resources, false);
+            store.record_collection(
+                sample.environment_id,
+                side,
+                epoch_ms(),
+                sample.failed_resources,
+                CollectionAttempt::NoObservations,
+            );
         }
         Ok(sample) => {
             let sample_environment = sample.environment_id.clone();
@@ -196,7 +219,17 @@ async fn persist_side(
                 }
                 None => store.append_sample(sample.points, retention).await,
             };
-            store.record_collection(sample_environment, side, epoch_ms(), failed_resources, result.is_ok());
+            store.record_collection(
+                sample_environment,
+                side,
+                epoch_ms(),
+                failed_resources,
+                match result {
+                    Ok(HistoryAppendOutcome::Retained) => CollectionAttempt::Persisted,
+                    Ok(HistoryAppendOutcome::NotRetained) => CollectionAttempt::NotRetained,
+                    Err(_) => CollectionAttempt::PersistenceFailed,
+                },
+            );
             if result.is_err() {
                 tracing::warn!(
                     history_side = side.label(),
@@ -206,7 +239,7 @@ async fn persist_side(
             }
         }
         Err(_) => {
-            store.record_collection(environment, side, epoch_ms(), 1, false);
+            store.record_collection(environment, side, epoch_ms(), 1, CollectionAttempt::SamplingFailed);
             tracing::warn!(
                 history_side = side.label(),
                 outcome = "sample_failed",
@@ -488,5 +521,187 @@ mod tests {
             assert_eq!(store.points().await.expect("retained point").len(), 1);
         });
         runtime.shutdown_runtime_blocking().expect("shutdown");
+    }
+
+    struct EmptySampler;
+    impl HistorySampler for EmptySampler {
+        fn sample_topics(&self) -> HistorySampleFuture<'_> {
+            Box::pin(std::future::ready(Ok(Vec::new())))
+        }
+        fn sample_brokers(&self) -> HistorySampleFuture<'_> {
+            self.sample_topics()
+        }
+    }
+
+    #[test]
+    fn collection_evidence_separates_sampling_persistence_empty_and_recovered_samples() {
+        use crate::infrastructure::local_storage_status::{FileReadState, FileWriteState};
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime();
+        let path = directory.path().join("history.json");
+        let store = HistoryStore::new(path.clone(), runtime.root_context().component("history"));
+        runtime.block_on(collect_once(&store, &FailedSampler, retention(10)));
+        assert_eq!(
+            store.collection_health().unwrap().brokers.last_attempt,
+            Some(CollectionAttempt::SamplingFailed)
+        );
+        assert!(!path.exists());
+        std::fs::create_dir(&path).unwrap();
+        runtime.block_on(collect_once(&store, &BrokerOnlySampler, retention(10)));
+        assert_eq!(
+            store.collection_health().unwrap().brokers.last_attempt,
+            Some(CollectionAttempt::PersistenceFailed)
+        );
+        let failed = runtime.block_on(store.inspect_storage());
+        assert_eq!(failed.evidence.read, FileReadState::Failed);
+        assert_eq!(
+            failed.evidence.last_write,
+            FileWriteState::NotObserved,
+            "a failed read before append is not an attempted write"
+        );
+        std::fs::remove_dir(&path).unwrap();
+        runtime.block_on(collect_once(&store, &BrokerOnlySampler, retention(10)));
+        let persisted = store.collection_health().unwrap().brokers;
+        assert_eq!(persisted.last_attempt, Some(CollectionAttempt::Persisted));
+        assert!(persisted.last_success_epoch_ms.is_some());
+        let recovered = runtime.block_on(store.inspect_storage());
+        assert_eq!(recovered.evidence.read, FileReadState::Readable);
+        assert_eq!(recovered.evidence.last_write, FileWriteState::Succeeded);
+        runtime.block_on(collect_once(&store, &EmptySampler, retention(10)));
+        let empty = store.collection_health().unwrap().brokers;
+        assert_eq!(empty.last_attempt, Some(CollectionAttempt::NoObservations));
+        assert!(!empty.failed);
+        assert_eq!(empty.last_success_epoch_ms, persisted.last_success_epoch_ms);
+        runtime.shutdown_runtime_blocking().unwrap();
+    }
+
+    #[test]
+    fn readable_history_retains_actual_atomic_write_failure_evidence() {
+        use crate::infrastructure::local_storage_status::{FileReadState, FileWriteState};
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime();
+        // The data filename is valid on NTFS/ext4; its atomic candidate exceeds the component limit.
+        let path = directory.path().join(format!("{}.json", "h".repeat(245)));
+        std::fs::write(&path, br#"{"schemaVersion":2,"points":[],"legacyNotes":[]}"#).unwrap();
+        let store = HistoryStore::new(path, runtime.root_context().component("history"));
+        runtime.block_on(collect_once(&store, &BrokerOnlySampler, retention(10)));
+        assert_eq!(
+            store.collection_health().unwrap().brokers.last_attempt,
+            Some(CollectionAttempt::PersistenceFailed)
+        );
+        let status = runtime.block_on(store.inspect_storage());
+        assert_eq!(status.evidence.read, FileReadState::Readable);
+        assert_eq!(status.evidence.last_write, FileWriteState::Failed);
+        assert!(status.evidence.last_successful_write_epoch_ms.is_none());
+        assert!(runtime.block_on(store.points()).unwrap().is_empty());
+        assert_eq!(
+            runtime.block_on(store.inspect_storage()).evidence.last_write,
+            FileWriteState::Failed,
+            "a successful read must not erase write-failure evidence"
+        );
+        runtime.shutdown_runtime_blocking().unwrap();
+    }
+
+    #[test]
+    fn zero_retention_does_not_report_a_stored_sample_but_records_the_empty_file_write() {
+        use crate::infrastructure::local_storage_status::{FileReadState, FileWriteState};
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime();
+        for (index, limits) in [
+            HistoryRetention {
+                max_points_per_series: 0,
+                ..retention(10)
+            },
+            HistoryRetention {
+                max_series: 0,
+                ..retention(10)
+            },
+            HistoryRetention {
+                max_total_points: 0,
+                ..retention(10)
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let store = HistoryStore::new(
+                directory.path().join(format!("history-{index}.json")),
+                runtime.root_context().component("history"),
+            );
+            runtime.block_on(collect_once(&store, &BrokerOnlySampler, retention(10)));
+            let successful_sample = store.collection_health().unwrap().brokers.last_success_epoch_ms;
+            assert!(successful_sample.is_some());
+            runtime.block_on(collect_once(&store, &BrokerOnlySampler, limits));
+            let health = store.collection_health().unwrap().brokers;
+            assert_eq!(health.last_attempt, Some(CollectionAttempt::NotRetained));
+            assert_eq!(health.last_success_epoch_ms, successful_sample);
+            assert!(!health.failed);
+            assert!(runtime.block_on(store.points()).unwrap().is_empty());
+            let status = runtime.block_on(store.inspect_storage());
+            assert_eq!(status.evidence.read, FileReadState::Readable);
+            assert_eq!(status.evidence.last_write, FileWriteState::Succeeded);
+            assert!(status.evidence.last_successful_write_epoch_ms.is_some());
+        }
+        runtime.shutdown_runtime_blocking().unwrap();
+    }
+
+    #[test]
+    fn rejected_and_evicted_samples_do_not_advance_last_stored_sample() {
+        use crate::infrastructure::local_storage_status::FileWriteState;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime();
+        let store = HistoryStore::new(
+            directory.path().join("history.json"),
+            runtime.root_context().component("history"),
+        );
+        let sample = |timestamp, value| {
+            Ok(EnvironmentHistorySample {
+                environment_id: None,
+                failed_resources: 0,
+                points: vec![HistoryPoint {
+                    metric: HistoryMetricKind::BrokerCount,
+                    series_identity: "registered".into(),
+                    timestamp_epoch_ms: timestamp,
+                    value,
+                    source_revision: 0,
+                }],
+            })
+        };
+        runtime.block_on(persist_side(
+            &store,
+            CollectionSide::Brokers,
+            None,
+            sample(1, f64::NAN),
+            retention(1),
+        ));
+        let rejected = store.collection_health().unwrap().brokers;
+        assert_eq!(rejected.last_attempt, Some(CollectionAttempt::NotRetained));
+        assert!(rejected.last_success_epoch_ms.is_none());
+        let untouched = runtime.block_on(store.inspect_storage());
+        assert_eq!(untouched.evidence.last_write, FileWriteState::NotObserved);
+        assert!(!untouched.path.exists());
+        runtime.block_on(persist_side(
+            &store,
+            CollectionSide::Brokers,
+            None,
+            sample(100, 2.0),
+            retention(1),
+        ));
+        let success = store.collection_health().unwrap().brokers.last_success_epoch_ms;
+        assert!(success.is_some());
+        runtime.block_on(persist_side(
+            &store,
+            CollectionSide::Brokers,
+            None,
+            sample(1, 1.0),
+            retention(1),
+        ));
+        let evicted = store.collection_health().unwrap().brokers;
+        assert_eq!(evicted.last_attempt, Some(CollectionAttempt::NotRetained));
+        assert_eq!(evicted.last_success_epoch_ms, success);
+        let retained = runtime.block_on(store.points()).unwrap();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].timestamp_epoch_ms, 100);
+        runtime.shutdown_runtime_blocking().unwrap();
     }
 }

@@ -31,13 +31,12 @@ use rocketmq_dashboard_common::{
 use rocketmq_runtime::ChildServiceContext;
 use serde::{Deserialize, Serialize};
 
-pub(super) use super::atomic_file::write_json_atomically;
-
 use super::{
     environment_store::{
         DesktopDocument, EnvironmentCatalog, EnvironmentChange, EnvironmentProfile, EnvironmentValidation,
         LocalOperationKind, LocalOperationRecord, StoredMonitorRule, load_document, new_environment_id,
     },
+    local_storage_status::{FileIoEvidence, FileReadState, LocalFileStatus, inspect_json, write_observed},
     storage_writer::StorageWriter,
 };
 
@@ -462,6 +461,7 @@ pub struct DesktopConfigStore {
     protected_original: AtomicBool,
     writer: Arc<parking_lot::Mutex<Option<StorageWriter>>>,
     document: parking_lot::RwLock<Option<DesktopDocument>>,
+    io_evidence: Arc<parking_lot::RwLock<FileIoEvidence>>,
 }
 
 impl DesktopConfigStore {
@@ -487,12 +487,41 @@ impl DesktopConfigStore {
             protected_original: AtomicBool::new(false),
             writer: Arc::new(parking_lot::Mutex::new(None)),
             document: parking_lot::RwLock::new(None),
+            io_evidence: Arc::new(parking_lot::RwLock::new(FileIoEvidence::default())),
         })
     }
 
     /// Returns the exact non-secret storage path.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn owns_writer(&self) -> bool {
+        self.writer.lock().is_some()
+    }
+
+    pub(crate) async fn inspect_storage(&self) -> LocalFileStatus {
+        let _guard = self.io_gate.lock().await;
+        let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
+        let result = self
+            .context
+            .storage_io()
+            .spawn_io("gpui-config-status", move || {
+                inspect_json::<DesktopDocument>(&path, CONFIG_SCHEMA_VERSION, &evidence, |document| {
+                    document.validate()?;
+                    Ok(Some(document.settings.revision))
+                });
+            })
+            .await;
+        if result.is_err() {
+            self.io_evidence.write().record_read(FileReadState::Unknown, None, None);
+        }
+        LocalFileStatus {
+            path: self.path.clone(),
+            writer_owned: self.owns_writer(),
+            evidence: *self.io_evidence.read(),
+        }
     }
 
     pub(crate) fn authentication_enabled(&self) -> Result<bool, ConfigStoreFailure> {
@@ -521,16 +550,17 @@ impl DesktopConfigStore {
             return Err(ConfigStoreFailure::writer_unavailable());
         }
         let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
         let document = self
             .context
             .storage_io()
             .spawn_io(name, move || {
-                let (mut document, _) = load_document(&path)?;
+                let (mut document, _) = load_observed_document(&path, &evidence)?;
                 let before = document.audit.clone();
                 update(&mut document.audit)?;
                 document.validate()?;
                 if document.audit != before {
-                    write_json_atomically(&path, &document)?;
+                    write_observed(&path, &document, &evidence)?;
                 }
                 Ok::<_, ConfigStoreFailure>(document)
             })
@@ -545,6 +575,7 @@ impl DesktopConfigStore {
         let _guard = self.io_gate.lock().await;
         let path = self.path.clone();
         let writer = Arc::clone(&self.writer);
+        let evidence = Arc::clone(&self.io_evidence);
         let result = self
             .context
             .storage_io()
@@ -554,10 +585,10 @@ impl DesktopConfigStore {
                     *writer = Some(StorageWriter::acquire(&path)?);
                 }
                 drop(writer);
-                let (document, migrated) = load_document(&path)?;
+                let (document, migrated) = load_observed_document(&path, &evidence)?;
                 document.validate()?;
                 if migrated {
-                    write_json_atomically(&path, &document)?;
+                    write_observed(&path, &document, &evidence)?;
                 }
                 Ok::<_, ConfigStoreFailure>(document)
             })
@@ -604,11 +635,12 @@ impl DesktopConfigStore {
         }
         let config = config.normalize()?;
         let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
         let document = self
             .context
             .storage_io()
             .spawn_io("gpui-config-save", move || {
-                let (mut document, _) = load_document(&path)?;
+                let (mut document, _) = load_observed_document(&path, &evidence)?;
                 if document
                     .local_operations
                     .iter()
@@ -628,7 +660,13 @@ impl DesktopConfigStore {
                     .checked_add(1)
                     .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
                 document.apply_config(&config)?;
-                persist_local_document(&path, document, context, LocalOperationKind::ConfigurationSaved)
+                persist_local_document(
+                    &path,
+                    document,
+                    context,
+                    LocalOperationKind::ConfigurationSaved,
+                    &evidence,
+                )
             })
             .await
             .map_err(ConfigStoreFailure::runtime)??;
@@ -690,11 +728,12 @@ impl DesktopConfigStore {
     ) -> Result<DesktopConfig, ConfigStoreFailure> {
         let _guard = self.io_gate.lock().await;
         let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
         let document = self
             .context
             .storage_io()
             .spawn_io("gpui-environment-change", move || {
-                let (mut document, _) = load_document(&path)?;
+                let (mut document, _) = load_observed_document(&path, &evidence)?;
                 if document
                     .local_operations
                     .iter()
@@ -732,7 +771,13 @@ impl DesktopConfigStore {
                     .revision
                     .checked_add(1)
                     .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
-                persist_local_document(&path, document, context, LocalOperationKind::ConfigurationSaved)
+                persist_local_document(
+                    &path,
+                    document,
+                    context,
+                    LocalOperationKind::ConfigurationSaved,
+                    &evidence,
+                )
             })
             .await
             .map_err(ConfigStoreFailure::runtime)??;
@@ -745,10 +790,11 @@ impl DesktopConfigStore {
     pub async fn monitor_rules(&self) -> Result<Vec<StoredMonitorRule>, ConfigStoreFailure> {
         let _guard = self.io_gate.lock().await;
         let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
         self.context
             .storage_io()
             .spawn_io("gpui-monitor-list", move || {
-                load_document(&path).map(|(document, _)| document.monitors.rules)
+                load_observed_document(&path, &evidence).map(|(document, _)| document.monitors.rules)
             })
             .await
             .map_err(ConfigStoreFailure::runtime)?
@@ -764,11 +810,12 @@ impl DesktopConfigStore {
     ) -> Result<bool, ConfigStoreFailure> {
         let _guard = self.io_gate.lock().await;
         let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
         let (document, removed) = self
             .context
             .storage_io()
             .spawn_io("gpui-monitor-commit", move || {
-                let (mut document, _) = load_document(&path)?;
+                let (mut document, _) = load_observed_document(&path, &evidence)?;
                 if document
                     .local_operations
                     .iter()
@@ -792,7 +839,7 @@ impl DesktopConfigStore {
                 } else {
                     LocalOperationKind::MonitorDeleted
                 };
-                let document = persist_local_document(&path, document, context, kind)?;
+                let document = persist_local_document(&path, document, context, kind, &evidence)?;
                 Ok::<_, ConfigStoreFailure>((document, removed))
             })
             .await
@@ -807,6 +854,7 @@ fn persist_local_document(
     mut document: DesktopDocument,
     context: OperationContext,
     kind: LocalOperationKind,
+    evidence: &parking_lot::RwLock<FileIoEvidence>,
 ) -> Result<DesktopDocument, ConfigStoreFailure> {
     let committed_at_epoch_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -830,8 +878,28 @@ fn persist_local_document(
             .drain(..document.local_operations.len() - 10_000);
     }
     document.validate()?;
-    write_json_atomically(path, &document)?;
+    write_observed(path, &document, evidence)?;
     Ok(document)
+}
+
+fn load_observed_document(
+    path: &Path,
+    evidence: &parking_lot::RwLock<FileIoEvidence>,
+) -> Result<(DesktopDocument, bool), ConfigStoreFailure> {
+    let result = load_document(path);
+    match &result {
+        Ok((document, migrated)) => evidence.write().record_read(
+            if *migrated {
+                FileReadState::MigrationRequired
+            } else {
+                FileReadState::Readable
+            },
+            (!migrated).then_some(document.schema_version),
+            (!migrated).then_some(document.settings.revision),
+        ),
+        Err(_) => evidence.write().record_read(FileReadState::Failed, None, None),
+    }
+    result
 }
 
 #[cfg(test)]
