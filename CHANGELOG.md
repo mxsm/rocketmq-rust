@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **refactor(runtime):** Make file configuration helpers optional behind the default-enabled `config-file` feature, preserving Broker, NameServer, and Controller configuration support while removing format parsers from runtime-only consumers. Consumers using `common::parse_config_file` with default features disabled must enable `config-file` explicitly.
+- **refactor(transport):** Gate HTTP NameServer discovery behind the default-enabled `http-discovery` feature, retaining Client and NameServer discovery while allowing other Transport consumers to omit the HTTP dependency stack. Consumers using these APIs with default features disabled must enable `http-discovery` explicitly.
+- **refactor(dependencies):** Remove unused Observability, Transport, and Broker dependency declarations, avoiding an unused timezone database and redundant compression backend in individual service builds.
 - **improve(dashboard-tauri):** Refresh the desktop icon with RocketMQ-Rust branding across PNG, ICO, ICNS, the sidebar, and the favicon, preserving square sidebar sizing at compact widths ([#11880](https://github.com/mxsm/rocketmq-rust/issues/11880)).
 - **refactor(proxy):** Rename the private listener readiness gate to `ListenerReadinessGate`, document its reporting contract, and align the production-readiness source policy with the renamed counter ([#11828](https://github.com/mxsm/rocketmq-rust/issues/11828)).
 - **refactor(proxy):** Rename optional Broker Remoting handler wiring to `broker_remoting_handler` and add `ProxyRuntimeBuilder::with_broker_remoting_handler`; adapter selection, dispatch behavior, diagnostics, and shutdown ordering are unchanged ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
@@ -71,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove the unused Notification candidate continuation spawner while preserving active pending replay workers and shutdown behavior ([#12080](https://github.com/mxsm/rocketmq-rust/issues/12080)).
+- **refactor(client):** Remove the unused crate-private delayed client action helper; tracked rebalance scheduling is unchanged ([#12079](https://github.com/mxsm/rocketmq-rust/issues/12079)).
+- **refactor(client):** Remove four unused crate-private KV API aliases while preserving public Admin methods and request behavior ([#12078](https://github.com/mxsm/rocketmq-rust/issues/12078)).
+- **refactor(store):** Remove unused private CommitLog memory lock wrappers; active append and memory lock lifecycle paths are unchanged ([#12064](https://github.com/mxsm/rocketmq-rust/issues/12064)).
+- **refactor(client):** Remove the obsolete internal admin error text parser; response codes continue to use structured errors ([#12063](https://github.com/mxsm/rocketmq-rust/issues/12063)).
+- **refactor(broker):** Remove unused legacy PopLite command assembly; current response and deferred reply paths are unchanged ([#12062](https://github.com/mxsm/rocketmq-rust/issues/12062)).
 - **refactor(broker):** Remove the unused internal consumer session expiry helper; manager-owned expiry and transport retirement are unchanged ([#11995](https://github.com/mxsm/rocketmq-rust/issues/11995)).
 - **refactor(broker):** Remove unused private deferred candidate spawners; active replay and shutdown paths are unchanged ([#11993](https://github.com/mxsm/rocketmq-rust/issues/11993)).
 - **refactor(broker):** Remove the unused internal named-broker escape path; active remote escape selection, authorization, and epoch fencing are unchanged ([#11976](https://github.com/mxsm/rocketmq-rust/issues/11976)).

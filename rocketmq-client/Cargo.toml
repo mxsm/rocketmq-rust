@@ -49,7 +49,7 @@ rocketmq-model           = { workspace = true }
 rocketmq-protocol        = { workspace = true }
 rocketmq-runtime         = { workspace = true }
 rocketmq-security-api    = { workspace = true }
-rocketmq-transport       = { workspace = true, features = ["socks"] }
+rocketmq-transport       = { workspace = true, features = ["socks", "http-discovery"] }
 rocketmq-error.workspace = true
 rocketmq-auth.workspace  = true
 rocketmq-observability   = { workspace = true }

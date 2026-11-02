@@ -790,6 +790,8 @@ async fn inactive_slave_does_not_elect_but_inactive_master_does() {
         .with_heartbeat_interval_ms(100)
         .with_election_timeout_ms(300)
         .with_storage_engine_type(crate::config::StorageEngineType::Memory)
+        // The heartbeat scan would elect too, only later: the listener has to do it here.
+        .with_raft_scan_wait_timeout_ms(3_600_000)
         .with_notify_broker_role_changed(false);
 
     let manager = Arc::new(

@@ -439,6 +439,24 @@ pub(crate) struct MappedFileQueueAppendHandle {
 }
 
 impl MappedFileQueueAppendHandle {
+    /// Moves the last file back to `offset`, which must lie inside it, and says whether it did.
+    pub(crate) fn truncate_last_file(&self, offset: i64) -> bool {
+        let _guard = self.runtime_state.commit_lock().lock();
+        let Some(mapped_file) = self.mapped_files.snapshot().last().cloned() else {
+            return false;
+        };
+        let Ok(position) = i32::try_from(offset - mapped_file.get_file_from_offset() as i64) else {
+            return false;
+        };
+        if position < 0 {
+            return false;
+        }
+        mapped_file.set_wrote_position(position);
+        mapped_file.set_committed_position(position);
+        mapped_file.set_flushed_position(position);
+        true
+    }
+
     pub(crate) fn fence_writes(&self) {
         let _guard = self.runtime_state.commit_lock().lock();
         self.runtime_state.begin_close();

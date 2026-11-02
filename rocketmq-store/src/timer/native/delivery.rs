@@ -77,6 +77,8 @@ pub(crate) enum NativeWriteOutcome {
 /// Why a due timer leaves without a write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NativeSettled {
+    /// Its message landed in an earlier batch, where a write in front of it stayed.
+    Landed,
     /// A recall cancelled it.
     Recalled,
     /// CommitLog cleanup deleted its record.
@@ -208,7 +210,8 @@ impl NativeTimerEngine {
 
     /// Records the outcomes of a written batch. The lane's watermark moves over the timers done
     /// in front of the first that stays, and that timer goes back into the wheel with every
-    /// timer after it, whatever their outcomes, so the lane keeps its order.
+    /// timer after it, whatever their outcomes, so the lane keeps its order. Those whose message
+    /// landed are not written again; they count as written when they leave the wheel.
     pub(crate) fn settle(&self, batch: NativeWrittenBatch) -> NativeDeliveryReport {
         let mut report = NativeDeliveryReport::default();
         let mut through: Option<NativeDueCursor> = None;
@@ -217,6 +220,10 @@ impl NativeTimerEngine {
         for (entry, outcome) in outcomes.by_ref() {
             match outcome {
                 NativeOutcome::Written => report.written += 1,
+                NativeOutcome::Settled(NativeSettled::Landed) => {
+                    self.landed.lock().remove(&entry.cq_offset);
+                    report.written += 1;
+                }
                 NativeOutcome::Dropped => report.dropped += 1,
                 NativeOutcome::Settled(NativeSettled::Recalled) => report.recalled += 1,
                 NativeOutcome::Settled(NativeSettled::CleanedUp) => report.cleaned_up += 1,
@@ -232,7 +239,13 @@ impl NativeTimerEngine {
             self.advance_delivered(batch.lane, through);
         }
         if let Some(first) = stays {
-            let requeued: Vec<_> = std::iter::once(first).chain(outcomes.map(|(entry, _)| entry)).collect();
+            let mut requeued = vec![first];
+            for (entry, outcome) in outcomes {
+                if outcome == NativeOutcome::Written {
+                    self.landed.lock().insert(entry.cq_offset);
+                }
+                requeued.push(entry);
+            }
             report.requeued = requeued.len();
             self.requeue(requeued);
         }
@@ -241,6 +254,12 @@ impl NativeTimerEngine {
 
     fn delivery_of(&self, timer: NativeDueTimer, reader: &impl NativeCommitLogReader) -> NativeDelivery {
         let NativeDueTimer { entry, recalls } = timer;
+        if self.landed.lock().contains(&entry.cq_offset) {
+            return NativeDelivery::Settled {
+                entry,
+                reason: NativeSettled::Landed,
+            };
+        }
         let message = match self.message_of(&entry, reader) {
             Ok(message) => message,
             Err(reason) => return NativeDelivery::Settled { entry, reason },
@@ -300,8 +319,7 @@ impl NativeDueBatch {
     /// Writes the batch's messages through `writer`, at most `max_in_flight` at a time so the
     /// CommitLog can merge them, and takes their outcomes in the lane's order. The first write
     /// that stays stops further writes. Writes already in flight behind it may still land;
-    /// their timers stay too and are written again with the same delivery token, which
-    /// at-least-once delivery allows.
+    /// [`NativeTimerEngine::settle`] keeps those from being written again.
     pub(crate) async fn write(
         self,
         writer: &impl NativeTimerWriter,

@@ -26,12 +26,17 @@ Shared `Bytes` and vectored writes reduce copies in userspace. They do not imply
 | Feature | Effect |
 | --- | --- |
 | `tls`, `socks` | Default package features providing TLS and SOCKS support; connections still require runtime configuration. |
+| `http-discovery` | Default package feature providing `DefaultTopAddressing`, `HttpTinyClient`, and `HttpResult` for HTTP/HTTPS NameServer address discovery. |
 | `simd` | Forwards accelerated protocol decoding support. |
 | `observability`, `observability-traces` | Optional metrics and tracing integration. Exporter ownership remains with the application. |
 | `linux-sendfile` | Default-off Linux plaintext file transfer backend. |
 | `test-support` | Exposes test/benchmark helpers. |
 
 The root workspace dependency disables transport default features, so a workspace consumer must explicitly enable the capabilities it needs. A direct package build and a consumer's feature selection can therefore differ.
+
+Consumers that disable default features and use the HTTP discovery APIs must enable
+`http-discovery`. Client and NameServer enable it explicitly; services that only use
+Remoting transport can omit the HTTP client and its dependencies.
 
 ## Validation
 
