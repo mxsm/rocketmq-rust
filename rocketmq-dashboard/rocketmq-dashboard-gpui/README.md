@@ -470,8 +470,21 @@ application TaskGroup loop. Each automatic interval begins after the previous
 snapshot completes. Leaving the page or deactivating the window cancels current
 reads; resuming refreshes once. Application shutdown cancels and awaits this work.
 Environment/configuration changes and logout clear the snapshot, edges, and
-selection. The shared snapshot and selection model can support another native
-presentation without introducing a separate query implementation.
+selection.
+
+The Sphere presentation uses this same bounded, Cluster-filtered snapshot and
+selection. Native canvas painting consumes an orthographic projection prepared
+outside Render: deterministic Cluster sectors share the Broker globe, with small
+NameServer and Controller globes only when those actual nodes exist. It keeps
+unknown and cached observation semantics and introduces no additional query.
+Rotation, zoom, focus-selected and reset are explicit, keyboard-accessible buttons;
+Alt+arrows rotate, Alt+PageUp/PageDown zoom, Alt+F focuses selection and Alt+R resets
+while the topology workspace has keyboard focus. There is no animation clock.
+At most 32 non-overlapping labels are drawn, with the
+selected observation first. The searchable picker and keyboard list expose every
+displayed node, including nodes on the far side. Actual canvas bounds trigger a
+new projection on resize. An invalid canvas or a viewport smaller than 480×260
+pixels falls back to the same 2D map while preserving the filter and selection.
 
 ## License
 
