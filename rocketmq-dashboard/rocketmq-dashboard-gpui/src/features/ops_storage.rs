@@ -324,14 +324,14 @@ impl OpsView {
                 &self.storage.inputs[3],
             ),
         ];
-        div().debug_selector(|| "ops-storage-page".into()).flex().flex_col().gap_4()
+        div().debug_selector(|| "ops-storage-page".into()).w_full().min_w_0().h_auto().flex_shrink_0().flex().flex_col().gap_4()
             .child(div().flex().flex_wrap().gap_2()
                 .child(Button::new("refresh-storage-status").debug_selector(|| "refresh-storage-status".into()).label("Refresh status").disabled(self.storage.loading || self.busy).on_click(cx.listener(|view, _, window, cx| view.refresh_storage(window, cx))))
                 .child(Button::new("reload-storage").debug_selector(|| "reload-storage".into()).label("Reload configuration").outline().disabled(self.busy).on_click(cx.listener(|view, _, window, cx| view.reload(window, cx))))
                 .child(Button::new("ops-open-config-directory").debug_selector(|| "ops-open-config-directory".into()).label("Open config directory").outline().disabled(self.busy).on_click(cx.listener(|view, _, window, cx| view.open_config_directory(window, cx)))))
             .child(status)
-            .child(self.native_storage.clone())
-            .child(div().font_semibold().child("History collection settings"))
+            .child(div().w_full().min_w_0().flex_shrink_0().flex().flex_col().child(self.native_storage.clone()))
+            .child(div().debug_selector(|| "ops-history-heading".into()).font_semibold().child("History collection settings"))
             .child("These settings use the selected authority and are shared by desktops connected to the same database. Samples keep their environment identity. Proxy scope can limit sampling capabilities; the collection results above report actual attempts.")
             .child(Checkbox::new("ops-history-enabled").debug_selector(|| "ops-history-enabled".into()).label("Enable History collection").checked(self.storage.enabled).disabled(self.busy).on_click(cx.listener(|view, enabled, _, cx| { view.storage.enabled = *enabled; view.storage.dirty = view.storage.read(cx) != Ok(view.storage.original); cx.notify(); })))
             .child(div().flex().flex_wrap().gap_3().children(fields.into_iter().map(|(id, label, hint, input)| div().flex_1().min_w(px(240.)).child(label).child(div().debug_selector(move || id.into()).child(Input::new(input).disabled(self.busy))).child(div().text_xs().text_color(theme.muted_foreground).child(hint)))))
