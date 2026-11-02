@@ -194,17 +194,29 @@ impl DashboardBrokerOperations for RealDashboardBrokerOperations {
 impl AppServices {
     /// Loads the independently evidenced Dashboard overview.
     pub async fn dashboard_overview(&self, revision: u64) -> Result<DashboardOverviewLoad, UiError> {
-        self.dashboard_broker.dashboard_overview(revision).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-dashboard-overview", async move {
+            backend.dashboard_overview(revision).await
+        })
+        .await
     }
 
     /// Loads current Topic metrics without inferred rates.
     pub async fn dashboard_topic_current(&self, revision: u64) -> Result<TopicCurrentLoad, UiError> {
-        self.dashboard_broker.dashboard_topic_current(revision).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-dashboard-topic-current", async move {
+            backend.dashboard_topic_current(revision).await
+        })
+        .await
     }
 
     /// Loads current Broker metrics without converting missing runtime fields to zero.
     pub async fn dashboard_broker_current(&self, revision: u64) -> Result<Vec<BrokerCurrentMetric>, UiError> {
-        self.dashboard_broker.dashboard_broker_current(revision).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-dashboard-broker-current", async move {
+            backend.dashboard_broker_current(revision).await
+        })
+        .await
     }
 
     /// Loads actual Topic History points in the requested range.
@@ -215,9 +227,13 @@ impl AppServices {
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
-        self.dashboard_broker
-            .dashboard_topic_history(revision, topic, start_epoch_ms, end_epoch_ms)
-            .await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-dashboard-topic-history", async move {
+            backend
+                .dashboard_topic_history(revision, topic, start_epoch_ms, end_epoch_ms)
+                .await
+        })
+        .await
     }
 
     /// Loads actual Broker History points in the requested range.
@@ -229,9 +245,13 @@ impl AppServices {
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
-        self.dashboard_broker
-            .dashboard_broker_history(revision, metric, identity, start_epoch_ms, end_epoch_ms)
-            .await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-dashboard-broker-history", async move {
+            backend
+                .dashboard_broker_history(revision, metric, identity, start_epoch_ms, end_epoch_ms)
+                .await
+        })
+        .await
     }
 
     pub async fn dashboard_count_history(
@@ -241,25 +261,39 @@ impl AppServices {
         start: u64,
         end: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
-        self.dashboard_broker
-            .dashboard_count_history(revision, metric, start, end)
-            .await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-dashboard-count-history", async move {
+            backend.dashboard_count_history(revision, metric, start, end).await
+        })
+        .await
     }
     pub async fn dashboard_history_health(
         &self,
         revision: u64,
     ) -> Result<crate::infrastructure::history_health::HistoryCollectionHealth, UiError> {
-        self.dashboard_broker.dashboard_history_health(revision).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-dashboard-history-health", async move {
+            backend.dashboard_history_health(revision).await
+        })
+        .await
     }
 
     /// Loads the complete Broker inventory.
     pub async fn broker_inventory(&self, revision: u64) -> Result<Vec<BrokerInventoryItem>, UiError> {
-        self.dashboard_broker.broker_inventory(revision).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-broker-inventory", async move {
+            backend.broker_inventory(revision).await
+        })
+        .await
     }
 
     /// Loads redaction-aware runtime entries for one Broker.
     pub async fn broker_runtime(&self, revision: u64, identity: BrokerIdentity) -> Result<Vec<RuntimeEntry>, UiError> {
-        self.dashboard_broker.broker_runtime(revision, identity).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-broker-runtime", async move {
+            backend.broker_runtime(revision, identity).await
+        })
+        .await
     }
 
     /// Loads Broker config paired with its generation CAS token.
@@ -268,7 +302,11 @@ impl AppServices {
         revision: u64,
         identity: BrokerIdentity,
     ) -> Result<BrokerConfigSnapshot, UiError> {
-        self.dashboard_broker.broker_config(revision, identity).await
+        let backend = Arc::clone(&self.dashboard_broker);
+        self.run_protected_query("gpui-broker-config", async move {
+            backend.broker_config(revision, identity).await
+        })
+        .await
     }
 
     /// Applies one reviewed Broker config patch with generation CAS and no replay.

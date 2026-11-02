@@ -49,6 +49,8 @@ pub enum AuditAction {
     AclPolicyDeleted,
     LocalLogin,
     LocalLogout,
+    /// Persistent native sessions for one confirmed username were revoked.
+    SessionRevokeAll,
 }
 
 /// The business result, independent of a following refresh or audit persistence failure.
@@ -296,6 +298,7 @@ impl AuditAcceptedOperation {
 
         let resource = match &self.context.resource {
             OperationResource::Configuration | OperationResource::LocalSession => None,
+            OperationResource::SessionUser(identity) => Some(identity),
             OperationResource::Monitor(value)
             | OperationResource::Topic(value)
             | OperationResource::ConsumerGroup(value)
@@ -320,6 +323,28 @@ fn valid_identity(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_revocation_audit_round_trips_a_confirmed_username_without_session_capabilities() {
+        let value = serde_json::json!({
+            "context": {
+                "environmentId": "env-native",
+                "configurationRevision": 4,
+                "requestId": "request-session-revoke",
+                "actor": {"kind": "local_operator", "username": "operator"},
+                "resource": {"kind": "session_user", "identity": "other-operator"}
+            },
+            "action": "session_revoke_all",
+            "acceptedAtEpochMs": 100
+        });
+        let operation: AuditAcceptedOperation = serde_json::from_value(value.clone()).unwrap();
+        operation.validate().unwrap();
+        assert_eq!(operation.action, AuditAction::SessionRevokeAll);
+        assert_eq!(serde_json::to_value(&operation).unwrap(), value);
+        let mut with_capability = value;
+        with_capability["sessionToken"] = serde_json::json!("must-not-be-retained");
+        assert!(serde_json::from_value::<AuditAcceptedOperation>(with_capability).is_err());
+    }
 
     #[test]
     fn legacy_audit_records_round_trip_and_topic_intent_accepts_only_field_names() {

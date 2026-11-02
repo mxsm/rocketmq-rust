@@ -122,6 +122,7 @@ fn acl_bulk_target_notices_scroll_without_hiding_records_or_pagination(cx: &mut 
     }
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     cluster(&view, "cluster-a", cx);
     draw(&root, cx);
@@ -225,6 +226,7 @@ fn acl_scope_change_cancels_old_secret_query_and_leave_clears_a_retained_form(cx
     let (started, _release, done) = fixture.backend.hold_query();
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     cluster(&view, "cluster-a", cx);
     draw(&root, cx);
@@ -274,6 +276,7 @@ fn acl_official_user_and_policy_controls_require_confirmation_and_submit_structu
     let fixture = Fixture::new();
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     assert!(fixture.backend.user_calls.lock().unwrap().is_empty());
     assert!(fixture.backend.policy_calls.lock().unwrap().is_empty());
@@ -382,6 +385,7 @@ fn acl_password_entities_history_and_returned_values_clear_on_close_tab_and_scop
     fixture.backend.users.lock().unwrap().push(user());
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     cluster(&view, "cluster-a", cx);
     draw(&root, cx);
@@ -389,6 +393,9 @@ fn acl_password_entities_history_and_returned_values_clear_on_close_tab_and_scop
     completed(cx, &completion, "gpui-service-acl-users");
     draw(&root, cx);
     click(cx, "acl-show-passwords");
+    let reveal = cx.update(|_, app| view.update(app, |view, _| view.access_task.take().unwrap()));
+    cx.background_executor.allow_parking();
+    cx.background_executor.block_test(reveal);
     cx.read(|app| assert!(view.read(app).show_passwords));
     click(cx, "acl-user-edit-0");
     draw(&root, cx);
@@ -449,6 +456,7 @@ fn acl_users_and_policies_search_pages_are_independent_and_partial_attempt_canno
     }
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     cluster(&view, "cluster-a", cx);
     draw(&root, cx);

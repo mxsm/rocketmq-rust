@@ -96,6 +96,11 @@ impl Fixture {
         }
     }
 
+    pub(crate) fn sign_in(&self, username: &str, password: &str) -> Result<crate::services::SessionState, UiError> {
+        self.runtime
+            .block_on(self.services.establish_session_for_test(username, password))
+    }
+
     pub fn operation(&self, index: u64) -> AuditAcceptedOperation {
         AuditAcceptedOperation {
             context: OperationContext {
@@ -233,6 +238,25 @@ pub(crate) fn settle_audit_read(
             .expect("owned Audit read completion");
         cx.run_until_parked();
     }
+    settle_audit_detail(view, cx);
+}
+
+pub(crate) fn settle_audit_detail(view: &Entity<AuditView>, cx: &mut gpui::VisualTestContext) {
+    cx.background_executor.allow_parking();
+    let detail_access = cx.update(|_, app| view.update(app, |view, _| view.detail_access_task.take()));
+    if let Some(task) = detail_access {
+        cx.background_executor.block_test(task);
+    }
+    let copy = cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.detail
+                .as_ref()
+                .and_then(|detail| detail.update(cx, |detail, _| detail.take_access_task_for_test()))
+        })
+    });
+    if let Some(task) = copy {
+        cx.background_executor.block_test(task);
+    }
 }
 
 pub(crate) fn wait_for_audit_read(
@@ -277,7 +301,7 @@ fn ids(view: &Entity<AuditView>, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
 fn audit_queued_results_and_already_rendered_cached_controls_recheck_live_auth(cx: &mut gpui::TestAppContext) {
     let fixture = Fixture::new(true);
     fixture.seed(70);
-    fixture.auth.authenticate("operator", "test-password").unwrap();
+    fixture.sign_in("operator", "test-password").unwrap();
     let before = fixture.events();
     let (root, view, cx) = mount(cx, fixture.services.clone());
     draw(&root, &view, &fixture, cx);
@@ -304,7 +328,7 @@ fn audit_queued_results_and_already_rendered_cached_controls_recheck_live_auth(c
     );
 
     for control in ["audit-next", "audit-previous", "audit-open-0"] {
-        fixture.auth.authenticate("operator", "test-password").unwrap();
+        fixture.sign_in("operator", "test-password").unwrap();
         click(cx, "audit-apply");
         draw(&root, &view, &fixture, cx);
         click(cx, "audit-next");
@@ -345,7 +369,7 @@ fn audit_queued_read_is_bound_to_the_current_operator_not_an_authenticated_boole
     let credentials = Arc::new(Credentials(std::sync::Mutex::new("operator-a".into())));
     let fixture = Fixture::with_environment(true, credentials.clone());
     fixture.seed(40);
-    fixture.auth.authenticate("operator-a", "test-password").unwrap();
+    fixture.sign_in("operator-a", "test-password").unwrap();
     let (root, view, cx) = mount(cx, fixture.services.clone());
     draw(&root, &view, &fixture, cx);
     let (started, release) = cx.update(|_, app| view.update(app, |view, _| view.hold_next_query()));
@@ -359,7 +383,7 @@ fn audit_queued_read_is_bound_to_the_current_operator_not_an_authenticated_boole
     });
     fixture.auth.sign_out();
     *credentials.0.lock().unwrap() = "operator-b".into();
-    fixture.auth.authenticate("operator-b", "test-password").unwrap();
+    fixture.sign_in("operator-b", "test-password").unwrap();
     release.send(()).unwrap();
     cx.run_until_parked();
     assert!(fixture.services.audit_read_access().is_ok());
@@ -547,6 +571,15 @@ fn audit_compact_detail_copies_trusted_request_and_separates_cleanup_and_broker_
     });
     draw(&root, &view, &fixture, cx);
     let open = cx.debug_bounds("audit-open-1").unwrap();
+    if open.bottom() > results.bottom() {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: results.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-80.))),
+            ..Default::default()
+        });
+        draw(&root, &view, &fixture, cx);
+    }
+    let open = cx.debug_bounds("audit-open-1").unwrap();
     assert!(
         open.top() >= results.top() && open.bottom() <= results.bottom(),
         "record control must be visible after wheel: {open:?}, viewport={results:?}"
@@ -557,6 +590,7 @@ fn audit_compact_detail_copies_trusted_request_and_separates_cleanup_and_broker_
     let body = cx.debug_bounds("audit-detail-scroll").unwrap();
     assert!(body.right() <= px(960.) && body.bottom() <= px(640.));
     click(cx, "audit-copy-request-id");
+    draw(&root, &view, &fixture, cx);
     assert_eq!(
         cx.update(|_, app| app.read_from_clipboard().and_then(|item| item.text())),
         Some("audit-query-2".into())
@@ -600,7 +634,7 @@ fn audit_real_auth_authority_pending_requests_and_context_clear_drop_all_protect
         cx.read(|app| view.read(app).store.error.as_ref().unwrap().code()),
         UiErrorCode::Authentication
     );
-    fixture.auth.authenticate("operator", "test-password").unwrap();
+    fixture.sign_in("operator", "test-password").unwrap();
     click(cx, "audit-apply");
     draw(&root, &view, &fixture, cx);
     assert_eq!(cx.read(|app| view.read(app).store.pending.len()), 1);
@@ -608,6 +642,7 @@ fn audit_real_auth_authority_pending_requests_and_context_clear_drop_all_protect
     draw(&root, &view, &fixture, cx);
     let detail = cx.read(|app| view.read(app).detail.clone().unwrap());
     click(cx, "audit-copy-request-id");
+    draw(&root, &view, &fixture, cx);
     assert_eq!(
         cx.update(|_, app| app.read_from_clipboard().and_then(|item| item.text())),
         Some("unfinished-request".into())

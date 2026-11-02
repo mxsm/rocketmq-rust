@@ -33,7 +33,7 @@ use super::AppServices;
 use crate::{
     infrastructure::{
         audit_store::AuditStore,
-        auth_state::{DesktopAuthState, LocalSession},
+        auth_state::DesktopAuthState,
         config_store::{ConfigStoreFailure, DesktopConfigStore},
     },
     state::{UiError, UiErrorCode},
@@ -57,7 +57,7 @@ struct FailedTerminalWrite {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct AuditReadAccess {
     // Authentication-disabled mode intentionally has no operator identity requirement.
-    session: Option<LocalSession>,
+    session: Option<super::SessionState>,
 }
 
 #[cfg(test)]
@@ -384,7 +384,7 @@ impl AppServices {
                     false,
                 ));
             }
-            Some(session)
+            Some(super::SessionState::from_local(&session))
         } else {
             None
         };
@@ -414,6 +414,38 @@ impl AppServices {
     }
 
     pub(super) async fn run_mutation<T: MutationAudit + Send + 'static>(
+        &self,
+        name: &'static str,
+        operation: Option<AuditAcceptedOperation>,
+        future: impl Future<Output = Result<T, UiError>> + Send + 'static,
+    ) -> Result<T, UiError> {
+        let validate_access = !operation
+            .as_ref()
+            .is_some_and(|operation| matches!(operation.action, AuditAction::LocalLogin | AuditAction::LocalLogout));
+        let expected_session = self.current_session();
+        let services = self.clone();
+        let work = async move {
+            if validate_access {
+                let access = services.protected_access_for(expected_session.clone()).await?;
+                if services.current_session() != expected_session || !services.protected_access_is_current(&access) {
+                    return Err(UiError::new(
+                        "The session changed before the operation was accepted. Review it again.",
+                        UiErrorCode::Authentication,
+                        false,
+                    ));
+                }
+            }
+            services.record_mutation(operation, future).await
+        };
+        // Confirmation registers the application owner immediately. Its job validates access
+        // before Audit admission or any business call, independently of GPUI delivery.
+        match &self.runtime_bridge {
+            Some(runtime) => runtime.run_owned(name, work).await,
+            None => work.await,
+        }
+    }
+
+    pub(super) async fn run_owned_mutation<T: MutationAudit + Send + 'static>(
         &self,
         name: &'static str,
         operation: Option<AuditAcceptedOperation>,
@@ -527,10 +559,7 @@ impl AppServices {
                 )
             })
         };
-        let result = match &self.runtime_bridge {
-            Some(runtime) => runtime.run("gpui-audit-query", work).await,
-            None => work.await,
-        };
+        let result = self.run_protected_query("gpui-audit-query", work).await;
         if self.audit_read_access()? != access {
             return Err(UiError::new(
                 "Audit access changed while records were read.",
@@ -548,10 +577,7 @@ impl AppServices {
         let access = self.audit_read_access()?;
         let store = audit.store.clone();
         let work = async move { store.pending().await.map_err(super::config_ui_error) };
-        let result = match &self.runtime_bridge {
-            Some(runtime) => runtime.run("gpui-audit-pending", work).await,
-            None => work.await,
-        };
+        let result = self.run_protected_query("gpui-audit-pending", work).await;
         if self.audit_read_access()? != access {
             return Err(UiError::new(
                 "Audit access changed while records were read.",

@@ -24,6 +24,7 @@ pub mod key_value;
 pub mod metric_card;
 #[path = "components/page_header.rs"]
 pub mod page_header;
+pub(crate) mod protected_action;
 #[path = "components/sidebar.rs"]
 pub mod sidebar;
 #[path = "components/states.rs"]

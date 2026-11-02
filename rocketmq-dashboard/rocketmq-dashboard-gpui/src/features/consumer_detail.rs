@@ -22,8 +22,8 @@ mod render;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    ClipboardItem, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Task, Window, div,
+    Context, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Task,
+    Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
@@ -57,6 +57,8 @@ pub enum ConsumerDetailIntent {
 
 pub struct ConsumerDetail {
     services: AppServices,
+    session_owner: Option<crate::services::SessionState>,
+    access_task: Option<Task<()>>,
     revision: u64,
     pub store: ConsumerDetailStore,
     resource_task: Option<Task<()>>,
@@ -87,8 +89,11 @@ impl ConsumerDetail {
         query_scope: rocketmq_dashboard_common::ConsumerQueryScope,
         cx: &mut Context<Self>,
     ) -> Self {
+        let session_owner = services.current_session();
         let mut detail = Self {
             services,
+            session_owner,
+            access_task: None,
             revision,
             store: ConsumerDetailStore::new(group, tab),
             resource_task: None,
@@ -169,6 +174,8 @@ impl ConsumerDetail {
     }
 
     pub(super) fn clear_for_environment(&mut self, revision: u64, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        self.access_task = None;
+        self.session_owner = None;
         self.revision = revision;
         self.resource_task = None;
         self.mutation_dialog = None;
@@ -190,6 +197,8 @@ impl ConsumerDetail {
     }
 
     pub(super) fn discard_queries(&mut self, cx: &mut Context<Self>) {
+        self.access_task = None;
+        self.session_owner = None;
         self.resource_task = None;
         self.diagnostic_task = None;
         self.store.clear_diagnostic();
@@ -224,7 +233,7 @@ impl ConsumerDetail {
     }
 
     fn refresh_active(&mut self, cx: &mut Context<Self>) {
-        if !self.store.active_is_idle() {
+        if self.services.current_session() != self.session_owner || !self.store.active_is_idle() {
             return;
         }
         let Some(mut request) = self.store.begin_active(self.revision) else {
@@ -279,7 +288,9 @@ impl ConsumerDetail {
         kind: ConsumerDiagnosticKind,
         cx: &mut Context<Self>,
     ) {
-        if self.capabilities.diagnostics != rocketmq_dashboard_common::CapabilityAvailability::Available {
+        if self.services.current_session() != self.session_owner
+            || self.capabilities.diagnostics != rocketmq_dashboard_common::CapabilityAvailability::Available
+        {
             return;
         }
         let Some(mut load) = self.store.begin_diagnostic(self.revision, client.clone(), kind) else {
@@ -423,6 +434,8 @@ impl Render for ConsumerDetail {
             (ConsumerTab::OffsetActions, "Offset Actions"),
         ];
         let copy_group = self.store.group.as_str().to_owned();
+        let copy_session = self.session_owner.clone();
+        let copy_revision = self.revision;
         let window_padding = gpui_component::window_paddings(window);
         let content = div()
             .w_full()
@@ -446,7 +459,16 @@ impl Render for ConsumerDetail {
                     .label("Copy group")
                     .small()
                     .outline()
-                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_group.clone()))),
+                    .on_click(cx.listener(move |detail, _, window, cx| {
+                        detail.access_task = Some(crate::components::protected_action::copy(
+                            detail.services.clone(),
+                            copy_session.clone(),
+                            copy_revision,
+                            copy_group.clone(),
+                            window,
+                            cx,
+                        ));
+                    })),
             )
             .child(div().w_full().min_w_0().whitespace_normal().child(format!(
                     "Consumer reads: {}",

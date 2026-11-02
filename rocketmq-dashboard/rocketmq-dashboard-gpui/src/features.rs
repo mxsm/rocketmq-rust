@@ -30,6 +30,8 @@ mod audit_detail;
 mod audit_presentation;
 #[path = "features/audit_query_store.rs"]
 mod audit_query_store;
+pub(crate) mod sessions;
+mod sessions_store;
 
 #[path = "features/login.rs"]
 pub mod login;

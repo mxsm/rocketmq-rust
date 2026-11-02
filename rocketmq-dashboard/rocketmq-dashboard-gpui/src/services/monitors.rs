@@ -51,12 +51,10 @@ impl AppServices {
     pub async fn monitor_rules(&self, revision: u64) -> Result<MonitorRulesSnapshot, UiError> {
         let store = self.monitors.clone().ok_or_else(unavailable)?;
         let scope = store.scope(revision).map_err(config_ui_error)?;
-        let runtime = self.runtime_bridge.as_ref().ok_or_else(unavailable)?;
-        runtime
-            .run("gpui-monitor-rules", async move {
-                store.snapshot(scope).await.map_err(config_ui_error)
-            })
-            .await
+        self.run_protected_query("gpui-monitor-rules", async move {
+            store.snapshot(scope).await.map_err(config_ui_error)
+        })
+        .await
     }
 
     pub async fn mutate_monitor_rule(

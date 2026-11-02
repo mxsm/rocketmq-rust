@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Environment-backed credentials with an in-memory-only dashboard session.
+//! Environment-backed credentials and the current native session capability.
 
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -20,6 +20,7 @@ use std::{fmt, sync::Arc};
 
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_dashboard_common::CredentialSourceKind;
+use rocketmq_dashboard_storage::{SessionId, SessionRecord};
 
 use super::config_store::AuthConfig;
 
@@ -49,10 +50,16 @@ impl EnvironmentReader for ProcessEnvironment {
     }
 }
 
-/// A non-sensitive local session marker.
+/// Private current-session state. Only its username and local lifetime are projected to views;
+/// formatting omits both the stored capability and supplied identity values.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct LocalSession {
     username: Option<String>,
+    // A local lifetime distinguishes replacement logins for the same username. It is never a
+    // persistent capability and is deliberately absent from Debug and the native session list.
+    generation: u128,
+    id: Option<SessionId>,
+    expires_at_epoch_ms: Option<u64>,
 }
 
 impl fmt::Debug for LocalSession {
@@ -75,6 +82,18 @@ impl LocalSession {
     pub fn username(&self) -> Option<&str> {
         self.username.as_deref()
     }
+
+    pub(crate) fn generation(&self) -> u128 {
+        self.generation
+    }
+
+    pub(crate) fn session_id(&self) -> Option<SessionId> {
+        self.id.clone()
+    }
+
+    pub(crate) fn expires_at_epoch_ms(&self) -> Option<u64> {
+        self.expires_at_epoch_ms
+    }
 }
 
 /// Deterministic credential or local-session rejection that never carries a supplied value.
@@ -95,6 +114,7 @@ pub(crate) enum AuthRejection {
 pub struct DesktopAuthState {
     environment: Arc<dyn EnvironmentReader>,
     session: parking_lot::Mutex<LocalSession>,
+    changes: tokio::sync::watch::Sender<u64>,
 }
 
 impl DesktopAuthState {
@@ -105,9 +125,11 @@ impl DesktopAuthState {
 
     /// Uses an injected source for deterministic tests.
     pub fn new(environment: Arc<dyn EnvironmentReader>) -> Arc<Self> {
+        let (changes, _) = tokio::sync::watch::channel(0);
         Arc::new(Self {
             environment,
             session: parking_lot::Mutex::new(LocalSession::default()),
+            changes,
         })
     }
 
@@ -124,8 +146,8 @@ impl DesktopAuthState {
         Ok(())
     }
 
-    /// Authenticates a local operator and stores only the username in memory.
-    pub fn authenticate(&self, username: &str, password: &str) -> Result<LocalSession, AuthRejection> {
+    /// Verifies the existing local operator source without creating a session before persistence.
+    pub(crate) fn verify_credentials(&self, username: &str, password: &str) -> Result<(), AuthRejection> {
         let configured_username = self.required(LOGIN_USERNAME_ENV)?;
         let configured_password = self.required(LOGIN_PASSWORD_ENV)?;
         let accepted = constant_time_eq(username.as_bytes(), configured_username.as_bytes())
@@ -135,19 +157,72 @@ impl DesktopAuthState {
         if !accepted {
             return Err(AuthRejection::Rejected);
         }
+        Ok(())
+    }
+
+    /// Installs a durable session only while the login's captured local lifetime is still current.
+    pub(crate) fn install_session(&self, expected: &LocalSession, record: &SessionRecord) -> Option<LocalSession> {
+        let mut session = self.session.lock();
+        if &*session != expected {
+            return None;
+        }
+        *session = LocalSession {
+            username: Some(record.username.clone()),
+            generation: rand::random(),
+            id: Some(record.id.clone()),
+            expires_at_epoch_ms: Some(record.expires_at_epoch_ms),
+        };
+        self.changed();
+        Some(session.clone())
+    }
+
+    #[cfg(test)]
+    pub fn authenticate(&self, username: &str, password: &str) -> Result<LocalSession, AuthRejection> {
+        self.verify_credentials(username, password)?;
         let session = LocalSession {
             username: Some(username.to_owned()),
+            generation: rand::random(),
+            ..LocalSession::default()
         };
         *self.session.lock() = session.clone();
+        self.changed();
         Ok(session)
     }
 
-    /// Clears the complete in-memory local session.
+    /// Clears fixture state without the native service's persisted revocation path.
+    #[cfg(test)]
     pub fn sign_out(&self) {
-        *self.session.lock() = LocalSession::default();
+        *self.session.lock() = LocalSession {
+            generation: rand::random(),
+            ..LocalSession::default()
+        };
+        self.changed();
     }
 
-    /// Returns a non-sensitive session snapshot.
+    /// A late validation or logout must never end a replacement session.
+    pub(crate) fn sign_out_if_current(&self, expected: &LocalSession) -> bool {
+        let mut session = self.session.lock();
+        if &*session != expected {
+            return false;
+        }
+        *session = LocalSession {
+            generation: rand::random(),
+            ..LocalSession::default()
+        };
+        self.changed();
+        true
+    }
+
+    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    fn changed(&self) {
+        self.changes
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    /// Returns the service owner's session snapshot; views receive the safe SessionState projection.
     pub fn session(&self) -> LocalSession {
         self.session.lock().clone()
     }

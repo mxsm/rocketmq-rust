@@ -250,15 +250,22 @@ fn reconciliation_replaces_a_finished_worker_even_when_settings_match() {
     assert!(!finished.is_running());
     assert!(finished.matches_settings(60, retention));
     assert_eq!(fixture.history.task_group().task_count(), 0);
+    let auth = DesktopAuthState::new(Arc::new(MapEnvironment::new([])));
+    let host_context = fixture.runtime.root_context().component("recovery-host");
     let backend = DesktopBackend {
         store: fixture.store.clone(),
         provider: Arc::new(ProductFakeConnectionProvider),
-        auth: DesktopAuthState::new(Arc::new(MapEnvironment::new([]))),
+        sessions: crate::services::sessions::SessionService::new(
+            fixture.store.clone(),
+            auth.clone(),
+            host_context.clone(),
+        ),
+        auth,
         state: parking_lot::RwLock::new(GlobalConnectionState::default()),
         update_gate: tokio::sync::Mutex::new(()),
         history_context: fixture.history.clone(),
         monitor_context: fixture.runtime.root_context().component("recovery-monitor"),
-        host_context: fixture.runtime.root_context().component("recovery-host"),
+        host_context,
         history_store,
         history_sampler: sampler,
         monitor_store: MonitorStore::with_config_store(fixture.store.clone()),

@@ -118,29 +118,17 @@ impl AppServices {
     pub(crate) async fn acl_users(&self, request: AclRequest) -> Result<AclRead<AclUser>, UiError> {
         self.require_acl_access(request.revision)?;
         let backend = self.acl.clone();
-        match &self.runtime_bridge {
-            Some(runtime) => {
-                runtime
-                    .run("gpui-service-acl-users", async move { backend.users(request).await })
-                    .await
-            }
-            None => backend.users(request).await,
-        }
+        self.run_protected_query("gpui-service-acl-users", async move { backend.users(request).await })
+            .await
     }
     pub(crate) async fn acl_policies(&self, request: AclRequest) -> Result<AclRead<AclPolicy>, UiError> {
         self.require_acl_access(request.revision)?;
         let backend = self.acl.clone();
-        match &self.runtime_bridge {
-            Some(runtime) => {
-                runtime
-                    .run(
-                        "gpui-service-acl-policies",
-                        async move { backend.policies(request).await },
-                    )
-                    .await
-            }
-            None => backend.policies(request).await,
-        }
+        self.run_protected_query(
+            "gpui-service-acl-policies",
+            async move { backend.policies(request).await },
+        )
+        .await
     }
     pub(crate) async fn mutate_acl(&self, revision: u64, command: AclCommand) -> Result<AclWriteResult, UiError> {
         command

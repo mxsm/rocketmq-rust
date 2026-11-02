@@ -48,6 +48,8 @@ enum MessageTab {
 
 pub struct MessageDetail {
     services: AppServices,
+    session_owner: Option<crate::services::SessionState>,
+    access_task: Option<Task<()>>,
     revision: u64,
     row: MessageMetadataRow,
     tab: MessageTab,
@@ -65,8 +67,11 @@ pub struct MessageDetail {
 impl EventEmitter<MessageDetailIntent> for MessageDetail {}
 impl MessageDetail {
     pub fn new(services: AppServices, revision: u64, row: MessageMetadataRow) -> Self {
+        let session_owner = services.current_session();
         Self {
             services,
+            session_owner,
+            access_task: None,
             revision,
             row,
             tab: MessageTab::Overview,
@@ -88,6 +93,9 @@ impl MessageDetail {
         detail
     }
     fn load_payload(&mut self, cx: &mut Context<Self>) {
+        if self.services.current_session() != self.session_owner {
+            return;
+        }
         let Some(request) = self.payload.begin(self.revision) else {
             return;
         };
@@ -110,6 +118,8 @@ impl MessageDetail {
         }));
     }
     pub fn clear_sensitive(&mut self, cx: &mut Context<Self>) {
+        self.access_task = None;
+        self.session_owner = None;
         self.task = None;
         self.payload.clear();
         self.preview = None;
@@ -121,6 +131,16 @@ impl MessageDetail {
         cx.notify();
     }
     fn select_tab(&mut self, tab: MessageTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.access_task = Some(crate::components::protected_action::run(
+            self.services.clone(),
+            self.session_owner.clone(),
+            self.revision,
+            window,
+            cx,
+            move |detail, window, cx| detail.select_authorized_tab(tab, window, cx),
+        ));
+    }
+    fn select_authorized_tab(&mut self, tab: MessageTab, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = tab;
         if matches!(tab, MessageTab::Body | MessageTab::Properties) && matches!(self.payload.state, Loadable::Idle) {
             self.load_payload(cx);
@@ -144,6 +164,9 @@ impl MessageDetail {
         cx.notify();
     }
     fn load_trace(&mut self, cx: &mut Context<Self>) {
+        if self.services.current_session() != self.session_owner {
+            return;
+        }
         let trace_topic = self.trace_topic.as_ref().map_or_else(
             || DEFAULT_TRACE_TOPIC.to_owned(),
             |input| input.read(cx).value().trim().to_owned(),
@@ -185,12 +208,20 @@ impl MessageDetail {
                         .label("Copy Message ID")
                         .outline()
                         .debug_selector(|| "message-copy-id".into())
-                        .on_click(cx.listener(|detail, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                detail.row.identity.message_id.clone(),
+                        .on_click(cx.listener(|detail, _, window, cx| {
+                            let message_id = detail.row.identity.message_id.clone();
+                            detail.access_task = Some(crate::components::protected_action::run(
+                                detail.services.clone(),
+                                detail.session_owner.clone(),
+                                detail.revision,
+                                window,
+                                cx,
+                                move |detail, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(message_id));
+                                    detail.copied = true;
+                                    cx.notify();
+                                },
                             ));
-                            detail.copied = true;
-                            cx.notify();
                         })),
                 )
                 .children(self.copied.then(|| div().child("Message ID copied.")))
@@ -329,9 +360,18 @@ impl MessageDetail {
                             .label(if self.json { "Show plain text" } else { "Format JSON" })
                             .outline()
                             .debug_selector(|| "message-body-format".into())
-                            .on_click(cx.listener(|detail, _, _, cx| {
-                                detail.json = !detail.json;
-                                cx.notify();
+                            .on_click(cx.listener(|detail, _, window, cx| {
+                                detail.access_task = Some(crate::components::protected_action::run(
+                                    detail.services.clone(),
+                                    detail.session_owner.clone(),
+                                    detail.revision,
+                                    window,
+                                    cx,
+                                    |detail, _, cx| {
+                                        detail.json = !detail.json;
+                                        cx.notify();
+                                    },
+                                ));
                             }))
                     }))
                     .child(
@@ -347,6 +387,10 @@ impl MessageDetail {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "message_detail_session_tests.rs"]
+mod session_tests;
 impl Render for MessageDetail {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let index = match self.tab {

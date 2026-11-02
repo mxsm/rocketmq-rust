@@ -95,6 +95,8 @@ pub(crate) struct AuditView {
     active: bool,
     epoch: RequestEpoch,
     query_task: Option<Task<()>>,
+    detail_access_task: Option<Task<()>>,
+    session_owner: Option<crate::services::SessionState>,
     read_access: Option<AuditReadAccess>,
     #[cfg(test)]
     query_gate: Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>,
@@ -183,6 +185,8 @@ impl AuditView {
             active: false,
             epoch: RequestEpoch::initial(),
             query_task: None,
+            detail_access_task: None,
+            session_owner: None,
             read_access: None,
             #[cfg(test)]
             query_gate: None,
@@ -219,6 +223,7 @@ impl AuditView {
     }
 
     fn clear_records(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.session_owner = None;
         self.query_task = None;
         let _ = self.epoch.advance();
         self.store.clear();
@@ -373,6 +378,7 @@ impl AuditView {
             return;
         };
         self.read_access = Some(access.clone());
+        self.session_owner = self.services.current_session();
         self.query_task = None;
         let Ok(epoch) = self.epoch.advance() else {
             return;
@@ -417,6 +423,7 @@ impl AuditView {
     }
 
     fn close_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.detail_access_task = None;
         if let Some(detail) = self.detail.take() {
             detail.update(cx, |detail, cx| {
                 detail.record = None;
@@ -427,6 +434,26 @@ impl AuditView {
     }
 
     fn open_detail(&mut self, record: AuditRecord, epoch: RequestEpoch, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_access(window, cx).is_none() {
+            return;
+        }
+        self.detail_access_task = Some(crate::components::protected_action::run(
+            self.services.clone(),
+            self.session_owner.clone(),
+            self.services.connection_state().config.revision,
+            window,
+            cx,
+            move |view, window, cx| view.open_authorized_detail(record, epoch, window, cx),
+        ));
+    }
+
+    fn open_authorized_detail(
+        &mut self,
+        record: AuditRecord,
+        epoch: RequestEpoch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(access) = self.read_access(window, cx) else {
             cx.notify();
             return;
@@ -442,7 +469,7 @@ impl AuditView {
             let owner = owner.clone();
             let closing_detail = detail.clone();
             dialog
-                .title("Local Audit record")
+                .title("Audit record")
                 .w(window.viewport_size().width.min(px(640.)) - px(32.))
                 .margin_top(px(16.))
                 .max_h(window.viewport_size().height - px(32.))
@@ -600,7 +627,7 @@ impl Render for AuditView {
                 )
             });
         div().debug_selector(|| "audit-workspace".into()).size_full().min_w_0().p_4().flex().flex_col().gap_3()
-            .child(div().flex_shrink_0().text_sm().child(format!("Operations recorded by this desktop. Local authentication is {}.", if self.services.connection_state().config.auth.enabled { "required" } else { "disabled" })))
+            .child(div().flex_shrink_0().text_sm().child(format!("Native operations in the selected desktop storage. Shared SQL includes native clients writing to that database. Local authentication is {}.", if self.services.connection_state().config.auth.enabled { "required" } else { "disabled" })))
             .child(div().id("audit-filters").debug_selector(|| "audit-filters".into()).w_full().max_h(window.viewport_size().height / 3.).flex_shrink_0().overflow_y_scroll().child(filters))
             .child(controls)
             .when(self.draft_changed, |body| body.child(div().text_sm().child("Draft changed. Apply filters starts a new cursor window; paging uses the applied query.")))
