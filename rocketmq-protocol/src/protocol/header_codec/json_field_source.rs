@@ -158,7 +158,7 @@ impl<'de> DeserializeSeed<'de> for JsonFieldTextSeed<'_> {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_str(JsonFieldTextVisitor { payload: self.payload })
+        deserializer.deserialize_any(JsonFieldTextVisitor { payload: self.payload })
     }
 }
 
@@ -186,7 +186,7 @@ impl<'de> Visitor<'de> for JsonFieldTextVisitor<'_> {
     type Value = ();
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON extension-field string")
+        formatter.write_str("a JSON extension-field string, number, boolean, or null")
     }
 
     #[inline]
@@ -211,6 +211,78 @@ impl<'de> Visitor<'de> for JsonFieldTextVisitor<'_> {
         E: serde::de::Error,
     {
         self.append(&value)
+    }
+
+    #[inline]
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.append(&value.to_string())
+    }
+
+    #[inline]
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.append(&value.to_string())
+    }
+
+    #[inline]
+    fn visit_i128<E>(self, value: i128) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.append(&value.to_string())
+    }
+
+    #[inline]
+    fn visit_u128<E>(self, value: u128) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.append(&value.to_string())
+    }
+
+    #[inline]
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.append(&value.to_string())
+    }
+
+    #[inline]
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.append(if value { "true" } else { "false" })
+    }
+
+    #[inline]
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.append("")
+    }
+
+    #[inline]
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.append("")
+    }
+
+    #[inline]
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
     }
 }
 

@@ -684,7 +684,7 @@ fn try_parse_flexible_json_header(src: &[u8]) -> Option<ParsedJsonHeader> {
                     })?;
                 } else {
                     let raw_code = parser.parse_i32()?;
-                    language_code = LanguageCode::value_of(raw_code as u8).unwrap_or(LanguageCode::OTHER);
+                    language_code = LanguageCode::from(raw_code);
                 }
             }
             b"version" => {
@@ -725,7 +725,8 @@ fn try_parse_flexible_json_header(src: &[u8]) -> Option<ParsedJsonHeader> {
                     rpc_serialize_type = serialize_type(&parser.src[value])?;
                 } else {
                     let raw_type = parser.parse_i32()?;
-                    rpc_serialize_type = SerializeType::value_of(raw_type as u8)?;
+                    let raw_u8 = u8::try_from(raw_type).ok()?;
+                    rpc_serialize_type = SerializeType::value_of(raw_u8)?;
                 }
             }
             _ => return None,
