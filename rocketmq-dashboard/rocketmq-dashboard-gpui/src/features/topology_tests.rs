@@ -157,6 +157,37 @@ fn loop_finished(completed: &mpsc::Receiver<&'static str>) {
     }
 }
 
+#[gpui::test]
+fn topology_sphere_shortcuts_follow_mode_and_empty_canvas_click_from_outside_focus(cx: &mut gpui::TestAppContext) {
+    use rocketmq_dashboard_common::topology::sphere::SphereCamera;
+    let backend = Arc::new(FakeTopologyBackend::default());
+    let (root, view, cx) = open(cx, AppServices::default().with_topology_backend(backend.clone()));
+    draw(&root, cx);
+    let outside = cx.update(|_, app| app.focus_handle());
+    cx.update(|window, _| outside.focus(window));
+    click(cx, "topology-sphere");
+    draw_sphere_size(&root, cx, 1440., 900.);
+    cx.simulate_keystrokes("alt-right");
+    cx.run_until_parked();
+    let turned = cx.read(|app| view.read(app).store.sphere.camera);
+    assert_ne!(
+        turned,
+        SphereCamera::default(),
+        "choosing Sphere must provide the advertised shortcut focus"
+    );
+    cx.update(|window, _| outside.focus(window));
+    let viewport = cx.debug_bounds("topology-viewport").unwrap();
+    cx.simulate_click(viewport.origin + point(px(4.), px(4.)), Modifiers::default());
+    cx.simulate_keystrokes("alt-left");
+    cx.run_until_parked();
+    assert_ne!(
+        cx.read(|app| view.read(app).store.sphere.camera),
+        turned,
+        "clicking the canvas must restore camera shortcut focus"
+    );
+    assert_eq!(backend.calls().len(), 6);
+}
+
 fn draw_sphere_size(root: &Entity<Root>, cx: &mut gpui::VisualTestContext, width: f32, height: f32) {
     let viewport = size(px(width), px(height));
     cx.simulate_resize(viewport);
@@ -189,7 +220,7 @@ fn topology_sphere_actual_camera_controls_node_click_and_keyboard_picker_share_t
     assert_ne!(
         cx.read(|app| view.read(app).store.sphere.camera),
         SphereCamera::default(),
-        "the focused node picker must provide the equivalent camera keyboard path"
+        "the active Sphere workspace must provide the equivalent camera keyboard path"
     );
     cx.simulate_keystrokes("alt-r");
     draw(&root, cx);
