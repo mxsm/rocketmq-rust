@@ -57,9 +57,11 @@ fn exercise_sql(engine: StorageEngine, url: String) {
 
         let source = tempfile::tempdir().unwrap();
         let path = source.path().join("config.json");
-        let mut legacy = DesktopConfig::default();
-        legacy.schema_version = 1;
-        legacy.revision = 42;
+        let legacy = DesktopConfig {
+            schema_version: 1,
+            revision: 42,
+            ..Default::default()
+        };
         let original = serde_json::to_vec(&legacy).unwrap();
         std::fs::write(&path, &original).unwrap();
         let history_bytes = serde_json::to_vec(&serde_json::json!({ "schemaVersion": 1, "points": [{ "metric": "topic_messages", "seriesIdentity": "legacy-orders", "timestampEpochMs": 100, "value": 3.5, "sourceRevision": 42 }] })).unwrap();
