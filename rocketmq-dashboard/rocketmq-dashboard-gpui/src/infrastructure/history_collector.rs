@@ -16,7 +16,7 @@
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use rocketmq_dashboard_common::{EnvironmentId, HistoryPoint, HistoryRetention};
+use rocketmq_dashboard_common::{EnvironmentConnectionSnapshot, EnvironmentId, HistoryPoint, HistoryRetention};
 use rocketmq_runtime::ChildServiceContext;
 use tokio_util::sync::CancellationToken;
 
@@ -25,7 +25,7 @@ use crate::state::UiError;
 use super::{
     config_store::ConfigStoreFailure,
     history_health::{CollectionAttempt, CollectionSide},
-    history_store::{HistoryAppendOutcome, HistoryStore},
+    history_store::{HistoryAppendOutcome, HistoryCollectionLease, HistoryStore},
 };
 
 /// Boxed sampling operation implemented by the Dashboard service boundary.
@@ -48,7 +48,10 @@ pub trait HistorySampler: Send + Sync {
     /// Samples current Broker metrics independently from Topic availability.
     fn sample_brokers(&self) -> HistorySampleFuture<'_>;
 
-    fn sample_topics_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+    fn sample_topics_scoped(
+        &self,
+        _scope: Option<EnvironmentConnectionSnapshot>,
+    ) -> EnvironmentHistorySampleFuture<'_> {
         Box::pin(async {
             self.sample_topics().await.map(|points| EnvironmentHistorySample {
                 failed_resources: 0,
@@ -58,7 +61,10 @@ pub trait HistorySampler: Send + Sync {
         })
     }
 
-    fn sample_brokers_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+    fn sample_brokers_scoped(
+        &self,
+        _scope: Option<EnvironmentConnectionSnapshot>,
+    ) -> EnvironmentHistorySampleFuture<'_> {
         Box::pin(async {
             self.sample_brokers().await.map(|points| EnvironmentHistorySample {
                 failed_resources: 0,
@@ -110,7 +116,19 @@ impl HistoryLifecycle {
                     }
                     // A started sample owns its completion. Shutdown cancels the next iteration and
                     // awaits this operation instead of detaching or partially persisting a sample.
-                    collect_once(&store, sampler.as_ref(), retention).await;
+                    collect_with_lease(
+                        &store,
+                        sampler.as_ref(),
+                        retention,
+                        Duration::from_secs(interval_seconds.saturating_add(60).max(120)),
+                    )
+                    .await;
+                }
+                if store.release_collection().await.is_err() {
+                    tracing::warn!(
+                        outcome = "history_lease_release_failed",
+                        "History ownership will expire at the authority"
+                    );
                 }
             })
             .map_err(ConfigStoreFailure::runtime)?;
@@ -165,13 +183,69 @@ impl Drop for HistoryLifecycle {
     }
 }
 
-async fn collect_once(store: &HistoryStore, sampler: &dyn HistorySampler, retention: HistoryRetention) {
+#[cfg(test)]
+pub(in crate::infrastructure) async fn collect_once(
+    store: &HistoryStore,
+    sampler: &dyn HistorySampler,
+    retention: HistoryRetention,
+) {
+    collect_with_lease(store, sampler, retention, Duration::from_secs(120)).await;
+}
+
+async fn collect_with_lease(
+    store: &HistoryStore,
+    sampler: &dyn HistorySampler,
+    retention: HistoryRetention,
+    ttl: Duration,
+) {
+    let scope = match store.authoritative_environment_snapshot().await {
+        Ok(snapshot) => snapshot,
+        Err(_) => {
+            let environment = store
+                .environment_snapshot()
+                .ok()
+                .flatten()
+                .map(|snapshot| snapshot.environment_id);
+            for side in [CollectionSide::Topics, CollectionSide::Brokers] {
+                store.record_collection(
+                    environment.clone(),
+                    side,
+                    epoch_ms(),
+                    0,
+                    CollectionAttempt::PersistenceFailed,
+                );
+            }
+            return;
+        }
+    };
+    let environment = scope.as_ref().map(|snapshot| snapshot.environment_id.clone());
+    let lease = match store.collection_lease(environment.clone(), ttl).await {
+        Ok(Some(lease)) => lease,
+        result => {
+            let attempt = if result.is_ok() {
+                CollectionAttempt::OwnershipUnavailable
+            } else {
+                CollectionAttempt::PersistenceFailed
+            };
+            for side in [CollectionSide::Topics, CollectionSide::Brokers] {
+                store.record_collection(environment.clone(), side, epoch_ms(), 0, attempt);
+            }
+            return;
+        }
+    };
     tokio::join!(
-        sample_and_persist(store, CollectionSide::Topics, sampler.sample_topics_scoped(), retention),
+        sample_and_persist(
+            store,
+            CollectionSide::Topics,
+            lease.clone(),
+            sampler.sample_topics_scoped(scope.clone()),
+            retention
+        ),
         sample_and_persist(
             store,
             CollectionSide::Brokers,
-            sampler.sample_brokers_scoped(),
+            lease,
+            sampler.sample_brokers_scoped(scope),
             retention
         ),
     );
@@ -180,17 +254,15 @@ async fn collect_once(store: &HistoryStore, sampler: &dyn HistorySampler, retent
 async fn sample_and_persist(
     store: &HistoryStore,
     side: CollectionSide,
+    lease: HistoryCollectionLease,
     sample: EnvironmentHistorySampleFuture<'_>,
     retention: HistoryRetention,
 ) {
-    let environment = store
-        .environment_snapshot()
-        .ok()
-        .flatten()
-        .map(|snapshot| snapshot.environment_id);
-    persist_side(store, side, environment, sample.await, retention).await;
+    let environment = lease.environment().cloned();
+    persist_captured(store, side, environment, lease, sample.await, retention).await;
 }
 
+#[cfg(test)]
 async fn persist_side(
     store: &HistoryStore,
     side: CollectionSide,
@@ -198,10 +270,26 @@ async fn persist_side(
     result: Result<EnvironmentHistorySample, UiError>,
     retention: HistoryRetention,
 ) {
+    let lease = store
+        .collection_lease(environment.clone(), Duration::from_secs(120))
+        .await
+        .unwrap()
+        .unwrap();
+    persist_captured(store, side, environment, lease, result, retention).await;
+}
+
+async fn persist_captured(
+    store: &HistoryStore,
+    side: CollectionSide,
+    environment: Option<EnvironmentId>,
+    lease: HistoryCollectionLease,
+    result: Result<EnvironmentHistorySample, UiError>,
+    retention: HistoryRetention,
+) {
     match result {
         Ok(sample) if sample.points.is_empty() => {
             store.record_collection(
-                sample.environment_id,
+                sample.environment_id.or(environment),
                 side,
                 epoch_ms(),
                 sample.failed_resources,
@@ -211,13 +299,10 @@ async fn persist_side(
         Ok(sample) => {
             let sample_environment = sample.environment_id.clone();
             let failed_resources = sample.failed_resources;
-            let result = match sample.environment_id {
-                Some(environment_id) => {
-                    store
-                        .append_environment_sample(environment_id, sample.points, retention)
-                        .await
-                }
-                None => store.append_sample(sample.points, retention).await,
+            let result = if sample.environment_id.as_ref() == lease.environment() {
+                store.append_captured(lease, sample.points, retention).await
+            } else {
+                Err(ConfigStoreFailure::stale_revision())
             };
             store.record_collection(
                 sample_environment,
@@ -283,9 +368,13 @@ mod tests {
             self.sample_topics()
         }
 
-        fn sample_topics_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+        fn sample_topics_scoped(
+            &self,
+            scope: Option<EnvironmentConnectionSnapshot>,
+        ) -> EnvironmentHistorySampleFuture<'_> {
             Box::pin(async move {
-                let snapshot = self.configuration.environment_snapshot().unwrap();
+                let snapshot = scope.expect("captured environment");
+                assert_eq!(snapshot, self.configuration.environment_snapshot().unwrap());
                 self.entered.notify_one();
                 self.release.notified().await;
                 Ok(EnvironmentHistorySample {

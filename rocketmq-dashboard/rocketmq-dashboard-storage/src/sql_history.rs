@@ -18,16 +18,19 @@ use super::*;
 impl SqlStore {
     pub(crate) async fn acquire_history_lease(
         &self,
-        environment_id: EnvironmentId,
+        environment_id: Option<EnvironmentId>,
         holder_id: String,
         ttl_ms: i64,
-    ) -> Result<Option<HistoryLease>, StorageError> {
+    ) -> Result<Option<CollectionLease>, StorageError> {
         let document = self
             .load_desktop()
             .await?
             .ok_or_else(|| StorageError::new(StorageErrorKind::Uninitialized))?
             .document;
-        if !document.profiles.iter().any(|profile| profile.id == environment_id) {
+        if environment_id
+            .as_ref()
+            .is_some_and(|id| !document.profiles.iter().any(|profile| &profile.id == id))
+        {
             return Err(StorageError::new(StorageErrorKind::Validation));
         }
         with_pool!(self, pool, {
@@ -39,7 +42,7 @@ impl SqlStore {
             };
             let mut insert = QueryBuilder::new(prefix);
             insert.push(" INTO native_dashboard_history_lease (environment_id, holder_id, fencing_token, expires_at_ms) VALUES (")
-                .push_bind(environment_id.as_str()).push(", '', 0, 0)");
+                .push_bind(environment_id.as_ref().map_or("", EnvironmentId::as_str)).push(", '', 0, 0)");
             if self.engine != StorageEngine::MySql {
                 insert.push(" ON CONFLICT (environment_id) DO NOTHING");
             }
@@ -52,7 +55,7 @@ impl SqlStore {
                 .push(" + ")
                 .push_bind(ttl_ms)
                 .push(" WHERE environment_id = ")
-                .push_bind(environment_id.as_str())
+                .push_bind(environment_id.as_ref().map_or("", EnvironmentId::as_str))
                 .push(" AND expires_at_ms <= ")
                 .push(self.clock())
                 .push(" AND fencing_token < ")
@@ -68,9 +71,9 @@ impl SqlStore {
                 let mut select = QueryBuilder::new(
                     "SELECT fencing_token, expires_at_ms FROM native_dashboard_history_lease WHERE environment_id = ",
                 );
-                select.push_bind(environment_id.as_str());
+                select.push_bind(environment_id.as_ref().map_or("", EnvironmentId::as_str));
                 let row = select.build().fetch_one(&mut *transaction).await.map_err(query_error)?;
-                Some(HistoryLease {
+                Some(CollectionLease {
                     environment_id,
                     holder_id,
                     fencing_token: row.try_get(0).map_err(query_error)?,
@@ -86,9 +89,9 @@ impl SqlStore {
 
     pub(crate) async fn renew_history_lease(
         &self,
-        lease: HistoryLease,
+        lease: CollectionLease,
         ttl_ms: i64,
-    ) -> Result<Option<HistoryLease>, StorageError> {
+    ) -> Result<Option<CollectionLease>, StorageError> {
         with_pool!(self, pool, {
             let mut transaction = pool.begin_with(self.begin_statement()).await.map_err(query_error)?;
             let mut update = QueryBuilder::new("UPDATE native_dashboard_history_lease SET expires_at_ms = ");
@@ -97,7 +100,7 @@ impl SqlStore {
                 .push(" + ")
                 .push_bind(ttl_ms)
                 .push(" WHERE environment_id = ")
-                .push_bind(lease.environment_id.as_str())
+                .push_bind(lease.key().to_owned())
                 .push(" AND holder_id = ")
                 .push_bind(&lease.holder_id)
                 .push(" AND fencing_token = ")
@@ -115,9 +118,9 @@ impl SqlStore {
                 let mut select = QueryBuilder::new(
                     "SELECT expires_at_ms FROM native_dashboard_history_lease WHERE environment_id = ",
                 );
-                select.push_bind(lease.environment_id.as_str());
+                select.push_bind(lease.key().to_owned());
                 let row = select.build().fetch_one(&mut *transaction).await.map_err(query_error)?;
-                Some(HistoryLease {
+                Some(CollectionLease {
                     expires_at_epoch_ms: row.try_get(0).map_err(query_error)?,
                     ..lease
                 })
@@ -129,13 +132,13 @@ impl SqlStore {
         })
     }
 
-    pub(crate) async fn release_history_lease(&self, lease: HistoryLease) -> Result<bool, StorageError> {
+    pub(crate) async fn release_history_lease(&self, lease: CollectionLease) -> Result<bool, StorageError> {
         with_pool!(self, pool, {
             let mut update = QueryBuilder::new(
                 "UPDATE native_dashboard_history_lease SET expires_at_ms = 0 WHERE environment_id = ",
             );
             update
-                .push_bind(lease.environment_id.as_str())
+                .push_bind(lease.key().to_owned())
                 .push(" AND holder_id = ")
                 .push_bind(lease.holder_id)
                 .push(" AND fencing_token = ")
@@ -148,10 +151,10 @@ impl SqlStore {
 
     pub(crate) async fn append_history(
         &self,
-        lease: HistoryLease,
+        lease: CollectionLease,
         sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<HistoryAppendOutcome, StorageError> {
+    ) -> Result<HistoryAppendReport, StorageError> {
         with_pool!(self, pool, {
             let mut transaction = pool.begin_with(self.begin_statement()).await.map_err(query_error)?;
             // Lock the ownership row before the history row. All holders use the same lock order,
@@ -159,7 +162,7 @@ impl SqlStore {
             let mut select =
                 QueryBuilder::new("SELECT fencing_token FROM native_dashboard_history_lease WHERE environment_id = ");
             select
-                .push_bind(lease.environment_id.as_str())
+                .push_bind(lease.key().to_owned())
                 .push(" AND holder_id = ")
                 .push_bind(&lease.holder_id)
                 .push(" AND fencing_token = ")
@@ -199,7 +202,7 @@ impl SqlStore {
                         sample
                             .into_iter()
                             .map(|point| EnvironmentHistoryPoint {
-                                environment_id: Some(lease.environment_id.clone()),
+                                environment_id: lease.environment_id.clone(),
                                 point,
                             })
                             .collect(),
@@ -214,6 +217,7 @@ impl SqlStore {
                 })
                 .await
                 .map_err(|_| StorageError::new(StorageErrorKind::Runtime))??;
+            let written = replacement.is_some();
             if let Some(payload) = replacement {
                 let mut update = QueryBuilder::new("UPDATE native_dashboard_document SET payload = ");
                 update
@@ -236,7 +240,14 @@ impl SqlStore {
                 }
             }
             transaction.commit().await.map_err(query_error)?;
-            Ok(outcome)
+            Ok(HistoryAppendReport {
+                outcome,
+                write: if written {
+                    HistoryWriteOutcome::Committed
+                } else {
+                    HistoryWriteOutcome::Unchanged
+                },
+            })
         })
     }
 }

@@ -44,23 +44,45 @@ pub enum StorageErrorKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageError {
     kind: StorageErrorKind,
+    io_operation: Option<StorageIoOperation>,
+}
+
+/// Safe evidence of the filesystem phase that failed, without paths or raw I/O errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageIoOperation {
+    Read,
+    Write,
 }
 
 impl StorageError {
     pub(crate) const fn new(kind: StorageErrorKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            io_operation: None,
+        }
     }
 
     pub const fn kind(&self) -> StorageErrorKind {
         self.kind
     }
 
+    pub const fn io_operation(&self) -> Option<StorageIoOperation> {
+        self.io_operation
+    }
+
     pub(crate) fn validation(_source: impl Error + Send + Sync + 'static) -> Self {
         Self::new(StorageErrorKind::Validation)
     }
 
-    pub(crate) fn io(_operation: &'static str, _path: PathBuf, _source: io::Error) -> Self {
-        Self::new(StorageErrorKind::Io)
+    pub(crate) fn io(operation: &'static str, _path: PathBuf, _source: io::Error) -> Self {
+        Self {
+            kind: StorageErrorKind::Io,
+            io_operation: Some(if operation.starts_with("read") {
+                StorageIoOperation::Read
+            } else {
+                StorageIoOperation::Write
+            }),
+        }
     }
 
     pub(crate) fn invalid_document(_path: PathBuf, _source: serde_json::Error) -> Self {

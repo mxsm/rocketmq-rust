@@ -97,9 +97,15 @@ impl AuditService {
         })
     }
 
-    pub(super) fn recover_pending(&self) {
-        if !self.recovery_loaded.swap(true, Ordering::AcqRel) {
-            let count = self.store.pending().map_or(0, |pending| pending.len());
+    pub(super) async fn recover_pending(&self) {
+        if !self.recovery_loaded.load(Ordering::Acquire) {
+            let Ok(pending) = self.store.pending().await else {
+                return;
+            };
+            if self.recovery_loaded.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let count = pending.len();
             self.recovered_pending.store(count, Ordering::Release);
             self.changes.send_replace(count);
         }
@@ -435,8 +441,31 @@ impl AppServices {
                 super::config_ui_error_with_summary(source, "The operation could not be recorded and was not started.")
             })?;
         }
+        self.complete_admitted_mutation(operation, future).await
+    }
+
+    /// The whole DLQ sequence must be durably admitted before its first business call.
+    pub(super) async fn admit_audit_batch(&self, operations: &[Option<AuditAcceptedOperation>]) -> Result<(), UiError> {
+        if let Some(audit) = &self.audit {
+            audit
+                .store
+                .accept_batch(operations.iter().flatten().cloned().collect())
+                .await
+                .map_err(|source| {
+                    super::config_ui_error_with_summary(source, "The batch could not be recorded and was not started.")
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Already admitted work retains its captured attribution while configuration/session changes.
+    pub(super) async fn complete_admitted_mutation<T: MutationAudit + Send>(
+        &self,
+        operation: Option<AuditAcceptedOperation>,
+        future: impl Future<Output = Result<T, UiError>> + Send,
+    ) -> Result<T, UiError> {
         let result = future.await;
-        if let (Some(audit), Some(operation)) = (audit, operation) {
+        if let (Some(audit), Some(operation)) = (self.audit.clone(), operation) {
             let (outcome, facts) = result.as_ref().map_or_else(error_outcome, MutationAudit::audit);
             // Preserve a terminal fact even if the wall clock fails after acceptance.
             let timestamp_epoch_ms = now_epoch_ms().unwrap_or(operation.accepted_at_epoch_ms);
@@ -483,26 +512,54 @@ impl AppServices {
         }
     }
 
-    pub(crate) fn query_audit(&self, query: AuditQuery) -> Result<AuditPage, UiError> {
-        self.audit_read_access()?;
+    pub(crate) async fn query_audit(&self, query: AuditQuery) -> Result<AuditPage, UiError> {
+        let access = self.audit_read_access()?;
         let audit = self
             .audit
             .as_ref()
             .ok_or_else(|| UiError::new("Local audit is unavailable.", UiErrorCode::CapabilityUnavailable, false))?;
-        audit.store.query(query).map_err(|error| {
-            super::config_ui_error_with_summary(
-                error,
-                "Local audit records could not be read. Restart the applied query if its retained page expired.",
-            )
-        })
+        let store = audit.store.clone();
+        let work = async move {
+            store.query(query).await.map_err(|error| {
+                super::config_ui_error_with_summary(
+                    error,
+                    "Audit records could not be read. Restart the applied query if its retained page expired.",
+                )
+            })
+        };
+        let result = match &self.runtime_bridge {
+            Some(runtime) => runtime.run("gpui-audit-query", work).await,
+            None => work.await,
+        };
+        if self.audit_read_access()? != access {
+            return Err(UiError::new(
+                "Audit access changed while records were read.",
+                UiErrorCode::Authentication,
+                true,
+            ));
+        }
+        result
     }
 
-    pub(crate) fn audit_pending(&self) -> Result<Vec<AuditAcceptedOperation>, UiError> {
+    pub(crate) async fn audit_pending(&self) -> Result<Vec<AuditAcceptedOperation>, UiError> {
         let Some(audit) = &self.audit else {
             return Ok(Vec::new());
         };
-        self.audit_read_access()?;
-        audit.store.pending().map_err(super::config_ui_error)
+        let access = self.audit_read_access()?;
+        let store = audit.store.clone();
+        let work = async move { store.pending().await.map_err(super::config_ui_error) };
+        let result = match &self.runtime_bridge {
+            Some(runtime) => runtime.run("gpui-audit-pending", work).await,
+            None => work.await,
+        };
+        if self.audit_read_access()? != access {
+            return Err(UiError::new(
+                "Audit access changed while records were read.",
+                UiErrorCode::Authentication,
+                true,
+            ));
+        }
+        result
     }
 }
 

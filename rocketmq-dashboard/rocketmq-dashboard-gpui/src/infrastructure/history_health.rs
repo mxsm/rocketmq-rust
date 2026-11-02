@@ -41,6 +41,7 @@ pub struct CollectionSideHealth {
 /// Sampling and persistence are separate evidence; an empty response proves no stored sample.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollectionAttempt {
+    OwnershipUnavailable,
     NoObservations,
     NotRetained,
     SamplingFailed,
@@ -59,6 +60,7 @@ pub struct HistoryCollectionHealth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollectionStatus {
     Disabled,
+    Standby,
     Warming,
     Normal,
     Stale,
@@ -69,6 +71,12 @@ impl HistoryCollectionHealth {
     pub fn status(self, now_epoch_ms: u64) -> CollectionStatus {
         if !self.enabled || self.interval_seconds == 0 {
             return CollectionStatus::Disabled;
+        }
+        if [self.topics, self.brokers]
+            .iter()
+            .all(|side| side.last_attempt == Some(CollectionAttempt::OwnershipUnavailable))
+        {
+            return CollectionStatus::Standby;
         }
         let successes = [self.topics.last_success_epoch_ms, self.brokers.last_success_epoch_ms];
         let oldest = successes.into_iter().flatten().min();

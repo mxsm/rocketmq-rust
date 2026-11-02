@@ -21,9 +21,10 @@ use serde::de::DeserializeOwned;
 use sqlx::{ConnectOptions, QueryBuilder, Row};
 
 use crate::{
-    session::SessionDocument, DatabaseConnection, DesktopDocument, DesktopSnapshot, HistoryAppendOutcome,
-    HistoryDocument, HistoryLease, ImportSnapshot, SessionId, SessionPage, SessionQuery, SessionRecord, StorageEngine,
-    StorageError, StorageErrorKind, StorageRevision, StorageStatus,
+    session::SessionDocument, CollectionLease, DatabaseConnection, DesktopDocument, DesktopSnapshot,
+    HistoryAppendReport, HistoryDocument, HistoryReadOrigin, HistoryReadReport, HistoryWriteOutcome, ImportSnapshot,
+    SessionId, SessionPage, SessionQuery, SessionRecord, StorageEngine, StorageError, StorageErrorKind,
+    StorageRevision, StorageStatus,
 };
 
 #[path = "sql_history.rs"]
@@ -62,6 +63,10 @@ pub(crate) struct SqlStore {
 }
 
 impl SqlStore {
+    pub(crate) fn engine(&self) -> StorageEngine {
+        self.engine
+    }
+
     pub(crate) async fn connect(
         engine: StorageEngine,
         connection: DatabaseConnection,
@@ -292,13 +297,16 @@ impl SqlStore {
         })
     }
 
-    pub(crate) async fn history(&self) -> Result<HistoryDocument, StorageError> {
+    pub(crate) async fn history(&self) -> Result<HistoryReadReport, StorageError> {
         let Some((_, payload)) = self.read_payload("history").await? else {
             return Err(StorageError::new(StorageErrorKind::Uninitialized));
         };
         let history: HistoryDocument = decode(&payload)?;
         history.validate()?;
-        Ok(history)
+        Ok(HistoryReadReport {
+            document: history,
+            origin: HistoryReadOrigin::Existing,
+        })
     }
 
     async fn update_sessions<R>(

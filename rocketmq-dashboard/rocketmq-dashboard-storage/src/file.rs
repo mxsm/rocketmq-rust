@@ -24,9 +24,10 @@ use rocketmq_dashboard_common::{EnvironmentHistoryPoint, EnvironmentId, HistoryP
 use rocketmq_runtime::ChildServiceContext;
 
 use crate::{
-    atomic_file::write_json_atomically, document, history, session::SessionDocument, store::now_ms, DesktopDocument,
-    DesktopSnapshot, HistoryAppendOutcome, HistoryDocument, HistoryLease, ImportSnapshot, SessionId, SessionPage,
-    SessionQuery, SessionRecord, StorageEngine, StorageError, StorageErrorKind, StorageRevision, StorageStatus,
+    atomic_file::write_json_atomically, document, history, session::SessionDocument, store::now_ms, CollectionLease,
+    DesktopDocument, DesktopSnapshot, HistoryAppendOutcome, HistoryAppendReport, HistoryReadOrigin, HistoryReadReport,
+    HistoryWriteOutcome, ImportSnapshot, SessionId, SessionPage, SessionQuery, SessionRecord, StorageEngine,
+    StorageError, StorageErrorKind, StorageRevision, StorageStatus,
 };
 
 /// Never replaced or removed, so every native instance locks the same file object.
@@ -55,9 +56,10 @@ impl DirectoryWriter {
 
 struct FileState {
     config_path: PathBuf,
+    history_path: PathBuf,
     revision: StorageRevision,
     writer: Option<DirectoryWriter>,
-    leases: BTreeMap<EnvironmentId, HistoryLease>,
+    leases: BTreeMap<Option<EnvironmentId>, CollectionLease>,
     last_write_epoch_ms: Option<u64>,
 }
 
@@ -73,6 +75,18 @@ impl FileState {
     fn load(&self) -> Result<DesktopDocument, StorageError> {
         self.ensure_open()?;
         document::load_document(&self.config_path).map(|(document, _)| document)
+    }
+
+    fn reload(&mut self) -> Result<DesktopDocument, StorageError> {
+        self.ensure_open()?;
+        let (document, migrated) = document::load_document(&self.config_path)?;
+        if migrated {
+            let next = self.revision.next()?;
+            write_json_atomically(&self.config_path, &document)?;
+            self.revision = next;
+            self.wrote();
+        }
+        Ok(document)
     }
 
     fn wrote(&mut self) {
@@ -100,9 +114,9 @@ impl FileState {
         Ok(result)
     }
 
-    fn active_lease(&self, lease: &HistoryLease, now: i64) -> bool {
+    fn active_lease(&self, lease: &CollectionLease, now: i64) -> bool {
         self.leases
-            .get(lease.environment_id())
+            .get(&lease.environment_id)
             .is_some_and(|current| current.matches(lease, now))
     }
 }
@@ -114,6 +128,18 @@ pub(crate) struct FileStore {
 
 impl FileStore {
     pub(crate) async fn open(config_path: PathBuf, context: ChildServiceContext) -> Result<Self, StorageError> {
+        let history_path = config_path.with_file_name("history.json");
+        Self::open_paths(config_path, history_path, context).await
+    }
+
+    pub(crate) async fn open_paths(
+        config_path: PathBuf,
+        history_path: PathBuf,
+        context: ChildServiceContext,
+    ) -> Result<Self, StorageError> {
+        if config_path.parent() != history_path.parent() {
+            return Err(StorageError::new(StorageErrorKind::Validation));
+        }
         let state = context
             .storage_io()
             .spawn_io("native-storage-open", move || {
@@ -125,6 +151,7 @@ impl FileStore {
                 }
                 Ok::<_, StorageError>(FileState {
                     config_path,
+                    history_path,
                     revision: StorageRevision(0),
                     writer: Some(writer),
                     leases: BTreeMap::new(),
@@ -161,9 +188,10 @@ impl FileStore {
 
     pub(crate) async fn load_desktop(&self) -> Result<Option<DesktopSnapshot>, StorageError> {
         self.run("native-desktop-load", |state| {
+            let document = state.reload()?;
             Ok(Some(DesktopSnapshot {
                 storage_revision: state.revision,
-                document: state.load()?,
+                document,
             }))
         })
         .await
@@ -227,33 +255,42 @@ impl FileStore {
             .map_err(|_| StorageError::new(StorageErrorKind::Runtime))?
     }
 
-    pub(crate) async fn history(&self) -> Result<HistoryDocument, StorageError> {
+    pub(crate) async fn history(&self) -> Result<HistoryReadReport, StorageError> {
         self.run("native-history-read", |state| {
             state.ensure_open()?;
-            let path = state.config_path.with_file_name("history.json");
+            let path = state.history_path.clone();
+            let existed = path.try_exists().map_err(|_| StorageError::new(StorageErrorKind::Io))?;
             let (history, migrated) = history::load_document(&path)?;
             history.validate()?;
             if migrated {
                 write_json_atomically(&path, &history)?;
                 state.wrote();
             }
-            Ok(history)
+            Ok(HistoryReadReport {
+                document: history,
+                origin: if migrated {
+                    HistoryReadOrigin::Migrated
+                } else if existed {
+                    HistoryReadOrigin::Existing
+                } else {
+                    HistoryReadOrigin::Missing
+                },
+            })
         })
         .await
     }
 
     pub(crate) async fn acquire_history_lease(
         &self,
-        environment_id: EnvironmentId,
+        environment_id: Option<EnvironmentId>,
         holder_id: String,
         ttl_ms: i64,
-    ) -> Result<Option<HistoryLease>, StorageError> {
+    ) -> Result<Option<CollectionLease>, StorageError> {
         self.run("native-history-acquire", move |state| {
-            if !state
-                .load()?
-                .profiles
-                .iter()
-                .any(|profile| profile.id == environment_id)
+            let document = state.load()?;
+            if environment_id
+                .as_ref()
+                .is_some_and(|id| !document.profiles.iter().any(|profile| &profile.id == id))
             {
                 return Err(StorageError::new(StorageErrorKind::Validation));
             }
@@ -266,7 +303,7 @@ impl FileStore {
                 .map_or(0, |lease| lease.fencing_token)
                 .checked_add(1)
                 .ok_or_else(|| StorageError::new(StorageErrorKind::RevisionExhausted))?;
-            let lease = HistoryLease {
+            let lease = CollectionLease {
                 environment_id,
                 holder_id,
                 fencing_token: token,
@@ -282,16 +319,16 @@ impl FileStore {
 
     pub(crate) async fn renew_history_lease(
         &self,
-        lease: HistoryLease,
+        lease: CollectionLease,
         ttl_ms: i64,
-    ) -> Result<Option<HistoryLease>, StorageError> {
+    ) -> Result<Option<CollectionLease>, StorageError> {
         self.run("native-history-renew", move |state| {
             state.ensure_open()?;
             let now = now_ms()?;
             if !state.active_lease(&lease, now) {
                 return Ok(None);
             }
-            let renewed = HistoryLease {
+            let renewed = CollectionLease {
                 expires_at_epoch_ms: now
                     .checked_add(ttl_ms)
                     .ok_or_else(|| StorageError::new(StorageErrorKind::Validation))?,
@@ -303,7 +340,7 @@ impl FileStore {
         .await
     }
 
-    pub(crate) async fn release_history_lease(&self, lease: HistoryLease) -> Result<bool, StorageError> {
+    pub(crate) async fn release_history_lease(&self, lease: CollectionLease) -> Result<bool, StorageError> {
         self.run("native-history-release", move |state| {
             state.ensure_open()?;
             if !state.active_lease(&lease, now_ms()?) {
@@ -319,37 +356,51 @@ impl FileStore {
 
     pub(crate) async fn append_history(
         &self,
-        lease: HistoryLease,
+        lease: CollectionLease,
         sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<HistoryAppendOutcome, StorageError> {
+    ) -> Result<HistoryAppendReport, StorageError> {
         self.run("native-history-append", move |state| {
             state.ensure_open()?;
             if !state.active_lease(&lease, now_ms()?) {
                 return Err(StorageError::new(StorageErrorKind::LeaseLost));
             }
+            let sample: Vec<_> = sample
+                .into_iter()
+                .filter(|point| {
+                    point.value.is_finite()
+                        && !point.series_identity.trim().is_empty()
+                        && point.series_identity.len() <= 1_024
+                })
+                .collect();
             if sample.is_empty() {
-                return Ok(HistoryAppendOutcome::NotRetained);
+                return Ok(HistoryAppendReport {
+                    outcome: HistoryAppendOutcome::NotRetained,
+                    write: HistoryWriteOutcome::Unchanged,
+                });
             }
-            let path = state.config_path.with_file_name("history.json");
-            let (mut history, _) = history::load_document(&path)?;
+            let path = state.history_path.clone();
+            let (mut history, migrated) = history::load_document(&path)?;
             history.validate()?;
             let before = history.clone();
             let outcome = history.append(
                 sample
                     .into_iter()
                     .map(|point| EnvironmentHistoryPoint {
-                        environment_id: Some(lease.environment_id.clone()),
+                        environment_id: lease.environment_id.clone(),
                         point,
                     })
                     .collect(),
                 retention,
             );
-            if history != before {
+            let write = if history != before || migrated {
                 write_json_atomically(&path, &history)?;
                 state.wrote();
-            }
-            Ok(outcome)
+                HistoryWriteOutcome::Committed
+            } else {
+                HistoryWriteOutcome::Unchanged
+            };
+            Ok(HistoryAppendReport { outcome, write })
         })
         .await
     }

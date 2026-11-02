@@ -32,6 +32,32 @@ pub enum HistoryAppendOutcome {
     NotRetained,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryWriteOutcome {
+    Unchanged,
+    Committed,
+}
+
+/// A retained observation and a successful physical write are separate facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryAppendReport {
+    pub outcome: HistoryAppendOutcome,
+    pub write: HistoryWriteOutcome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryReadOrigin {
+    Missing,
+    Existing,
+    Migrated,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryReadReport {
+    pub document: HistoryDocument,
+    pub origin: HistoryReadOrigin,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HistoryDocument {
@@ -125,7 +151,50 @@ pub struct HistoryLease {
     pub(crate) expires_at_epoch_ms: i64,
 }
 
+/// A fenced grant for legacy observations whose source supplied no environment identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnassignedHistoryLease(pub(crate) CollectionLease);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CollectionLease {
+    pub(crate) environment_id: Option<EnvironmentId>,
+    pub(crate) holder_id: String,
+    pub(crate) fencing_token: i64,
+    pub(crate) expires_at_epoch_ms: i64,
+}
+
+impl CollectionLease {
+    #[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
+    pub(crate) fn key(&self) -> &str {
+        self.environment_id.as_ref().map_or("", EnvironmentId::as_str)
+    }
+
+    pub(crate) fn matches(&self, lease: &Self, now: i64) -> bool {
+        self.environment_id == lease.environment_id
+            && self.holder_id == lease.holder_id
+            && self.fencing_token == lease.fencing_token
+            && self.expires_at_epoch_ms > now
+    }
+}
+
 impl HistoryLease {
+    pub(crate) fn from_grant(environment_id: EnvironmentId, grant: CollectionLease) -> Self {
+        Self {
+            environment_id,
+            holder_id: grant.holder_id,
+            fencing_token: grant.fencing_token,
+            expires_at_epoch_ms: grant.expires_at_epoch_ms,
+        }
+    }
+
+    pub(crate) fn grant(&self) -> CollectionLease {
+        CollectionLease {
+            environment_id: Some(self.environment_id.clone()),
+            holder_id: self.holder_id.clone(),
+            fencing_token: self.fencing_token,
+            expires_at_epoch_ms: self.expires_at_epoch_ms,
+        }
+    }
     pub fn environment_id(&self) -> &EnvironmentId {
         &self.environment_id
     }
@@ -140,13 +209,6 @@ impl HistoryLease {
 
     pub fn expires_at_epoch_ms(&self) -> i64 {
         self.expires_at_epoch_ms
-    }
-
-    pub(crate) fn matches(&self, lease: &Self, now: i64) -> bool {
-        self.environment_id == lease.environment_id
-            && self.holder_id == lease.holder_id
-            && self.fencing_token == lease.fencing_token
-            && self.expires_at_epoch_ms > now
     }
 }
 

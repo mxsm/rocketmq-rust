@@ -36,6 +36,7 @@ pub(crate) struct Fixture {
     pub auth: Arc<DesktopAuthState>,
     pub audit: AuditStore,
     pub active: EnvironmentId,
+    completion: std::sync::mpsc::Receiver<&'static str>,
 }
 
 impl Fixture {
@@ -72,13 +73,15 @@ impl Fixture {
             .unwrap();
         let store = DesktopConfigStore::new(path, runtime.root_context().component("storage"));
         let auth = DesktopAuthState::new(environment);
+        let (sender, completion) = std::sync::mpsc::channel();
         let services = AppServices::desktop_with_fake_provider(
             store.clone(),
             auth.clone(),
             runtime.root_context().component("services"),
             runtime.root_context().component("history"),
             runtime.root_context().component("monitor"),
-        );
+        )
+        .with_runtime_completion(sender);
         runtime.block_on(services.bootstrap()).unwrap();
         let active = store.environment_snapshot().unwrap().environment_id;
         let audit = AuditStore::new(store.clone());
@@ -89,6 +92,7 @@ impl Fixture {
             auth,
             audit,
             active,
+            completion,
         }
     }
 
@@ -160,7 +164,7 @@ impl Fixture {
     }
 
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.audit
+        crate::infrastructure::audit_store::persisted_journal(&self._directory.path().join("config.json"))
             .query(AuditQuery {
                 filter: AuditFilter::recent(now()),
                 limit: 200,
@@ -208,11 +212,46 @@ fn mount(
     (root, view, cx)
 }
 
-fn draw(root: &Entity<Root>, cx: &mut gpui::VisualTestContext) {
-    cx.run_until_parked();
+fn draw(root: &Entity<Root>, view: &Entity<AuditView>, fixture: &Fixture, cx: &mut gpui::VisualTestContext) {
+    settle_audit_read(view, &fixture.completion, cx);
     for _ in 0..2 {
         cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
     }
+}
+
+pub(crate) fn settle_audit_read(
+    view: &Entity<AuditView>,
+    completion: &std::sync::mpsc::Receiver<&'static str>,
+    cx: &mut gpui::VisualTestContext,
+) {
+    cx.run_until_parked();
+    // Native reads run on the real owned runtime. A parked GPUI dispatcher alone cannot
+    // prove their completion; use the existing runtime rendezvous before inspecting rows.
+    while cx.read(|app| view.read(app).store.loading) {
+        completion
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("owned Audit read completion");
+        cx.run_until_parked();
+    }
+}
+
+pub(crate) fn wait_for_audit_read(
+    completion: &std::sync::mpsc::Receiver<&'static str>,
+    cx: &mut gpui::VisualTestContext,
+) {
+    for expected in ["gpui-audit-query", "gpui-audit-pending"] {
+        cx.run_until_parked();
+        loop {
+            if completion
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("owned Audit read completion")
+                == expected
+            {
+                break;
+            }
+        }
+    }
+    cx.run_until_parked();
 }
 fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
     let bounds = cx
@@ -241,9 +280,10 @@ fn audit_queued_results_and_already_rendered_cached_controls_recheck_live_auth(c
     fixture.auth.authenticate("operator", "test-password").unwrap();
     let before = fixture.events();
     let (root, view, cx) = mount(cx, fixture.services.clone());
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     let (started, release) = cx.update(|_, app| view.update(app, |view, _| view.hold_next_query()));
     click(cx, "audit-next");
+    wait_for_audit_read(&fixture.completion, cx);
     fixture.runtime.block_on(async {
         tokio::time::timeout(std::time::Duration::from_secs(5), started)
             .await
@@ -266,13 +306,13 @@ fn audit_queued_results_and_already_rendered_cached_controls_recheck_live_auth(c
     for control in ["audit-next", "audit-previous", "audit-open-0"] {
         fixture.auth.authenticate("operator", "test-password").unwrap();
         click(cx, "audit-apply");
-        draw(&root, cx);
+        draw(&root, &view, &fixture, cx);
         click(cx, "audit-next");
-        draw(&root, cx);
+        draw(&root, &view, &fixture, cx);
         assert_eq!(cx.read(|app| view.read(app).store.pages.len()), 2);
         if control == "audit-next" {
             click(cx, "audit-previous");
-            draw(&root, cx);
+            draw(&root, &view, &fixture, cx);
         }
         let cached = cx.debug_bounds(control).unwrap();
         fixture.auth.sign_out();
@@ -307,9 +347,10 @@ fn audit_queued_read_is_bound_to_the_current_operator_not_an_authenticated_boole
     fixture.seed(40);
     fixture.auth.authenticate("operator-a", "test-password").unwrap();
     let (root, view, cx) = mount(cx, fixture.services.clone());
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     let (started, release) = cx.update(|_, app| view.update(app, |view, _| view.hold_next_query()));
     click(cx, "audit-next");
+    wait_for_audit_read(&fixture.completion, cx);
     fixture.runtime.block_on(async {
         tokio::time::timeout(std::time::Duration::from_secs(5), started)
             .await
@@ -324,9 +365,9 @@ fn audit_queued_read_is_bound_to_the_current_operator_not_an_authenticated_boole
     assert!(fixture.services.audit_read_access().is_ok());
     assert_eq!(cx.read(|app| view.read(app).retained_record_count()), 0);
     assert!(cx.read(|app| view.read(app).store.applied.is_none()));
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     click(cx, "audit-apply");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert_eq!(cx.read(|app| view.read(app).retained_record_count()), 25);
     fixture.runtime.shutdown_runtime_blocking().unwrap();
 }
@@ -339,7 +380,7 @@ fn audit_actual_pages_filters_and_expired_cursor_recovery_preserve_drafts_withou
     fixture.seed(40);
     let seeded = fixture.events();
     let (root, view, cx) = mount(cx, fixture.services.clone());
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     let first = ids(&view, cx);
     assert_eq!(first.len(), 25);
     // A terminal write may commit after the first page with an earlier captured UTC timestamp.
@@ -354,12 +395,12 @@ fn audit_actual_pages_filters_and_expired_cursor_recovery_preserve_drafts_withou
         .unwrap();
     let before = fixture.events();
     click(cx, "audit-next");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     let second = ids(&view, cx);
     assert_eq!(second.len(), 5);
     assert!(second.iter().all(|id| !first.contains(id)));
     click(cx, "audit-previous");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert_eq!(ids(&view, cx), first);
     cx.update(|window, app| {
         view.update(app, |view, cx| {
@@ -371,11 +412,11 @@ fn audit_actual_pages_filters_and_expired_cursor_recovery_preserve_drafts_withou
         })
     });
     click(cx, "audit-next");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert!(cx.read(|app| view.read(app).store.error.is_some()));
     let draft = cx.read(|app| view.read(app).start.read(app).value());
     click(cx, "audit-restart");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert_eq!(cx.read(|app| view.read(app).start.read(app).value()), draft);
     let refreshed = ids(&view, cx);
     assert_eq!(
@@ -384,19 +425,19 @@ fn audit_actual_pages_filters_and_expired_cursor_recovery_preserve_drafts_withou
     );
     assert!(cx.read(|app| view.read(app).store.error.is_none()));
     click(cx, "audit-apply");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert!(
         cx.read(|app| view.read(app).validation.is_some()),
         "oversized UTC draft must fail before replacing the applied window"
     );
     assert_eq!(ids(&view, cx), refreshed);
     click(cx, "audit-reset");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     click(cx, "audit-outcome-filter");
     cx.simulate_keystrokes("down enter");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     click(cx, "audit-apply");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     cx.read(|app| {
         let view = view.read(app);
         assert_eq!(
@@ -428,9 +469,9 @@ fn audit_actual_pages_filters_and_expired_cursor_recovery_preserve_drafts_withou
                 .update(cx, |picker, cx| picker.set_selected_value(&None, window, cx));
         })
     });
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     click(cx, "audit-apply");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     cx.read(|app| {
         let state = &view.read(app).store;
         let applied = state.applied.as_ref().unwrap();
@@ -455,9 +496,9 @@ fn audit_actual_pages_filters_and_expired_cursor_recovery_preserve_drafts_withou
             });
         })
     });
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     click(cx, "audit-apply");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert_eq!(ids(&view, cx).len(), 10);
     assert_eq!(
         fixture.events(),
@@ -473,7 +514,7 @@ fn audit_compact_detail_copies_trusted_request_and_separates_cleanup_and_broker_
     fixture.seed(3);
     let before = fixture.events();
     let (root, view, cx) = mount(cx, fixture.services.clone());
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     let results = cx.debug_bounds("audit-results").unwrap();
     let apply = cx.debug_bounds("audit-apply").unwrap();
     let next = cx.debug_bounds("audit-next").unwrap();
@@ -498,20 +539,20 @@ fn audit_compact_detail_copies_trusted_request_and_separates_cleanup_and_broker_
         delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-160.))),
         ..Default::default()
     });
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: results.center(),
         delta: gpui::ScrollDelta::Pixels(point(px(0.), px(160.))),
         ..Default::default()
     });
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     let open = cx.debug_bounds("audit-open-1").unwrap();
     assert!(
         open.top() >= results.top() && open.bottom() <= results.bottom(),
         "record control must be visible after wheel: {open:?}, viewport={results:?}"
     );
     click(cx, "audit-open-1");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     let detail = cx.read(|app| view.read(app).detail.clone().unwrap());
     let body = cx.debug_bounds("audit-detail-scroll").unwrap();
     assert!(body.right() <= px(960.) && body.bottom() <= px(640.));
@@ -525,7 +566,7 @@ fn audit_compact_detail_copies_trusted_request_and_separates_cleanup_and_broker_
         delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-2000.))),
         ..Default::default()
     });
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     for selector in [
         "audit-broker-target-facts",
         "audit-consumer-cleanup-facts",
@@ -553,7 +594,7 @@ fn audit_real_auth_authority_pending_requests_and_context_clear_drop_all_protect
     fixture.runtime.block_on(fixture.audit.accept(pending)).unwrap();
     let before = fixture.events();
     let (root, view, cx) = mount(cx, fixture.services.clone());
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert!(cx.read(|app| view.read(app).store.pages.is_empty()));
     assert_eq!(
         cx.read(|app| view.read(app).store.error.as_ref().unwrap().code()),
@@ -561,10 +602,10 @@ fn audit_real_auth_authority_pending_requests_and_context_clear_drop_all_protect
     );
     fixture.auth.authenticate("operator", "test-password").unwrap();
     click(cx, "audit-apply");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert_eq!(cx.read(|app| view.read(app).store.pending.len()), 1);
     click(cx, "audit-pending-0");
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     let detail = cx.read(|app| view.read(app).detail.clone().unwrap());
     click(cx, "audit-copy-request-id");
     assert_eq!(
@@ -577,7 +618,7 @@ fn audit_real_auth_authority_pending_requests_and_context_clear_drop_all_protect
     assert!(!cx.update(|window, app| window.has_active_dialog(app)));
     fixture.auth.sign_out();
     cx.update(|window, app| view.update(app, |view, cx| view.set_active(true, window, cx)));
-    draw(&root, cx);
+    draw(&root, &view, &fixture, cx);
     assert_eq!(cx.read(|app| view.read(app).retained_record_count()), 0);
     assert_eq!(fixture.events(), before);
     fixture.runtime.shutdown_runtime_blocking().unwrap();

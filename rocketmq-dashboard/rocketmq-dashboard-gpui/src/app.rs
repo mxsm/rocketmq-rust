@@ -15,6 +15,8 @@
 //! Root application entity, startup lifecycle, shell composition, and page cache ownership.
 
 mod audit;
+#[path = "app/storage_authority.rs"]
+mod storage_authority;
 
 #[path = "app/consumers.rs"]
 mod consumers;
@@ -226,6 +228,7 @@ pub struct RocketmqDashboard {
     intent_task: Option<Task<()>>,
     audit_task: Option<Task<()>>,
     audit_retry_task: Option<Task<()>>,
+    configuration_watch_task: Option<Task<()>>,
     subscriptions: Vec<Subscription>,
     startup_epoch: RequestEpoch,
     login_epoch: RequestEpoch,
@@ -292,6 +295,7 @@ impl RocketmqDashboard {
             intent_task: None,
             audit_task: None,
             audit_retry_task: None,
+            configuration_watch_task: None,
             subscriptions,
             startup_epoch: RequestEpoch::initial(),
             login_epoch: RequestEpoch::initial(),
@@ -335,6 +339,7 @@ impl RocketmqDashboard {
     }
 
     fn start_bootstrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.configuration_watch_task = None;
         let epoch = match self.startup_epoch.advance() {
             Ok(request) => request,
             Err(_) => {
@@ -430,6 +435,7 @@ impl RocketmqDashboard {
                 let route = snapshot.destination();
                 self.history.replace(route.clone());
                 self.startup_state = StartupState::Ready(ReadyScreen::from_route(&route));
+                self.subscribe_configuration(window, cx);
                 self.legacy_pages
                     .ops
                     .update(cx, |view, cx| view.sync_from_services(window, cx));

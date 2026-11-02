@@ -128,12 +128,12 @@ fn message_consume_audit_distinguishes_business_failure_and_transport_unknown() 
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    let events = services
-        .query_audit(AuditQuery {
+    let events = runtime
+        .block_on(services.query_audit(AuditQuery {
             filter: AuditFilter::recent(now),
             limit: 20,
             cursor: None,
-        })
+        }))
         .unwrap()
         .events;
     let outcomes = events
@@ -185,7 +185,7 @@ fn message_admitted_consume_survives_dropped_waiter_while_query_cancels() {
         tokio::select!{result=&mut consume=>panic!("consume finished early: {result:?}"),result=started=>result.unwrap()}
         drop(consume);release.send(()).unwrap();
         let report=mutations.task_group().shutdown(Duration::from_secs(5)).await;assert!(report.is_healthy());
-        assert!(services.audit_pending().unwrap().is_empty());
+        assert!(crate::infrastructure::audit_store::persisted_journal(store.path()).pending().is_empty());
     });
     assert_eq!(backend.calls().consume.len(), 1);
     let persisted = std::fs::read_to_string(store.path()).unwrap();

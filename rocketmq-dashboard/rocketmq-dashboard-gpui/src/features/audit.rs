@@ -383,16 +383,11 @@ impl AuditView {
         #[cfg(test)]
         let gate = self.query_gate.take();
         self.query_task = Some(cx.spawn_in(window, async move |this, cx| {
-            // The GPUI entity owns both the waiter and this bounded read of the existing local journal.
-            let (query, result) = cx
-                .background_executor()
-                .spawn(async move {
-                    let result = services
-                        .query_audit(query.clone())
-                        .and_then(|page| services.audit_pending().map(|pending| (page, pending)));
-                    (query, result)
-                })
-                .await;
+            // The entity owns the waiter; the existing runtime owns these authoritative reads.
+            let result = match services.query_audit(query.clone()).await {
+                Ok(page) => services.audit_pending().await.map(|pending| (page, pending)),
+                Err(error) => Err(error),
+            };
             #[cfg(test)]
             if let Some((started, release)) = gate {
                 let _ = started.send(());

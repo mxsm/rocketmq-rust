@@ -192,7 +192,7 @@ fn run() -> Result<(), AppError> {
                 Some(source) => AppError::caused_by(AppErrorCode::Configuration, source),
                 None => AppError::new(AppErrorCode::Configuration),
             };
-            if let Err(source) = runtime.shutdown(None) {
+            if let Err(source) = runtime.shutdown(None, None) {
                 error.push_source(source);
             }
             if let Err(source) = telemetry_guard.shutdown().into_result() {
@@ -207,7 +207,7 @@ fn run() -> Result<(), AppError> {
         Arc::clone(&auth),
     );
     let services = AppServices::desktop(
-        config_store,
+        Arc::clone(&config_store),
         Arc::clone(&provider),
         auth,
         runtime.component("services"),
@@ -262,7 +262,7 @@ fn run() -> Result<(), AppError> {
             cx.quit();
         }
     });
-    let runtime_shutdown = runtime.shutdown(Some(provider));
+    let runtime_shutdown = runtime.shutdown(Some(provider), Some(config_store));
     match &runtime_shutdown {
         Ok(report) => info!(
             leaked = report.leaked,

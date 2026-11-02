@@ -199,15 +199,25 @@ impl AppServices {
         let services = self.clone();
         let backend = Arc::clone(&self.dlq);
         let work = async move {
+            let admitted = services.admit_audit_batch(&operations).await.is_ok();
             let mut entries = Vec::with_capacity(targets.len());
             for (target, operation) in targets.into_iter().zip(operations) {
-                let attempt = services
-                    .record_mutation(operation, async { Ok(backend.consume(scope, target.clone()).await) })
-                    .await
-                    .unwrap_or(DlqAttempt {
+                let attempt = if admitted {
+                    services
+                        .complete_admitted_mutation(operation, async {
+                            Ok(backend.consume(scope, target.clone()).await)
+                        })
+                        .await
+                        .unwrap_or(DlqAttempt {
+                            state: DlqEntryState::Unattempted,
+                            receipt: None,
+                        })
+                } else {
+                    DlqAttempt {
                         state: DlqEntryState::Unattempted,
                         receipt: None,
-                    });
+                    }
+                };
                 entries.push(DlqEntryResult { target, attempt });
             }
             Ok(DlqBatchResult { entries })

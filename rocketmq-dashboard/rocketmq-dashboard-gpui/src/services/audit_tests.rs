@@ -35,10 +35,7 @@ mod topic_fields;
 
 use super::*;
 use crate::{
-    infrastructure::{
-        audit_store::AuditStore,
-        auth_state::{LOGIN_PASSWORD_ENV, LOGIN_USERNAME_ENV, MapEnvironment},
-    },
+    infrastructure::auth_state::{LOGIN_PASSWORD_ENV, LOGIN_USERNAME_ENV, MapEnvironment},
     services::{
         brokers::BrokerConfigMutationResult,
         consumers::{ConsumerRequestScope, test_support::FakeConsumerBackend},
@@ -92,8 +89,8 @@ impl Fixture {
     }
 
     fn events(&self) -> Vec<AuditEvent> {
-        self.services
-            .query_audit(AuditQuery {
+        crate::infrastructure::audit_store::persisted_journal(self.store.path())
+            .query(AuditQuery {
                 filter: AuditFilter::recent(now_epoch_ms().unwrap()),
                 limit: 200,
                 cursor: None,
@@ -202,7 +199,16 @@ fn audit_business_success_survives_terminal_write_failure_and_retry_never_replay
             BrokerConfigMutationResult::AppliedReloadFailed { .. }
         ));
         assert!(fixture.services.audit_write_warning());
-        assert_eq!(fixture.services.audit_pending().unwrap().len(), 1);
+        assert!(
+            fixture.services.audit_pending().await.is_err(),
+            "unavailable authority cannot return cached pending data"
+        );
+        assert_eq!(
+            crate::infrastructure::audit_store::persisted_journal(&backup)
+                .pending()
+                .len(),
+            1
+        );
         fixture.services.retry_audit_writes().await.unwrap();
         assert!(fixture.services.audit_write_warning(), "a failed retry remains visible");
         std::fs::remove_dir(fixture.store.path()).unwrap();
@@ -210,7 +216,7 @@ fn audit_business_success_survives_terminal_write_failure_and_retry_never_replay
         fixture.services.retry_audit_writes().await.unwrap();
         fixture.services.retry_audit_writes().await.unwrap();
         assert!(!fixture.services.audit_write_warning());
-        assert!(fixture.services.audit_pending().unwrap().is_empty());
+        assert!(fixture.services.audit_pending().await.unwrap().is_empty());
     });
     assert_eq!(backend.calls().patches.len(), 1);
     let events = fixture.events();
@@ -237,7 +243,7 @@ fn audit_owned_shutdown_timeout_leaves_a_durable_unknown_request_without_replay(
         drop(waiter);
         let report = fixture.mutations.task_group().shutdown(Duration::ZERO).await;
         assert!(report.timed_out > 0);
-        assert_eq!(fixture.services.audit_pending().unwrap().len(), 1);
+        assert_eq!(crate::infrastructure::audit_store::persisted_journal(fixture.store.path()).pending().len(), 1);
         assert!(fixture.events().is_empty());
     });
     let bytes: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture.store.path()).unwrap()).unwrap();
@@ -401,6 +407,7 @@ fn audit_query_access_follows_local_auth_and_failed_login_does_not_persist_the_s
                     limit: 10,
                     cursor: None
                 })
+                .await
                 .is_err()
         );
         assert!(
@@ -422,9 +429,8 @@ fn audit_query_access_follows_local_auth_and_failed_login_does_not_persist_the_s
     assert!(!file.contains("wrong-password"));
     assert!(!file.contains("private-password"));
     assert!(
-        AuditStore::new(Arc::clone(&fixture.store))
+        crate::infrastructure::audit_store::persisted_journal(fixture.store.path())
             .pending()
-            .unwrap()
             .is_empty()
     );
     fixture.runtime.shutdown_runtime_blocking().unwrap();

@@ -150,8 +150,8 @@ fn audit_ordinary_broker_sheet_close_drops_the_view_waiter_but_commits_the_owned
             .block_on(mutations.task_group().shutdown(Duration::from_secs(5)))
             .is_healthy()
     );
-    let page = services
-        .query_audit(AuditQuery {
+    let page = crate::infrastructure::audit_store::persisted_journal(&directory.path().join("config.json"))
+        .query(AuditQuery {
             filter: AuditFilter::recent(crate::services::audit::now_epoch_ms().unwrap()),
             limit: 20,
             cursor: None,

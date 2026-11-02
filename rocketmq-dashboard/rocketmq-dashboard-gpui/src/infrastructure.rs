@@ -18,7 +18,6 @@
 pub mod admin_provider;
 /// Real query/mutation Admin session adapters hidden behind the provider.
 pub mod admin_session;
-mod atomic_file;
 pub(crate) mod audit_store;
 #[path = "infrastructure/auth_state.rs"]
 pub mod auth_state;
@@ -37,4 +36,9 @@ pub mod history_store;
 pub(crate) mod local_storage_status;
 #[path = "infrastructure/monitor_store.rs"]
 pub mod monitor_store;
-mod storage_writer;
+
+#[cfg(all(
+    test,
+    any(feature = "storage-sqlite", feature = "storage-mysql", feature = "storage-postgres")
+))]
+mod native_storage_tests;

@@ -12,201 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Versioned, non-sensitive desktop configuration persisted on the storage-I/O lane.
+//! Safe native storage failures and compatibility re-exports.
 
-use std::{
-    error::Error as StdError,
-    fmt, io,
-    path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+#[cfg(test)]
+use std::io;
+use std::{error::Error as StdError, fmt, path::PathBuf, sync::Arc};
+
+#[cfg(test)]
+use rocketmq_dashboard_common::CredentialSourceKind;
+pub use rocketmq_dashboard_storage::{
+    AuthConfig, CONFIG_SCHEMA_VERSION, DesktopConfig, FoundationFlags, HISTORY_MAX_POINTS_CAP, HISTORY_MAX_SERIES_CAP,
+    HISTORY_MAX_TOTAL_POINTS_CAP,
 };
+use rocketmq_dashboard_storage::{StorageError, StorageErrorKind};
 
-use rocketmq_dashboard_common::{
-    ConnectionScope, ConnectionSnapshot, CredentialSourceKind, EnvironmentConnectionSnapshot, OperationActor,
-    OperationContext, OperationResource, TransportSettings, normalize_nameserver_selection, normalize_proxy_selection,
-};
-use rocketmq_runtime::ChildServiceContext;
-use serde::{Deserialize, Serialize};
+#[path = "config_authority.rs"]
+mod authority;
+pub use authority::DesktopConfigStore;
+pub(crate) use authority::NativeConfigurationChange;
 
-use super::{
-    environment_store::{
-        DesktopDocument, EnvironmentCatalog, EnvironmentChange, EnvironmentProfile, EnvironmentValidation,
-        LocalOperationKind, LocalOperationRecord, StoredMonitorRule, load_document, new_environment_id,
-    },
-    local_storage_status::{FileIoEvidence, FileReadState, LocalFileStatus, inspect_json, write_observed},
-    storage_writer::StorageWriter,
-};
-
-/// Current on-disk schema understood by this delivery.
-pub const CONFIG_SCHEMA_VERSION: u32 = 4;
-
-#[path = "monitor_commit.rs"]
-mod monitor_commit;
-/// Environment override used by tests, packaged builds, and portable deployments.
+/// Existing portable configuration path override.
 pub const CONFIG_PATH_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH";
-
-/// Authentication settings that never contain credential values.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct AuthConfig {
-    /// Whether local dashboard sign-in is required.
-    pub enabled: bool,
-    /// Source category for RocketMQ Admin credentials.
-    pub credential_source: CredentialSourceKind,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            credential_source: CredentialSourceKind::None,
-        }
-    }
-}
-
-/// Maximum accepted per-series History retention.
-pub const HISTORY_MAX_POINTS_CAP: usize = 100_000;
-/// Maximum accepted distinct History series.
-pub const HISTORY_MAX_SERIES_CAP: usize = 4_096;
-/// Maximum accepted observations across the complete History file.
-pub const HISTORY_MAX_TOTAL_POINTS_CAP: usize = 100_000;
-
-/// Feature and bounded-lifecycle settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct FoundationFlags {
-    /// Enables the owned History collector.
-    pub history_enabled: bool,
-    /// Collection interval in seconds. Zero disables collection even when the flag is enabled.
-    pub history_interval_seconds: u64,
-    /// Maximum retained observations for each metric series.
-    pub history_max_points_per_series: usize,
-    /// Maximum retained metric series across the complete History file.
-    pub history_max_series: usize,
-    /// Maximum retained observations across the complete History file.
-    pub history_max_total_points: usize,
-    /// Enables the local Monitor store without exposing a Monitor page in Delivery 02.
-    pub monitor_enabled: bool,
-}
-
-impl Default for FoundationFlags {
-    fn default() -> Self {
-        Self {
-            history_enabled: false,
-            history_interval_seconds: 60,
-            history_max_points_per_series: 1_440,
-            history_max_series: 512,
-            history_max_total_points: 20_000,
-            monitor_enabled: false,
-        }
-    }
-}
-
-/// Complete non-sensitive desktop configuration.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct DesktopConfig {
-    /// Schema discriminator. Unknown versions are never overwritten.
-    pub schema_version: u32,
-    /// Monotonic persisted revision used to invalidate sessions and requests.
-    pub revision: u64,
-    /// Configured normalized NameServer endpoints.
-    pub nameservers: Vec<String>,
-    /// Selected NameServer endpoint.
-    pub current_nameserver: Option<String>,
-    /// Admin transport settings.
-    pub transport: TransportSettings,
-    /// Configured normalized Proxy endpoints.
-    pub proxies: Vec<String>,
-    /// Selected Proxy endpoint.
-    pub current_proxy: Option<String>,
-    /// Active query scope.
-    pub scope: ConnectionScope,
-    /// Non-sensitive authentication configuration.
-    pub auth: AuthConfig,
-    /// Delivery-foundation feature flags.
-    pub foundations: FoundationFlags,
-}
-
-impl fmt::Debug for DesktopConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DesktopConfig")
-            .field("schema_version", &self.schema_version)
-            .field("revision", &self.revision)
-            .field("nameserver_count", &self.nameservers.len())
-            .field("current_nameserver_configured", &self.current_nameserver.is_some())
-            .field("transport", &self.transport)
-            .field("proxy_count", &self.proxies.len())
-            .field("current_proxy_configured", &self.current_proxy.is_some())
-            .field("scope", &self.scope)
-            .field("auth", &self.auth)
-            .field("foundations", &self.foundations)
-            .finish()
-    }
-}
-
-impl Default for DesktopConfig {
-    fn default() -> Self {
-        Self {
-            schema_version: CONFIG_SCHEMA_VERSION,
-            revision: 0,
-            nameservers: Vec::new(),
-            current_nameserver: None,
-            transport: TransportSettings::default(),
-            proxies: Vec::new(),
-            current_proxy: None,
-            scope: ConnectionScope::NameServer,
-            auth: AuthConfig::default(),
-            foundations: FoundationFlags::default(),
-        }
-    }
-}
-
-impl DesktopConfig {
-    /// Validates and normalizes the complete persisted compatibility surface.
-    pub fn normalize(mut self) -> Result<Self, ConfigStoreFailure> {
-        if self.schema_version != CONFIG_SCHEMA_VERSION {
-            return Err(ConfigStoreFailure::unsupported_schema(
-                self.schema_version,
-                CONFIG_SCHEMA_VERSION,
-            ));
-        }
-        (self.nameservers, self.current_nameserver) =
-            normalize_nameserver_selection(&self.nameservers, self.current_nameserver.as_deref())
-                .map_err(ConfigStoreFailure::validation)?;
-        (self.proxies, self.current_proxy) = normalize_proxy_selection(&self.proxies, self.current_proxy.as_deref())
-            .map_err(ConfigStoreFailure::validation)?;
-        if self.scope == ConnectionScope::Proxy && self.current_proxy.is_none() {
-            return Err(ConfigStoreFailure::validation(ConfigValidation::ProxyRequiresSelection));
-        }
-        self.foundations.history_max_points_per_series = self
-            .foundations
-            .history_max_points_per_series
-            .min(HISTORY_MAX_POINTS_CAP);
-        self.foundations.history_max_series = self.foundations.history_max_series.min(HISTORY_MAX_SERIES_CAP);
-        self.foundations.history_max_total_points = self
-            .foundations
-            .history_max_total_points
-            .min(HISTORY_MAX_TOTAL_POINTS_CAP);
-        Ok(self)
-    }
-
-    /// Projects the immutable provider input without any credential values.
-    pub fn connection_snapshot(&self) -> ConnectionSnapshot {
-        ConnectionSnapshot {
-            revision: self.revision,
-            nameserver: self.current_nameserver.clone(),
-            proxy: self.current_proxy.clone(),
-            scope: self.scope,
-            transport: self.transport,
-            credential_source: self.auth.credential_source,
-        }
-    }
-}
+/// Explicit native authority, defaulting to file when no choice is supplied.
+pub const STORAGE_ENGINE_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE";
+/// External database connection input. Its value is never persisted or formatted.
+pub const DATABASE_URL_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_DATABASE_URL";
 
 /// Opaque recoverable storage failure with a fixed safe projection.
 #[derive(Clone)]
@@ -227,6 +57,8 @@ enum ConfigStoreRejection {
     RevisionExhausted,
     ProtectedOriginal,
     WriterUnavailable,
+    Uninitialized,
+    Closed,
 }
 
 #[derive(Clone)]
@@ -248,6 +80,7 @@ enum ConfigStoreCondition {
     InvalidDocument,
     Validation,
     Runtime,
+    Storage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,14 +94,18 @@ enum ConfigStoreFailureCode {
     ProtectedOriginal,
     Runtime,
     WriterUnavailable,
+    Storage,
+    Uninitialized,
 }
 
 #[derive(Debug, thiserror::Error)]
 enum ConfigValidation {
     #[error("the user configuration directory is unavailable")]
     UserDirectoryUnavailable,
-    #[error("Proxy scope requires a selected Proxy endpoint")]
-    ProxyRequiresSelection,
+    #[error("select file, sqlite, mysql, or postgres as the native storage engine")]
+    StorageEngine,
+    #[error("external database connection configuration is required for the selected engine")]
+    DatabaseConnection,
 }
 
 impl ConfigStoreFailure {
@@ -297,6 +134,7 @@ impl ConfigStoreFailure {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn io(operation: &'static str, path: PathBuf, source: io::Error) -> Self {
         Self::operational(ConfigStoreErrorInner {
             condition: ConfigStoreCondition::Io,
@@ -306,6 +144,7 @@ impl ConfigStoreFailure {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn invalid_document(path: PathBuf, source: serde_json::Error) -> Self {
         Self::caused_by(ConfigStoreCondition::InvalidDocument, Some(path), source)
     }
@@ -325,6 +164,7 @@ impl ConfigStoreFailure {
                 ConfigStoreCondition::InvalidDocument => ConfigStoreFailureCode::InvalidDocument,
                 ConfigStoreCondition::Validation => ConfigStoreFailureCode::Validation,
                 ConfigStoreCondition::Runtime => ConfigStoreFailureCode::Runtime,
+                ConfigStoreCondition::Storage => ConfigStoreFailureCode::Storage,
             },
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. }) => {
                 ConfigStoreFailureCode::UnsupportedSchema
@@ -341,6 +181,10 @@ impl ConfigStoreFailure {
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::WriterUnavailable) => {
                 ConfigStoreFailureCode::WriterUnavailable
             }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Uninitialized) => {
+                ConfigStoreFailureCode::Uninitialized
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Closed) => ConfigStoreFailureCode::Storage,
         }
     }
 
@@ -383,14 +227,54 @@ impl ConfigStoreFailure {
                 | ConfigStoreRejection::ProtectedOriginal
                 | ConfigStoreRejection::WriterUnavailable,
             ) => true,
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Uninitialized) => true,
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. })
             | ConfigStoreFailureKind::Rejected(ConfigStoreRejection::RevisionExhausted) => false,
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Closed) => false,
             ConfigStoreFailureKind::Operational(_) => true,
         }
     }
 
     pub(crate) fn safe_summary(&self) -> &'static str {
         match &self.kind {
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Closed) => "The selected native storage is closed.",
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Uninitialized) => {
+                "The selected database has no native Dashboard data. Initialize it or import existing files explicitly."
+            }
+            ConfigStoreFailureKind::Operational(error) if error.inner.condition == ConfigStoreCondition::Storage => {
+                match error
+                    .inner
+                    .source
+                    .downcast_ref::<StorageError>()
+                    .map(StorageError::kind)
+                {
+                    Some(StorageErrorKind::DriverUnavailable { .. }) => {
+                        "The selected native storage engine is unavailable in this application build."
+                    }
+                    Some(StorageErrorKind::Connection | StorageErrorKind::Query | StorageErrorKind::Closed) => {
+                        "The selected native database is unavailable. Check its external connection configuration and retry."
+                    }
+                    Some(StorageErrorKind::LeaseLost) => {
+                        "History collection ownership changed; the sample was not persisted."
+                    }
+                    Some(StorageErrorKind::EmptySource) => "The import source has no native Dashboard configuration.",
+                    Some(StorageErrorKind::AlreadyInitialized) => {
+                        "The selected storage already contains native Dashboard data."
+                    }
+                    _ => "The selected native storage could not complete the operation.",
+                }
+            }
+            ConfigStoreFailureKind::Operational(error) if error.inner.condition == ConfigStoreCondition::Validation => {
+                match error.inner.source.downcast_ref::<ConfigValidation>() {
+                    Some(ConfigValidation::StorageEngine) => {
+                        "Select file, sqlite, mysql, or postgres as the native storage engine."
+                    }
+                    Some(ConfigValidation::DatabaseConnection) => {
+                        "External database connection configuration is required for the selected engine."
+                    }
+                    _ => "The local dashboard configuration could not be loaded or updated.",
+                }
+            }
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::WriterUnavailable) => {
                 "Another Dashboard instance owns this data directory. Close it before opening this instance."
             }
@@ -398,6 +282,21 @@ impl ConfigStoreFailure {
                 "The local dashboard data uses an unsupported schema version. The original files were preserved."
             }
             _ => "The local dashboard configuration could not be loaded or updated.",
+        }
+    }
+}
+
+impl fmt::Display for ConfigStoreFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.safe_summary())
+    }
+}
+
+impl StdError for ConfigStoreFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match &self.kind {
+            ConfigStoreFailureKind::Operational(error) => Some(error),
+            ConfigStoreFailureKind::Rejected(_) => None,
         }
     }
 }
@@ -443,6 +342,7 @@ impl fmt::Display for ConfigStoreError {
             ConfigStoreCondition::InvalidDocument => "The local dashboard data is not valid JSON.",
             ConfigStoreCondition::Validation => "The local dashboard data failed validation.",
             ConfigStoreCondition::Runtime => "The local dashboard storage runtime is unavailable.",
+            ConfigStoreCondition::Storage => "The selected native Dashboard storage is unavailable.",
         })
     }
 }
@@ -453,453 +353,27 @@ impl StdError for ConfigStoreError {
     }
 }
 
-/// File-backed store with serialized updates and explicit corrupt-original protection.
-pub struct DesktopConfigStore {
-    path: PathBuf,
-    context: ChildServiceContext,
-    io_gate: tokio::sync::Mutex<()>,
-    protected_original: AtomicBool,
-    writer: Arc<parking_lot::Mutex<Option<StorageWriter>>>,
-    document: parking_lot::RwLock<Option<DesktopDocument>>,
-    io_evidence: Arc<parking_lot::RwLock<FileIoEvidence>>,
-}
-
-impl DesktopConfigStore {
-    /// Resolves the configured path, preferring [`CONFIG_PATH_ENV`].
-    pub fn from_environment(context: ChildServiceContext) -> Result<Arc<Self>, ConfigStoreFailure> {
-        let path = match std::env::var_os(CONFIG_PATH_ENV) {
-            Some(path) if !path.is_empty() => PathBuf::from(path),
-            _ => dirs::config_dir()
-                .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::UserDirectoryUnavailable))?
-                .join("rocketmq-dashboard")
-                .join("gpui")
-                .join("config.json"),
-        };
-        Ok(Self::new(path, context))
-    }
-
-    /// Creates a store at an injected path. Tests use this to avoid user directories.
-    pub fn new(path: PathBuf, context: ChildServiceContext) -> Arc<Self> {
-        Arc::new(Self {
-            path,
-            context,
-            io_gate: tokio::sync::Mutex::new(()),
-            protected_original: AtomicBool::new(false),
-            writer: Arc::new(parking_lot::Mutex::new(None)),
-            document: parking_lot::RwLock::new(None),
-            io_evidence: Arc::new(parking_lot::RwLock::new(FileIoEvidence::default())),
-        })
-    }
-
-    /// Returns the exact non-secret storage path.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub(crate) fn owns_writer(&self) -> bool {
-        self.writer.lock().is_some()
-    }
-
-    pub(crate) async fn inspect_storage(&self) -> LocalFileStatus {
-        let _guard = self.io_gate.lock().await;
-        let path = self.path.clone();
-        let evidence = Arc::clone(&self.io_evidence);
-        let result = self
-            .context
-            .storage_io()
-            .spawn_io("gpui-config-status", move || {
-                inspect_json::<DesktopDocument>(&path, CONFIG_SCHEMA_VERSION, &evidence, |document| {
-                    document.validate()?;
-                    Ok(Some(document.settings.revision))
-                });
-            })
-            .await;
-        if result.is_err() {
-            self.io_evidence.write().record_read(FileReadState::Unknown, None, None);
-        }
-        LocalFileStatus {
-            path: self.path.clone(),
-            writer_owned: self.owns_writer(),
-            evidence: *self.io_evidence.read(),
+impl From<StorageError> for ConfigStoreFailure {
+    fn from(error: StorageError) -> Self {
+        match error.kind() {
+            StorageErrorKind::UnsupportedSchema { found, supported } => Self::unsupported_schema(found, supported),
+            StorageErrorKind::Conflict => Self::stale_revision(),
+            StorageErrorKind::WriterUnavailable => Self::writer_unavailable(),
+            StorageErrorKind::Uninitialized => Self::rejected(ConfigStoreRejection::Uninitialized),
+            StorageErrorKind::RevisionExhausted => Self::rejected(ConfigStoreRejection::RevisionExhausted),
+            StorageErrorKind::InvalidDocument => Self::caused_by(ConfigStoreCondition::InvalidDocument, None, error),
+            StorageErrorKind::Io => Self::caused_by(ConfigStoreCondition::Io, None, error),
+            StorageErrorKind::Validation => Self::validation(error),
+            StorageErrorKind::Runtime => Self::runtime(error),
+            StorageErrorKind::DriverUnavailable { .. }
+            | StorageErrorKind::Connection
+            | StorageErrorKind::Query
+            | StorageErrorKind::EmptySource
+            | StorageErrorKind::AlreadyInitialized
+            | StorageErrorKind::LeaseLost
+            | StorageErrorKind::Closed => Self::caused_by(ConfigStoreCondition::Storage, None, error),
         }
     }
-
-    pub(crate) fn authentication_enabled(&self) -> Result<bool, ConfigStoreFailure> {
-        self.document
-            .read()
-            .as_ref()
-            .map(|document| document.settings.authentication_enabled)
-            .ok_or_else(|| ConfigStoreFailure::validation(EnvironmentValidation::MissingProfile))
-    }
-
-    pub(super) fn audit_snapshot(&self) -> Result<super::audit_store::AuditJournal, ConfigStoreFailure> {
-        self.document
-            .read()
-            .as_ref()
-            .map(|document| document.audit.clone())
-            .ok_or_else(|| ConfigStoreFailure::validation(EnvironmentValidation::MissingProfile))
-    }
-
-    pub(super) async fn update_audit(
-        &self,
-        name: &'static str,
-        update: impl FnOnce(&mut super::audit_store::AuditJournal) -> Result<(), ConfigStoreFailure> + Send + 'static,
-    ) -> Result<(), ConfigStoreFailure> {
-        let _guard = self.io_gate.lock().await;
-        if self.protected_original.load(Ordering::Acquire) || self.document.read().is_none() {
-            return Err(ConfigStoreFailure::writer_unavailable());
-        }
-        let path = self.path.clone();
-        let evidence = Arc::clone(&self.io_evidence);
-        let document = self
-            .context
-            .storage_io()
-            .spawn_io(name, move || {
-                let (mut document, _) = load_observed_document(&path, &evidence)?;
-                let before = document.audit.clone();
-                update(&mut document.audit)?;
-                document.validate()?;
-                if document.audit != before {
-                    write_observed(&path, &document, &evidence)?;
-                }
-                Ok::<_, ConfigStoreFailure>(document)
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)??;
-        *self.document.write() = Some(document);
-        Ok(())
-    }
-
-    /// Loads, parses, validates, and records the on-disk revision.
-    pub async fn load(&self) -> Result<DesktopConfig, ConfigStoreFailure> {
-        let _guard = self.io_gate.lock().await;
-        let path = self.path.clone();
-        let writer = Arc::clone(&self.writer);
-        let evidence = Arc::clone(&self.io_evidence);
-        let result = self
-            .context
-            .storage_io()
-            .spawn_io("gpui-config-load", move || {
-                let mut writer = writer.lock();
-                if writer.is_none() {
-                    *writer = Some(StorageWriter::acquire(&path)?);
-                }
-                drop(writer);
-                let (document, migrated) = load_observed_document(&path, &evidence)?;
-                document.validate()?;
-                if migrated {
-                    write_observed(&path, &document, &evidence)?;
-                }
-                Ok::<_, ConfigStoreFailure>(document)
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)?;
-        match result {
-            Ok(document) => {
-                let config = document.config()?;
-
-                self.protected_original.store(false, Ordering::Release);
-                *self.document.write() = Some(document);
-                Ok(config)
-            }
-            Err(error) if error.protects_original() => {
-                self.protected_original.store(true, Ordering::Release);
-                Err(error)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Atomically persists a validated next revision.
-    pub async fn save_next(&self, config: DesktopConfig) -> Result<DesktopConfig, ConfigStoreFailure> {
-        if self.protected_original.load(Ordering::Acquire) {
-            return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::ProtectedOriginal));
-        }
-        let context = self.operation_context(
-            config.revision,
-            OperationActor::System,
-            OperationResource::Configuration,
-        )?;
-        self.save_next_with_context(config, context).await
-    }
-
-    /// Saves the active profile and its accepted-operation record in one replacement.
-    pub async fn save_next_with_context(
-        &self,
-        config: DesktopConfig,
-        context: OperationContext,
-    ) -> Result<DesktopConfig, ConfigStoreFailure> {
-        let _guard = self.io_gate.lock().await;
-        if self.protected_original.load(Ordering::Acquire) {
-            return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::ProtectedOriginal));
-        }
-        let config = config.normalize()?;
-        let path = self.path.clone();
-        let evidence = Arc::clone(&self.io_evidence);
-        let document = self
-            .context
-            .storage_io()
-            .spawn_io("gpui-config-save", move || {
-                let (mut document, _) = load_observed_document(&path, &evidence)?;
-                if document
-                    .local_operations
-                    .iter()
-                    .any(|record| record.context.request_id == context.request_id)
-                {
-                    return Ok(document);
-                }
-                if config.revision != document.settings.revision
-                    || context.configuration_revision != config.revision
-                    || context.environment_id != document.active_environment_id
-                {
-                    return Err(ConfigStoreFailure::stale_revision());
-                }
-                let mut config = config;
-                config.revision = config
-                    .revision
-                    .checked_add(1)
-                    .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
-                document.apply_config(&config)?;
-                persist_local_document(
-                    &path,
-                    document,
-                    context,
-                    LocalOperationKind::ConfigurationSaved,
-                    &evidence,
-                )
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)??;
-        let config = document.config()?;
-
-        *self.document.write() = Some(document);
-        Ok(config)
-    }
-
-    /// Returns profiles from the same committed document as the configuration projection.
-    pub fn environments(&self) -> Option<EnvironmentCatalog> {
-        self.document.read().as_ref().map(DesktopDocument::catalog)
-    }
-
-    pub fn history_settings(&self) -> Option<FoundationFlags> {
-        self.document
-            .read()
-            .as_ref()
-            .and_then(|document| document.config().ok())
-            .map(|config| config.foundations)
-    }
-
-    pub fn environment_snapshot(&self) -> Result<EnvironmentConnectionSnapshot, ConfigStoreFailure> {
-        let document = self.document.read();
-        let document = document
-            .as_ref()
-            .ok_or_else(|| ConfigStoreFailure::validation(EnvironmentValidation::MissingProfile))?;
-        Ok(EnvironmentConnectionSnapshot {
-            environment_id: document.active_environment_id.clone(),
-            connection: document.config()?.connection_snapshot(),
-        })
-    }
-
-    /// Resolves attribution at acceptance; caller-supplied form data cannot choose an actor.
-    pub fn operation_context(
-        &self,
-        revision: u64,
-        actor: OperationActor,
-        resource: OperationResource,
-    ) -> Result<OperationContext, ConfigStoreFailure> {
-        let snapshot = self.environment_snapshot()?;
-        if snapshot.connection.revision != revision {
-            return Err(ConfigStoreFailure::stale_revision());
-        }
-        Ok(OperationContext {
-            environment_id: snapshot.environment_id,
-            configuration_revision: revision,
-            request_id: format!("request-{:032x}", rand::random::<u128>()),
-            actor,
-            resource,
-        })
-    }
-
-    /// Creates an empty profile or selects a profile explicitly. Endpoint edits never call this.
-    pub async fn change_environment(
-        &self,
-        change: EnvironmentChange,
-        context: OperationContext,
-    ) -> Result<DesktopConfig, ConfigStoreFailure> {
-        let _guard = self.io_gate.lock().await;
-        let path = self.path.clone();
-        let evidence = Arc::clone(&self.io_evidence);
-        let document = self
-            .context
-            .storage_io()
-            .spawn_io("gpui-environment-change", move || {
-                let (mut document, _) = load_observed_document(&path, &evidence)?;
-                if document
-                    .local_operations
-                    .iter()
-                    .any(|record| record.context.request_id == context.request_id)
-                {
-                    return Ok(document);
-                }
-                if context.configuration_revision != document.settings.revision
-                    || context.environment_id != document.active_environment_id
-                {
-                    return Err(ConfigStoreFailure::stale_revision());
-                }
-                match change {
-                    EnvironmentChange::Create { name } => {
-                        if name.trim().is_empty() {
-                            return Err(ConfigStoreFailure::validation(EnvironmentValidation::InvalidProfile));
-                        }
-                        let id = new_environment_id()?;
-                        document.profiles.push(EnvironmentProfile::from_config(
-                            id.clone(),
-                            name.trim().into(),
-                            &DesktopConfig::default(),
-                        ));
-                        document.active_environment_id = id;
-                    }
-                    EnvironmentChange::Select { id: selected } => {
-                        if !document.profiles.iter().any(|profile| profile.id == selected) {
-                            return Err(ConfigStoreFailure::validation(EnvironmentValidation::MissingProfile));
-                        }
-                        document.active_environment_id = selected;
-                    }
-                }
-                document.settings.revision = document
-                    .settings
-                    .revision
-                    .checked_add(1)
-                    .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
-                persist_local_document(
-                    &path,
-                    document,
-                    context,
-                    LocalOperationKind::ConfigurationSaved,
-                    &evidence,
-                )
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)??;
-        let config = document.config()?;
-
-        *self.document.write() = Some(document);
-        Ok(config)
-    }
-
-    pub async fn monitor_rules(&self) -> Result<Vec<StoredMonitorRule>, ConfigStoreFailure> {
-        let _guard = self.io_gate.lock().await;
-        let path = self.path.clone();
-        let evidence = Arc::clone(&self.io_evidence);
-        self.context
-            .storage_io()
-            .spawn_io("gpui-monitor-list", move || {
-                load_observed_document(&path, &evidence).map(|(document, _)| document.monitors.rules)
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)?
-    }
-
-    /// Commits a Monitor edit and its operation record under the configuration writer lock.
-    #[cfg(test)]
-    pub async fn save_monitor(
-        &self,
-        rule: Option<StoredMonitorRule>,
-        id: String,
-        context: OperationContext,
-    ) -> Result<bool, ConfigStoreFailure> {
-        let _guard = self.io_gate.lock().await;
-        let path = self.path.clone();
-        let evidence = Arc::clone(&self.io_evidence);
-        let (document, removed) = self
-            .context
-            .storage_io()
-            .spawn_io("gpui-monitor-commit", move || {
-                let (mut document, _) = load_observed_document(&path, &evidence)?;
-                if document
-                    .local_operations
-                    .iter()
-                    .any(|record| record.context.request_id == context.request_id)
-                {
-                    return Ok((document, false));
-                }
-                if context.configuration_revision != document.settings.revision
-                    || context.environment_id != document.active_environment_id
-                {
-                    return Err(ConfigStoreFailure::stale_revision());
-                }
-                let old_len = document.monitors.rules.len();
-                document.monitors.rules.retain(|existing| {
-                    !(existing.environment_id.as_ref() == Some(&context.environment_id) && existing.rule.id == id)
-                });
-                let removed = old_len != document.monitors.rules.len();
-                let kind = if let Some(rule) = rule {
-                    document.monitors.rules.push(rule);
-                    LocalOperationKind::MonitorSaved
-                } else {
-                    LocalOperationKind::MonitorDeleted
-                };
-                let document = persist_local_document(&path, document, context, kind, &evidence)?;
-                Ok::<_, ConfigStoreFailure>((document, removed))
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)??;
-        *self.document.write() = Some(document);
-        Ok(removed)
-    }
-}
-
-fn persist_local_document(
-    path: &Path,
-    mut document: DesktopDocument,
-    context: OperationContext,
-    kind: LocalOperationKind,
-    evidence: &parking_lot::RwLock<FileIoEvidence>,
-) -> Result<DesktopDocument, ConfigStoreFailure> {
-    let committed_at_epoch_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(ConfigStoreFailure::validation)?;
-    let committed_at_epoch_ms =
-        u64::try_from(committed_at_epoch_ms.as_millis()).map_err(ConfigStoreFailure::validation)?;
-    document.local_operations.push(LocalOperationRecord {
-        context: context.clone(),
-        kind,
-        committed_at_epoch_ms,
-    });
-    let action = match kind {
-        LocalOperationKind::ConfigurationSaved => rocketmq_dashboard_common::AuditAction::ConfigurationSaved,
-        LocalOperationKind::MonitorSaved => rocketmq_dashboard_common::AuditAction::MonitorSaved,
-        LocalOperationKind::MonitorDeleted => rocketmq_dashboard_common::AuditAction::MonitorDeleted,
-    };
-    document.audit.finish_local(context, action, committed_at_epoch_ms)?;
-    if document.local_operations.len() > 10_000 {
-        document
-            .local_operations
-            .drain(..document.local_operations.len() - 10_000);
-    }
-    document.validate()?;
-    write_observed(path, &document, evidence)?;
-    Ok(document)
-}
-
-fn load_observed_document(
-    path: &Path,
-    evidence: &parking_lot::RwLock<FileIoEvidence>,
-) -> Result<(DesktopDocument, bool), ConfigStoreFailure> {
-    let result = load_document(path);
-    match &result {
-        Ok((document, migrated)) => evidence.write().record_read(
-            if *migrated {
-                FileReadState::MigrationRequired
-            } else {
-                FileReadState::Readable
-            },
-            (!migrated).then_some(document.schema_version),
-            (!migrated).then_some(document.settings.revision),
-        ),
-        Err(_) => evidence.write().record_read(FileReadState::Failed, None, None),
-    }
-    result
 }
 
 #[cfg(test)]
@@ -980,6 +454,35 @@ mod tests {
             assert_eq!(error.code(), ConfigStoreFailureCode::StaleRevision);
         });
         runtime.shutdown_runtime_blocking().expect("shutdown");
+    }
+
+    #[test]
+    fn injected_native_authority_is_the_same_handle_and_never_opens_a_second_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime();
+        let path = directory.path().join("config.json");
+        let context = runtime.root_context().component("native");
+        runtime.block_on(async {
+            let native = Arc::new(
+                rocketmq_dashboard_storage::DashboardStore::open(
+                    rocketmq_dashboard_storage::StorageOptions::File {
+                        config_path: path.clone(),
+                    },
+                    context.clone(),
+                )
+                .await
+                .unwrap(),
+            );
+            let store = DesktopConfigStore::with_native_storage(path, context, Arc::clone(&native));
+            store.load().await.unwrap();
+            assert!(Arc::ptr_eq(&native, &store.native_storage().await.unwrap()));
+            assert!(store.owns_writer());
+            store.close().await.unwrap();
+            assert!(!store.owns_writer());
+            assert!(store.load().await.is_err());
+            assert_eq!(native.status().await.unwrap_err().kind(), StorageErrorKind::Closed);
+        });
+        runtime.shutdown_runtime_blocking().unwrap();
     }
 
     #[test]
