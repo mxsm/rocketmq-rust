@@ -28,11 +28,12 @@ description.workspace  = true
 rust-version.workspace = true
 
 [features]
-default = []
+default = ["config-file"]
+config-file = ["dep:config"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-config.workspace = true
+config = { workspace = true, optional = true }
 dashmap.workspace = true
 futures = "0.3"
 parking_lot.workspace = true

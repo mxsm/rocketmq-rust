@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(runtime):** Make file configuration helpers optional behind the default-enabled `config-file` feature, preserving Broker, NameServer, and Controller configuration support while removing format parsers from runtime-only consumers. Consumers using `common::parse_config_file` with default features disabled must enable `config-file` explicitly.
 - **refactor(transport):** Gate HTTP NameServer discovery behind the default-enabled `http-discovery` feature, retaining Client and NameServer discovery while allowing other Transport consumers to omit the HTTP dependency stack. Consumers using these APIs with default features disabled must enable `http-discovery` explicitly.
 - **refactor(dependencies):** Remove unused Observability, Transport, and Broker dependency declarations, avoiding an unused timezone database and redundant compression backend in individual service builds.
 - **improve(dashboard-tauri):** Refresh the desktop icon with RocketMQ-Rust branding across PNG, ICO, ICNS, the sidebar, and the favicon, preserving square sidebar sizing at compact widths ([#11880](https://github.com/mxsm/rocketmq-rust/issues/11880)).

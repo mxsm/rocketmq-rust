@@ -11,6 +11,16 @@
 
 [未发布的 API 迁移与契约修正说明](MIGRATION.md)
 
+## 功能开关
+
+默认启用的 `config-file` feature 提供 `common::parse_config_file`，包含文件配置解析和
+安全的配置错误诊断。只需要运行时服务的消费者可以关闭默认 feature，以移除 `config`
+依赖及其格式解析器。已经关闭默认 feature 且使用该模块的消费者，需要显式启用
+`config-file`。
+
+根工作区关闭 Runtime 的默认 feature。Broker、NameServer 和 Controller 显式启用
+`config-file`，保留配置加载和错误诊断功能；支持的配置格式不变。
+
 ## 运行时模型
 
 生产应用入口拥有 `RuntimeOwner`。库接收 `ChildServiceContext` 或更窄的能力对象，
