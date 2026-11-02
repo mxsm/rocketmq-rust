@@ -89,7 +89,7 @@ fn dlq_group_inventory_requires_current_nameserver_scope_without_changing_proxy_
             .await
             .unwrap();
         release.send(()).unwrap();
-        assert_eq!(pending.await.unwrap_err().code(), UiErrorCode::CapabilityUnavailable);
+        assert_eq!(pending.await.unwrap_err().code(), UiErrorCode::Authentication);
         let proxy_request = ConsumerRequestScope {
             revision: services.connection_state().config.revision,
             epoch: 2,

@@ -116,6 +116,9 @@ fn audit_ordinary_broker_sheet_close_drops_the_view_waiter_but_commits_the_owned
     });
     let view = captured.borrow_mut().take().unwrap();
     cx.run_until_parked();
+    let inventory = cx.update(|_, app| view.update(app, |view, _| view.inventory_task.take().unwrap()));
+    cx.background_executor.allow_parking();
+    cx.background_executor.block_test(inventory);
     cx.update(|window, app| {
         view.update(app, |view, cx| {
             view.open_identity(item, BrokerTab::Configuration, false, window, cx)
@@ -123,6 +126,11 @@ fn audit_ordinary_broker_sheet_close_drops_the_view_waiter_but_commits_the_owned
     });
     cx.run_until_parked();
     let inspector = cx.read(|app| view.read(app).inspector.clone().unwrap());
+    let queries = cx.update(|_, app| inspector.update(app, |inspector, _| inspector.take_query_tasks_for_test()));
+    cx.background_executor.allow_parking();
+    for query in queries {
+        cx.background_executor.block_test(query);
+    }
     let weak_inspector = inspector.downgrade();
     cx.update(|window, app| {
         inspector.update(app, |inspector, cx| {

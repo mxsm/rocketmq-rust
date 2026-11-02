@@ -487,7 +487,14 @@ fn audit_login_retains_the_frozen_actor_and_records_only_the_verified_session_id
 #[test]
 fn audit_saturated_terminal_queue_still_signs_out_and_retries_only_the_reserved_logout_fact() {
     let fixture = Fixture::new();
-    fixture.auth.authenticate("operator", "private-password").unwrap();
+    fixture
+        .runtime
+        .block_on(
+            fixture
+                .services
+                .establish_session_for_test("operator", "private-password"),
+        )
+        .unwrap();
     fixture.runtime.block_on(async {
         let audit = fixture.services.audit.as_ref().unwrap();
         let mut writes = Vec::new();
@@ -550,7 +557,11 @@ fn audit_saturated_terminal_queue_still_signs_out_and_retries_only_the_reserved_
         std::fs::remove_dir(fixture.store.path()).unwrap();
         std::fs::rename(backup, fixture.store.path()).unwrap();
         // A persistence retry must not execute sign_out again against a later session.
-        fixture.auth.authenticate("operator", "private-password").unwrap();
+        fixture
+            .services
+            .establish_session_for_test("operator", "private-password")
+            .await
+            .unwrap();
         fixture.services.retry_audit_writes().await.unwrap();
         assert!(fixture.auth.session().is_authenticated());
         assert!(audit.failed_writes.lock().is_empty());
@@ -612,10 +623,7 @@ fn audit_retry_button_enters_the_owned_runtime_from_the_gpui_executor(cx: &mut g
         Root::new(dashboard, window, cx)
     });
     cx.run_until_parked();
-    assert_eq!(
-        completion.recv_timeout(Duration::from_secs(5)).unwrap(),
-        "gpui-bootstrap"
-    );
+    assert_eq!(crate::app::tests::next_owned_completion(&completion), "gpui-bootstrap");
     cx.run_until_parked();
     let bounds = cx
         .debug_bounds("retry-audit-write")
@@ -623,7 +631,7 @@ fn audit_retry_button_enters_the_owned_runtime_from_the_gpui_executor(cx: &mut g
     cx.simulate_click(bounds.center(), Modifiers::default());
     cx.run_until_parked();
     assert_eq!(
-        completion.recv_timeout(Duration::from_secs(5)).unwrap(),
+        crate::app::tests::next_owned_completion(&completion),
         "gpui-audit-retry"
     );
     cx.run_until_parked();

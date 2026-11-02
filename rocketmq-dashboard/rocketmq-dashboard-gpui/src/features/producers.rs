@@ -16,7 +16,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 use gpui_component::{
@@ -43,6 +43,8 @@ impl SelectItem for ProducerTopicOption {
 
 pub struct ProducersView {
     services: AppServices,
+    session_owner: Option<crate::services::SessionState>,
+    access_task: Option<Task<()>>,
     revision: u64,
     pub store: ProducersStore,
     keyword: Entity<InputState>,
@@ -92,8 +94,11 @@ impl ProducersView {
                 }
             }),
         ];
+        let session_owner = services.current_session();
         Self {
             services,
+            session_owner,
+            access_task: None,
             revision,
             store: ProducersStore::default(),
             keyword,
@@ -126,6 +131,7 @@ impl ProducersView {
     }
 
     pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.access_task = None;
         self.revision = revision;
         self.inventory_task = None;
         self.topics_task = None;
@@ -300,6 +306,9 @@ impl ProducersView {
         self.client_sheet_open = true;
         let owner = cx.entity().downgrade();
         let apply_owner = owner.clone();
+        let copy_owner = owner.clone();
+        let copy_session = self.session_owner.clone();
+        let copy_revision = self.revision;
         let topic = self.topic.clone();
         let group = self.group.clone();
         let title = client.identity.as_str().to_owned();
@@ -344,11 +353,22 @@ impl ProducersView {
                             ]
                             .into_iter()
                             .map(|(id, label, value)| {
+                                let copy_owner = copy_owner.clone();
+                                let copy_session = copy_session.clone();
                                 Button::new(id)
                                     .debug_selector(move || id.to_owned())
                                     .label(label)
-                                    .on_click(move |_, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(value.clone()))
+                                    .on_click(move |_, window, cx| {
+                                        let _ = copy_owner.update(cx, |view, cx| {
+                                            view.access_task = Some(crate::components::protected_action::copy(
+                                                view.services.clone(),
+                                                copy_session.clone(),
+                                                copy_revision,
+                                                value.clone(),
+                                                window,
+                                                cx,
+                                            ));
+                                        });
                                     })
                             }),
                         )

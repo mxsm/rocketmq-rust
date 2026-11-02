@@ -597,10 +597,7 @@ impl AppServices {
     where
         T: Send + 'static,
     {
-        match &self.runtime_bridge {
-            Some(runtime) => runtime.run(name, future).await,
-            None => future.await,
-        }
+        self.run_protected_query(name, future).await
     }
 }
 

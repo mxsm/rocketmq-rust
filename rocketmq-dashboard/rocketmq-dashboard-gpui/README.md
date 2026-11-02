@@ -53,8 +53,8 @@ configuration or Audit event. `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` retains its 
 file/import location. A SQL connection failure or unavailable driver is an explicit
 error and cannot switch authority. A fresh SQL workspace requires explicit initialization
 or import through the shared storage API; startup does not infer either action.
-Visible selection/setup/import controls, native Sessions and engine-aware OPS status
-remain subsequent deliveries, so this adapter stage does not complete E01/E02.
+Visible selection/setup/import controls and engine-aware OPS status remain subsequent
+deliveries. Persistent native Sessions are described below; E02 remains incomplete.
 
 SQL reads refresh authoritative documents. Storage revisions advance independently
 of configuration revisions, so a peer Audit/Monitor write cannot be overwritten by a
@@ -243,8 +243,9 @@ environment. The recent 24-hour preset and explicit start/end fields support win
 up to 31 days; the end is exclusive. Apply starts a new query window, while Previous
 and Next retain its cursor snapshot. Restart applied query recovers an expired page
 without replacing draft inputs. Queries and detail views append no events.
-These records describe this desktop's operations and are not a tamper-proof
-or organization-wide audit log.
+Records belong to the selected native storage authority. File mode covers its directory
+writer; shared SQL includes native clients writing to that database. Other databases and
+Web backend events remain separate, and retention follows the native journal policy.
 
 Audit access follows the configured local authentication mode. Sign-out and environment
 changes clear cached rows and details. Details show trusted request/actor/resource
@@ -263,8 +264,8 @@ eviction of unread results.
 Authentication has two separate settings in the configuration:
 
 - When local login is enabled, `ROCKETMQ_DASHBOARD_USERNAME` and
-  `ROCKETMQ_DASHBOARD_PASSWORD` must be present. Only the local session marker
-  is retained after authentication.
+  `ROCKETMQ_DASHBOARD_PASSWORD` must be present. The auth owner retains only the
+  current native session capability and its display metadata after authentication.
 - When the Admin credential source is `environment`,
   `ROCKETMQ_ADMIN_ACCESS_KEY` and `ROCKETMQ_ADMIN_SECRET_KEY` are required;
   `ROCKETMQ_ADMIN_SECURITY_TOKEN` is optional. These credentials authenticate
@@ -274,6 +275,41 @@ The [auth owner](src/infrastructure/auth_state.rs) resolves secrets for immediat
 use; the configuration file stores the credential-source choice. Background
 admin and persistence work uses injected child scopes from the desktop runtime.
 The application closes this runtime when the GPUI event loop exits.
+
+## Persistent native sessions
+
+Sessions uses the same selected native storage authority as configuration and Audit.
+It preserves the existing environment-backed operator source; it does not introduce a
+second account or role system. Enable local login and sign in to manage sessions.
+There is no separate Web backend, HTTP login or browser-cookie dependency.
+
+Each successful login creates a persistent record with an absolute eight-hour expiry.
+Protected operations validate the current record against the selected authority;
+last access advances without extending expiry. The application also validates on
+window activation and through an owned five-second poll. A revoked or expired session,
+or storage that cannot be verified, ends local access and clears protected views,
+query results, dialogs, message payloads, diagnostics and credential editor history.
+Connection/profile replacement drops the old capability too. Accepted mutations keep
+their captured actor, environment and application owner until terminal Audit finishes.
+
+The page shows username, creation, expiry, last access, observed status and the current
+session marker, with UTC timestamps and a 25-record cursor page. Username filtering
+uses an exact match. Revoke all requires typing the selected username, includes every
+active session for that username in the selected authority, and can end this desktop's
+own session. It records the target username and count through P11 Audit; audit-only
+repair never runs the revocation command again. Capabilities are absent from the UI,
+Debug output, logs, configuration and Audit facts. A delayed logout revokes its captured
+old session and cannot end a replacement login.
+
+Records survive restart; this desktop signs in again on each launch. File mode keeps
+`sessions.json` under the existing directory writer. SQL clients using the same database
+share session revocation and native Audit visibility; other databases and Web backend
+sessions/events are separate. Native storage drivers remain optional.
+
+The canonical document remains schema four and session metadata uses its own schema
+one. `session_revoke_all` and the `session_user` resource add typed Audit variants without
+rewriting old events. Older readers reject those unknown variants and preserve the source;
+they must be upgraded before opening a store containing these events.
 
 ## Development
 

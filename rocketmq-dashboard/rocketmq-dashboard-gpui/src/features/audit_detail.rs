@@ -15,8 +15,8 @@
 //! Bounded, read-only detail of a local terminal event or unfinished accepted request.
 
 use gpui::{
-    ClipboardItem, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _,
+    Styled as _, Task, Window, div, px,
 };
 use gpui_component::{StyledExt as _, button::Button};
 use rocketmq_dashboard_common::{AuditAcceptedOperation, AuditAction, AuditEvent};
@@ -25,6 +25,8 @@ use super::audit_presentation::{
     action_label, actor_label, consumer_field_label, outcome_label, resource_label, timestamp, topic_field_label,
 };
 use crate::services::{AppServices, audit::AuditReadAccess};
+#[cfg(test)]
+use gpui::ClipboardItem;
 
 #[derive(Clone)]
 pub(super) enum AuditRecord {
@@ -36,14 +38,22 @@ pub(super) struct AuditDetail {
     pub record: Option<AuditRecord>,
     services: AppServices,
     access: AuditReadAccess,
+    session_owner: Option<crate::services::SessionState>,
+    revision: u64,
+    access_task: Option<Task<()>>,
 }
 
 impl AuditDetail {
     pub fn new(record: AuditRecord, services: AppServices, access: AuditReadAccess) -> Self {
+        let session_owner = services.current_session();
+        let revision = services.connection_state().config.revision;
         Self {
             record: Some(record),
             services,
             access,
+            session_owner,
+            revision,
+            access_task: None,
         }
     }
 
@@ -51,6 +61,11 @@ impl AuditDetail {
         self.services
             .audit_read_access()
             .is_ok_and(|access| access == self.access)
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_access_task_for_test(&mut self) -> Option<Task<()>> {
+        self.access_task.take()
     }
 }
 
@@ -88,6 +103,16 @@ struct TargetCountProjection {
 }
 
 fn target_count_projection(event: &AuditEvent) -> TargetCountProjection {
+    if event.operation.action == AuditAction::SessionRevokeAll {
+        return TargetCountProjection {
+            label: "Session revocations",
+            selector: "audit-session-target-facts",
+            value: format!(
+                "{} confirmed · {} unconfirmed",
+                event.facts.applied_targets, event.facts.unconfirmed_targets
+            ),
+        };
+    }
     let broker_unit = event.operation.action == AuditAction::BrokerUpdated
         || (matches!(
             event.operation.action,
@@ -123,7 +148,7 @@ impl Render for AuditDetail {
             self.record = None;
             return div()
                 .debug_selector(|| "audit-detail-access-changed".into())
-                .child("Local Audit access changed. Reopen the record from an authorized query.")
+                .child("Audit access changed. Reopen the record from an authorized query.")
                 .into_any_element();
         }
         let Some(record) = self.record.as_ref() else {
@@ -136,21 +161,26 @@ impl Render for AuditDetail {
             .flex()
             .flex_col()
             .gap_3()
-            .child("Operations recorded by this desktop")
+            .child("Native operations retained by the selected desktop storage")
             .child(
                 Button::new("audit-copy-request-id")
                     .debug_selector(|| "audit-copy-request-id".into())
                     .label("Copy request ID")
                     .outline()
-                    .on_click(cx.listener(|detail, _, _, cx| {
+                    .on_click(cx.listener(|detail, _, window, cx| {
                         if !detail.access_is_current() {
                             detail.record = None;
                             cx.notify();
                             return;
                         }
                         if let Some(record) = &detail.record {
-                            cx.write_to_clipboard(ClipboardItem::new_string(
+                            detail.access_task = Some(crate::components::protected_action::copy(
+                                detail.services.clone(),
+                                detail.session_owner.clone(),
+                                detail.revision,
                                 record.operation().context.request_id.clone(),
+                                window,
+                                cx,
                             ));
                         }
                     })),
@@ -346,7 +376,7 @@ mod tests {
         use crate::features::audit::tests::Fixture;
 
         let fixture = Fixture::new(true);
-        fixture.auth.authenticate("operator", "test-password").unwrap();
+        fixture.sign_in("operator", "test-password").unwrap();
         let services = fixture.services.clone();
         let access = services.audit_read_access().unwrap();
         cx.update(gpui_component::init);
@@ -363,6 +393,9 @@ mod tests {
         cx.draw(point(px(0.), px(0.)), viewport, |_, _| root.clone());
         let copy = cx.debug_bounds("audit-copy-request-id").unwrap();
         cx.simulate_click(copy.center(), gpui::Modifiers::default());
+        let copy_task = cx.update(|_, app| detail.update(app, |detail, _| detail.access_task.take().unwrap()));
+        cx.background_executor.allow_parking();
+        cx.background_executor.block_test(copy_task);
         assert_eq!(
             cx.update(|_, app| app.read_from_clipboard().and_then(|item| item.text())),
             Some("legacy-consumer-delete".into())
@@ -377,7 +410,7 @@ mod tests {
         );
         assert!(cx.read(|app| detail.read(app).record.is_none()));
 
-        fixture.auth.authenticate("operator", "test-password").unwrap();
+        fixture.sign_in("operator", "test-password").unwrap();
         let access = fixture.services.audit_read_access().unwrap();
         cx.update(|_, app| {
             detail.update(app, |detail, cx| {

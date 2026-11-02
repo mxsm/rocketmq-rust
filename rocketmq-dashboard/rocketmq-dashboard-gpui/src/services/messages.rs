@@ -239,10 +239,7 @@ impl AppServices {
         name: &'static str,
         future: impl Future<Output = Result<T, UiError>> + Send + 'static,
     ) -> Result<T, UiError> {
-        match &self.runtime_bridge {
-            Some(runtime) => runtime.run(name, future).await,
-            None => future.await,
-        }
+        self.run_protected_query(name, future).await
     }
     #[cfg(test)]
     pub(crate) fn with_message_backend(mut self, backend: Arc<dyn MessageBackend>) -> Self {

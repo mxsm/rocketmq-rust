@@ -155,10 +155,7 @@ impl AppServices {
         self.require_dlq_scope(scope.revision)?;
         let backend = Arc::clone(&self.dlq);
         let work = async move { backend.query(scope, query).await };
-        match &self.runtime_bridge {
-            Some(runtime) => runtime.run("gpui-service-dlq-query", work).await,
-            None => work.await,
-        }
+        self.run_protected_query("gpui-service-dlq-query", work).await
     }
     pub(crate) async fn recover_dlq(
         &self,
@@ -180,6 +177,7 @@ impl AppServices {
             .collect::<Vec<_>>();
         // Capture the actor/environment once, then derive per-entry operation IDs locally. No form
         // supplies attribution and a logout or profile switch cannot relabel later batch entries.
+        let expected_session = self.current_session();
         let accepted = self.accept_operation(
             scope.revision,
             AuditAction::DlqResent,
@@ -199,7 +197,22 @@ impl AppServices {
         let services = self.clone();
         let backend = Arc::clone(&self.dlq);
         let work = async move {
-            let admitted = services.admit_audit_batch(&operations).await.is_ok();
+            let access = services.protected_access_for(expected_session.clone()).await;
+            if access
+                .as_ref()
+                .is_err_and(|error| error.code() == UiErrorCode::Authentication)
+                || services.current_session() != expected_session
+            {
+                return Err(UiError::new(
+                    "The session changed before the batch was accepted. Review it again.",
+                    UiErrorCode::Authentication,
+                    false,
+                ));
+            }
+            let admitted = access
+                .as_ref()
+                .is_ok_and(|access| services.protected_access_is_current(access))
+                && services.admit_audit_batch(&operations).await.is_ok();
             let mut entries = Vec::with_capacity(targets.len());
             for (target, operation) in targets.into_iter().zip(operations) {
                 let attempt = if admitted {
@@ -237,6 +250,7 @@ impl AppServices {
     ) -> Result<usize, UiError> {
         query.validate().map_err(validation)?;
         self.require_dlq_scope(scope.revision)?;
+        let expected_session = self.current_session();
         let runtime = self.runtime_bridge.as_ref().ok_or_else(|| {
             UiError::new(
                 "The CSV writer is unavailable.",
@@ -246,8 +260,17 @@ impl AppServices {
         })?;
         let context = runtime.context.clone();
         let backend = Arc::clone(&self.dlq);
+        let services = self.clone();
         runtime
             .run_owned("gpui-service-dlq-export", async move {
+                let access = services.protected_access_for(expected_session.clone()).await?;
+                if services.current_session() != expected_session || !services.protected_access_is_current(&access) {
+                    return Err(UiError::new(
+                        "The session changed before export was accepted. Review it again.",
+                        UiErrorCode::Authentication,
+                        false,
+                    ));
+                }
                 let csv = backend.csv(scope, query, expected).await?;
                 export_service::write_csv(context, destination, csv).await
             })

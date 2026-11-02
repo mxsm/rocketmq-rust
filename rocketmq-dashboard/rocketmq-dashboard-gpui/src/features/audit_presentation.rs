@@ -18,7 +18,7 @@ use rocketmq_dashboard_common::{
     AuditAction, AuditConsumerField, AuditOutcome, AuditTopicField, OperationActor, OperationResource,
 };
 
-pub(super) const ACTIONS: [AuditAction; 24] = [
+pub(super) const ACTIONS: [AuditAction; 25] = [
     AuditAction::ConfigurationSaved,
     AuditAction::MonitorSaved,
     AuditAction::MonitorDeleted,
@@ -43,6 +43,7 @@ pub(super) const ACTIONS: [AuditAction; 24] = [
     AuditAction::AclPolicyDeleted,
     AuditAction::LocalLogin,
     AuditAction::LocalLogout,
+    AuditAction::SessionRevokeAll,
 ];
 
 pub(super) const OUTCOMES: [AuditOutcome; 5] = [
@@ -79,6 +80,7 @@ pub(super) fn action_label(action: AuditAction) -> &'static str {
         AuditAction::AclPolicyDeleted => "ACL policy deleted",
         AuditAction::LocalLogin => "Local sign in",
         AuditAction::LocalLogout => "Local sign out",
+        AuditAction::SessionRevokeAll => "Persistent sessions revoked",
     }
 }
 
@@ -104,6 +106,7 @@ pub(super) fn resource_label(resource: &OperationResource) -> String {
     match resource {
         OperationResource::Configuration => "Local settings".into(),
         OperationResource::LocalSession => "Local session".into(),
+        OperationResource::SessionUser(username) => format!("Sessions for username: {username}"),
         OperationResource::Monitor(id) => format!("Monitor rule: {id}"),
         OperationResource::Topic(id) => format!("Topic: {id}"),
         OperationResource::ConsumerGroup(id) => format!("Consumer group: {id}"),
