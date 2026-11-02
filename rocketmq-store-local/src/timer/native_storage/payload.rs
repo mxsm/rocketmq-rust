@@ -163,6 +163,8 @@ impl NativeTimerStorage {
         if let Some(day_dir) = day_dir {
             // A directory still holding a name that is not a segment is left alone.
             if fs::remove_dir(&day_dir).is_ok() {
+                // A directory created since the last sync is gone before that sync can reach it.
+                state.changed_dirs.remove(&day_dir);
                 state.changed_dirs.insert(self.root.join(NATIVE_PAYLOAD_DIR));
             }
         }
