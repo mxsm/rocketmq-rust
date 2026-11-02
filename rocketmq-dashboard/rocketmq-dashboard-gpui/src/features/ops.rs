@@ -1033,19 +1033,34 @@ pub(super) fn key_values<const N: usize>(
     muted: gpui::Hsla,
 ) -> gpui::Div {
     div()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
         .rounded(px(8.))
         .border_1()
         .border_color(border)
         .children(values.into_iter().map(|(label, value)| {
             div()
+                .debug_selector(move || format!("ops-value-row-{label}"))
+                .w_full()
+                .min_w_0()
+                .flex_shrink_0()
                 .min_h(px(44.))
                 .px_3()
                 .flex()
                 .items_center()
                 .border_b_1()
                 .border_color(border)
-                .child(div().w(px(180.)).text_color(muted).child(label))
-                .child(div().flex_1().min_w_0().child(value))
+                .child(div().w(px(180.)).flex_shrink_0().text_color(muted).child(label))
+                .child(
+                    div()
+                        .debug_selector(move || format!("ops-value-text-{label}"))
+                        .flex_1()
+                        .min_w_0()
+                        .child(value),
+                )
         }))
 }
 
