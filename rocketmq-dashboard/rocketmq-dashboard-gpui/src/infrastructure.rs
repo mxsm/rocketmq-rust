@@ -34,6 +34,7 @@ pub mod history_collector;
 pub mod history_health;
 #[path = "infrastructure/history_store.rs"]
 pub mod history_store;
+pub(crate) mod local_storage_status;
 #[path = "infrastructure/monitor_store.rs"]
 pub mod monitor_store;
 mod storage_writer;

@@ -24,12 +24,19 @@ use rocketmq_runtime::ChildServiceContext;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    config_store::{ConfigStoreFailure, DesktopConfigStore, write_json_atomically},
+    config_store::{ConfigStoreFailure, DesktopConfigStore},
+    local_storage_status::{FileIoEvidence, FileReadState, LocalFileStatus, inspect_json, write_observed},
     storage_writer::StorageWriter,
 };
 
 const HISTORY_SCHEMA_VERSION: u32 = 2;
 const MAX_SERIES_IDENTITY_BYTES: usize = 1_024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryAppendOutcome {
+    Retained,
+    NotRetained,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -57,6 +64,7 @@ pub struct HistoryStore {
     owner: Option<Arc<DesktopConfigStore>>,
     writer: Arc<parking_lot::Mutex<Option<StorageWriter>>>,
     health: parking_lot::RwLock<BTreeMap<Option<EnvironmentId>, super::history_health::HistoryCollectionHealth>>,
+    io_evidence: Arc<parking_lot::RwLock<FileIoEvidence>>,
 }
 
 impl HistoryStore {
@@ -82,6 +90,7 @@ impl HistoryStore {
             owner: None,
             writer: Arc::new(parking_lot::Mutex::new(None)),
             health: parking_lot::RwLock::new(BTreeMap::new()),
+            io_evidence: Arc::new(parking_lot::RwLock::new(FileIoEvidence::default())),
         })
     }
 
@@ -93,6 +102,7 @@ impl HistoryStore {
             owner: Some(owner),
             writer: Arc::new(parking_lot::Mutex::new(None)),
             health: parking_lot::RwLock::new(BTreeMap::new()),
+            io_evidence: Arc::new(parking_lot::RwLock::new(FileIoEvidence::default())),
         })
     }
 
@@ -109,13 +119,38 @@ impl HistoryStore {
         Ok(health)
     }
 
+    pub(crate) async fn inspect_storage(&self) -> LocalFileStatus {
+        let _guard = self.gate.lock().await;
+        let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
+        let result = self
+            .context
+            .storage_io()
+            .spawn_io("gpui-history-status", move || {
+                inspect_json::<HistoryDocument>(&path, HISTORY_SCHEMA_VERSION, &evidence, |_| Ok(None));
+            })
+            .await;
+        if result.is_err() {
+            self.io_evidence.write().record_read(FileReadState::Unknown, None, None);
+        }
+        let writer_owned = self
+            .owner
+            .as_ref()
+            .map_or_else(|| self.writer.lock().is_some(), |owner| owner.owns_writer());
+        LocalFileStatus {
+            path: self.path.clone(),
+            writer_owned,
+            evidence: *self.io_evidence.read(),
+        }
+    }
+
     pub fn record_collection(
         &self,
         environment: Option<EnvironmentId>,
         side: super::history_health::CollectionSide,
         timestamp: u64,
         failed_resources: usize,
-        persisted: bool,
+        outcome: super::history_health::CollectionAttempt,
     ) {
         let mut health = self.health.write();
         let health = health.entry(environment).or_default();
@@ -123,9 +158,15 @@ impl HistoryStore {
             super::history_health::CollectionSide::Topics => &mut health.topics,
             super::history_health::CollectionSide::Brokers => &mut health.brokers,
         };
-        side.failed = !persisted;
+        use super::history_health::CollectionAttempt;
+        side.last_attempt = Some(outcome);
+        side.last_attempt_epoch_ms = Some(timestamp);
+        side.failed = matches!(
+            outcome,
+            CollectionAttempt::SamplingFailed | CollectionAttempt::PersistenceFailed
+        );
         side.failed_resources = failed_resources;
-        if persisted {
+        if outcome == CollectionAttempt::Persisted {
             side.last_success_epoch_ms = Some(timestamp);
         }
     }
@@ -154,12 +195,13 @@ impl HistoryStore {
         let _guard = self.gate.lock().await;
         self.ensure_writer().await?;
         let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
         self.context
             .storage_io()
             .spawn_io("gpui-history-points", move || {
                 let (document, migrated) = load_document(&path)?;
                 if migrated {
-                    write_json_atomically(&path, &document)?;
+                    write_observed(&path, &document, &evidence)?;
                 }
                 Ok(document.points)
             })
@@ -231,7 +273,7 @@ impl HistoryStore {
         &self,
         sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<(), ConfigStoreFailure> {
+    ) -> Result<HistoryAppendOutcome, ConfigStoreFailure> {
         self.append_observations(
             sample
                 .into_iter()
@@ -251,7 +293,7 @@ impl HistoryStore {
         environment_id: EnvironmentId,
         sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<(), ConfigStoreFailure> {
+    ) -> Result<HistoryAppendOutcome, ConfigStoreFailure> {
         self.append_observations(
             sample
                 .into_iter()
@@ -269,7 +311,7 @@ impl HistoryStore {
         &self,
         sample: Vec<EnvironmentHistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<(), ConfigStoreFailure> {
+    ) -> Result<HistoryAppendOutcome, ConfigStoreFailure> {
         let sample = sample
             .into_iter()
             .filter(|observation| {
@@ -280,22 +322,51 @@ impl HistoryStore {
             })
             .collect::<Vec<_>>();
         if sample.is_empty() {
-            return Ok(());
+            return Ok(HistoryAppendOutcome::NotRetained);
         }
         let _guard = self.gate.lock().await;
         self.ensure_writer().await?;
         let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
         self.context
             .storage_io()
             .spawn_io("gpui-history-append-sample", move || {
                 let (mut document, _) = load_document(&path)?;
+                let submitted = sample
+                    .iter()
+                    .map(observation_identity)
+                    .collect::<std::collections::BTreeSet<_>>();
                 document.points.extend(sample);
                 document.points = retain_observations(document.points, retention);
-                write_json_atomically(&path, &document)
+                let outcome = if document
+                    .points
+                    .iter()
+                    .any(|point| submitted.contains(&observation_identity(point)))
+                {
+                    HistoryAppendOutcome::Retained
+                } else {
+                    HistoryAppendOutcome::NotRetained
+                };
+                write_observed(&path, &document, &evidence)?;
+                Ok(outcome)
             })
             .await
             .map_err(ConfigStoreFailure::runtime)?
     }
+}
+
+// Include value and provider revision so an older retained point cannot stand in for a rejected sample.
+fn observation_identity(
+    point: &EnvironmentHistoryPoint,
+) -> (Option<EnvironmentId>, HistoryMetricKind, String, u64, u64, u64) {
+    (
+        point.environment_id.clone(),
+        point.point.metric,
+        point.point.series_identity.clone(),
+        point.point.timestamp_epoch_ms,
+        point.point.source_revision,
+        point.point.value.to_bits(),
+    )
 }
 
 fn retain_observations(

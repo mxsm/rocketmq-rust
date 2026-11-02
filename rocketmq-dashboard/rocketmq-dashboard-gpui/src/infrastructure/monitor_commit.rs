@@ -38,11 +38,12 @@ impl DesktopConfigStore {
             return Err(ConfigStoreFailure::writer_unavailable());
         }
         let path = self.path.clone();
+        let evidence = Arc::clone(&self.io_evidence);
         let (document, outcome) = self
             .context
             .storage_io()
             .spawn_io("gpui-monitor-cas", move || {
-                let (mut document, _) = load_document(&path)?;
+                let (mut document, _) = load_observed_document(&path, &evidence)?;
                 if context.configuration_revision != document.settings.revision
                     || context.environment_id != document.active_environment_id
                 {
@@ -160,7 +161,7 @@ impl DesktopConfigStore {
                         (LocalOperationKind::MonitorDeleted, MonitorMutationOutcome::Deleted)
                     }
                 };
-                let document = persist_local_document(&path, document, context, kind)?;
+                let document = persist_local_document(&path, document, context, kind, &evidence)?;
                 Ok::<_, ConfigStoreFailure>((document, outcome))
             })
             .await

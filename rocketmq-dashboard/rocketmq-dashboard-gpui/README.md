@@ -271,12 +271,30 @@ registered Broker count and per-Broker production or consumption rates. Each que
 returns at most the latest 1,440 real observations, with UTC time labels, units and
 paged exact values. Refresh errors retain the previous successful page and its time.
 
-The collector is disabled by default. Set `settings.foundations.historyEnabled` to `true` in
-`config.json`, with a positive `settings.foundations.historyIntervalSeconds`, then reload configuration.
+The collector is disabled by default. OPS → Storage saves History enablement, interval and
+bounded retention through the existing revision-checked configuration flow. An interval of zero
+disables the owned collector even when the enablement checkbox is selected. Retention takes effect
+when a subsequent real sample is persisted. Manual `settings.foundations` edits in `config.json`
+remain supported through Reload configuration.
 The page shows disabled, warming, normal, partial or stale collection and the latest
 successful collection time for the active environment in this process. A sample is
 stale after three collection intervals. Existing retention limits and environment
 attribution apply to both count and resource series; missing samples are not filled.
+
+OPS Storage reports the local file backend and actual directory-writer ownership. Refresh status
+reads and validates current files without migrating data or probing writes. Read failure or unknown
+state remains visible independently of the last persistence attempt. Successful-write timestamps
+describe observations in the current process; schema and filesystem dates do not prove write health.
+The configuration file holds settings, Monitor rules and Audit; metric history uses its own file.
+Collector state separates unavailable sampling, failed persistence, no observations and successfully
+stored samples for the active environment. Samples rejected by validation or fully removed by
+retention do not advance the latest stored sample time; successful empty-file writes still count as
+storage writes. Scope labels retain the configured Direct/Proxy boundary.
+Open config directory continues to use the native desktop action.
+
+Unsaved History inputs survive failed operations and revision conflicts. A stale draft shows current
+saved settings and requires an explicit choice to keep it against the current revision or discard it.
+Reloading and revisiting Storage refresh authoritative status without silently replacing a dirty draft.
 
 From this directory, select the checks relevant to a change:
 
