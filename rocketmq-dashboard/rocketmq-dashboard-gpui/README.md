@@ -35,6 +35,34 @@ $env:RUST_LOG = "info,rocketmq_dashboard_gpui=debug"
 cargo run
 ```
 
+## Native persistence adapters
+
+The default build keeps the existing file layouts and one writer per data directory.
+Configuration, environments, Monitor rules and Audit share one canonical document;
+History uses the same opened storage authority. SQL builds enable optional
+`storage-sqlite`, `storage-mysql` or `storage-postgres` features, independently or together:
+
+```text
+cargo build --no-default-features --features storage-sqlite
+```
+
+For this adapter delivery, `ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE` explicitly selects
+`file`, `sqlite`, `mysql` or `postgres` (absent means `file`). SQL connection input comes
+from external `ROCKETMQ_DASHBOARD_GPUI_DATABASE_URL`; it is never persisted in a native
+configuration or Audit event. `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` retains its existing
+file/import location. A SQL connection failure or unavailable driver is an explicit
+error and cannot switch authority. A fresh SQL workspace requires explicit initialization
+or import through the shared storage API; startup does not infer either action.
+Visible selection/setup/import controls, native Sessions and engine-aware OPS status
+remain subsequent deliveries, so this adapter stage does not complete E01/E02.
+
+SQL reads refresh authoritative documents. Storage revisions advance independently
+of configuration revisions, so a peer Audit/Monitor write cannot be overwritten by a
+stale configuration candidate. Configuration identity changes feed the existing ordered
+provider/view invalidation pipeline. History acquires collection ownership before
+starting sampler work and checks the captured fence when persisting. Legacy unassigned
+observations retain their original attribution and stay outside current-environment charts.
+
 ## Topic fields and mutation support
 
 Topic forms resolve cluster shortcuts to exact Brokers before submission. Editing
@@ -83,7 +111,7 @@ assigned explicitly to the selected environment from its completion dialog.
 
 Accepted changes remain application-owned when a dialog closes. Rule state,
 its local operation record, and its terminal P11 audit event share one canonical
-atomic file replacement; configuration revision checks also prevent writes after
+atomic authority transaction (file replacement or SQL CAS); configuration revision checks also prevent writes after
 the connection or environment changes.
 
 ## Consumer and Producer workspaces
@@ -147,15 +175,14 @@ root, installs logging, and composes the desktop services. The layers are:
 ```text
 GPUI views
   -> application services
-  -> GpuiAdminProvider / configuration, history and monitor stores
-  -> rocketmq-admin-core client adapter
-  -> application-owned ClientRuntime
+    -> GpuiAdminProvider -> rocketmq-admin-core -> application-owned ClientRuntime
+    -> DashboardStore (file / SQLite / MySQL / PostgreSQL)
 ```
 
 The shared dashboard models and admin facade come from
 [rocketmq-dashboard-common](../rocketmq-dashboard-common). The desktop provider
-implements live cluster queries and administration; configuration, history and
-monitor persistence remain local to this application. See
+implements live cluster queries and administration; the shared
+[native storage crate](../rocketmq-dashboard-storage) owns persistence. See
 [src/services](src/services) and [src/infrastructure](src/infrastructure) for
 the implemented operations and their lifecycle owners.
 
@@ -164,7 +191,7 @@ Dashboard overview/current/history and Broker inventory/runtime/config reads, pl
 Broker config patches. Its [Admin provider](src/infrastructure/admin_provider/dashboard_broker.rs)
 keeps raw Admin responses inside infrastructure and returns allowlisted DTOs to the services.
 
-Configuration defaults to `rocketmq-dashboard/gpui/config.json` beneath the OS
+File configuration defaults to `rocketmq-dashboard/gpui/config.json` beneath the OS
 user configuration directory. Set `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` to
 override the complete file path. NameServer selection and connection settings
 are stored in this document.
@@ -175,7 +202,7 @@ TLS, or VIP settings preserves its persistent identity. History and Monitor
 rules belong to that identity, while the configuration revision identifies a
 particular connection generation.
 
-The version 4 configuration document holds profiles, global settings, Monitor
+In file mode, the version 4 configuration document holds profiles, global settings, Monitor
 rules, local operation records, and the desktop audit journal in one atomic replacement. Metric samples
 remain in the separately versioned `history.json`. Version 1 configuration and
 history files, version 2/3 profile documents, and legacy Monitor arrays are migrated on startup. The nested
@@ -188,7 +215,7 @@ be evaluated; the Monitor lifecycle still performs no evaluation. The original
 document. Unsupported schemas or failed migration writes preserve their source
 files and report a recoverable startup error.
 
-One application instance owns the local data directory for its lifetime through
+In file mode, one application instance owns the local data directory for its lifetime through
 an OS file lock. A second instance using that directory must wait until the first
 closes. An interrupted write leaves either the previous complete document or the
 new complete document; unfinished candidate files are not treated as committed
@@ -199,7 +226,7 @@ Accepted Broker, Topic, Consumer, Monitor, and configuration changes belong to t
 so closing a Sheet or signing out only drops the old view's result receiver. External
 changes first save an accepted-operation record and then save one terminal outcome;
 these two writes do not provide a transaction with RocketMQ. Shutdown drains owned
-work for the existing five-second budget while local storage and the provider remain
+work for the existing five-second budget while the selected storage and provider remain
 available. Interrupted requests stay pending for authoritative verification after restart,
 and are never automatically replayed. Local login and logout also record safe outcomes.
 
@@ -281,7 +308,7 @@ successful collection time for the active environment in this process. A sample 
 stale after three collection intervals. Existing retention limits and environment
 attribution apply to both count and resource series; missing samples are not filled.
 
-OPS Storage reports the local file backend and actual directory-writer ownership. Refresh status
+In file mode, OPS Storage reports the local file backend and actual directory-writer ownership. Refresh status
 reads and validates current files without migrating data or probing writes. Read failure or unknown
 state remains visible independently of the last persistence attempt. Successful-write timestamps
 describe observations in the current process; schema and filesystem dates do not prove write health.

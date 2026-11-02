@@ -18,8 +18,9 @@ use rocketmq_dashboard_common::{EnvironmentId, HistoryPoint, HistoryRetention};
 use rocketmq_runtime::ChildServiceContext;
 
 use crate::{
-    file::FileStore, session::SessionDocument, DesktopDocument, HistoryAppendOutcome, HistoryDocument, HistoryLease,
-    SessionId, SessionPage, SessionQuery, SessionRecord, StorageEngine, StorageError, StorageErrorKind, StorageOptions,
+    file::FileStore, session::SessionDocument, DesktopDocument, HistoryAppendOutcome, HistoryAppendReport,
+    HistoryDocument, HistoryLease, HistoryReadReport, SessionId, SessionPage, SessionQuery, SessionRecord,
+    StorageEngine, StorageError, StorageErrorKind, StorageOptions, UnassignedHistoryLease,
 };
 
 /// A CAS token for the complete canonical document, independent of config revision.
@@ -104,6 +105,29 @@ macro_rules! dispatch {
 }
 
 impl DashboardStore {
+    /// Opens injected file names under one directory writer. Default layouts use [`Self::open`].
+    ///
+    /// # Errors
+    /// Rejects different parent directories and returns normal source/ownership failures.
+    pub async fn open_file_paths(
+        config_path: PathBuf,
+        history_path: PathBuf,
+        context: ChildServiceContext,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            backend: Backend::File(FileStore::open_paths(config_path, history_path, context).await?),
+        })
+    }
+
+    /// Returns the selected authority without probing a connection or exposing its credentials.
+    pub fn engine(&self) -> StorageEngine {
+        match &self.backend {
+            Backend::File(_) => StorageEngine::File,
+            #[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
+            Backend::Sql(store) => store.engine(),
+        }
+    }
+
     pub async fn open(options: StorageOptions, context: ChildServiceContext) -> Result<Self, StorageError> {
         let backend = match options {
             StorageOptions::File { config_path } => Backend::File(FileStore::open(config_path, context).await?),
@@ -158,6 +182,10 @@ impl DashboardStore {
     }
 
     pub async fn history(&self) -> Result<HistoryDocument, StorageError> {
+        Ok(self.read_history().await?.document)
+    }
+
+    pub async fn read_history(&self) -> Result<HistoryReadReport, StorageError> {
         dispatch!(self, history)
     }
 
@@ -169,7 +197,14 @@ impl DashboardStore {
         ttl: Duration,
     ) -> Result<Option<HistoryLease>, StorageError> {
         let ttl_ms = lease_input(&holder_id, ttl)?;
-        dispatch!(self, acquire_history_lease, environment_id, holder_id, ttl_ms)
+        let grant = dispatch!(
+            self,
+            acquire_history_lease,
+            Some(environment_id.clone()),
+            holder_id,
+            ttl_ms
+        )?;
+        Ok(grant.map(|grant| HistoryLease::from_grant(environment_id, grant)))
     }
 
     pub async fn renew_history_lease(
@@ -178,11 +213,12 @@ impl DashboardStore {
         ttl: Duration,
     ) -> Result<Option<HistoryLease>, StorageError> {
         let ttl_ms = lease_input(lease.holder_id(), ttl)?;
-        dispatch!(self, renew_history_lease, lease, ttl_ms)
+        let grant = dispatch!(self, renew_history_lease, lease.grant(), ttl_ms)?;
+        Ok(grant.map(|grant| HistoryLease::from_grant(lease.environment_id, grant)))
     }
 
     pub async fn release_history_lease(&self, lease: HistoryLease) -> Result<bool, StorageError> {
-        dispatch!(self, release_history_lease, lease)
+        dispatch!(self, release_history_lease, lease.grant())
     }
 
     /// The lease and its fencing token are verified in the same transaction as bounded retention.
@@ -193,7 +229,61 @@ impl DashboardStore {
         sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
     ) -> Result<HistoryAppendOutcome, StorageError> {
-        dispatch!(self, append_history, lease, sample, retention)
+        Ok(self.append_history_observed(lease, sample, retention).await?.outcome)
+    }
+
+    pub async fn append_history_observed(
+        &self,
+        lease: HistoryLease,
+        sample: Vec<HistoryPoint>,
+        retention: HistoryRetention,
+    ) -> Result<HistoryAppendReport, StorageError> {
+        dispatch!(self, append_history, lease.grant(), sample, retention)
+    }
+
+    /// Coordinates explicitly unassigned legacy collection without inventing an environment.
+    pub async fn acquire_unassigned_history_lease(
+        &self,
+        holder_id: String,
+        ttl: Duration,
+    ) -> Result<Option<UnassignedHistoryLease>, StorageError> {
+        let ttl_ms = lease_input(&holder_id, ttl)?;
+        Ok(dispatch!(self, acquire_history_lease, None, holder_id, ttl_ms)?.map(UnassignedHistoryLease))
+    }
+
+    pub async fn renew_unassigned_history_lease(
+        &self,
+        lease: UnassignedHistoryLease,
+        ttl: Duration,
+    ) -> Result<Option<UnassignedHistoryLease>, StorageError> {
+        let ttl_ms = lease_input(&lease.0.holder_id, ttl)?;
+        Ok(dispatch!(self, renew_history_lease, lease.0, ttl_ms)?.map(UnassignedHistoryLease))
+    }
+
+    pub async fn release_unassigned_history_lease(&self, lease: UnassignedHistoryLease) -> Result<bool, StorageError> {
+        dispatch!(self, release_history_lease, lease.0)
+    }
+
+    /// Keeps source ownership as `None`; current-environment charts must exclude these rows.
+    pub async fn append_unassigned_history(
+        &self,
+        lease: UnassignedHistoryLease,
+        sample: Vec<HistoryPoint>,
+        retention: HistoryRetention,
+    ) -> Result<HistoryAppendOutcome, StorageError> {
+        Ok(self
+            .append_unassigned_history_observed(lease, sample, retention)
+            .await?
+            .outcome)
+    }
+
+    pub async fn append_unassigned_history_observed(
+        &self,
+        lease: UnassignedHistoryLease,
+        sample: Vec<HistoryPoint>,
+        retention: HistoryRetention,
+    ) -> Result<HistoryAppendReport, StorageError> {
+        dispatch!(self, append_history, lease.0, sample, retention)
     }
 
     pub async fn create_session(&self, session: SessionRecord, now_epoch_ms: u64) -> Result<(), StorageError> {

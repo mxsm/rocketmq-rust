@@ -308,8 +308,8 @@ impl Fixture {
         }
     }
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.services
-            .query_audit(AuditQuery {
+        crate::infrastructure::audit_store::persisted_journal(self.store.path())
+            .query(AuditQuery {
                 filter: AuditFilter::recent(super::super::audit::now_epoch_ms().unwrap()),
                 limit: 200,
                 cursor: None,

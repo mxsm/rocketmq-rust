@@ -33,6 +33,8 @@ mod session;
 mod sql;
 mod store;
 
+pub(crate) use history::CollectionLease;
+
 #[cfg(test)]
 mod contracts_tests;
 
@@ -45,8 +47,11 @@ pub use document::{
     DesktopDocument, DesktopSettings, EnvironmentCatalog, EnvironmentChange, EnvironmentProfile, LocalOperationKind,
     LocalOperationRecord, MonitorDocument, MonitorMigrationState, MonitorRule, StoredMonitorRule,
 };
-pub use error::{StorageError, StorageErrorKind};
-pub use history::{HistoryAppendOutcome, HistoryDocument, HistoryLease, LegacyHistoryRecord, HISTORY_SCHEMA_VERSION};
+pub use error::{StorageError, StorageErrorKind, StorageIoOperation};
+pub use history::{
+    HistoryAppendOutcome, HistoryAppendReport, HistoryDocument, HistoryLease, HistoryReadOrigin, HistoryReadReport,
+    HistoryWriteOutcome, LegacyHistoryRecord, UnassignedHistoryLease, HISTORY_SCHEMA_VERSION,
+};
 pub use options::{DatabaseConnection, StorageEngine, StorageOptions, StorageSelection};
 pub use session::{SessionCursor, SessionId, SessionPage, SessionQuery, SessionRecord};
 pub use store::{DashboardStore, DesktopSnapshot, ImportSnapshot, StorageRevision, StorageStatus};

@@ -19,9 +19,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::{Serialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 
-use super::{atomic_file::write_json_atomically, config_store::ConfigStoreFailure};
+use super::config_store::ConfigStoreFailure;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum FileReadState {
@@ -59,7 +59,7 @@ impl FileIoEvidence {
         self.file_revision = revision;
     }
 
-    fn record_write(&mut self, succeeded: bool) {
+    pub(super) fn record_write(&mut self, succeeded: bool) {
         self.last_write = if succeeded {
             FileWriteState::Succeeded
         } else {
@@ -76,16 +76,6 @@ pub(crate) struct LocalFileStatus {
     pub path: PathBuf,
     pub writer_owned: bool,
     pub evidence: FileIoEvidence,
-}
-
-pub(super) fn write_observed<T: Serialize>(
-    path: &Path,
-    value: &T,
-    evidence: &parking_lot::RwLock<FileIoEvidence>,
-) -> Result<(), ConfigStoreFailure> {
-    let result = write_json_atomically(path, value);
-    evidence.write().record_write(result.is_ok());
-    result
 }
 
 /// A status refresh reads and validates the current file without migrating it or probing writes.
@@ -122,7 +112,15 @@ pub(super) fn inspect_json<T: DeserializeOwned>(
         .and_then(serde_json::Value::as_u64)
         .and_then(|value| u32::try_from(value).ok());
     if schema.is_none_or(|version| version < expected_schema) {
-        evidence.write().record_read(FileReadState::Unknown, schema, None);
+        evidence.write().record_read(
+            if schema.is_some() {
+                FileReadState::MigrationRequired
+            } else {
+                FileReadState::Unknown
+            },
+            schema,
+            None,
+        );
         return;
     }
     if schema != Some(expected_schema) {

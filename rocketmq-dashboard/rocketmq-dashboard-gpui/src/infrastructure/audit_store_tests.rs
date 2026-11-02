@@ -13,11 +13,17 @@
 // limitations under the License.
 
 use rocketmq_dashboard_common::{
-    AuditAction, AuditFilter, EnvironmentId, OperationActor, OperationContext, OperationResource,
+    AuditAction, AuditEvent, AuditFilter, EnvironmentId, OperationActor, OperationContext, OperationResource,
 };
 use rocketmq_runtime::{ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
 
 use super::*;
+
+const MAX_EVENTS: usize = rocketmq_dashboard_storage::MAX_AUDIT_EVENTS;
+
+fn journal_events(journal: &AuditJournal) -> Vec<AuditEvent> {
+    serde_json::from_value(serde_json::to_value(journal).unwrap()["events"].clone()).unwrap()
+}
 
 fn operation(index: usize) -> AuditAcceptedOperation {
     AuditAcceptedOperation {
@@ -97,19 +103,19 @@ fn audit_cursor_excludes_later_commits_and_rejects_changed_filters() {
 
 #[test]
 fn audit_cursor_expires_when_retention_removes_only_part_of_its_unread_rows() {
-    let mut journal = AuditJournal {
-        events: (1..=MAX_EVENTS)
-            .map(|index| AuditEvent {
-                event_id: u64::try_from(index).unwrap(),
-                operation: operation(index),
-                outcome: AuditOutcome::Succeeded,
-                timestamp_epoch_ms: 100,
-                facts: AuditFacts::default(),
-            })
-            .collect(),
-        next_event_id: u64::try_from(MAX_EVENTS).unwrap() + 1,
-        ..AuditJournal::default()
-    };
+    let events = (1..=MAX_EVENTS)
+        .map(|index| AuditEvent {
+            event_id: u64::try_from(index).unwrap(),
+            operation: operation(index),
+            outcome: AuditOutcome::Succeeded,
+            timestamp_epoch_ms: 100,
+            facts: AuditFacts::default(),
+        })
+        .collect::<Vec<_>>();
+    let mut value = serde_json::to_value(AuditJournal::default()).unwrap();
+    value["events"] = serde_json::to_value(events).unwrap();
+    value["nextEventId"] = (u64::try_from(MAX_EVENTS).unwrap() + 1).into();
+    let mut journal: AuditJournal = serde_json::from_value(value).unwrap();
     journal.validate().unwrap();
     let mut request = query(2);
     let first = journal.query(request.clone()).unwrap();
@@ -123,8 +129,8 @@ fn audit_cursor_expires_when_retention_removes_only_part_of_its_unread_rows() {
             .finish(operation(index), AuditOutcome::Succeeded, AuditFacts::default(), 100)
             .unwrap();
     }
-    assert_eq!(journal.events.len(), MAX_EVENTS);
-    assert_eq!(journal.events.first().unwrap().event_id, 201);
+    assert_eq!(journal_events(&journal).len(), MAX_EVENTS);
+    assert_eq!(journal_events(&journal).first().unwrap().event_id, 201);
     assert!(
         journal.query(request).is_err(),
         "continuation must not silently omit the 200 evicted unread rows"
@@ -155,8 +161,8 @@ fn audit_has_one_terminal_per_request_and_checks_attribution_and_bounds() {
     journal
         .finish(accepted.clone(), AuditOutcome::Succeeded, AuditFacts::default(), 120)
         .unwrap();
-    assert_eq!(journal.events.len(), 1);
-    assert_eq!(journal.events[0].outcome, AuditOutcome::Partial);
+    assert_eq!(journal_events(&journal).len(), 1);
+    assert_eq!(journal_events(&journal)[0].outcome, AuditOutcome::Partial);
     let mut changed = accepted;
     changed.context.actor = OperationActor::System;
     assert!(
@@ -186,9 +192,9 @@ fn audit_independent_requests_for_one_resource_do_not_lock_or_resolve_each_other
             110,
         )
         .unwrap();
-    assert_eq!(journal.pending, [unresolved]);
-    assert_eq!(journal.events.len(), 1);
-    assert_eq!(journal.events[0].operation, confirmed_new_request);
+    assert_eq!(journal.pending(), &[unresolved]);
+    assert_eq!(journal_events(&journal).len(), 1);
+    assert_eq!(journal_events(&journal)[0].operation, confirmed_new_request);
 }
 
 #[test]
@@ -212,8 +218,8 @@ fn audit_retention_expires_cursors_but_keeps_unresolved_requests_and_limits_new_
         )
         .unwrap();
     assert!(journal.query(request).is_err());
-    assert_eq!(journal.pending, [operation(0)]);
-    assert_eq!(journal.events.len(), 1);
+    assert_eq!(journal.pending(), &[operation(0)]);
+    assert_eq!(journal_events(&journal).len(), 1);
     for index in 1..MAX_PENDING {
         let mut pending = operation(index + 100);
         pending.context.resource = OperationResource::Topic(format!("pending-{index}"));
@@ -222,7 +228,7 @@ fn audit_retention_expires_cursors_but_keeps_unresolved_requests_and_limits_new_
     let mut overflow = operation(10_000);
     overflow.context.resource = OperationResource::Topic("overflow".into());
     assert!(journal.accept(overflow).is_err());
-    assert_eq!(journal.pending[0], operation(0));
+    assert_eq!(journal.pending()[0], operation(0));
     journal.validate().unwrap();
 }
 
@@ -234,14 +240,18 @@ fn audit_restart_retains_unfinished_requests_without_inventing_an_outcome() {
     let config = DesktopConfigStore::new(path.clone(), runtime.root_context().component("first-store"));
     runtime.block_on(config.load()).unwrap();
     let audit = AuditStore::new(Arc::clone(&config));
-    runtime.block_on(audit.accept(operation(0))).unwrap();
+    let mut accepted = operation(0);
+    let scope = config.environment_snapshot().unwrap();
+    accepted.context.environment_id = scope.environment_id;
+    accepted.context.configuration_revision = scope.connection.revision;
+    runtime.block_on(audit.accept(accepted.clone())).unwrap();
     drop(audit);
     drop(config);
     let config = DesktopConfigStore::new(path, runtime.root_context().component("reopened-store"));
     runtime.block_on(config.load()).unwrap();
     let audit = AuditStore::new(config);
-    assert_eq!(audit.pending().unwrap(), [operation(0)]);
-    assert!(audit.query(query(20)).unwrap().events.is_empty());
+    assert_eq!(runtime.block_on(audit.pending()).unwrap(), [accepted]);
+    assert!(runtime.block_on(audit.query(query(20))).unwrap().events.is_empty());
     runtime.shutdown_runtime_blocking().unwrap();
 }
 
@@ -261,12 +271,12 @@ fn audit_schema_two_migrates_committed_local_records_and_requires_journal_in_sch
     value.as_object_mut().unwrap().remove("audit");
     std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(runtime.block_on(config.load()).unwrap().transport.use_tls);
-    let events = AuditStore::new(Arc::clone(&config))
-        .query(AuditQuery {
+    let events = runtime
+        .block_on(AuditStore::new(Arc::clone(&config)).query(AuditQuery {
             filter: AuditFilter::recent(crate::services::audit::now_epoch_ms().unwrap()),
             limit: 20,
             cursor: None,
-        })
+        }))
         .unwrap()
         .events;
     assert_eq!(events.len(), 1);
@@ -306,7 +316,7 @@ fn audit_local_config_and_monitor_commit_failure_cannot_publish_state_or_event_s
     assert_eq!(std::fs::read(&path).unwrap(), original);
     assert!(runtime.block_on(monitors.list()).unwrap().is_empty());
     let audit = AuditStore::new(Arc::clone(&config));
-    assert!(audit.query(query(20)).unwrap().events.is_empty());
+    assert!(runtime.block_on(audit.query(query(20))).unwrap().events.is_empty());
     drop(open_original);
     runtime.block_on(config.save_next(settings)).unwrap();
     runtime.block_on(monitors.upsert(rule)).unwrap();

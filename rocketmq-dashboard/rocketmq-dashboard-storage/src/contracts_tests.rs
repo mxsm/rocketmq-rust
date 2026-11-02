@@ -314,6 +314,88 @@ pub(crate) async fn exercise_contract(store: &DashboardStore, peer: &DashboardSt
     );
     assert!(store.history().await.unwrap().points.is_empty());
     assert!(store.status().await.unwrap().last_successful_write_epoch_ms.is_some());
+    let unassigned = store
+        .acquire_unassigned_history_lease("native-legacy".into(), Duration::from_secs(600))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(peer
+        .acquire_unassigned_history_lease("native-legacy-peer".into(), Duration::from_secs(600))
+        .await
+        .unwrap()
+        .is_none());
+    let report = store
+        .append_unassigned_history_observed(unassigned.clone(), vec![point(7, 7.0), point(8, 8.0)], retention)
+        .await
+        .unwrap();
+    assert_eq!(
+        report,
+        HistoryAppendReport {
+            outcome: HistoryAppendOutcome::Retained,
+            write: HistoryWriteOutcome::Committed
+        }
+    );
+    let report = store
+        .append_unassigned_history_observed(unassigned.clone(), vec![point(0, 0.0)], retention)
+        .await
+        .unwrap();
+    assert_eq!(
+        report,
+        HistoryAppendReport {
+            outcome: HistoryAppendOutcome::NotRetained,
+            write: HistoryWriteOutcome::Unchanged
+        }
+    );
+    assert!(store
+        .history()
+        .await
+        .unwrap()
+        .points
+        .iter()
+        .all(|point| point.environment_id.is_none()));
+    peer.append_history(replacement.clone(), vec![point(9, 9.0)], retention)
+        .await
+        .unwrap();
+    let history = peer.history().await.unwrap();
+    assert_eq!(
+        history
+            .points
+            .iter()
+            .filter(|point| point.environment_id.as_ref() == Some(replacement.environment_id()))
+            .count(),
+        1
+    );
+    assert_eq!(
+        history
+            .points
+            .iter()
+            .filter(|point| point.environment_id.is_none())
+            .count(),
+        2
+    );
+    assert!(store
+        .release_unassigned_history_lease(unassigned.clone())
+        .await
+        .unwrap());
+    let next_unassigned = peer
+        .acquire_unassigned_history_lease("native-legacy-peer".into(), Duration::from_secs(600))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store
+            .append_unassigned_history(unassigned, vec![point(10, 10.0)], retention)
+            .await
+            .unwrap_err()
+            .kind(),
+        StorageErrorKind::LeaseLost
+    );
+    assert!(peer
+        .renew_history_lease(replacement.clone(), Duration::from_secs(600))
+        .await
+        .unwrap()
+        .is_some());
+    peer.release_unassigned_history_lease(next_unassigned).await.unwrap();
     peer.release_history_lease(second_lease).await.unwrap();
     peer.release_history_lease(replacement).await.unwrap();
 

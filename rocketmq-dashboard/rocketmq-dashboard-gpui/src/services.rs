@@ -17,6 +17,8 @@ pub(crate) mod audit;
 mod audit_outcomes;
 #[path = "services/local_storage.rs"]
 pub(crate) mod local_storage;
+#[path = "services/storage_authority.rs"]
+mod storage_authority;
 
 #[path = "services/acl.rs"]
 pub(crate) mod acl;
@@ -536,6 +538,18 @@ impl ConnectionProvider for ProductFakeConnectionProvider {
 }
 
 trait ApplicationBackend: Send + Sync {
+    fn configuration_changes(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<Option<crate::infrastructure::config_store::NativeConfigurationChange>>>
+    {
+        None
+    }
+    fn refresh_authority_if_changed(
+        &self,
+        _progress: ConfigProgressSender,
+    ) -> ServiceFuture<'_, Result<Option<ConfigUpdate>, UiError>> {
+        Box::pin(std::future::ready(Ok(None)))
+    }
     fn local_runtime_status(&self) -> ServiceFuture<'_, Result<local_storage::LocalRuntimeStatus, UiError>> {
         Box::pin(std::future::ready(Err(UiError::new(
             "Local storage status is unavailable for this backend.",
@@ -749,15 +763,18 @@ impl AppServices {
             return self.backend.bootstrap().await;
         };
         let backend = Arc::clone(&self.backend);
-        let result = runtime
-            .run("gpui-bootstrap", async move { backend.bootstrap().await })
-            .await;
-        if result.is_ok()
-            && let Some(audit) = &self.audit
-        {
-            audit.recover_pending();
-        }
-        result
+        let audit = self.audit.clone();
+        runtime
+            .run("gpui-bootstrap", async move {
+                let result = backend.bootstrap().await;
+                if result.is_ok()
+                    && let Some(audit) = audit
+                {
+                    audit.recover_pending().await;
+                }
+                result
+            })
+            .await
     }
 
     /// Authenticates without retaining the supplied password.
@@ -1051,6 +1068,18 @@ impl DesktopBackend {
 }
 
 impl ApplicationBackend for DesktopBackend {
+    fn configuration_changes(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<Option<crate::infrastructure::config_store::NativeConfigurationChange>>>
+    {
+        Some(self.store.configuration_changes())
+    }
+    fn refresh_authority_if_changed(
+        &self,
+        progress: ConfigProgressSender,
+    ) -> ServiceFuture<'_, Result<Option<ConfigUpdate>, UiError>> {
+        Box::pin(self.reload_peer_configuration(progress))
+    }
     fn local_runtime_status(&self) -> ServiceFuture<'_, Result<local_storage::LocalRuntimeStatus, UiError>> {
         Box::pin(self.inspect_local_runtime())
     }

@@ -1,10 +1,11 @@
 # Native Dashboard storage
 
 This crate provides native Dashboard persistence without GPUI or an HTTP backend. It is a repository-root
-workspace member. The first delivery supplies the storage contracts and engines; GPUI startup, its existing
-stores, native storage selection, OPS status and persistent Sessions UI still need to be wired to this crate.
-It does not enable SQL in the desktop application by itself. E01/E02 remain incomplete until that integration
-and native application verification are delivered.
+workspace member. GPUI startup and its configuration, environment, Monitor, History and Audit adapters use
+this authority. The desktop enables drivers through its optional `storage-sqlite`, `storage-mysql` and
+`storage-postgres` features. Visible storage selection/workspace initialization/import, engine-aware OPS
+status and persistent Sessions UI remain subsequent deliveries. E01/E02 remain incomplete until those
+workflows and native application verification are delivered.
 
 The default feature set uses files and does not link SQLx. `sqlite`, `mysql` and `postgres` independently
 enable only their optional SQLx drivers. Selecting an unavailable driver or failing to connect returns an
@@ -28,6 +29,9 @@ History keeps the captured environment identity, bounds retained series and obse
 requires a fenced collection lease checked in the commit transaction. Lease acquisition and expiry use the
 database clock in SQL mode. `HistoryAppendOutcome` distinguishes an actually retained submitted sample from
 an empty, invalid or fully evicted sample. A real write can succeed without retaining a submitted observation.
+`HistoryAppendReport` records that distinction explicitly, and `HistoryReadReport` distinguishes missing,
+existing and actually migrated file data. Legacy observations with no environment use a separate unassigned
+lease and retain `None` attribution; they cannot appear in a current-environment chart.
 Session records preserve expiry, last access and revocation; a sequence cursor excludes later creations even
 when their timestamps are equal. Session operations and the P11 journal use the same authority, while the
 explicit atomic config/Monitor + Audit contract remains the canonical document transaction.

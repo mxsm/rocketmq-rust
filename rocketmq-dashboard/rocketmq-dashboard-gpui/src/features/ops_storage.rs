@@ -343,7 +343,7 @@ fn render_file(title: &str, file: &LocalFileStatus, cx: &gpui::App) -> gpui::Div
         FileReadState::Unknown => "Unknown / not validated",
         FileReadState::Readable => "Read and validation succeeded",
         FileReadState::Missing => "File is not present",
-        FileReadState::MigrationRequired => "Validated legacy data; reload needed",
+        FileReadState::MigrationRequired => "Older schema detected; reload to validate and migrate",
         FileReadState::Failed => "Current read or validation failed",
     };
     let write = match file.evidence.last_write {
@@ -407,6 +407,7 @@ fn time_label(value: Option<u64>) -> String {
 fn collection_label(side: CollectionSideHealth) -> String {
     let state = match side.last_attempt {
         None => "No attempt observed",
+        Some(CollectionAttempt::OwnershipUnavailable) => "Waiting for collection ownership",
         Some(CollectionAttempt::NoObservations) => "No observations returned",
         Some(CollectionAttempt::NotRetained) => "No submitted observations retained",
         Some(CollectionAttempt::SamplingFailed) => "Sampling failed",

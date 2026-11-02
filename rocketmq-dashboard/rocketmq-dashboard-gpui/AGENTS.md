@@ -24,8 +24,11 @@
 - Keep GPUI-specific rendering, window behavior, event handling, and view state in this project.
 - Put reusable Dashboard models, client contracts, and UI-independent service logic in
   `../rocketmq-dashboard-common/` when practical; do not duplicate shared domain behavior in views.
-- The direct repository path dependencies are `rocketmq-dashboard-common` and `rocketmq-observability`.
-  Revalidate this consumer when their API, features, or shared behavior changes affect it.
+- Repository path dependencies provide shared contracts (`rocketmq-dashboard-common`), native persistence
+  (`rocketmq-dashboard-storage`), Admin adapters (`rocketmq-admin-core`), owned tasks (`rocketmq-runtime`), and
+  observability (`rocketmq-observability`). Revalidate this consumer when their changed behavior affects it.
+- Keep all native persistence on the same opened `DashboardStore`. File mode retains the directory writer;
+  SQL drivers stay optional, with no silent file fallback. Web backend migrations are a separate boundary.
 - Changes to shared RocketMQ crates consumed through those dependencies may also require GPUI revalidation. Use
   the current manifests and the root shared-code rules to determine the actual consumer scope.
 - Do not modify the Tauri or Web Dashboard implementations merely to mirror a GPUI change unless the user asks
