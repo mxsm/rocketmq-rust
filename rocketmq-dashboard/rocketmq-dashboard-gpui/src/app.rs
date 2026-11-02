@@ -18,6 +18,8 @@ mod audit;
 mod sessions;
 #[path = "app/storage_authority.rs"]
 mod storage_authority;
+#[path = "app/storage_setup.rs"]
+mod storage_setup;
 
 #[path = "app/consumers.rs"]
 mod consumers;
@@ -228,6 +230,8 @@ pub struct RocketmqDashboard {
     services: AppServices,
     startup_state: StartupState,
     startup_task: Option<Task<()>>,
+    storage_setup_view: Option<Entity<crate::features::storage_setup::StorageSetupView>>,
+    storage_setup_subscription: Option<Subscription>,
     session_task: Option<Task<()>>,
     session_watch_task: Option<Task<()>>,
     session_validation_task: Option<Task<()>>,
@@ -299,6 +303,8 @@ impl RocketmqDashboard {
             services,
             startup_state: StartupState::Booting,
             startup_task: None,
+            storage_setup_view: None,
+            storage_setup_subscription: None,
             session_task: None,
             session_watch_task: None,
             session_validation_task: None,
@@ -351,6 +357,8 @@ impl RocketmqDashboard {
     }
 
     fn start_bootstrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.storage_setup_view = None;
+        self.storage_setup_subscription = None;
         self.configuration_watch_task = None;
         let epoch = match self.startup_epoch.advance() {
             Ok(request) => request,
@@ -1106,6 +1114,9 @@ impl RocketmqDashboard {
     }
 
     fn render_startup_failure(&self, cx: &mut Context<Self>) -> gpui::Div {
+        if let Some(view) = &self.storage_setup_view {
+            return div().size_full().child(view.clone());
+        }
         let theme = cx.theme();
         let error = match &self.startup_state {
             StartupState::Failed(error) => error,
@@ -1123,6 +1134,8 @@ impl RocketmqDashboard {
             .items_center()
             .justify_center()
             .bg(theme.background)
+            .flex_col()
+            .gap_3()
             .child(states::error_state(
                 "Dashboard startup needs attention",
                 &detail,
@@ -1131,6 +1144,12 @@ impl RocketmqDashboard {
                 retryable.then(|| cx.listener(|this, _, window, cx| this.retry_startup(window, cx))),
                 Some(cx.listener(|this, _, window, cx| this.open_config_location(window, cx))),
             ))
+            .child(
+                Button::new("startup-storage-setup")
+                    .debug_selector(|| "startup-storage-setup".into())
+                    .label("Storage setup")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_storage_setup(window, cx))),
+            )
     }
 
     fn render_login(&self, cx: &mut Context<Self>) -> gpui::Div {

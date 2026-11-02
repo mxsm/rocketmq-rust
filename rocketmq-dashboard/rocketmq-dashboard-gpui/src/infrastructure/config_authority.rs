@@ -45,6 +45,9 @@ use crate::infrastructure::{
 
 #[path = "monitor_commit.rs"]
 mod monitor_commit;
+#[path = "storage_setup.rs"]
+mod storage_setup;
+pub(crate) use storage_setup::{NativeStorageSetup, SelectionSource, WorkspaceSetupAction};
 
 /// File compatibility constructors and SQL clients share this exact opened handle.
 pub struct DesktopConfigStore {
@@ -52,7 +55,9 @@ pub struct DesktopConfigStore {
     history_path: Option<PathBuf>,
     context: ChildServiceContext,
     from_environment: bool,
+    engine_override: Result<Option<StorageEngine>, ConfigStoreFailure>,
     native: tokio::sync::OnceCell<Arc<DashboardStore>>,
+    selection: tokio::sync::OnceCell<storage_setup::FrozenSelection>,
     io_gate: tokio::sync::Mutex<()>,
     protected_original: AtomicBool,
     closed: AtomicBool,
@@ -127,8 +132,14 @@ impl DesktopConfigStore {
             path,
             context,
             from_environment,
+            engine_override: if from_environment {
+                storage_setup::engine_override_from_environment()
+            } else {
+                Ok(None)
+            },
             history_path: None,
             native: tokio::sync::OnceCell::new_with(storage),
+            selection: tokio::sync::OnceCell::new(),
             io_gate: tokio::sync::Mutex::new(()),
             protected_original: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -161,7 +172,7 @@ impl DesktopConfigStore {
         let storage = self
             .native
             .get_or_try_init(|| async {
-                let options = self.storage_options()?;
+                let options = self.storage_options().await?;
                 let storage = match (options, self.history_path.as_ref()) {
                     (StorageOptions::File { config_path }, Some(history_path)) => {
                         DashboardStore::open_file_paths(config_path, history_path.clone(), self.context.clone()).await
@@ -181,24 +192,8 @@ impl DesktopConfigStore {
         Ok(Arc::clone(storage))
     }
 
-    fn storage_options(&self) -> Result<StorageOptions, ConfigStoreFailure> {
-        let engine = if self.from_environment {
-            match std::env::var(STORAGE_ENGINE_ENV) {
-                Err(std::env::VarError::NotPresent) => StorageEngine::File,
-                Ok(value) => match value.as_str() {
-                    "file" => StorageEngine::File,
-                    "sqlite" => StorageEngine::Sqlite,
-                    "mysql" => StorageEngine::MySql,
-                    "postgres" => StorageEngine::Postgres,
-                    _ => return Err(ConfigStoreFailure::validation(ConfigValidation::StorageEngine)),
-                },
-                Err(std::env::VarError::NotUnicode(_)) => {
-                    return Err(ConfigStoreFailure::validation(ConfigValidation::StorageEngine));
-                }
-            }
-        } else {
-            StorageEngine::File
-        };
+    async fn storage_options(&self) -> Result<StorageOptions, ConfigStoreFailure> {
+        let engine = self.frozen_selection().await.engine.clone()?;
         if engine == StorageEngine::File {
             return Ok(StorageOptions::File {
                 config_path: self.path.clone(),

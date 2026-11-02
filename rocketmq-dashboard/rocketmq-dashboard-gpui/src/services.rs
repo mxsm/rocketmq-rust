@@ -21,6 +21,8 @@ pub(crate) mod sessions;
 mod sessions_history;
 #[path = "services/storage_authority.rs"]
 mod storage_authority;
+#[path = "services/storage_setup.rs"]
+pub(crate) mod storage_setup;
 
 #[path = "services/acl.rs"]
 pub(crate) mod acl;
@@ -557,6 +559,21 @@ impl ConnectionProvider for ProductFakeConnectionProvider {
 }
 
 trait ApplicationBackend: Send + Sync {
+    fn storage_setup_snapshot(&self) -> ServiceFuture<'_, Result<storage_setup::StorageSetupSnapshot, UiError>> {
+        Box::pin(std::future::ready(Err(storage_setup::unavailable())))
+    }
+    fn save_storage_engine(
+        &self,
+        _engine: rocketmq_dashboard_storage::StorageEngine,
+    ) -> ServiceFuture<'_, Result<(), UiError>> {
+        Box::pin(std::future::ready(Err(storage_setup::unavailable())))
+    }
+    fn complete_workspace_setup(
+        &self,
+        _action: storage_setup::WorkspaceSetupAction,
+    ) -> ServiceFuture<'_, Result<(), UiError>> {
+        Box::pin(std::future::ready(Err(storage_setup::unavailable())))
+    }
     fn configuration_changes(
         &self,
     ) -> Option<tokio::sync::watch::Receiver<Option<crate::infrastructure::config_store::NativeConfigurationChange>>>
@@ -1152,6 +1169,31 @@ impl DesktopBackend {
 }
 
 impl ApplicationBackend for DesktopBackend {
+    fn storage_setup_snapshot(&self) -> ServiceFuture<'_, Result<storage_setup::StorageSetupSnapshot, UiError>> {
+        Box::pin(async move {
+            Ok(storage_setup::StorageSetupSnapshot::from(
+                self.store.storage_setup_snapshot().await,
+            ))
+        })
+    }
+    fn save_storage_engine(
+        &self,
+        engine: rocketmq_dashboard_storage::StorageEngine,
+    ) -> ServiceFuture<'_, Result<(), UiError>> {
+        Box::pin(async move { self.store.save_storage_engine(engine).await.map_err(config_ui_error) })
+    }
+    fn complete_workspace_setup(
+        &self,
+        action: storage_setup::WorkspaceSetupAction,
+    ) -> ServiceFuture<'_, Result<(), UiError>> {
+        Box::pin(async move {
+            let _update = self.update_gate.lock().await;
+            self.store
+                .complete_workspace_setup(action)
+                .await
+                .map_err(config_ui_error)
+        })
+    }
     fn configuration_changes(
         &self,
     ) -> Option<tokio::sync::watch::Receiver<Option<crate::infrastructure::config_store::NativeConfigurationChange>>>
