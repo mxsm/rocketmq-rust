@@ -731,42 +731,6 @@ impl NotificationDeferredService {
         })
     }
 
-    /// Runs post-callback filtering batches while the caller retains routing
-    /// ownership for each bounded candidate batch.
-    pub(crate) fn spawn_candidate_continuation<F, Fut>(
-        self: &Arc<Self>,
-        task_group: &TaskGroup,
-        mut continuation: NotificationArrivalContinuation,
-        handle_candidates: Arc<F>,
-    ) -> RuntimeResult<TaskId>
-    where
-        F: Fn(Vec<NotificationCandidateReservation>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let service = Arc::clone(self);
-        task_group.spawn_service("broker.notification-deferred.arrival", async move {
-            loop {
-                let prepared = {
-                    let view = continuation.owned.view();
-                    let batch_conflicts = continuation.remaining_conflicts.min(service.scan_limit.get());
-                    service.prepare_arrival_batch_with_conflict_budget(view, Some(continuation.cursor), batch_conflicts)
-                };
-                continuation.remaining_conflicts =
-                    continuation.remaining_conflicts.saturating_sub(prepared.conflicts());
-                let (candidates, cursor) = prepared.into_parts();
-                handle_candidates(candidates).await;
-                continuation.cursor = cursor;
-                if continuation.cursor.is_complete()
-                    || continuation.remaining_conflicts == 0
-                    || service.closed.load(Ordering::Acquire)
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-    }
-
     pub(crate) fn sweep_expired(&self) -> NotificationDeferredSweepBatch {
         NotificationDeferredSweepBatch::from_transport(self.registry.sweep_expired(self.scan_limit))
     }
