@@ -51,7 +51,14 @@ mod defaults {
     }
 
     pub fn mapped_file_size_commit_log() -> usize {
-        1024 * 1024 * 1024 // 1GB
+        // Every unit test opens a store of its own. On Linux each mapped file takes all its disk
+        // space up front, and it keeps it until the process ends if the store is never dropped,
+        // even after the test deleted the file. At the production sizes they fill a CI runner.
+        if cfg!(test) {
+            16 * 1024 * 1024
+        } else {
+            1024 * 1024 * 1024 // 1GB
+        }
     }
 
     pub fn compaction_mapped_file_size() -> usize {
@@ -219,7 +226,12 @@ mod defaults {
     }
 
     pub fn mapped_file_size_consume_queue() -> usize {
-        300000 * 20
+        // See `mapped_file_size_commit_log`.
+        if cfg!(test) {
+            30000 * 20
+        } else {
+            300000 * 20
+        }
     }
 
     pub fn mapped_file_size_consume_queue_ext() -> usize {
@@ -355,11 +367,16 @@ mod defaults {
     }
 
     pub fn max_hash_slot_num() -> u32 {
-        5000000
+        // One index file takes 400 MB at the production size. See `mapped_file_size_commit_log`.
+        if cfg!(test) {
+            5000
+        } else {
+            5000000
+        }
     }
 
     pub fn max_index_num() -> u32 {
-        5000000 * 4
+        max_hash_slot_num() * 4
     }
 
     pub fn max_msgs_num_batch() -> usize {
@@ -1486,7 +1503,7 @@ impl Default for MessageStoreConfig {
             store_path_epoch_file: None,
             store_path_broker_identity: None,
             read_only_commit_log_store_paths: None,
-            mapped_file_size_commit_log: 1024 * 1024 * 1024, //CommitLog file size,default is 1G
+            mapped_file_size_commit_log: defaults::mapped_file_size_commit_log(), //CommitLog file size,default is 1G
             compaction_mapped_file_size: 100 * 1024 * 1024,
             /* CompactinLog file size, default
              * is 100M */
@@ -1549,7 +1566,7 @@ impl Default for MessageStoreConfig {
             timer_metric_small_threshold: 0,
             timer_progress_log_interval_ms: 0,
             store_type: Default::default(),
-            mapped_file_size_consume_queue: 300000 * 20,
+            mapped_file_size_consume_queue: defaults::mapped_file_size_consume_queue(),
             enable_consume_queue_ext: false,
             mapped_file_size_consume_queue_ext: 48 * 1024 * 1024,
             mapper_file_size_batch_consume_queue: 300000 * 46,
@@ -1588,8 +1605,8 @@ impl Default for MessageStoreConfig {
             max_transfer_count_on_message_in_disk: 8,
             access_message_in_memory_max_ratio: 40,
             message_index_enable: true,
-            max_hash_slot_num: 5000000,
-            max_index_num: 5000000 * 4,
+            max_hash_slot_num: defaults::max_hash_slot_num(),
+            max_index_num: defaults::max_index_num(),
             max_msgs_num_batch: 64,
             message_index_safe: false,
             ha_listen_address: defaults::ha_listen_address(),

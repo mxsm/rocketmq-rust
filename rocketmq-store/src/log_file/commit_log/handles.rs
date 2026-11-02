@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rocketmq_model::common::broker::broker_role::BrokerRole;
@@ -23,6 +24,7 @@ use rocketmq_model::utils::crc32_utils::crc32_bytes;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState;
 use tracing::Instrument;
 
+use crate::base::dispatch_request::DispatchRequest;
 use crate::base::message_encoder_pool;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;
@@ -42,6 +44,9 @@ use crate::store_error::StoreOperation;
 use crate::transfer::segment::SegmentLease;
 
 use super::append_sequencer::CommitLogAppendPort;
+use super::check_message_and_return_size_in_segment;
+use super::reput_record_is_complete;
+use super::CommitLogRecordWindow;
 use super::CommitLogStoreContext;
 
 /// Safe, narrow capability for scheduled commit-log retention work.
@@ -148,6 +153,72 @@ impl CommitLogReadHandle {
 
     pub(crate) fn roll_next_file(&self, offset: i64) -> i64 {
         self.mapped_file_queue.roll_next_file(offset)
+    }
+
+    /// Reads the records in `start..end`, from the record boundary `start`, `read_bytes` at a
+    /// time, and hands each message to `visit`. Returns where reading stopped: at `end`, or at the
+    /// first offset that holds no whole valid record ending by `end`.
+    pub(crate) fn walk_records(
+        &self,
+        start: i64,
+        end: i64,
+        read_bytes: usize,
+        mut visit: impl FnMut(&DispatchRequest),
+    ) -> i64 {
+        let delay_levels = BTreeMap::new();
+        let mut offset = start;
+        while offset < end {
+            let Some(mut data) = self.get_data_bounded(offset, read_bytes) else {
+                return offset;
+            };
+            offset = data.start_offset() as i64;
+            let batch_start = offset;
+            let mut read_size = 0i32;
+            while read_size < data.size() && offset < end {
+                let Some(bytes) = data.bytes_mut() else {
+                    break;
+                };
+                if !reput_record_is_complete(bytes) {
+                    break;
+                }
+                let segment_remaining =
+                    usize::try_from(self.roll_next_file(offset).saturating_sub(offset)).unwrap_or(0);
+                let request = check_message_and_return_size_in_segment(
+                    CommitLogRecordWindow {
+                        bytes,
+                        segment_remaining,
+                    },
+                    false,
+                    false,
+                    false,
+                    &self.message_store_config,
+                    0,
+                    &delay_levels,
+                );
+                if !request.success {
+                    return offset;
+                }
+                if request.msg_size == 0 {
+                    offset = self.roll_next_file(offset);
+                    break;
+                }
+                let size = if request.buffer_size == -1 {
+                    request.msg_size
+                } else {
+                    request.buffer_size
+                };
+                if offset + i64::from(size) > end {
+                    return offset;
+                }
+                visit(&request);
+                offset += i64::from(size);
+                read_size += size;
+            }
+            if offset == batch_start {
+                return offset;
+            }
+        }
+        offset
     }
 
     pub(crate) fn get_confirm_offset(&self) -> i64 {
@@ -320,6 +391,31 @@ impl CommitLogReplicaHandle {
         allow_cross_file: bool,
     ) -> Result<Option<Vec<SegmentLease>>, StoreError> {
         self.read.select_segments(offset, max_bytes, allow_cross_file)
+    }
+
+    /// Cuts off a record the last replication frame left unfinished, scanning from the record
+    /// boundary `start`, and returns the new end of the log if it cut anything.
+    ///
+    /// # Errors
+    ///
+    /// Fails when more than `read_bytes`, the most one record can span, would go: that is not an
+    /// unfinished record but a log that does not parse, and it must not be cut away.
+    pub(crate) async fn cut_unfinished_record(&self, start: i64, read_bytes: usize) -> Result<Option<i64>, StoreError> {
+        let _lock = self.put_message_lock.lock().await;
+        let end = self.get_max_offset();
+        let whole_end = self.read.walk_records(start, end, read_bytes, |_| {});
+        if whole_end >= end {
+            return Ok(None);
+        }
+        let cut_bytes = usize::try_from(end - whole_end).unwrap_or(usize::MAX);
+        if cut_bytes > read_bytes || !self.append.truncate_last_file(whole_end) {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
+                    .in_component(StoreComponent::CommitLog)
+                    .with_detail("the end of the replicated CommitLog cannot be cut back to a whole record"),
+            );
+        }
+        Ok(Some(whole_end))
     }
 
     pub(crate) async fn append_data(

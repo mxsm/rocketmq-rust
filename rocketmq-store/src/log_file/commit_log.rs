@@ -2688,6 +2688,31 @@ pub(crate) struct CommitLogRecordWindow<'a> {
     pub segment_remaining: usize,
 }
 
+/// Whether `bytes` starts with a whole record, or at least with one the parser can reject.
+pub(crate) fn reput_record_is_complete(bytes: &Bytes) -> bool {
+    let Some(total_size) = bytes
+        .get(..4)
+        .and_then(|value| <[u8; 4]>::try_from(value).ok())
+        .map(i32::from_be_bytes)
+    else {
+        return false;
+    };
+    if total_size < 8 {
+        return true;
+    }
+    let Some(magic_code) = bytes
+        .get(4..8)
+        .and_then(|value| <[u8; 4]>::try_from(value).ok())
+        .map(i32::from_be_bytes)
+    else {
+        return false;
+    };
+    if magic_code == BLANK_MAGIC_CODE {
+        return true;
+    }
+    usize::try_from(total_size).map_or(true, |total_size| total_size <= bytes.len())
+}
+
 pub fn check_message_and_return_size(
     bytes: &mut Bytes,
     check_crc: bool,
@@ -3356,6 +3381,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn walking_records_crosses_the_end_of_a_file() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let mut store = new_test_message_store_with_config(
+            directory.path(),
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                ha_listen_port: 0,
+                ..Default::default()
+            },
+            BrokerRole::AsyncMaster,
+            false,
+        );
+        store.init().await.unwrap();
+        let log = store.get_commit_log();
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        assert!(log
+            .install_controller_write_lease(WriteLeaseToken::try_new(authority, 1).unwrap(), Duration::from_secs(60)));
+        for _ in 0..40 {
+            let result = log.put_message(append_test_message("walk-topic", b"walked")).await;
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+        }
+        let end = log.get_max_offset();
+        assert!(end > 4096);
+
+        let mut seen = 0;
+        let stopped = log.read_handle().walk_records(0, end, 4096, |_| seen += 1);
+
+        assert_eq!((seen, stopped), (40, end));
+        store.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_lease_renewed_during_an_append_leaves_it_accepted() {
+        for batch in [false, true] {
+            let directory = tempfile::TempDir::new().unwrap();
+            let mut store = new_test_message_store_with_config(
+                directory.path(),
+                MessageStoreConfig {
+                    mapped_file_size_commit_log: 4096,
+                    ha_listen_port: 0,
+                    ..Default::default()
+                },
+                BrokerRole::AsyncMaster,
+                false,
+            );
+            store.init().await.unwrap();
+            let log = store.get_commit_log();
+            let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+            let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+            let renewed = WriteLeaseToken::try_new(authority, 2).unwrap();
+            assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
+            let lease = log.controller_write_lease_state();
+            *log.after_append.lock() = Some(Box::new(move || {
+                assert!(lease.install(renewed, Duration::from_secs(60)));
+            }));
+            let result = if batch {
+                let mut item = rocketmq_model::common::message::message_single::Message::default();
+                item.set_body(Some(Bytes::from_static(b"renewed")));
+                let mut message = append_test_message("renewal-topic", b"unused");
+                message.set_body(rocketmq_protocol::common::message::message_decoder::encode_messages(&[
+                    item,
+                ]));
+                log.put_messages(MessageExtBatch {
+                    message_ext_broker_inner: message,
+                    ..Default::default()
+                })
+                .await
+            } else {
+                log.put_message(append_test_message("renewal-topic", b"renewed")).await
+            };
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+        }
+    }
+
+    #[tokio::test]
     async fn append_execution_evidence_survives_post_append_lease_fence_and_renewal() {
         for batch in [false, true] {
             for replace_lease in [false, true] {
@@ -3383,8 +3483,9 @@ mod tests {
                 assert!(!denied.canonical().unwrap().is_accepted());
 
                 let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+                let next_authority = WriteAuthority::try_new(0, MasterEpoch::try_from(2).unwrap()).unwrap();
                 let token = WriteLeaseToken::try_new(authority, 1).unwrap();
-                let next_token = WriteLeaseToken::try_new(authority, 2).unwrap();
+                let next_token = WriteLeaseToken::try_new(next_authority, 2).unwrap();
                 assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
                 let lease = log.controller_write_lease_state();
                 *log.after_append.lock() = Some(Box::new(move || {

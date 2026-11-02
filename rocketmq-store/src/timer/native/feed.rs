@@ -20,8 +20,15 @@
 //! order as the master does, and counts one delivered only once its token is here, so its
 //! watermark never passes a timer the master did not write. A slave promoted to master also
 //! finds here the timers its old master already wrote.
+//!
+//! The tokens live in memory. Each checkpoint leaves a mark in the CommitLog, below every
+//! delivery the next start may still need, and that start reads the deliveries back from there.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -39,12 +46,23 @@ use crate::timer::timer_message_store::TIMER_TOPIC;
 /// what the slave did not match.
 const FEED_CAPACITY: usize = 1 << 20;
 
+/// File under the store's `config` directory that holds the mark.
+const FEED_MARK_FILE: &str = "timer-native-feed.meta";
+
+/// The dispatched messages that carry one token. A client that sends a timer again gives both
+/// copies the same token, and each copy needs one message.
+struct KeptToken {
+    lowest_offset: i64,
+    highest_offset: i64,
+    messages: u32,
+}
+
 /// Delivery tokens of the native timers whose message Reput dispatched while this Broker did
 /// not deliver.
 #[derive(Default)]
 pub(crate) struct NativeDeliveryFeed {
     observing: AtomicBool,
-    tokens: Mutex<HashSet<CheetahString>>,
+    tokens: Mutex<HashMap<CheetahString, KeptToken>>,
     full: AtomicBool,
 }
 
@@ -59,13 +77,38 @@ impl NativeDeliveryFeed {
         self.tokens.lock().len()
     }
 
-    /// Takes `token` when the message it names was dispatched.
+    /// Takes `token` when a message it names was dispatched.
     pub(crate) fn take(&self, token: &CheetahString) -> bool {
-        self.tokens.lock().remove(token)
+        let mut tokens = self.tokens.lock();
+        let Some(kept) = tokens.get_mut(token) else {
+            return false;
+        };
+        kept.messages -= 1;
+        if kept.messages == 0 {
+            tokens.remove(token);
+        }
+        true
+    }
+
+    /// The lowest CommitLog offset a kept token came from.
+    pub(crate) fn lowest_offset(&self) -> Option<i64> {
+        self.tokens.lock().values().map(|kept| kept.lowest_offset).min()
+    }
+
+    /// Keeps the token of a message a restart read back from the CommitLog, in whichever role
+    /// this Broker comes up: a master finds there what it wrote before it went down.
+    pub(crate) fn replay(&self, request: &DispatchRequest) {
+        self.keep(request);
     }
 
     fn record(&self, request: &DispatchRequest) {
-        if !self.observing.load(Ordering::Acquire) || !request.success || request.topic.as_str() == TIMER_TOPIC {
+        if self.observing.load(Ordering::Acquire) {
+            self.keep(request);
+        }
+    }
+
+    fn keep(&self, request: &DispatchRequest) {
+        if !request.success || request.topic.as_str() == TIMER_TOPIC {
             // A timer in the Timer topic carries the same token as the message it becomes.
             return;
         }
@@ -79,14 +122,65 @@ impl NativeDeliveryFeed {
         if !is_native_token(token) {
             return;
         }
+        let offset = request.commit_log_offset;
         let mut tokens = self.tokens.lock();
+        if let Some(kept) = tokens.get_mut(token) {
+            // Reput dispatches again what a restart read back; its copies only count once.
+            if offset > kept.highest_offset {
+                kept.highest_offset = offset;
+                kept.messages += 1;
+            }
+            kept.lowest_offset = kept.lowest_offset.min(offset);
+            return;
+        }
         if tokens.len() >= FEED_CAPACITY {
             if !self.full.swap(true, Ordering::AcqRel) {
                 warn!("the native delivery feed is full; a promotion may deliver native timers again");
             }
             return;
         }
-        tokens.insert(token.clone());
+        tokens.insert(
+            token.clone(),
+            KeptToken {
+                lowest_offset: offset,
+                highest_offset: offset,
+                messages: 1,
+            },
+        );
+    }
+}
+
+/// The CommitLog offset a start reads the deliveries back from.
+pub(crate) struct NativeFeedMark {
+    path: PathBuf,
+}
+
+impl NativeFeedMark {
+    pub(crate) fn new(store_root: impl AsRef<Path>) -> Self {
+        Self {
+            path: store_root.as_ref().join("config").join(FEED_MARK_FILE),
+        }
+    }
+
+    /// The mark an earlier run left, if it left a readable one.
+    pub(crate) fn read(&self) -> Option<i64> {
+        fs::read_to_string(&self.path).ok()?.trim().parse().ok()
+    }
+
+    /// Replaces the mark, durably.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of writing the file; the old mark stays then.
+    pub(crate) fn write(&self, offset: i64) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let temp = self.path.with_extension("meta.tmp");
+        let mut file = fs::File::create(&temp)?;
+        file.write_all(offset.to_string().as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&temp, &self.path)
     }
 }
 
