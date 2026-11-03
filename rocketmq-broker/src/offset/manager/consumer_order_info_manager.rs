@@ -462,33 +462,6 @@ impl OrderInfo {
         false
     }
 
-    /// Gets the lock-free timestamp for the current order info.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<u64>` containing the lock-free timestamp if available, `None` otherwise.
-    pub fn get_lock_free_timestamp(&self) -> Option<u64> {
-        if self.offset_list.is_empty() {
-            return None;
-        }
-        let current_time = current_millis();
-        for i in 0..self.offset_list.len() {
-            if self.is_not_ack(i) {
-                if self.invisible_time.is_none() || self.invisible_time.unwrap_or(0) == 0 {
-                    return None;
-                }
-                let mut next_visible_time = self.pop_time + self.invisible_time.unwrap_or(0);
-                if let Some(time) = self.offset_next_visible_time.get(&self.get_queue_offset(i)) {
-                    next_visible_time = *time;
-                }
-                if current_time < next_visible_time {
-                    return Some(next_visible_time);
-                }
-            }
-        }
-        Some(current_time)
-    }
-
     /// Updates the next visible time for a given queue offset.
     ///
     /// # Arguments
@@ -703,21 +676,6 @@ mod tests {
             attempt_id: "test".to_string(),
         };
         assert!(!order_info.need_block("another_test", 2000));
-    }
-
-    #[test]
-    fn get_lock_free_timestamp_returns_none_for_empty_offset_list() {
-        let order_info = OrderInfo {
-            pop_time: 1000,
-            invisible_time: Some(3000),
-            offset_list: vec![],
-            offset_next_visible_time: HashMap::new(),
-            offset_consumed_count: HashMap::new(),
-            last_consume_timestamp: 0,
-            commit_offset_bit: 0,
-            attempt_id: "test".to_string(),
-        };
-        assert_eq!(order_info.get_lock_free_timestamp(), None);
     }
 
     #[test]
