@@ -26,5 +26,3 @@ categories             = ["api-bindings"]
 readme                 = "README.md"
 description            = "Rocketmq rust error module"
 rust-version.workspace = true
-[dependencies]
-thiserror.workspace = true
