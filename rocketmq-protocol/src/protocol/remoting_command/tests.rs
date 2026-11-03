@@ -836,11 +836,25 @@ fn json_raw_fallback_and_mutation_materialize_the_compatibility_map() {
 
 #[test]
 fn json_envelope_rejects_non_string_extension_field_values() {
-    for value in ["7", "true", "null", "{}", "[]"] {
+    for value in ["{}", "[]"] {
         let mut header = json_header_with_ext_fields(&format!(r#"{{"value":{value}}}"#));
         let header_length = header.len();
 
         assert!(RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON).is_err());
+    }
+
+    for (value, expected) in [("7", Some("7")), ("null", Some("")), ("true", Some("true"))] {
+        let mut header = json_header_with_ext_fields(&format!(r#"{{"value":{value}}}"#));
+        let header_length = header.len();
+        let cmd = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .expect("scalar extension fields should decode");
+        assert_eq!(
+            cmd.expect("command should decode")
+                .ext_fields()
+                .and_then(|f| f.get("value"))
+                .map(CheetahString::as_str),
+            expected
+        );
     }
 }
 
