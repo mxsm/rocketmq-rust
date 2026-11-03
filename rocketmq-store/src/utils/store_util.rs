@@ -25,8 +25,13 @@ pub struct StoreUtil;
 pub static TOTAL_PHYSICAL_MEMORY_SIZE: LazyLock<u64> = LazyLock::new(StoreUtil::get_total_physical_memory_size);
 
 impl StoreUtil {
+    /// Returns zero when host memory information is unavailable, so read
+    /// estimates use the conservative disk-transfer limits.
     pub fn get_total_physical_memory_size() -> u64 {
-        let mut sys = System::new_all();
+        let Ok(mut sys) = System::new_all() else {
+            error!("host memory information is unavailable; using disk-transfer limits");
+            return 0;
+        };
         sys.refresh_all();
         let physical_total = sys.total_memory();
         physical_total * 1024 // Convert from kilobytes to bytes

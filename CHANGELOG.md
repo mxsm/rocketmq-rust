@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **chore(dependencies):** Consolidate pending Rust updates to `sysinfo 0.40.1`, `simd-json 0.19.0`, `tonic-prost 0.14.9`, and `tonic-prost-build 0.14.9`; align SRE Kubernetes dependencies at `k8s-openapi 0.29.0` and `kube 5.0.0`, adapt fallible system-information initialization, and synchronize standalone lockfiles ([#12163](https://github.com/mxsm/rocketmq-rust/issues/12163)).
 - **refactor(runtime):** Make file configuration helpers optional behind the default-enabled `config-file` feature, preserving Broker, NameServer, and Controller configuration support while removing format parsers from runtime-only consumers. Consumers using `common::parse_config_file` with default features disabled must enable `config-file` explicitly.
 - **refactor(transport):** Gate HTTP NameServer discovery behind the default-enabled `http-discovery` feature, retaining Client and NameServer discovery while allowing other Transport consumers to omit the HTTP dependency stack. Consumers using these APIs with default features disabled must enable `http-discovery` explicitly.
 - **refactor(dependencies):** Remove unused Observability, Transport, and Broker dependency declarations, avoiding an unused timezone database and redundant compression backend in individual service builds.
