@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove the unused internal topic creation helper and its duplicate metadata update path ([#12113](https://github.com/mxsm/rocketmq-rust/issues/12113)).
 - **refactor(broker):** Remove the unused internal ordered-consumption timestamp helper and its dedicated test ([#12167](https://github.com/mxsm/rocketmq-rust/issues/12167)).
 - **refactor(broker):** Remove unused internal NameServer heartbeat broadcasts and their dedicated result types ([#12112](https://github.com/mxsm/rocketmq-rust/issues/12112)).
 - **refactor(broker):** Remove the unused Notification candidate continuation spawner while preserving active pending replay workers and shutdown behavior ([#12080](https://github.com/mxsm/rocketmq-rust/issues/12080)).
