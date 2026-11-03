@@ -543,8 +543,16 @@ impl AppServices {
         future: impl Future<Output = Result<T, UiError>> + Send,
     ) -> Result<T, UiError> {
         let result = future.await;
-        if let (Some(audit), Some(operation)) = (self.audit.clone(), operation) {
+        if let (Some(audit), Some(mut operation)) = (self.audit.clone(), operation) {
             let (outcome, facts) = result.as_ref().map_or_else(error_outcome, MutationAudit::audit);
+            if operation.action == AuditAction::LocalLogin
+                && outcome == AuditOutcome::Succeeded
+                && let Some(actor @ OperationActor::LocalOperator { .. }) = &facts.authenticated_actor
+            {
+                // Login has no durable pre-verification acceptance. Finalize this terminal actor
+                // from its verified result, never from a replacement global session or form input.
+                operation.context.actor = actor.clone();
+            }
             // Preserve a terminal fact even if the wall clock fails after acceptance.
             let timestamp_epoch_ms = now_epoch_ms().unwrap_or(operation.accepted_at_epoch_ms);
             audit

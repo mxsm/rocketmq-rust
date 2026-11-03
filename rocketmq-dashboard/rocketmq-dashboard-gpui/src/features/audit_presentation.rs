@@ -97,7 +97,7 @@ pub(super) fn outcome_label(outcome: AuditOutcome) -> &'static str {
 pub(super) fn actor_label(actor: &OperationActor) -> String {
     match actor {
         OperationActor::LocalOperator { username } => format!("Local operator: {username}"),
-        OperationActor::LocalDesktop => "Local desktop (authentication disabled)".into(),
+        OperationActor::LocalDesktop => "Local desktop".into(),
         OperationActor::System => "System".into(),
     }
 }

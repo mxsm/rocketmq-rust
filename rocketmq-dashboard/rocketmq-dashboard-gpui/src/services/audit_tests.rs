@@ -33,9 +33,12 @@ mod consumer_fields;
 #[path = "audit_topic_fields_tests.rs"]
 mod topic_fields;
 
+#[path = "audit_login_tests.rs"]
+mod login;
+
 use super::*;
 use crate::{
-    infrastructure::auth_state::{LOGIN_PASSWORD_ENV, LOGIN_USERNAME_ENV, MapEnvironment},
+    infrastructure::auth_state::{EnvironmentReader, LOGIN_PASSWORD_ENV, LOGIN_USERNAME_ENV, MapEnvironment},
     services::{
         brokers::BrokerConfigMutationResult,
         consumers::{ConsumerRequestScope, test_support::FakeConsumerBackend},
@@ -55,6 +58,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_environment(Arc::new(MapEnvironment::new([
+            (LOGIN_USERNAME_ENV, "operator"),
+            (LOGIN_PASSWORD_ENV, "private-password"),
+        ])))
+    }
+
+    fn with_environment(environment: Arc<dyn EnvironmentReader>) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("audit-service-test", 1))
             .unwrap()
@@ -65,10 +75,7 @@ impl Fixture {
             directory.path().join("config.json"),
             runtime.root_context().component("storage"),
         );
-        let auth = DesktopAuthState::new(Arc::new(MapEnvironment::new([
-            (LOGIN_USERNAME_ENV, "operator"),
-            (LOGIN_PASSWORD_ENV, "private-password"),
-        ])));
+        let auth = DesktopAuthState::new(environment);
         let mutations = runtime.root_context().component("mutations");
         let services = AppServices::desktop_with_fake_provider(
             Arc::clone(&store),
@@ -571,54 +578,6 @@ fn audit_query_access_follows_local_auth_and_failed_login_does_not_persist_the_s
             .pending()
             .is_empty()
     );
-    fixture.runtime.shutdown_runtime_blocking().unwrap();
-}
-
-#[test]
-fn audit_login_retains_the_frozen_actor_and_records_only_the_verified_session_identity() {
-    let fixture = Fixture::new();
-    let environment = fixture.store.environments().unwrap().active_id;
-    fixture.runtime.block_on(async {
-        assert!(
-            fixture
-                .services
-                .authenticate("unverified-form-user", "wrong-password")
-                .await
-                .is_err()
-        );
-        fixture
-            .services
-            .authenticate("operator", "private-password")
-            .await
-            .unwrap();
-    });
-    let events = fixture.events();
-    let successful = events
-        .iter()
-        .find(|event| event.operation.action == AuditAction::LocalLogin && event.outcome == AuditOutcome::Succeeded)
-        .unwrap();
-    assert_eq!(successful.operation.context.actor, OperationActor::LocalDesktop);
-    assert_eq!(successful.operation.context.environment_id, environment);
-    assert_eq!(successful.operation.context.configuration_revision, 0);
-    assert_eq!(
-        successful.facts.authenticated_actor,
-        Some(OperationActor::LocalOperator {
-            username: "operator".into()
-        })
-    );
-    let rejected = events
-        .iter()
-        .find(|event| event.outcome == AuditOutcome::Rejected)
-        .unwrap();
-    assert!(rejected.facts.authenticated_actor.is_none());
-    assert_ne!(
-        successful.operation.context.request_id,
-        rejected.operation.context.request_id
-    );
-    let file = std::fs::read_to_string(fixture.store.path()).unwrap();
-    for forbidden in ["unverified-form-user", "wrong-password", "private-password"] {
-        assert!(!file.contains(forbidden));
-    }
     fixture.runtime.shutdown_runtime_blocking().unwrap();
 }
 
