@@ -78,7 +78,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             self.timer_message_store(),
             self.transactional_message_check_service.as_ref(),
             self.ack_message_processor.as_ref(),
-            &self.broker_attached_plugins,
             Arc::clone(&self.is_schedule_service_start),
             Arc::clone(&self.is_transaction_check_service_start),
             Arc::clone(&self.shutdown),
@@ -325,7 +324,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             self.timer_message_store(),
             self.transactional_message_check_service.as_ref(),
             self.ack_message_processor.as_ref(),
-            &self.broker_attached_plugins,
             Arc::clone(&self.is_schedule_service_start),
             Arc::clone(&self.is_transaction_check_service_start),
             Arc::clone(&shutdown),
@@ -354,7 +352,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             &self.consumer_offset_manager,
             &schedule,
             self.timer_message_store(),
-            &self.broker_attached_plugins,
             transition,
             self.metadata_io
                 .as_ref()
@@ -577,11 +574,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         self.timer_message_store
             .as_ref()
             .or_else(|| self.message_store().and_then(BrokerReadStore::get_timer_message_store))
-    }
-
-    #[inline]
-    pub fn broker_attached_plugins(&self) -> &[Arc<dyn BrokerAttachedPlugin>] {
-        &self.broker_attached_plugins
     }
 
     #[inline]
@@ -910,9 +902,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             error!(?error, should_start, "Failed to change ScheduleMessageService status");
             return;
         }
-        for plugin in self.broker_attached_plugins.iter() {
-            plugin.status_changed(should_start);
-        }
         self.change_transaction_check_service_status(should_start).await;
 
         if let Some(ack_message_processor) = &self.ack_message_processor {
@@ -1234,7 +1223,6 @@ impl BrokerRuntime {
             notification_processor: None,
             query_assignment_processor: None,
             metadata_io,
-            broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
             slave_master_addr,
