@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(client):** Remove the unused crate-private delayed client action helper; tracked rebalance scheduling is unchanged ([#12079](https://github.com/mxsm/rocketmq-rust/issues/12079)).
 - **refactor(client):** Remove four unused crate-private KV API aliases while preserving public Admin methods and request behavior ([#12078](https://github.com/mxsm/rocketmq-rust/issues/12078)).
 - **refactor(store):** Remove unused private CommitLog memory lock wrappers; active append and memory lock lifecycle paths are unchanged ([#12064](https://github.com/mxsm/rocketmq-rust/issues/12064)).
+- **refactor(store):** Remove the unused internal Compaction CommitLog dispatch wrapper; production dispatch is unchanged ([#12176](https://github.com/mxsm/rocketmq-rust/issues/12176)).
 - **refactor(client):** Remove the obsolete internal admin error text parser; response codes continue to use structured errors ([#12063](https://github.com/mxsm/rocketmq-rust/issues/12063)).
 - **refactor(broker):** Remove unused legacy PopLite command assembly; current response and deferred reply paths are unchanged ([#12062](https://github.com/mxsm/rocketmq-rust/issues/12062)).
 - **refactor(broker):** Remove the unused internal consumer session expiry helper; manager-owned expiry and transport retirement are unchanged ([#11995](https://github.com/mxsm/rocketmq-rust/issues/11995)).

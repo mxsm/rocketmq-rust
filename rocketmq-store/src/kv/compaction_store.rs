@@ -40,7 +40,6 @@ use crate::kv::compaction_generation::CompactionQueues;
 use crate::kv::compaction_generation::CompactionRecord;
 use crate::kv::compaction_generation::CurrentPointer;
 use crate::kv::compaction_generation::GenerationMetadata;
-use crate::log_file::mapped_file::MappedFile;
 use crate::runtime::StoreRuntimeScope;
 
 type PayloadResolver = dyn Fn(i64, i32) -> Option<Bytes> + Send + Sync;
@@ -410,33 +409,6 @@ impl CompactionStore {
             .entry(queue_key)
             .or_default()
             .insert(record.queue_offset, record);
-    }
-
-    pub fn dispatch_from_commit_log<MF: MappedFile>(
-        &self,
-        dispatch_request: &DispatchRequest,
-        commit_log_file: &MF,
-    ) -> bool {
-        if !dispatch_request.success
-            || dispatch_request.msg_size <= 0
-            || dispatch_request.commit_log_offset < 0
-            || dispatch_request.consume_queue_offset < 0
-        {
-            return false;
-        }
-        let file_from_offset = commit_log_file.get_file_from_offset() as i64;
-        if dispatch_request.commit_log_offset < file_from_offset {
-            return false;
-        }
-        let pos = (dispatch_request.commit_log_offset - file_from_offset) as usize;
-        if commit_log_file
-            .get_data(pos, dispatch_request.msg_size as usize)
-            .is_none()
-        {
-            return false;
-        }
-        self.put_dispatch_message(dispatch_request);
-        true
     }
 
     pub async fn compact_once(&self) -> Result<usize, StoreError> {
