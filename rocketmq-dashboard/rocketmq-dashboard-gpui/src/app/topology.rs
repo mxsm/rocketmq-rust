@@ -16,6 +16,10 @@ use super::{LegacyPageCache, RocketmqDashboard};
 use crate::{features::topology::TopologyIntent, route::AppRoute};
 use gpui::{Context, Subscription, Window};
 
+#[cfg(test)]
+#[path = "topology_layout_tests.rs"]
+mod layout_tests;
+
 impl RocketmqDashboard {
     pub(super) fn topology_subscription(
         pages: &LegacyPageCache,

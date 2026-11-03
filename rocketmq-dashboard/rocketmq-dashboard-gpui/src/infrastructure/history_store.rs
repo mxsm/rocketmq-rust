@@ -12,51 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Versioned metric observations with explicit environment ownership.
-
-use std::{collections::BTreeMap, io, path::PathBuf, sync::Arc};
-
-use rocketmq_dashboard_common::{
-    EnvironmentHistoryPoint, EnvironmentId, HistoryMetricKind, HistoryPoint, HistoryRetention, filter_history_range,
-    retain_history_points_bounded,
-};
-use rocketmq_runtime::ChildServiceContext;
-use serde::{Deserialize, Serialize};
+//! Native History and observed file evidence through the selected shared authority.
 
 use super::{
-    config_store::{ConfigStoreFailure, DesktopConfigStore, write_json_atomically},
-    storage_writer::StorageWriter,
+    config_store::{ConfigStoreFailure, DesktopConfigStore},
+    local_storage_status::{FileIoEvidence, FileReadState, LocalFileStatus, inspect_json},
 };
+use rocketmq_dashboard_common::{
+    EnvironmentHistoryPoint, EnvironmentId, HistoryMetricKind, HistoryPoint, HistoryRetention, filter_history_range,
+};
+pub use rocketmq_dashboard_storage::HistoryAppendOutcome;
+#[cfg(test)]
+use rocketmq_dashboard_storage::{HISTORY_SCHEMA_VERSION, HistoryDocument};
+use rocketmq_dashboard_storage::{HistoryReadOrigin, HistoryWriteOutcome, StorageEngine, StorageIoOperation};
+use rocketmq_runtime::ChildServiceContext;
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
-const HISTORY_SCHEMA_VERSION: u32 = 2;
-const MAX_SERIES_IDENTITY_BYTES: usize = 1_024;
+#[path = "history_ownership.rs"]
+mod ownership;
+pub(crate) use ownership::HistoryCollectionLease;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct HistoryDocument {
-    schema_version: u32,
-    points: Vec<EnvironmentHistoryPoint>,
-    legacy_notes: Vec<LegacyHistoryRecord>,
-}
-
-impl Default for HistoryDocument {
-    fn default() -> Self {
-        Self {
-            schema_version: HISTORY_SCHEMA_VERSION,
-            points: Vec::new(),
-            legacy_notes: Vec::new(),
-        }
-    }
-}
-
-/// History shares the canonical store's process-lifetime directory writer in production.
 pub struct HistoryStore {
     path: PathBuf,
     context: ChildServiceContext,
     gate: tokio::sync::Mutex<()>,
-    owner: Option<Arc<DesktopConfigStore>>,
-    writer: Arc<parking_lot::Mutex<Option<StorageWriter>>>,
+    owner: Arc<DesktopConfigStore>,
+    collection: tokio::sync::Mutex<Option<HistoryCollectionLease>>,
+    holder_id: String,
     health: parking_lot::RwLock<BTreeMap<Option<EnvironmentId>, super::history_health::HistoryCollectionHealth>>,
+    io_evidence: Arc<parking_lot::RwLock<FileIoEvidence>>,
+    #[cfg(test)]
+    unassigned_fixture: bool,
 }
 
 impl HistoryStore {
@@ -68,42 +54,55 @@ impl HistoryStore {
     pub fn environment_snapshot(
         &self,
     ) -> Result<Option<rocketmq_dashboard_common::EnvironmentConnectionSnapshot>, ConfigStoreFailure> {
-        self.owner
-            .as_ref()
-            .map(|owner| owner.environment_snapshot())
-            .transpose()
+        #[cfg(test)]
+        if self.unassigned_fixture {
+            return Ok(None);
+        }
+        self.owner.environment_snapshot().map(Some)
     }
+
+    pub(crate) async fn authoritative_environment_snapshot(
+        &self,
+    ) -> Result<Option<rocketmq_dashboard_common::EnvironmentConnectionSnapshot>, ConfigStoreFailure> {
+        #[cfg(test)]
+        if self.unassigned_fixture {
+            return Ok(None);
+        }
+        self.owner.authoritative_environment_snapshot().await.map(Some)
+    }
+
     #[cfg(test)]
     pub fn new(path: PathBuf, context: ChildServiceContext) -> Arc<Self> {
-        Arc::new(Self {
-            path,
-            context,
-            gate: tokio::sync::Mutex::new(()),
-            owner: None,
-            writer: Arc::new(parking_lot::Mutex::new(None)),
-            health: parking_lot::RwLock::new(BTreeMap::new()),
-        })
+        let owner =
+            DesktopConfigStore::with_history_path(path.with_file_name("config.json"), path.clone(), context.clone());
+        let mut store = Self::compose(path, context, owner);
+        store.unassigned_fixture = true;
+        Arc::new(store)
     }
 
     pub fn with_config_store(path: PathBuf, context: ChildServiceContext, owner: Arc<DesktopConfigStore>) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::compose(path, context, owner))
+    }
+
+    fn compose(path: PathBuf, context: ChildServiceContext, owner: Arc<DesktopConfigStore>) -> Self {
+        Self {
             path,
             context,
             gate: tokio::sync::Mutex::new(()),
-            owner: Some(owner),
-            writer: Arc::new(parking_lot::Mutex::new(None)),
+            owner,
+            collection: tokio::sync::Mutex::new(None),
+            holder_id: format!("gpui-history-{:032x}", rand::random::<u128>()),
             health: parking_lot::RwLock::new(BTreeMap::new()),
-        })
+            io_evidence: Arc::new(parking_lot::RwLock::new(FileIoEvidence::default())),
+            #[cfg(test)]
+            unassigned_fixture: false,
+        }
     }
 
     pub fn collection_health(&self) -> Result<super::history_health::HistoryCollectionHealth, ConfigStoreFailure> {
         let environment = self.environment_snapshot()?.map(|snapshot| snapshot.environment_id);
         let mut health = self.health.read().get(&environment).copied().unwrap_or_default();
-        let settings = self
-            .owner
-            .as_ref()
-            .and_then(|owner| owner.history_settings())
-            .unwrap_or_default();
+        let settings = self.owner.history_settings().unwrap_or_default();
         health.enabled = settings.history_enabled;
         health.interval_seconds = settings.history_interval_seconds;
         Ok(health)
@@ -115,7 +114,7 @@ impl HistoryStore {
         side: super::history_health::CollectionSide,
         timestamp: u64,
         failed_resources: usize,
-        persisted: bool,
+        attempt: super::history_health::CollectionAttempt,
     ) {
         let mut health = self.health.write();
         let health = health.entry(environment).or_default();
@@ -123,51 +122,85 @@ impl HistoryStore {
             super::history_health::CollectionSide::Topics => &mut health.topics,
             super::history_health::CollectionSide::Brokers => &mut health.brokers,
         };
-        side.failed = !persisted;
+        side.last_attempt = Some(attempt);
+        side.last_attempt_epoch_ms = Some(timestamp);
+        side.failed = matches!(
+            attempt,
+            super::history_health::CollectionAttempt::SamplingFailed
+                | super::history_health::CollectionAttempt::PersistenceFailed
+        );
         side.failed_resources = failed_resources;
-        if persisted {
+        if attempt == super::history_health::CollectionAttempt::Persisted {
             side.last_success_epoch_ms = Some(timestamp);
         }
     }
 
-    async fn ensure_writer(&self) -> Result<(), ConfigStoreFailure> {
-        if let Some(owner) = &self.owner {
-            owner.environment_snapshot()?;
-            return Ok(());
-        }
-        let path = self.path.clone();
-        let writer = Arc::clone(&self.writer);
-        self.context
-            .storage_io()
-            .spawn_io("gpui-history-writer", move || {
-                let mut writer = writer.lock();
-                if writer.is_none() {
-                    *writer = Some(StorageWriter::acquire(&path)?);
-                }
-                Ok::<_, ConfigStoreFailure>(())
-            })
+    pub(crate) async fn inspect_storage(&self) -> LocalFileStatus {
+        let _guard = self.gate.lock().await;
+        let file = self
+            .owner
+            .native_storage()
             .await
-            .map_err(ConfigStoreFailure::runtime)?
+            .is_ok_and(|store| store.engine() == StorageEngine::File);
+        if file {
+            let path = self.path.clone();
+            let evidence = Arc::clone(&self.io_evidence);
+            if self
+                .context
+                .storage_io()
+                .spawn_io("gpui-history-status", move || {
+                    inspect_json::<rocketmq_dashboard_storage::HistoryDocument>(
+                        &path,
+                        rocketmq_dashboard_storage::HISTORY_SCHEMA_VERSION,
+                        &evidence,
+                        |document| {
+                            document.validate()?;
+                            Ok(None)
+                        },
+                    );
+                })
+                .await
+                .is_err()
+            {
+                self.io_evidence.write().record_read(FileReadState::Unknown, None, None);
+            }
+        } else {
+            self.io_evidence.write().record_read(FileReadState::Unknown, None, None);
+        }
+        LocalFileStatus {
+            path: self.path.clone(),
+            writer_owned: self.owner.owns_writer(),
+            evidence: *self.io_evidence.read(),
+        }
     }
 
     pub async fn observations(&self) -> Result<Vec<EnvironmentHistoryPoint>, ConfigStoreFailure> {
         let _guard = self.gate.lock().await;
-        self.ensure_writer().await?;
-        let path = self.path.clone();
-        self.context
-            .storage_io()
-            .spawn_io("gpui-history-points", move || {
-                let (document, migrated) = load_document(&path)?;
-                if migrated {
-                    write_json_atomically(&path, &document)?;
+        let result = self.owner.native_storage().await?.read_history().await;
+        match result {
+            Ok(report) => {
+                let mut evidence = self.io_evidence.write();
+                evidence.record_read(
+                    if report.origin == HistoryReadOrigin::Missing {
+                        FileReadState::Missing
+                    } else {
+                        FileReadState::Readable
+                    },
+                    Some(report.document.schema_version),
+                    None,
+                );
+                if report.origin == HistoryReadOrigin::Migrated {
+                    evidence.record_write(true);
                 }
-                Ok(document.points)
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)?
+                Ok(report.document.points)
+            }
+            Err(error) => {
+                self.io_evidence.write().record_read(FileReadState::Failed, None, None);
+                Err(error.into())
+            }
+        }
     }
 
-    /// Compatibility projection. Environment-aware callers use `query_environment`.
     pub async fn points(&self) -> Result<Vec<HistoryPoint>, ConfigStoreFailure> {
         Ok(self
             .observations()
@@ -177,7 +210,6 @@ impl HistoryStore {
             .collect())
     }
 
-    /// Compatibility lookup of unassigned observations only.
     pub async fn query(
         &self,
         metric: HistoryMetricKind,
@@ -189,7 +221,6 @@ impl HistoryStore {
             .await
     }
 
-    /// Environment attribution is filtered before metric, series, or timestamp projection.
     pub async fn query_environment(
         &self,
         environment_id: EnvironmentId,
@@ -216,220 +247,96 @@ impl HistoryStore {
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, ConfigStoreFailure> {
-        let points = self
+        let points: Vec<_> = self
             .observations()
             .await?
             .into_iter()
-            .filter(|observation| observation.environment_id == environment_id)
-            .map(|observation| observation.point)
+            .filter(|point| point.environment_id == environment_id)
+            .map(|point| point.point)
             .filter(|point| point.metric == metric && point.series_identity == series_identity)
-            .collect::<Vec<_>>();
+            .collect();
         Ok(filter_history_range(&points, start_epoch_ms, end_epoch_ms))
     }
 
+    #[cfg(test)]
     pub async fn append_sample(
         &self,
         sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<(), ConfigStoreFailure> {
-        self.append_observations(
-            sample
-                .into_iter()
-                .map(|point| EnvironmentHistoryPoint {
-                    environment_id: None,
-                    point,
-                })
-                .collect(),
-            retention,
-        )
-        .await
+    ) -> Result<HistoryAppendOutcome, ConfigStoreFailure> {
+        self.append_observations(None, sample, retention).await
     }
 
-    /// The environment is captured with the provider generation before sampling starts.
+    #[cfg(test)]
     pub async fn append_environment_sample(
         &self,
         environment_id: EnvironmentId,
         sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<(), ConfigStoreFailure> {
-        self.append_observations(
-            sample
-                .into_iter()
-                .map(|point| EnvironmentHistoryPoint {
-                    environment_id: Some(environment_id.clone()),
-                    point,
-                })
-                .collect(),
-            retention,
-        )
-        .await
+    ) -> Result<HistoryAppendOutcome, ConfigStoreFailure> {
+        self.append_observations(Some(environment_id), sample, retention).await
     }
 
+    #[cfg(test)]
     async fn append_observations(
         &self,
-        sample: Vec<EnvironmentHistoryPoint>,
+        environment: Option<EnvironmentId>,
+        sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<(), ConfigStoreFailure> {
-        let sample = sample
-            .into_iter()
-            .filter(|observation| {
-                let point = &observation.point;
-                point.value.is_finite()
-                    && !point.series_identity.trim().is_empty()
-                    && point.series_identity.len() <= MAX_SERIES_IDENTITY_BYTES
-            })
-            .collect::<Vec<_>>();
+    ) -> Result<HistoryAppendOutcome, ConfigStoreFailure> {
+        let sample = valid_sample(sample);
         if sample.is_empty() {
-            return Ok(());
+            return Ok(HistoryAppendOutcome::NotRetained);
+        }
+        let lease = self
+            .collection_lease(environment, std::time::Duration::from_secs(120))
+            .await?
+            .ok_or_else(ConfigStoreFailure::writer_unavailable)?;
+        self.append_captured(lease, sample, retention).await
+    }
+
+    pub(crate) async fn append_captured(
+        &self,
+        lease: HistoryCollectionLease,
+        sample: Vec<HistoryPoint>,
+        retention: HistoryRetention,
+    ) -> Result<HistoryAppendOutcome, ConfigStoreFailure> {
+        let sample = valid_sample(sample);
+        if sample.is_empty() {
+            return Ok(HistoryAppendOutcome::NotRetained);
         }
         let _guard = self.gate.lock().await;
-        self.ensure_writer().await?;
-        let path = self.path.clone();
-        self.context
-            .storage_io()
-            .spawn_io("gpui-history-append-sample", move || {
-                let (mut document, _) = load_document(&path)?;
-                document.points.extend(sample);
-                document.points = retain_observations(document.points, retention);
-                write_json_atomically(&path, &document)
-            })
-            .await
-            .map_err(ConfigStoreFailure::runtime)?
-    }
-}
-
-fn retain_observations(
-    points: Vec<EnvironmentHistoryPoint>,
-    retention: HistoryRetention,
-) -> Vec<EnvironmentHistoryPoint> {
-    let mut environments: BTreeMap<Option<EnvironmentId>, Vec<HistoryPoint>> = BTreeMap::new();
-    for observation in points {
-        environments
-            .entry(observation.environment_id)
-            .or_default()
-            .push(observation.point);
-    }
-    let mut retained = Vec::new();
-    for (environment_id, points) in environments {
-        for point in retain_history_points_bounded(points, retention) {
-            retained.push(EnvironmentHistoryPoint {
-                environment_id: environment_id.clone(),
-                point,
-            });
-        }
-    }
-    let mut series = BTreeMap::new();
-    for observation in &retained {
-        series
-            .entry((
-                observation.environment_id.clone(),
-                observation.point.metric,
-                observation.point.series_identity.clone(),
-            ))
-            .and_modify(|newest: &mut u64| *newest = (*newest).max(observation.point.timestamp_epoch_ms))
-            .or_insert(observation.point.timestamp_epoch_ms);
-    }
-    let mut ages = series
-        .into_iter()
-        .map(|(key, newest)| (newest, key))
-        .collect::<Vec<_>>();
-    ages.sort();
-    let evicted = ages
-        .into_iter()
-        .rev()
-        .skip(retention.max_series)
-        .map(|(_, key)| key)
-        .collect::<std::collections::BTreeSet<_>>();
-    retained.retain(|observation| {
-        !evicted.contains(&(
-            observation.environment_id.clone(),
-            observation.point.metric,
-            observation.point.series_identity.clone(),
-        ))
-    });
-    retained.sort_by(|left, right| {
-        left.point
-            .timestamp_epoch_ms
-            .cmp(&right.point.timestamp_epoch_ms)
-            .then(left.environment_id.cmp(&right.environment_id))
-            .then(left.point.series_identity.cmp(&right.point.series_identity))
-    });
-    let evict = retained.len().saturating_sub(retention.max_total_points);
-    retained.drain(..evict);
-    retained.sort_by(|left, right| {
-        left.environment_id
-            .cmp(&right.environment_id)
-            .then(left.point.metric.cmp(&right.point.metric))
-            .then(left.point.series_identity.cmp(&right.point.series_identity))
-            .then(left.point.timestamp_epoch_ms.cmp(&right.point.timestamp_epoch_ms))
-    });
-    retained
-}
-
-fn load_document(path: &PathBuf) -> Result<(HistoryDocument, bool), ConfigStoreFailure> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((HistoryDocument::default(), false)),
-        Err(source) => return Err(ConfigStoreFailure::io("read history", path.clone(), source)),
-    };
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|source| ConfigStoreFailure::invalid_document(path.clone(), source))?;
-    if value.is_array() {
-        let legacy_notes = serde_json::from_value(value)
-            .map_err(|source| ConfigStoreFailure::invalid_document(path.clone(), source))?;
-        return Ok((
-            HistoryDocument {
-                legacy_notes,
-                ..HistoryDocument::default()
-            },
-            true,
-        ));
-    }
-    let version = value
-        .get("schemaVersion")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    match version {
-        1 => {
-            #[derive(Deserialize)]
-            #[serde(deny_unknown_fields, rename_all = "camelCase")]
-            struct LegacyMetricDocument {
-                schema_version: u32,
-                points: Vec<HistoryPoint>,
+        let store = self.owner.native_storage().await?;
+        let result = match lease {
+            HistoryCollectionLease::Environment(lease) => store.append_history_observed(lease, sample, retention).await,
+            HistoryCollectionLease::Unassigned(lease) => {
+                store.append_unassigned_history_observed(lease, sample, retention).await
             }
-            let legacy: LegacyMetricDocument = serde_json::from_value(value)
-                .map_err(|source| ConfigStoreFailure::invalid_document(path.clone(), source))?;
-            let _ = legacy.schema_version;
-            Ok((
-                HistoryDocument {
-                    points: legacy
-                        .points
-                        .into_iter()
-                        .map(|point| EnvironmentHistoryPoint {
-                            environment_id: None,
-                            point,
-                        })
-                        .collect(),
-                    ..HistoryDocument::default()
-                },
-                true,
-            ))
+        };
+        match result {
+            Ok(report) => {
+                if store.engine() == StorageEngine::File && report.write == HistoryWriteOutcome::Committed {
+                    self.io_evidence.write().record_write(true);
+                }
+                Ok(report.outcome)
+            }
+            Err(error) => {
+                if error.io_operation() == Some(StorageIoOperation::Write) {
+                    self.io_evidence.write().record_write(false);
+                }
+                Err(error.into())
+            }
         }
-        2 => serde_json::from_value(value)
-            .map(|document| (document, false))
-            .map_err(|source| ConfigStoreFailure::invalid_document(path.clone(), source)),
-        version => Err(ConfigStoreFailure::unsupported_schema(
-            u32::try_from(version).unwrap_or(u32::MAX),
-            HISTORY_SCHEMA_VERSION,
-        )),
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct LegacyHistoryRecord {
-    id: String,
-    note: String,
+fn valid_sample(sample: Vec<HistoryPoint>) -> Vec<HistoryPoint> {
+    sample
+        .into_iter()
+        .filter(|point| {
+            point.value.is_finite() && !point.series_identity.trim().is_empty() && point.series_identity.len() <= 1_024
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -444,6 +351,22 @@ mod tests {
             let first = EnvironmentId::parse("production").unwrap();
             let second = EnvironmentId::parse("staging").unwrap();
             runtime.block_on(async {
+                let authority = store.owner.native_storage().await.unwrap();
+                let mut snapshot = authority.load_desktop().await.unwrap().unwrap();
+                for id in [&first, &second] {
+                    snapshot
+                        .document
+                        .profiles
+                        .push(rocketmq_dashboard_storage::EnvironmentProfile::from_config(
+                            id.clone(),
+                            id.as_str().into(),
+                            &rocketmq_dashboard_storage::DesktopConfig::default(),
+                        ));
+                }
+                authority
+                    .compare_exchange_desktop(snapshot.storage_revision, snapshot.document)
+                    .await
+                    .unwrap();
                 store
                     .append_environment_sample(first.clone(), vec![point("orders", 1, 10.0)], retention(10))
                     .await
@@ -503,8 +426,8 @@ mod tests {
                 );
                 assert_eq!(store.observations().await.unwrap()[0].point, legacy_point);
             });
-            let (migrated, needs_migration) = load_document(&path.to_path_buf()).unwrap();
-            assert!(!needs_migration);
+            let migrated: HistoryDocument = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(migrated.schema_version, HISTORY_SCHEMA_VERSION);
             assert_eq!(migrated.points[0].environment_id, None);
         });
     }

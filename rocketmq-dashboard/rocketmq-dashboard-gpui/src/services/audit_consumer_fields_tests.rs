@@ -215,7 +215,7 @@ fn audit_consumer_edit_dropped_waiter_keeps_reviewed_intent_and_never_persists_c
     fixture.runtime.block_on(async {
         let mut waiter=Box::pin(fixture.services.patch_consumer_config(ConsumerRequestScope {revision:0,epoch:1,query_scope:Default::default()},command));
         tokio::select! {result=&mut waiter=>panic!("edit completed before release: {}",result.is_ok()),result=started=>result.unwrap(),}
-        let pending=fixture.services.audit_pending().unwrap().pop().unwrap();assert_eq!(pending.consumer_fields,expected);
+        let pending=fixture.services.audit_pending().await.unwrap().pop().unwrap();assert_eq!(pending.consumer_fields,expected);
         drop(waiter);fixture.services.sign_out().await.unwrap();
         let mut changes=fixture.services.audit_changes().unwrap();changes.borrow_and_update();
         assert!(release.send(Ok(ConsumerConfigPatchOutcome::Applied {previous_generation:7,generation:8})).is_ok());

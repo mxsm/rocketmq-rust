@@ -15,11 +15,11 @@
 //! Application-owned mutation attribution, terminal writes, and audit-only recovery.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::SystemTime,
 };
@@ -33,7 +33,7 @@ use super::AppServices;
 use crate::{
     infrastructure::{
         audit_store::AuditStore,
-        auth_state::{DesktopAuthState, LocalSession},
+        auth_state::DesktopAuthState,
         config_store::{ConfigStoreFailure, DesktopConfigStore},
     },
     state::{UiError, UiErrorCode},
@@ -57,7 +57,7 @@ struct FailedTerminalWrite {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct AuditReadAccess {
     // Authentication-disabled mode intentionally has no operator identity requirement.
-    session: Option<LocalSession>,
+    session: Option<super::SessionState>,
 }
 
 #[cfg(test)]
@@ -74,7 +74,7 @@ pub(super) struct AuditService {
     // reserved slot retains its logout fact without displacing any admitted Broker outcome.
     failed_logout: parking_lot::Mutex<Option<FailedTerminalWrite>>,
     changes: tokio::sync::watch::Sender<usize>,
-    recovery_loaded: AtomicBool,
+    recovered_pending_ids: parking_lot::Mutex<Option<BTreeSet<String>>>,
     recovered_pending: AtomicUsize,
     #[cfg(test)]
     terminal_gate: parking_lot::Mutex<Option<TerminalGate>>,
@@ -90,19 +90,71 @@ impl AuditService {
             failed_writes: parking_lot::Mutex::new(BTreeMap::new()),
             failed_logout: parking_lot::Mutex::new(None),
             changes,
-            recovery_loaded: AtomicBool::new(false),
+            recovered_pending_ids: parking_lot::Mutex::new(None),
             recovered_pending: AtomicUsize::new(0),
             #[cfg(test)]
             terminal_gate: parking_lot::Mutex::new(None),
         })
     }
 
-    pub(super) fn recover_pending(&self) {
-        if !self.recovery_loaded.swap(true, Ordering::AcqRel) {
-            let count = self.store.pending().map_or(0, |pending| pending.len());
-            self.recovered_pending.store(count, Ordering::Release);
-            self.changes.send_replace(count);
+    pub(super) async fn recover_pending(&self) {
+        if self.recovered_pending_ids.lock().is_some() {
+            return;
         }
+        let Ok(pending) = self.store.pending().await else {
+            return;
+        };
+        let changed = {
+            let mut recovered = self.recovered_pending_ids.lock();
+            if recovered.is_some() {
+                return;
+            }
+            let ids: BTreeSet<_> = pending
+                .into_iter()
+                .take(crate::infrastructure::audit_store::MAX_PENDING)
+                .map(|operation| operation.context.request_id)
+                .collect();
+            let count = ids.len();
+            *recovered = Some(ids);
+            self.recovered_pending.swap(count, Ordering::AcqRel) != count
+        };
+        if changed {
+            self.notify_recovery_change();
+        }
+    }
+
+    fn reconcile_recovered_pending(&self, pending: &[AuditAcceptedOperation]) {
+        let changed = {
+            let mut recovered = self.recovered_pending_ids.lock();
+            let Some(recovered) = recovered.as_mut() else {
+                return;
+            };
+            let pending: BTreeSet<_> = pending
+                .iter()
+                .map(|operation| operation.context.request_id.as_str())
+                .collect();
+            // Only startup requests can be recovered; another desktop's new work is not a crash.
+            recovered.retain(|request_id| pending.contains(request_id.as_str()));
+            self.recovered_pending.swap(recovered.len(), Ordering::AcqRel) != recovered.len()
+        };
+        if changed {
+            self.notify_recovery_change();
+        }
+    }
+
+    fn notify_recovery_change(&self) {
+        // Publish the current count even if another successful read reconciled first.
+        let _recovered = self.recovered_pending_ids.lock();
+        let count = self.failed_writes.lock().len()
+            + usize::from(self.failed_logout.lock().is_some())
+            + self.recovered_pending.load(Ordering::Acquire);
+        self.changes.send_if_modified(|current| {
+            if *current == count {
+                return false;
+            }
+            *current = count;
+            true
+        });
     }
 
     fn capture(
@@ -378,7 +430,7 @@ impl AppServices {
                     false,
                 ));
             }
-            Some(session)
+            Some(super::SessionState::from_local(&session))
         } else {
             None
         };
@@ -413,6 +465,38 @@ impl AppServices {
         operation: Option<AuditAcceptedOperation>,
         future: impl Future<Output = Result<T, UiError>> + Send + 'static,
     ) -> Result<T, UiError> {
+        let validate_access = !operation
+            .as_ref()
+            .is_some_and(|operation| matches!(operation.action, AuditAction::LocalLogin | AuditAction::LocalLogout));
+        let expected_session = self.current_session();
+        let services = self.clone();
+        let work = async move {
+            if validate_access {
+                let access = services.protected_access_for(expected_session.clone()).await?;
+                if services.current_session() != expected_session || !services.protected_access_is_current(&access) {
+                    return Err(UiError::new(
+                        "The session changed before the operation was accepted. Review it again.",
+                        UiErrorCode::Authentication,
+                        false,
+                    ));
+                }
+            }
+            services.record_mutation(operation, future).await
+        };
+        // Confirmation registers the application owner immediately. Its job validates access
+        // before Audit admission or any business call, independently of GPUI delivery.
+        match &self.runtime_bridge {
+            Some(runtime) => runtime.run_owned(name, work).await,
+            None => work.await,
+        }
+    }
+
+    pub(super) async fn run_owned_mutation<T: MutationAudit + Send + 'static>(
+        &self,
+        name: &'static str,
+        operation: Option<AuditAcceptedOperation>,
+        future: impl Future<Output = Result<T, UiError>> + Send + 'static,
+    ) -> Result<T, UiError> {
         let services = self.clone();
         let work = async move { services.record_mutation(operation, future).await };
         match &self.runtime_bridge {
@@ -435,9 +519,40 @@ impl AppServices {
                 super::config_ui_error_with_summary(source, "The operation could not be recorded and was not started.")
             })?;
         }
+        self.complete_admitted_mutation(operation, future).await
+    }
+
+    /// The whole DLQ sequence must be durably admitted before its first business call.
+    pub(super) async fn admit_audit_batch(&self, operations: &[Option<AuditAcceptedOperation>]) -> Result<(), UiError> {
+        if let Some(audit) = &self.audit {
+            audit
+                .store
+                .accept_batch(operations.iter().flatten().cloned().collect())
+                .await
+                .map_err(|source| {
+                    super::config_ui_error_with_summary(source, "The batch could not be recorded and was not started.")
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Already admitted work retains its captured attribution while configuration/session changes.
+    pub(super) async fn complete_admitted_mutation<T: MutationAudit + Send>(
+        &self,
+        operation: Option<AuditAcceptedOperation>,
+        future: impl Future<Output = Result<T, UiError>> + Send,
+    ) -> Result<T, UiError> {
         let result = future.await;
-        if let (Some(audit), Some(operation)) = (audit, operation) {
+        if let (Some(audit), Some(mut operation)) = (self.audit.clone(), operation) {
             let (outcome, facts) = result.as_ref().map_or_else(error_outcome, MutationAudit::audit);
+            if operation.action == AuditAction::LocalLogin
+                && outcome == AuditOutcome::Succeeded
+                && let Some(actor @ OperationActor::LocalOperator { .. }) = &facts.authenticated_actor
+            {
+                // Login has no durable pre-verification acceptance. Finalize this terminal actor
+                // from its verified result, never from a replacement global session or form input.
+                operation.context.actor = actor.clone();
+            }
             // Preserve a terminal fact even if the wall clock fails after acceptance.
             let timestamp_epoch_ms = now_epoch_ms().unwrap_or(operation.accepted_at_epoch_ms);
             audit
@@ -483,26 +598,51 @@ impl AppServices {
         }
     }
 
-    pub(crate) fn query_audit(&self, query: AuditQuery) -> Result<AuditPage, UiError> {
-        self.audit_read_access()?;
+    pub(crate) async fn query_audit(&self, query: AuditQuery) -> Result<AuditPage, UiError> {
+        let access = self.audit_read_access()?;
         let audit = self
             .audit
             .as_ref()
             .ok_or_else(|| UiError::new("Local audit is unavailable.", UiErrorCode::CapabilityUnavailable, false))?;
-        audit.store.query(query).map_err(|error| {
-            super::config_ui_error_with_summary(
-                error,
-                "Local audit records could not be read. Restart the applied query if its retained page expired.",
-            )
+        let store = audit.store.clone();
+        let work = async move {
+            store.query_with_pending(query).await.map_err(|error| {
+                super::config_ui_error_with_summary(
+                    error,
+                    "Audit records could not be read. Restart the applied query if its retained page expired.",
+                )
+            })
+        };
+        let result = self.run_protected_query("gpui-audit-query", work).await;
+        if self.audit_read_access()? != access {
+            return Err(UiError::new(
+                "Audit access changed while records were read.",
+                UiErrorCode::Authentication,
+                true,
+            ));
+        }
+        result.map(|(page, pending)| {
+            audit.reconcile_recovered_pending(&pending);
+            page
         })
     }
 
-    pub(crate) fn audit_pending(&self) -> Result<Vec<AuditAcceptedOperation>, UiError> {
+    pub(crate) async fn audit_pending(&self) -> Result<Vec<AuditAcceptedOperation>, UiError> {
         let Some(audit) = &self.audit else {
             return Ok(Vec::new());
         };
-        self.audit_read_access()?;
-        audit.store.pending().map_err(super::config_ui_error)
+        let access = self.audit_read_access()?;
+        let store = audit.store.clone();
+        let work = async move { store.pending().await.map_err(super::config_ui_error) };
+        let result = self.run_protected_query("gpui-audit-pending", work).await;
+        if self.audit_read_access()? != access {
+            return Err(UiError::new(
+                "Audit access changed while records were read.",
+                UiErrorCode::Authentication,
+                true,
+            ));
+        }
+        result.inspect(|pending| audit.reconcile_recovered_pending(pending))
     }
 }
 

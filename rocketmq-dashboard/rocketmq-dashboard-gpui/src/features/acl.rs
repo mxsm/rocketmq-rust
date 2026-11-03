@@ -96,6 +96,8 @@ impl AclForm {
 
 pub struct AclView {
     services: AppServices,
+    session_owner: Option<crate::services::SessionState>,
+    access_task: Option<Task<()>>,
     revision: u64,
     active: bool,
     pub(super) store: AclStore,
@@ -141,8 +143,11 @@ impl AclView {
                 view.draft_changed(window, cx);
             }),
         ];
+        let session_owner = services.current_session();
         Self {
             services,
+            session_owner,
+            access_task: None,
             revision,
             active: false,
             store: AclStore::default(),
@@ -195,6 +200,7 @@ impl AclView {
         }
     }
     fn close_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.access_task = None;
         self.show_passwords = false;
         self.store.clear_secrets();
         if let Some(form) = self.form.take() {
@@ -203,6 +209,7 @@ impl AclView {
         }
     }
     fn draft_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.access_task = None;
         self.users_task = None;
         self.policies_task = None;
         self.close_form(window, cx);
@@ -373,6 +380,16 @@ impl AclView {
                         .ok_text("Confirm once")
                         .cancel_text("Close"),
                 )
+                .footer(|ok, cancel, window, cx| {
+                    vec![
+                        div()
+                            .debug_selector(|| "acl-dialog-close".into())
+                            .child(cancel(window, cx)),
+                        div()
+                            .debug_selector(|| "acl-dialog-confirm".into())
+                            .child(ok(window, cx)),
+                    ]
+                })
                 .child(child)
                 .on_ok(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| view.submit(window, cx));
@@ -734,9 +751,23 @@ impl Render for AclView {
                         "Show backend-returned passwords"
                     })
                     .disabled(!confirmed)
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.show_passwords = !view.show_passwords;
-                        cx.notify();
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        if view.show_passwords {
+                            view.show_passwords = false;
+                            cx.notify();
+                            return;
+                        }
+                        view.access_task = Some(crate::components::protected_action::run(
+                            view.services.clone(),
+                            view.session_owner.clone(),
+                            view.revision,
+                            window,
+                            cx,
+                            |view, _, cx| {
+                                view.show_passwords = true;
+                                cx.notify();
+                            },
+                        ));
                     })),
             );
         }

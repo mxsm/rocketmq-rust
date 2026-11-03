@@ -104,8 +104,8 @@ impl Fixture {
     }
 
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.services
-            .query_audit(AuditQuery {
+        crate::infrastructure::audit_store::persisted_journal(self.store.path())
+            .query(AuditQuery {
                 filter: AuditFilter::recent(crate::services::audit::now_epoch_ms().unwrap()),
                 limit: 200,
                 cursor: None,
@@ -260,7 +260,7 @@ fn monitor_owned_waiter_drop_keeps_trusted_actor_and_atomic_terminal_without_rep
         let (started, release) = store.hold_next_commit();
         let mut waiter = Box::pin(fixture.services.mutate_monitor_rule(0, fixture.request("orders", 0, 2, 300)));
         tokio::select! { result = &mut waiter => panic!("Commit finished before release: {result:?}"), result = started => result.unwrap() }
-        let pending = fixture.services.audit_pending().unwrap().pop().unwrap();
+        let pending = fixture.services.audit_pending().await.unwrap().pop().unwrap();
         drop(waiter);
         fixture.services.sign_out().await.unwrap();
         release.send(()).unwrap();
@@ -271,7 +271,7 @@ fn monitor_owned_waiter_drop_keeps_trusted_actor_and_atomic_terminal_without_rep
         assert_eq!(event.operation.context.actor, OperationActor::LocalOperator { username: "operator".into() });
         assert_eq!(event.outcome, AuditOutcome::Succeeded);
         assert_eq!(rule.thresholds.unwrap().max_diff_total, 300);
-        assert!(fixture.services.audit_pending().unwrap().is_empty());
+        assert!(crate::infrastructure::audit_store::persisted_journal(fixture.store.path()).pending().is_empty());
         assert!(!serde_json::to_string(&event).unwrap().contains("maxDiffTotal"));
     });
     fixture.runtime.shutdown_runtime_blocking().unwrap();

@@ -24,6 +24,7 @@ pub mod key_value;
 pub mod metric_card;
 #[path = "components/page_header.rs"]
 pub mod page_header;
+pub(crate) mod protected_action;
 #[path = "components/sidebar.rs"]
 pub mod sidebar;
 #[path = "components/states.rs"]
@@ -38,6 +39,8 @@ pub mod topbar;
 pub(crate) mod topology_map;
 #[path = "components/topology_panels.rs"]
 pub(crate) mod topology_panels;
+#[path = "components/topology_sphere.rs"]
+pub(crate) mod topology_sphere;
 #[path = "components/trend.rs"]
 pub mod trend;
 

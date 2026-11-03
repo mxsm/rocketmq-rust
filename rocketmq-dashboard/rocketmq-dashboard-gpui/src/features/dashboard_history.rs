@@ -155,6 +155,7 @@ impl DashboardView {
             .map(|health| {
                 let status = match health.status(now) {
                     CollectionStatus::Disabled => "Collection disabled",
+                    CollectionStatus::Standby => "Waiting for collection ownership",
                     CollectionStatus::Warming => "Warming up",
                     CollectionStatus::Normal => "Collecting normally",
                     CollectionStatus::Stale => "Stale collection",

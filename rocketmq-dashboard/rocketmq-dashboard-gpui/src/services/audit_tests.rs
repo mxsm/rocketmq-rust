@@ -33,12 +33,12 @@ mod consumer_fields;
 #[path = "audit_topic_fields_tests.rs"]
 mod topic_fields;
 
+#[path = "audit_login_tests.rs"]
+mod login;
+
 use super::*;
 use crate::{
-    infrastructure::{
-        audit_store::AuditStore,
-        auth_state::{LOGIN_PASSWORD_ENV, LOGIN_USERNAME_ENV, MapEnvironment},
-    },
+    infrastructure::auth_state::{EnvironmentReader, LOGIN_PASSWORD_ENV, LOGIN_USERNAME_ENV, MapEnvironment},
     services::{
         brokers::BrokerConfigMutationResult,
         consumers::{ConsumerRequestScope, test_support::FakeConsumerBackend},
@@ -58,6 +58,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_environment(Arc::new(MapEnvironment::new([
+            (LOGIN_USERNAME_ENV, "operator"),
+            (LOGIN_PASSWORD_ENV, "private-password"),
+        ])))
+    }
+
+    fn with_environment(environment: Arc<dyn EnvironmentReader>) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("audit-service-test", 1))
             .unwrap()
@@ -68,10 +75,7 @@ impl Fixture {
             directory.path().join("config.json"),
             runtime.root_context().component("storage"),
         );
-        let auth = DesktopAuthState::new(Arc::new(MapEnvironment::new([
-            (LOGIN_USERNAME_ENV, "operator"),
-            (LOGIN_PASSWORD_ENV, "private-password"),
-        ])));
+        let auth = DesktopAuthState::new(environment);
         let mutations = runtime.root_context().component("mutations");
         let services = AppServices::desktop_with_fake_provider(
             Arc::clone(&store),
@@ -92,8 +96,8 @@ impl Fixture {
     }
 
     fn events(&self) -> Vec<AuditEvent> {
-        self.services
-            .query_audit(AuditQuery {
+        crate::infrastructure::audit_store::persisted_journal(self.store.path())
+            .query(AuditQuery {
                 filter: AuditFilter::recent(now_epoch_ms().unwrap()),
                 limit: 200,
                 cursor: None,
@@ -127,6 +131,144 @@ fn applied_broker() -> BrokerConfigMutationResult {
         invalidations: Vec::new(),
         error: UiError::new("Authoritative refresh failed.", UiErrorCode::Connection, true),
     }
+}
+
+#[test]
+fn audit_recovery_warning_tracks_only_unresolved_startup_requests_after_peer_completion() {
+    let fixture = Fixture::new();
+    let executed = Arc::new(AtomicUsize::new(0));
+    fixture.runtime.block_on(async {
+        let capture = || {
+            fixture
+                .services
+                .accept_operation(
+                    0,
+                    AuditAction::MessageConsumed,
+                    OperationResource::Message("opaque-id".into()),
+                )
+                .unwrap()
+                .unwrap()
+        };
+        let old_unresolved = capture();
+        fixture
+            .services
+            .audit
+            .as_ref()
+            .unwrap()
+            .store
+            .accept(old_unresolved.clone())
+            .await
+            .unwrap();
+        let operation = capture();
+        let (started, release) = fixture.services.hold_next_audit_terminal();
+        let observed = executed.clone();
+        let mut completing = Box::pin(fixture.services.run_mutation(
+            "peer-held-terminal",
+            Some(operation),
+            async move {
+                observed.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        ));
+        tokio::select! {
+            result = &mut completing => panic!("terminal completed before release: {result:?}"),
+            result = started => result.unwrap(),
+        }
+        // Two desktop services share one opened file authority, just as SQL peers share a journal.
+        let peer = AppServices::desktop_with_fake_provider(
+            fixture.store.clone(),
+            fixture.auth.clone(),
+            fixture.runtime.root_context().component("peer-services"),
+            fixture.runtime.root_context().component("peer-history"),
+            fixture.runtime.root_context().component("peer-monitor"),
+        );
+        peer.bootstrap().await.unwrap();
+        let mut changes = peer.audit_changes().unwrap();
+        assert_eq!(*changes.borrow_and_update(), 2);
+        assert!(peer.audit_recovery_warning());
+        let query = || AuditQuery {
+            filter: AuditFilter::recent(now_epoch_ms().unwrap()),
+            limit: 200,
+            cursor: None,
+        };
+        peer.query_audit(query()).await.unwrap();
+        assert!(
+            !changes.has_changed().unwrap(),
+            "Unresolved startup requests do not cause refresh notification loops"
+        );
+        let newly_pending = capture();
+        fixture
+            .services
+            .audit
+            .as_ref()
+            .unwrap()
+            .store
+            .accept(newly_pending.clone())
+            .await
+            .unwrap();
+        peer.query_audit(query()).await.unwrap();
+        assert!(
+            !changes.has_changed().unwrap(),
+            "New peer work is not a recovered startup request"
+        );
+        assert_eq!(*changes.borrow_and_update(), 2);
+
+        release.send(()).unwrap();
+        completing.await.unwrap();
+        peer.query_audit(query()).await.unwrap();
+        assert!(
+            peer.audit_recovery_warning(),
+            "The other old request remains unresolved"
+        );
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(*changes.borrow_and_update(), 1);
+        fixture
+            .services
+            .audit
+            .as_ref()
+            .unwrap()
+            .store
+            .finish(
+                old_unresolved,
+                AuditOutcome::Unknown,
+                AuditFacts::default(),
+                now_epoch_ms().unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let backup = fixture.directory.path().join("read-failure-backup.json");
+        std::fs::rename(fixture.store.path(), &backup).unwrap();
+        std::fs::create_dir(fixture.store.path()).unwrap();
+        assert!(peer.query_audit(query()).await.is_err());
+        assert!(peer.audit_pending().await.is_err());
+        assert!(
+            peer.audit_recovery_warning(),
+            "Failed reads cannot prove old requests resolved"
+        );
+        assert_eq!(*changes.borrow(), 1);
+        assert!(!changes.has_changed().unwrap());
+        std::fs::remove_dir(fixture.store.path()).unwrap();
+        std::fs::rename(backup, fixture.store.path()).unwrap();
+        let pending = peer.audit_pending().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].context.request_id, newly_pending.context.request_id);
+        assert!(
+            !peer.audit_recovery_warning(),
+            "A successful pending read clears the last resolved startup warning"
+        );
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(*changes.borrow_and_update(), 0);
+        peer.query_audit(query()).await.unwrap();
+        assert!(!changes.has_changed().unwrap());
+        assert_eq!(
+            fixture.services.audit_pending().await.unwrap(),
+            pending,
+            "Warning reconciliation must not remove actual pending records"
+        );
+    });
+    assert_eq!(executed.load(Ordering::Acquire), 1, "Recovery never replays peer work");
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
 }
 
 #[test]
@@ -202,7 +344,16 @@ fn audit_business_success_survives_terminal_write_failure_and_retry_never_replay
             BrokerConfigMutationResult::AppliedReloadFailed { .. }
         ));
         assert!(fixture.services.audit_write_warning());
-        assert_eq!(fixture.services.audit_pending().unwrap().len(), 1);
+        assert!(
+            fixture.services.audit_pending().await.is_err(),
+            "unavailable authority cannot return cached pending data"
+        );
+        assert_eq!(
+            crate::infrastructure::audit_store::persisted_journal(&backup)
+                .pending()
+                .len(),
+            1
+        );
         fixture.services.retry_audit_writes().await.unwrap();
         assert!(fixture.services.audit_write_warning(), "a failed retry remains visible");
         std::fs::remove_dir(fixture.store.path()).unwrap();
@@ -210,7 +361,7 @@ fn audit_business_success_survives_terminal_write_failure_and_retry_never_replay
         fixture.services.retry_audit_writes().await.unwrap();
         fixture.services.retry_audit_writes().await.unwrap();
         assert!(!fixture.services.audit_write_warning());
-        assert!(fixture.services.audit_pending().unwrap().is_empty());
+        assert!(fixture.services.audit_pending().await.unwrap().is_empty());
     });
     assert_eq!(backend.calls().patches.len(), 1);
     let events = fixture.events();
@@ -237,7 +388,7 @@ fn audit_owned_shutdown_timeout_leaves_a_durable_unknown_request_without_replay(
         drop(waiter);
         let report = fixture.mutations.task_group().shutdown(Duration::ZERO).await;
         assert!(report.timed_out > 0);
-        assert_eq!(fixture.services.audit_pending().unwrap().len(), 1);
+        assert_eq!(crate::infrastructure::audit_store::persisted_journal(fixture.store.path()).pending().len(), 1);
         assert!(fixture.events().is_empty());
     });
     let bytes: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture.store.path()).unwrap()).unwrap();
@@ -401,6 +552,7 @@ fn audit_query_access_follows_local_auth_and_failed_login_does_not_persist_the_s
                     limit: 10,
                     cursor: None
                 })
+                .await
                 .is_err()
         );
         assert!(
@@ -422,66 +574,24 @@ fn audit_query_access_follows_local_auth_and_failed_login_does_not_persist_the_s
     assert!(!file.contains("wrong-password"));
     assert!(!file.contains("private-password"));
     assert!(
-        AuditStore::new(Arc::clone(&fixture.store))
+        crate::infrastructure::audit_store::persisted_journal(fixture.store.path())
             .pending()
-            .unwrap()
             .is_empty()
     );
     fixture.runtime.shutdown_runtime_blocking().unwrap();
 }
 
 #[test]
-fn audit_login_retains_the_frozen_actor_and_records_only_the_verified_session_identity() {
-    let fixture = Fixture::new();
-    let environment = fixture.store.environments().unwrap().active_id;
-    fixture.runtime.block_on(async {
-        assert!(
-            fixture
-                .services
-                .authenticate("unverified-form-user", "wrong-password")
-                .await
-                .is_err()
-        );
-        fixture
-            .services
-            .authenticate("operator", "private-password")
-            .await
-            .unwrap();
-    });
-    let events = fixture.events();
-    let successful = events
-        .iter()
-        .find(|event| event.operation.action == AuditAction::LocalLogin && event.outcome == AuditOutcome::Succeeded)
-        .unwrap();
-    assert_eq!(successful.operation.context.actor, OperationActor::LocalDesktop);
-    assert_eq!(successful.operation.context.environment_id, environment);
-    assert_eq!(successful.operation.context.configuration_revision, 0);
-    assert_eq!(
-        successful.facts.authenticated_actor,
-        Some(OperationActor::LocalOperator {
-            username: "operator".into()
-        })
-    );
-    let rejected = events
-        .iter()
-        .find(|event| event.outcome == AuditOutcome::Rejected)
-        .unwrap();
-    assert!(rejected.facts.authenticated_actor.is_none());
-    assert_ne!(
-        successful.operation.context.request_id,
-        rejected.operation.context.request_id
-    );
-    let file = std::fs::read_to_string(fixture.store.path()).unwrap();
-    for forbidden in ["unverified-form-user", "wrong-password", "private-password"] {
-        assert!(!file.contains(forbidden));
-    }
-    fixture.runtime.shutdown_runtime_blocking().unwrap();
-}
-
-#[test]
 fn audit_saturated_terminal_queue_still_signs_out_and_retries_only_the_reserved_logout_fact() {
     let fixture = Fixture::new();
-    fixture.auth.authenticate("operator", "private-password").unwrap();
+    fixture
+        .runtime
+        .block_on(
+            fixture
+                .services
+                .establish_session_for_test("operator", "private-password"),
+        )
+        .unwrap();
     fixture.runtime.block_on(async {
         let audit = fixture.services.audit.as_ref().unwrap();
         let mut writes = Vec::new();
@@ -544,7 +654,11 @@ fn audit_saturated_terminal_queue_still_signs_out_and_retries_only_the_reserved_
         std::fs::remove_dir(fixture.store.path()).unwrap();
         std::fs::rename(backup, fixture.store.path()).unwrap();
         // A persistence retry must not execute sign_out again against a later session.
-        fixture.auth.authenticate("operator", "private-password").unwrap();
+        fixture
+            .services
+            .establish_session_for_test("operator", "private-password")
+            .await
+            .unwrap();
         fixture.services.retry_audit_writes().await.unwrap();
         assert!(fixture.auth.session().is_authenticated());
         assert!(audit.failed_writes.lock().is_empty());
@@ -606,10 +720,7 @@ fn audit_retry_button_enters_the_owned_runtime_from_the_gpui_executor(cx: &mut g
         Root::new(dashboard, window, cx)
     });
     cx.run_until_parked();
-    assert_eq!(
-        completion.recv_timeout(Duration::from_secs(5)).unwrap(),
-        "gpui-bootstrap"
-    );
+    assert_eq!(crate::app::tests::next_owned_completion(&completion), "gpui-bootstrap");
     cx.run_until_parked();
     let bounds = cx
         .debug_bounds("retry-audit-write")
@@ -617,7 +728,7 @@ fn audit_retry_button_enters_the_owned_runtime_from_the_gpui_executor(cx: &mut g
     cx.simulate_click(bounds.center(), Modifiers::default());
     cx.run_until_parked();
     assert_eq!(
-        completion.recv_timeout(Duration::from_secs(5)).unwrap(),
+        crate::app::tests::next_owned_completion(&completion),
         "gpui-audit-retry"
     );
     cx.run_until_parked();

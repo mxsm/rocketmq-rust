@@ -19,9 +19,9 @@ mod mutations;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    WeakEntity, Window, div, px,
+    App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window,
+    div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _, WindowExt as _,
@@ -57,6 +57,8 @@ struct ConsumerTableDelegate {
     rows: Vec<ConsumerGroupObservation>,
     loading: bool,
     owner: Option<WeakEntity<ConsumersView>>,
+    session_owner: Option<crate::services::SessionState>,
+    revision: u64,
 }
 
 impl ConsumerTableDelegate {
@@ -75,6 +77,8 @@ impl ConsumerTableDelegate {
             rows: Vec::new(),
             loading: true,
             owner: None,
+            session_owner: None,
+            revision: 0,
         }
     }
 }
@@ -107,6 +111,9 @@ impl TableDelegate for ConsumerTableDelegate {
         let value = match column {
             0 => {
                 let group = item.identity.as_str().to_owned();
+                let owner = self.owner.clone();
+                let session_owner = self.session_owner.clone();
+                let revision = self.revision;
                 return div()
                     .w_full()
                     .min_w_0()
@@ -122,7 +129,20 @@ impl TableDelegate for ConsumerTableDelegate {
                             .ghost()
                             .debug_selector(move || format!("consumer-copy-row-{row}"))
                             .tooltip(group.clone())
-                            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(group.clone()))),
+                            .on_click(move |_, window, cx| {
+                                if let Some(owner) = &owner {
+                                    let _ = owner.update(cx, |view, cx| {
+                                        view.access_task = Some(crate::components::protected_action::copy(
+                                            view.services.clone(),
+                                            session_owner.clone(),
+                                            revision,
+                                            group.clone(),
+                                            window,
+                                            cx,
+                                        ));
+                                    });
+                                }
+                            }),
                     );
             }
             1 => category_label(item.category).into(),
@@ -167,6 +187,8 @@ impl TableDelegate for ConsumerTableDelegate {
 
 pub struct ConsumersView {
     services: AppServices,
+    session_owner: Option<crate::services::SessionState>,
+    access_task: Option<Task<()>>,
     revision: u64,
     pub store: ConsumersStore,
     keyword: Entity<InputState>,
@@ -223,8 +245,11 @@ impl ConsumersView {
                 }
             }),
         ];
+        let session_owner = services.current_session();
         let view = Self {
             services,
+            session_owner,
+            access_task: None,
             revision,
             store: ConsumersStore::default(),
             keyword,
@@ -288,6 +313,7 @@ impl ConsumersView {
     }
 
     pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.access_task = None;
         self.revision = revision;
         self.inventory_task = None;
         self.create_dialog = None;
@@ -546,6 +572,8 @@ impl ConsumersView {
         self.table.update(cx, |table, cx| {
             table.delegate_mut().rows = page.items;
             table.delegate_mut().loading = loading;
+            table.delegate_mut().session_owner = self.session_owner.clone();
+            table.delegate_mut().revision = self.revision;
             table.refresh(cx);
             cx.notify();
         });

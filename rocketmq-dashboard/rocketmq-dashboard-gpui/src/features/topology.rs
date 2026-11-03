@@ -13,15 +13,16 @@
 // limitations under the License.
 
 use crate::{
-    components::{topology_map, topology_panels},
+    components::{topology_map, topology_panels, topology_sphere},
     features::topology_store::TopologyStore,
     route::AppRoute,
     services::{AppServices, topology::now_ms},
     state::UiError,
 };
 use gpui::{
-    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
+    AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
+    MouseButton, ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _,
@@ -29,6 +30,7 @@ use gpui_component::{
     scroll::ScrollableElement as _,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
 };
+use rocketmq_dashboard_common::topology::sphere::{SphereTurn, SphereZoom};
 use rocketmq_dashboard_common::*;
 
 #[derive(Clone)]
@@ -50,10 +52,11 @@ pub(crate) enum TopologyIntent {
     Navigate(AppRoute),
     Producer(String),
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Presentation {
     Map,
     List,
+    Sphere,
 }
 
 pub(crate) struct TopologyView {
@@ -70,6 +73,7 @@ pub(crate) struct TopologyView {
     refresh: TopologyRefresh,
     presentation: Presentation,
     error: Option<UiError>,
+    focus_handle: FocusHandle,
 }
 impl EventEmitter<TopologyIntent> for TopologyView {}
 impl TopologyView {
@@ -110,6 +114,7 @@ impl TopologyView {
             refresh: TopologyRefresh::Manual,
             presentation: Presentation::Map,
             error: None,
+            focus_handle: cx.focus_handle().tab_stop(false),
         }
     }
     pub fn set_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -275,6 +280,109 @@ impl TopologyView {
             cx.emit(TopologyIntent::Navigate(route.clone()));
         }
     }
+    fn zoom(&mut self, increase: bool, cx: &mut Context<Self>) {
+        if self.presentation == Presentation::Sphere && self.store.sphere.projection.is_ok() {
+            self.store
+                .sphere
+                .zoom(if increase { SphereZoom::In } else { SphereZoom::Out });
+        } else {
+            self.store.zoom(increase);
+        }
+        cx.notify();
+    }
+    fn sphere_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.presentation != Presentation::Sphere || !event.keystroke.modifiers.alt {
+            return;
+        }
+        match event.keystroke.key.as_str() {
+            "left" => self.store.sphere.turn(SphereTurn::Left),
+            "right" => self.store.sphere.turn(SphereTurn::Right),
+            "up" => self.store.sphere.turn(SphereTurn::Up),
+            "down" => self.store.sphere.turn(SphereTurn::Down),
+            "pageup" => self.zoom(true, cx),
+            "pagedown" => self.zoom(false, cx),
+            "f" => self.store.sphere.focus(),
+            "r" => self.store.sphere.reset(),
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+    fn render_sphere(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let mut surface = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .top_0()
+            .bottom_0()
+            .debug_selector(|| "topology-sphere-surface".into());
+        let Ok(projection) = &self.store.sphere.projection else {
+            return surface;
+        };
+        for globe in &projection.globes {
+            surface = surface.child(
+                div()
+                    .absolute()
+                    .left(px(globe.center[0] - 105.))
+                    .top(px(globe.center[1] + globe.radius + 6.))
+                    .w(px(210.))
+                    .text_center()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(globe.globe.label()),
+            );
+        }
+        for label in &projection.labels {
+            surface = surface.child(
+                div()
+                    .absolute()
+                    .left(px(label.bounds.x))
+                    .top(px(label.bounds.y))
+                    .w(px(label.bounds.width))
+                    .h(px(label.bounds.height))
+                    .text_xs()
+                    .overflow_hidden()
+                    .child(label.text.clone()),
+            );
+        }
+        for (index, point) in projection.nodes.iter().enumerate() {
+            let id = point.placed.node.id.clone();
+            let selected = self
+                .store
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.node == id);
+            let diameter = if selected { 18. } else { 12. };
+            surface = surface.child(
+                div()
+                    .absolute()
+                    .left(px(point.center[0] - diameter / 2.))
+                    .top(px(point.center[1] - diameter / 2.))
+                    .child(
+                        Button::new(SharedString::from(format!("topology-sphere:{id:?}")))
+                            .label("●")
+                            .compact()
+                            .outline()
+                            .when(selected, |button| button.primary())
+                            .w(px(diameter))
+                            .h(px(diameter))
+                            .p_0()
+                            .rounded_full()
+                            .when(!point.front, |button| button.opacity(0.45))
+                            .tooltip(format!(
+                                "{} · {}{}{}",
+                                id.kind_label(),
+                                point.placed.node.label,
+                                if point.placed.stale { " · cached" } else { "" },
+                                if point.front { "" } else { " · far side" }
+                            ))
+                            .debug_selector(move || format!("topology-sphere-node-{index}"))
+                            .on_click(cx.listener(move |view, _, window, cx| view.select(id.clone(), window, cx))),
+                    ),
+            );
+        }
+        surface
+    }
 }
 
 impl Render for TopologyView {
@@ -302,17 +410,18 @@ impl Render for TopologyView {
                     .h(px(placed.bounds.height))
                     .child(
                         Button::new(SharedString::from(format!("topology-map:{id:?}")))
-                            .label(format!(
+                            .child(topology_map::node_label(placed, index))
+                            .tooltip(format!(
                                 "{} · {}{}",
                                 id.kind_label(),
                                 placed.node.label,
                                 if placed.stale { " · cached" } else { "" }
                             ))
-                            .tooltip(placed.node.label.clone())
                             .outline()
                             .when(selected, |button| button.primary())
                             .w_full()
                             .h_full()
+                            .overflow_hidden()
                             .debug_selector(move || format!("topology-node-{index}"))
                             .on_click(cx.listener(move |view, _, window, cx| view.select(id.clone(), window, cx))),
                     )
@@ -343,7 +452,33 @@ impl Render for TopologyView {
                     .debug_selector(move || format!("topology-list-node-{index}"))
                     .on_click(cx.listener(move |view, _, window, cx| view.select(id.clone(), window, cx)))
             }));
-        div().id("topology-workspace").debug_selector(|| "topology-workspace".into()).size_full().overflow_y_scrollbar().child(div().w_full().p_4().flex().flex_col().gap_3()
+        let projection = if self.presentation == Presentation::Sphere {
+            self.store.sphere.projection.as_ref().ok().cloned()
+        } else {
+            None
+        };
+        let drawing = match self.presentation {
+            Presentation::Map => div().size_full().overflow_scrollbar().child(map).into_any_element(),
+            Presentation::List => div().size_full().overflow_scrollbar().child(list).into_any_element(),
+            Presentation::Sphere if projection.is_some() => self.render_sphere(cx).into_any_element(),
+            Presentation::Sphere => div().size_full().overflow_scrollbar().child(map).into_any_element(),
+        };
+        let weak = cx.entity().downgrade();
+        let observer = topology_sphere::surface(
+            projection,
+            cx.theme().border,
+            cx.theme().muted_foreground,
+            move |viewport, cx| {
+                cx.defer(move |cx| {
+                    let _ = weak.update(cx, |view, cx| {
+                        if view.store.sphere.set_viewport(viewport) {
+                            cx.notify();
+                        }
+                    });
+                });
+            },
+        );
+        div().id("topology-workspace").track_focus(&self.focus_handle).on_key_down(cx.listener(Self::sphere_key)).debug_selector(|| "topology-workspace".into()).size_full().min_w_0().overflow_y_scrollbar().child(div().w_full().min_w_0().p_4().flex().flex_col().gap_3()
             .child(div().flex().flex_wrap().gap_2().items_center()
                 .child(Button::new("topology-refresh").label(if self.loading { "Refresh again" } else { "Refresh" }).outline().debug_selector(|| "topology-refresh".into()).on_click(cx.listener(|view, _, window, cx| view.restart(window, cx))))
                 .children([(TopologyRefresh::Manual, "Manual"), (TopologyRefresh::FiveSeconds, "5s"), (TopologyRefresh::TenSeconds, "10s"), (TopologyRefresh::ThirtySeconds, "30s")].into_iter().enumerate().map(|(index, (mode, label))| Button::new(("topology-interval", index)).label(label).outline().when(self.refresh == mode, |button| button.primary()).debug_selector(move || format!("topology-interval-{index}")).on_click(cx.listener(move |view, _, window, cx| { view.refresh = mode; view.restart(window, cx); }))))
@@ -356,10 +491,18 @@ impl Render for TopologyView {
             .child(div().flex().flex_wrap().gap_2()
                 .child(Button::new("topology-map").label("2D map").outline().debug_selector(|| "topology-map".into()).on_click(cx.listener(|view, _, _, cx| { view.presentation = Presentation::Map; cx.notify(); })))
                 .child(Button::new("topology-list").label("Keyboard list").outline().debug_selector(|| "topology-list".into()).on_click(cx.listener(|view, _, _, cx| { view.presentation = Presentation::List; cx.notify(); })))
-                .child(Button::new("topology-zoom-out").label("Zoom −").outline().debug_selector(|| "topology-zoom-out".into()).on_click(cx.listener(|view, _, _, cx| { view.store.zoom(false); cx.notify(); })))
-                .child(Button::new("topology-zoom-in").label("Zoom +").outline().debug_selector(|| "topology-zoom-in".into()).on_click(cx.listener(|view, _, _, cx| { view.store.zoom(true); cx.notify(); })))
+                .child(Button::new("topology-sphere").label("Sphere").outline().debug_selector(|| "topology-sphere".into()).on_click(cx.listener(|view, _, window, cx| { view.presentation = Presentation::Sphere; view.focus_handle.focus(window); cx.notify(); })))
+                .child(Button::new("topology-zoom-out").label("Zoom −").outline().debug_selector(|| "topology-zoom-out".into()).on_click(cx.listener(|view, _, _, cx| view.zoom(false, cx))))
+                .child(Button::new("topology-zoom-in").label("Zoom +").outline().debug_selector(|| "topology-zoom-in".into()).on_click(cx.listener(|view, _, _, cx| view.zoom(true, cx))))
                 .child(div().w(px(300.)).debug_selector(|| "topology-node-picker".into()).child(Select::new(&self.node_picker).placeholder("Search and select a node"))))
-            .child(div().w_full().h(px(400.)).flex_shrink_0().debug_selector(|| "topology-viewport".into()).child(div().size_full().overflow_scrollbar().child(if self.presentation == Presentation::Map { map.into_any_element() } else { list.into_any_element() })))
+            .when(self.presentation == Presentation::Sphere, |body| body
+                .child(div().flex().flex_wrap().gap_2()
+                    .children([(SphereTurn::Left, "Rotate left"), (SphereTurn::Right, "Rotate right"), (SphereTurn::Up, "Rotate up"), (SphereTurn::Down, "Rotate down")].into_iter().enumerate().map(|(index, (direction, label))| Button::new(("topology-sphere-turn", index)).label(label).outline().debug_selector(move || format!("topology-sphere-turn-{index}")).on_click(cx.listener(move |view, _, _, cx| { view.store.sphere.turn(direction); cx.notify(); }))))
+                    .child(Button::new("topology-sphere-focus").label("Focus selected").outline().disabled(self.store.selection.is_none()).debug_selector(|| "topology-sphere-focus".into()).on_click(cx.listener(|view, _, _, cx| { view.store.sphere.focus(); cx.notify(); })))
+                    .child(Button::new("topology-sphere-reset").label("Reset camera").outline().debug_selector(|| "topology-sphere-reset".into()).on_click(cx.listener(|view, _, _, cx| { view.store.sphere.reset(); cx.notify(); }))))
+                .child(div().text_xs().child("Static native projection · Dimmed nodes indicate the far side · Up to 32 labels. Keyboard: Alt+arrows rotate, Alt+PageUp/PageDown zoom, Alt+F focuses selection, Alt+R resets. Node search and the list share selection."))
+                .children(self.store.sphere.projection.as_ref().err().map(|reason| div().debug_selector(|| "topology-sphere-fallback".into()).text_color(cx.theme().muted_foreground).child(reason.message()))))
+            .child(div().relative().min_w_0().h(px(400.)).flex_shrink_0().overflow_hidden().on_mouse_down(MouseButton::Left, cx.listener(|view, _, window, _| view.focus_handle.focus(window))).debug_selector(|| "topology-viewport".into()).child(observer).child(drawing))
             .child(topology_panels::lines("Selected observation", &self.store.detail))
             .child(Button::new("topology-open-entity").label("Open entity").outline().disabled(self.store.route.is_none()).debug_selector(|| "topology-open-entity".into()).on_click(cx.listener(|view, _, _, cx| view.open_selected(cx))))
             .child(topology_panels::lines("Sources and observation times", &self.store.sources))

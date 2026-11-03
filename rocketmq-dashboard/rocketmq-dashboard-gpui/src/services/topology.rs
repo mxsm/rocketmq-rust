@@ -207,10 +207,7 @@ impl AppServices {
                 layers,
             })
         };
-        let result = match &self.runtime_bridge {
-            Some(runtime) => runtime.run("gpui-topology-snapshot", work).await,
-            None => work.await,
-        }?;
+        let result = self.run_protected_query("gpui-topology-snapshot", work).await?;
         if self.topology_context() != context {
             return Err(stale());
         }

@@ -112,6 +112,114 @@ fn enter(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+fn fill_footer_form(
+    view: &Entity<AclView>,
+    users: bool,
+    cx: &mut gpui::VisualTestContext,
+) -> Option<Entity<InputState>> {
+    if users {
+        let form = user_form(view, cx);
+        set(&cx.read(|app| form.read(app).username.clone()), "footer-user", cx);
+        let password = cx.read(|app| form.read(app).password.clone());
+        set(&password, "footer-secret", cx);
+        Some(password)
+    } else {
+        let form = policy_form(view, cx);
+        set(&cx.read(|app| form.read(app).subject.clone()), "User:footer-user", cx);
+        set(&cx.read(|app| form.read(app).resource.clone()), "Topic:orders", cx);
+        None
+    }
+}
+
+fn visible_footer(cx: &mut gpui::VisualTestContext) {
+    let viewport = cx.update(|window, _| window.viewport_size());
+    assert!(cx.update(gpui_component::WindowExt::has_active_dialog));
+    for selector in ["acl-dialog-close", "acl-dialog-confirm"] {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("Missing owning ACL dialog action: {selector}"));
+        assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+        assert!(
+            bounds.left() >= px(0.)
+                && bounds.top() >= px(0.)
+                && bounds.right() <= viewport.width
+                && bounds.bottom() <= viewport.height,
+            "ACL dialog action must be visible inside the window: {selector}, {bounds:?}, {viewport:?}"
+        );
+    }
+}
+
+#[gpui::test]
+fn acl_owning_user_and_policy_dialog_actions_are_visible_cancel_and_admit_once(cx: &mut gpui::TestAppContext) {
+    let fixture = Fixture::new();
+    let (sender, completion) = mpsc::channel();
+    let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    completed(cx, &completion, "gpui-broker-inventory");
+    draw(&root, cx);
+    cluster(&view, "cluster-a", cx);
+    draw(&root, cx);
+    click(cx, "acl-confirm");
+    completed(cx, &completion, "gpui-service-acl-users");
+    for users in [true, false] {
+        if !users {
+            draw(&root, cx);
+            click(cx, "acl-policies");
+            completed(cx, &completion, "gpui-service-acl-policies");
+        }
+        draw(&root, cx);
+        click(cx, "acl-create");
+        draw(&root, cx);
+        visible_footer(cx);
+        let password = fill_footer_form(&view, users, cx);
+        let before = fixture.backend.writes.lock().unwrap().len();
+        click(cx, "acl-dialog-close");
+        assert!(!cx.update(gpui_component::WindowExt::has_active_dialog));
+        assert!(cx.read(|app| view.read(app).form.is_none()));
+        assert_eq!(fixture.backend.writes.lock().unwrap().len(), before);
+        if let Some(password) = password {
+            assert!(
+                cx.read(|app| password.read(app).value().is_empty()),
+                "Closing the actual modal must clear a retained password editor"
+            );
+        }
+        draw(&root, cx);
+        click(cx, "acl-create");
+        draw(&root, cx);
+        visible_footer(cx);
+        fill_footer_form(&view, users, cx);
+        draw(&root, cx);
+        let (started, release, _) = fixture.backend.hold_write();
+        click(cx, "acl-dialog-confirm");
+        fixture.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), started)
+                .await
+                .unwrap()
+                .unwrap();
+        });
+        draw(&root, cx);
+        visible_footer(cx);
+        click(cx, "acl-dialog-confirm");
+        assert_eq!(
+            fixture.backend.writes.lock().unwrap().len(),
+            before + 1,
+            "Duplicate button clicks must not admit another mutation"
+        );
+        release.send(()).unwrap();
+        committed(cx, &completion, users);
+        assert!(!cx.update(gpui_component::WindowExt::has_active_dialog));
+    }
+    let writes = fixture.backend.writes.lock().unwrap();
+    assert!(
+        matches!(&writes[0].change, AclChange::SaveUser { create: true, username, .. } if username == "footer-user")
+    );
+    assert!(
+        matches!(&writes[1].change, AclChange::SavePolicy { create: true, subject, entry, .. } if subject == "User:footer-user" && entry.resource == "Topic:orders")
+    );
+    drop(writes);
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
+}
+
 #[gpui::test]
 fn acl_bulk_target_notices_scroll_without_hiding_records_or_pagination(cx: &mut gpui::TestAppContext) {
     let fixture = Fixture::new();
@@ -122,6 +230,7 @@ fn acl_bulk_target_notices_scroll_without_hiding_records_or_pagination(cx: &mut 
     }
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     cluster(&view, "cluster-a", cx);
     draw(&root, cx);
@@ -225,6 +334,7 @@ fn acl_scope_change_cancels_old_secret_query_and_leave_clears_a_retained_form(cx
     let (started, _release, done) = fixture.backend.hold_query();
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     cluster(&view, "cluster-a", cx);
     draw(&root, cx);
@@ -274,6 +384,7 @@ fn acl_official_user_and_policy_controls_require_confirmation_and_submit_structu
     let fixture = Fixture::new();
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     assert!(fixture.backend.user_calls.lock().unwrap().is_empty());
     assert!(fixture.backend.policy_calls.lock().unwrap().is_empty());
@@ -382,6 +493,7 @@ fn acl_password_entities_history_and_returned_values_clear_on_close_tab_and_scop
     fixture.backend.users.lock().unwrap().push(user());
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     cluster(&view, "cluster-a", cx);
     draw(&root, cx);
@@ -389,6 +501,9 @@ fn acl_password_entities_history_and_returned_values_clear_on_close_tab_and_scop
     completed(cx, &completion, "gpui-service-acl-users");
     draw(&root, cx);
     click(cx, "acl-show-passwords");
+    let reveal = cx.update(|_, app| view.update(app, |view, _| view.access_task.take().unwrap()));
+    cx.background_executor.allow_parking();
+    cx.background_executor.block_test(reveal);
     cx.read(|app| assert!(view.read(app).show_passwords));
     click(cx, "acl-user-edit-0");
     draw(&root, cx);
@@ -449,6 +564,7 @@ fn acl_users_and_policies_search_pages_are_independent_and_partial_attempt_canno
     }
     let (sender, completion) = mpsc::channel();
     let (root, view, cx) = open(cx, fixture.services.clone().with_runtime_completion(sender));
+    completed(cx, &completion, "gpui-broker-inventory");
     draw(&root, cx);
     cluster(&view, "cluster-a", cx);
     draw(&root, cx);

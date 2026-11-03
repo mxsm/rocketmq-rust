@@ -363,9 +363,24 @@ impl DashboardService {
 }
 
 impl HistorySampler for DashboardService {
-    fn sample_topics_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+    fn sample_topics_scoped(
+        &self,
+        snapshot: Option<rocketmq_dashboard_common::EnvironmentConnectionSnapshot>,
+    ) -> EnvironmentHistorySampleFuture<'_> {
         Box::pin(async move {
-            let snapshot = self.history()?.environment_snapshot().map_err(history_error)?;
+            if self
+                .history()?
+                .authoritative_environment_snapshot()
+                .await
+                .map_err(history_error)?
+                != snapshot
+            {
+                return Err(UiError::new(
+                    "The authoritative connection changed before History sampling.",
+                    UiErrorCode::Connection,
+                    true,
+                ));
+            }
             let revision = snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.connection.revision)
@@ -381,9 +396,24 @@ impl HistorySampler for DashboardService {
         })
     }
 
-    fn sample_brokers_scoped(&self) -> EnvironmentHistorySampleFuture<'_> {
+    fn sample_brokers_scoped(
+        &self,
+        snapshot: Option<rocketmq_dashboard_common::EnvironmentConnectionSnapshot>,
+    ) -> EnvironmentHistorySampleFuture<'_> {
         Box::pin(async move {
-            let snapshot = self.history()?.environment_snapshot().map_err(history_error)?;
+            if self
+                .history()?
+                .authoritative_environment_snapshot()
+                .await
+                .map_err(history_error)?
+                != snapshot
+            {
+                return Err(UiError::new(
+                    "The authoritative connection changed before History sampling.",
+                    UiErrorCode::Connection,
+                    true,
+                ));
+            }
             let revision = snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.connection.revision)

@@ -25,6 +25,11 @@ The application starts in native fullscreen. Use the **Exit fullscreen** / **Ent
 button to switch between fullscreen and the normal window. The button is keyboard accessible;
 **Escape** continues to close dialogs and navigation drawers.
 
+For development smoke checks, set the per-process `ROCKETMQ_DASHBOARD_GPUI_SMOKE_WIDTH`
+and `ROCKETMQ_DASHBOARD_GPUI_SMOKE_HEIGHT` to choose the restored window size, for example
+`960` and `640`. Defaults are 1440 × 900; invalid, non-finite, or below-minimum values
+fall back to the defaults (minimum width 640, height 480). Startup remains fullscreen.
+
 The Windows executable embeds its application icon from [assets/app-icon.ico](assets/app-icon.ico).
 The original artwork and generation prompts are kept in [assets/](assets/app-icon.md).
 
@@ -34,6 +39,48 @@ Logging uses `RUST_LOG`. For example, in PowerShell from this directory:
 $env:RUST_LOG = "info,rocketmq_dashboard_gpui=debug"
 cargo run
 ```
+
+## Native persistence adapters
+
+The default build keeps the existing file layouts and one writer per data directory.
+Configuration, environments, Monitor rules and Audit share one canonical document;
+History uses the same opened storage authority. SQL builds enable optional
+`storage-sqlite`, `storage-mysql` or `storage-postgres` features, independently or together:
+
+```text
+cargo build --no-default-features --features storage-sqlite
+```
+
+OPS Storage offers File and the compiled SQL engines. Save choice for next launch writes
+only the engine to `<configured config path>.storage-selection.json`; for the default path
+this is `config.json.storage-selection.json`. Quit and reopen Dashboard to apply it.
+The active authority stays fixed for the entire process, including connection retries.
+`ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE` explicitly selects `file`, `sqlite`, `mysql` or
+`postgres` ahead of the saved choice; when it is present, change or remove it externally
+before changing engines. With neither input, the default remains File. SQL connection input comes
+from external `ROCKETMQ_DASHBOARD_GPUI_DATABASE_URL`; it is never persisted in a native
+configuration or Audit event. `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` retains its existing
+file/import location. A SQL connection failure or unavailable driver is an explicit
+error and cannot switch authority. Database URL values are never shown in the UI or choice file.
+
+When startup fails, Storage setup provides current engine status and recovery. A connected
+SQL authority with no native workspace offers Initialize workspace or Import legacy workspace,
+both with confirmation. PostgreSQL and MySQL databases must already exist at the external URL;
+initializing creates native Dashboard records, not a database. Import defaults to the configured
+legacy file path and also supports a native configuration-file chooser. It imports environments,
+configuration, Monitor, Audit, History and Sessions together, preserving the source files and
+rejecting an occupied target atomically. Close any file-mode instance owning the source directory
+before import. No automatic initialization or import occurs. If the result is not confirmed,
+refresh status before another attempt; an initialized target offers Continue startup instead.
+Successful setup returns through normal bootstrap and authentication. Persistent native Sessions
+are described below; automated controls do not substitute for platform manual checks.
+
+SQL reads refresh authoritative documents. Storage revisions advance independently
+of configuration revisions, so a peer Audit/Monitor write cannot be overwritten by a
+stale configuration candidate. Configuration identity changes feed the existing ordered
+provider/view invalidation pipeline. History acquires collection ownership before
+starting sampler work and checks the captured fence when persisting. Legacy unassigned
+observations retain their original attribution and stay outside current-environment charts.
 
 ## Topic fields and mutation support
 
@@ -83,7 +130,7 @@ assigned explicitly to the selected environment from its completion dialog.
 
 Accepted changes remain application-owned when a dialog closes. Rule state,
 its local operation record, and its terminal P11 audit event share one canonical
-atomic file replacement; configuration revision checks also prevent writes after
+atomic authority transaction (file replacement or SQL CAS); configuration revision checks also prevent writes after
 the connection or environment changes.
 
 ## Consumer and Producer workspaces
@@ -147,15 +194,14 @@ root, installs logging, and composes the desktop services. The layers are:
 ```text
 GPUI views
   -> application services
-  -> GpuiAdminProvider / configuration, history and monitor stores
-  -> rocketmq-admin-core client adapter
-  -> application-owned ClientRuntime
+    -> GpuiAdminProvider -> rocketmq-admin-core -> application-owned ClientRuntime
+    -> DashboardStore (file / SQLite / MySQL / PostgreSQL)
 ```
 
 The shared dashboard models and admin facade come from
 [rocketmq-dashboard-common](../rocketmq-dashboard-common). The desktop provider
-implements live cluster queries and administration; configuration, history and
-monitor persistence remain local to this application. See
+implements live cluster queries and administration; the shared
+[native storage crate](../rocketmq-dashboard-storage) owns persistence. See
 [src/services](src/services) and [src/infrastructure](src/infrastructure) for
 the implemented operations and their lifecycle owners.
 
@@ -164,7 +210,7 @@ Dashboard overview/current/history and Broker inventory/runtime/config reads, pl
 Broker config patches. Its [Admin provider](src/infrastructure/admin_provider/dashboard_broker.rs)
 keeps raw Admin responses inside infrastructure and returns allowlisted DTOs to the services.
 
-Configuration defaults to `rocketmq-dashboard/gpui/config.json` beneath the OS
+File configuration defaults to `rocketmq-dashboard/gpui/config.json` beneath the OS
 user configuration directory. Set `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` to
 override the complete file path. NameServer selection and connection settings
 are stored in this document.
@@ -175,7 +221,7 @@ TLS, or VIP settings preserves its persistent identity. History and Monitor
 rules belong to that identity, while the configuration revision identifies a
 particular connection generation.
 
-The version 4 configuration document holds profiles, global settings, Monitor
+In file mode, the version 4 configuration document holds profiles, global settings, Monitor
 rules, local operation records, and the desktop audit journal in one atomic replacement. Metric samples
 remain in the separately versioned `history.json`. Version 1 configuration and
 history files, version 2/3 profile documents, and legacy Monitor arrays are migrated on startup. The nested
@@ -188,7 +234,7 @@ be evaluated; the Monitor lifecycle still performs no evaluation. The original
 document. Unsupported schemas or failed migration writes preserve their source
 files and report a recoverable startup error.
 
-One application instance owns the local data directory for its lifetime through
+In file mode, one application instance owns the local data directory for its lifetime through
 an OS file lock. A second instance using that directory must wait until the first
 closes. An interrupted write leaves either the previous complete document or the
 new complete document; unfinished candidate files are not treated as committed
@@ -199,7 +245,7 @@ Accepted Broker, Topic, Consumer, Monitor, and configuration changes belong to t
 so closing a Sheet or signing out only drops the old view's result receiver. External
 changes first save an accepted-operation record and then save one terminal outcome;
 these two writes do not provide a transaction with RocketMQ. Shutdown drains owned
-work for the existing five-second budget while local storage and the provider remain
+work for the existing five-second budget while the selected storage and provider remain
 available. Interrupted requests stay pending for authoritative verification after restart,
 and are never automatically replayed. Local login and logout also record safe outcomes.
 
@@ -216,8 +262,9 @@ environment. The recent 24-hour preset and explicit start/end fields support win
 up to 31 days; the end is exclusive. Apply starts a new query window, while Previous
 and Next retain its cursor snapshot. Restart applied query recovers an expired page
 without replacing draft inputs. Queries and detail views append no events.
-These records describe this desktop's operations and are not a tamper-proof
-or organization-wide audit log.
+Records belong to the selected native storage authority. File mode covers its directory
+writer; shared SQL includes native clients writing to that database. Other databases and
+Web backend events remain separate, and retention follows the native journal policy.
 
 Audit access follows the configured local authentication mode. Sign-out and environment
 changes clear cached rows and details. Details show trusted request/actor/resource
@@ -236,8 +283,8 @@ eviction of unread results.
 Authentication has two separate settings in the configuration:
 
 - When local login is enabled, `ROCKETMQ_DASHBOARD_USERNAME` and
-  `ROCKETMQ_DASHBOARD_PASSWORD` must be present. Only the local session marker
-  is retained after authentication.
+  `ROCKETMQ_DASHBOARD_PASSWORD` must be present. The auth owner retains only the
+  current native session capability and its display metadata after authentication.
 - When the Admin credential source is `environment`,
   `ROCKETMQ_ADMIN_ACCESS_KEY` and `ROCKETMQ_ADMIN_SECRET_KEY` are required;
   `ROCKETMQ_ADMIN_SECURITY_TOKEN` is optional. These credentials authenticate
@@ -247,6 +294,41 @@ The [auth owner](src/infrastructure/auth_state.rs) resolves secrets for immediat
 use; the configuration file stores the credential-source choice. Background
 admin and persistence work uses injected child scopes from the desktop runtime.
 The application closes this runtime when the GPUI event loop exits.
+
+## Persistent native sessions
+
+Sessions uses the same selected native storage authority as configuration and Audit.
+It preserves the existing environment-backed operator source; it does not introduce a
+second account or role system. Enable local login and sign in to manage sessions.
+There is no separate Web backend, HTTP login or browser-cookie dependency.
+
+Each successful login creates a persistent record with an absolute eight-hour expiry.
+Protected operations validate the current record against the selected authority;
+last access advances without extending expiry. The application also validates on
+window activation and through an owned five-second poll. A revoked or expired session,
+or storage that cannot be verified, ends local access and clears protected views,
+query results, dialogs, message payloads, diagnostics and credential editor history.
+Connection/profile replacement drops the old capability too. Accepted mutations keep
+their captured actor, environment and application owner until terminal Audit finishes.
+
+The page shows username, creation, expiry, last access, observed status and the current
+session marker, with UTC timestamps and a 25-record cursor page. Username filtering
+uses an exact match. Revoke all requires typing the selected username, includes every
+active session for that username in the selected authority, and can end this desktop's
+own session. It records the target username and count through P11 Audit; audit-only
+repair never runs the revocation command again. Capabilities are absent from the UI,
+Debug output, logs, configuration and Audit facts. A delayed logout revokes its captured
+old session and cannot end a replacement login.
+
+Records survive restart; this desktop signs in again on each launch. File mode keeps
+`sessions.json` under the existing directory writer. SQL clients using the same database
+share session revocation and native Audit visibility; other databases and Web backend
+sessions/events are separate. Native storage drivers remain optional.
+
+The canonical document remains schema four and session metadata uses its own schema
+one. `session_revoke_all` and the `session_user` resource add typed Audit variants without
+rewriting old events. Older readers reject those unknown variants and preserve the source;
+they must be upgraded before opening a store containing these events.
 
 ## Development
 
@@ -271,12 +353,36 @@ registered Broker count and per-Broker production or consumption rates. Each que
 returns at most the latest 1,440 real observations, with UTC time labels, units and
 paged exact values. Refresh errors retain the previous successful page and its time.
 
-The collector is disabled by default. Set `settings.foundations.historyEnabled` to `true` in
-`config.json`, with a positive `settings.foundations.historyIntervalSeconds`, then reload configuration.
+The collector is disabled by default. OPS → Storage saves History enablement, interval and
+bounded retention through the existing revision-checked configuration flow. An interval of zero
+disables the owned collector even when the enablement checkbox is selected. Retention takes effect
+when a subsequent real sample is persisted. Manual `settings.foundations` edits in `config.json`
+remain supported through Reload configuration.
 The page shows disabled, warming, normal, partial or stale collection and the latest
 successful collection time for the active environment in this process. A sample is
 stale after three collection intervals. Existing retention limits and environment
 attribution apply to both count and resource series; missing samples are not filled.
+
+In file mode, OPS Storage reports the local file backend and actual directory-writer ownership. Refresh status
+reads and validates current files without migrating data or probing writes. Read failure or unknown
+state remains visible independently of the last persistence attempt. File successful-write timestamps
+describe observations in the current process; schema and filesystem dates do not prove write health.
+The configuration file holds settings, Monitor rules and Audit; metric history uses its own file.
+Collector state separates unavailable sampling, failed persistence, no observations and successfully
+stored samples for the active environment. Samples rejected by validation or fully removed by
+retention do not advance the latest stored sample time; successful empty-file writes still count as
+storage writes. Scope labels retain the configured Direct/Proxy boundary.
+Open config directory continues to use the native desktop action.
+
+For SQL, OPS shows fresh engine and workspace state, storage/document schema, actual pool and
+idle connection counts, and the authority's recorded last write, which may come from another
+desktop sharing that database. File-only writer and filesystem health are omitted for SQL.
+A status failure replaces previously displayed authority health. History worker ownership and
+collection health are separate; Standby means waiting for the shared collection lease.
+
+Unsaved History inputs survive failed operations and revision conflicts. A stale draft shows current
+saved settings and requires an explicit choice to keep it against the current revision or discard it.
+Reloading and revisiting Storage refresh authoritative status without silently replacing a dirty draft.
 
 From this directory, select the checks relevant to a change:
 
@@ -452,8 +558,21 @@ application TaskGroup loop. Each automatic interval begins after the previous
 snapshot completes. Leaving the page or deactivating the window cancels current
 reads; resuming refreshes once. Application shutdown cancels and awaits this work.
 Environment/configuration changes and logout clear the snapshot, edges, and
-selection. The shared snapshot and selection model can support another native
-presentation without introducing a separate query implementation.
+selection.
+
+The Sphere presentation uses this same bounded, Cluster-filtered snapshot and
+selection. Native canvas painting consumes an orthographic projection prepared
+outside Render: deterministic Cluster sectors share the Broker globe, with small
+NameServer and Controller globes only when those actual nodes exist. It keeps
+unknown and cached observation semantics and introduces no additional query.
+Rotation, zoom, focus-selected and reset are explicit, keyboard-accessible buttons;
+Alt+arrows rotate, Alt+PageUp/PageDown zoom, Alt+F focuses selection and Alt+R resets
+while the topology workspace has keyboard focus. There is no animation clock.
+At most 32 non-overlapping labels are drawn, with the
+selected observation first. The searchable picker and keyboard list expose every
+displayed node, including nodes on the far side. Actual canvas bounds trigger a
+new projection on resize. An invalid canvas or a viewport smaller than 480×260
+pixels falls back to the same 2D map while preserving the filter and selection.
 
 ## License
 

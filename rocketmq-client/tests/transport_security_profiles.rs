@@ -121,10 +121,14 @@ async fn socks_tunnel_preserves_business_dns_name_for_connect_and_tls_sni() {
         let key = tokio_rustls::rustls::pki_types::PrivateKeyDer::Pkcs8(
             tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
         );
-        let server = tokio_rustls::rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(vec![cert.der().clone()], key)
-            .expect("server TLS config");
+        let server = tokio_rustls::rustls::ServerConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("default TLS protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone()], key)
+        .expect("server TLS config");
         let tls = tokio_rustls::TlsAcceptor::from(Arc::new(server))
             .accept(stream)
             .await
