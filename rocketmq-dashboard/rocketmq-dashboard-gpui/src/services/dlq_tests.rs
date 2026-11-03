@@ -89,7 +89,7 @@ fn dlq_group_inventory_requires_current_nameserver_scope_without_changing_proxy_
             .await
             .unwrap();
         release.send(()).unwrap();
-        assert_eq!(pending.await.unwrap_err().code(), UiErrorCode::CapabilityUnavailable);
+        assert_eq!(pending.await.unwrap_err().code(), UiErrorCode::Authentication);
         let proxy_request = ConsumerRequestScope {
             revision: services.connection_state().config.revision,
             epoch: 2,
@@ -162,14 +162,15 @@ fn dlq_entire_admitted_batch_survives_receiver_drop_and_keeps_original_environme
         let (started, release, _) = backend.hold_consume(); let targets = (1..=3).map(|i| row(i).target.unwrap()).collect();
         let mut batch = Box::pin(services.recover_dlq(scope(), targets));
         tokio::select! { result = &mut batch => panic!("batch finished before release: {result:?}"), result = started => result.unwrap() }
+        assert_eq!(crate::infrastructure::audit_store::persisted_journal(store.path()).pending().len(), 3, "all entries are durable before the first RPC");
         drop(batch);
         let (progress, _) = tokio::sync::mpsc::unbounded_channel(); services.mutate_with_progress(ConfigMutation::CreateEnvironment("another environment".into()), progress).await.unwrap();
         assert_ne!(store.environment_snapshot().unwrap().environment_id, original_environment);
         release.send(()).unwrap();
         assert!(services.runtime_bridge.as_ref().unwrap().context.task_group().shutdown(Duration::from_secs(5)).await.is_healthy());
-        assert_eq!(backend.calls().consumes.len(), 3); assert!(services.audit_pending().unwrap().is_empty());
+        assert_eq!(backend.calls().consumes.len(), 3); assert!(crate::infrastructure::audit_store::persisted_journal(store.path()).pending().is_empty());
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-        let events = services.query_audit(AuditQuery { filter: AuditFilter::recent(now), limit: 20, cursor: None }).unwrap().events.into_iter().filter(|event| event.operation.action == AuditAction::DlqResent).collect::<Vec<_>>();
+        let events = crate::infrastructure::audit_store::persisted_journal(store.path()).query(AuditQuery { filter: AuditFilter::recent(now), limit: 20, cursor: None }).unwrap().events.into_iter().filter(|event| event.operation.action == AuditAction::DlqResent).collect::<Vec<_>>();
         assert_eq!(events.len(), 3); let outcomes = events.iter().map(|event| event.outcome).collect::<Vec<_>>();
         assert!(outcomes.contains(&AuditOutcome::Succeeded) && outcomes.contains(&AuditOutcome::Failed) && outcomes.contains(&AuditOutcome::Unknown));
         assert!(events.iter().all(|event| event.operation.context.environment_id == original_environment && event.operation.context.configuration_revision == 0));

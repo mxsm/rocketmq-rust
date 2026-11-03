@@ -21,9 +21,8 @@ use gpui::{
     div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
-    Disableable as _,
+    Disableable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
-    form::{Field, Form},
     input::{Input, InputState},
 };
 
@@ -91,15 +90,17 @@ pub struct LoginForm {
 }
 
 impl LoginForm {
+    fn password_state(window: &mut Window, cx: &mut Context<InputState>) -> InputState {
+        InputState::new(window, cx)
+            .multi_line(false)
+            .placeholder("Password")
+            .masked(true)
+    }
+
     /// Creates the two input entities once per Login route entry.
     pub fn new<T: 'static>(window: &mut Window, cx: &mut Context<T>) -> Self {
         let username = cx.new(|cx| InputState::new(window, cx).multi_line(false).placeholder("Username"));
-        let password = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(false)
-                .placeholder("Password")
-                .masked(true)
-        });
+        let password = cx.new(|cx| Self::password_state(window, cx));
 
         Self {
             username,
@@ -124,7 +125,9 @@ impl LoginForm {
         let plan = LoginFailurePlan::rejected_authentication();
         self.password.update(cx, |password, cx| {
             if plan.clear_password {
-                password.set_value("", window, cx);
+                // Replacing the editor also drops its undo/redo history. set_value alone leaves
+                // previous password edits recoverable through the widget's Undo action.
+                *password = Self::password_state(window, cx);
             }
             if plan.focus_password {
                 password.focus(window, cx);
@@ -136,9 +139,15 @@ impl LoginForm {
     }
 
     /// Removes the password when the user leaves the Login route or signs out.
+    pub fn clear_submitted_password<T: 'static>(&mut self, window: &mut Window, cx: &mut Context<T>) {
+        self.password
+            .update(cx, |password, cx| *password = Self::password_state(window, cx));
+    }
+
+    /// Removes the password editor history and visible submission state.
     pub fn clear_sensitive<T: 'static>(&mut self, window: &mut Window, cx: &mut Context<T>) {
         self.password
-            .update(cx, |password, cx| password.set_value("", window, cx));
+            .update(cx, |password, cx| *password = Self::password_state(window, cx));
         self.error = None;
         self.submitting = false;
         cx.notify();
@@ -168,7 +177,7 @@ impl LoginForm {
     /// Cancels visible submission state after the configuration supersedes a request.
     pub fn cancel_submission<T: 'static>(&mut self, window: &mut Window, cx: &mut Context<T>) {
         self.password
-            .update(cx, |password, cx| password.set_value("", window, cx));
+            .update(cx, |password, cx| *password = Self::password_state(window, cx));
         self.submitting = false;
         cx.notify();
     }
@@ -210,7 +219,7 @@ impl LoginForm {
         self.password.update(cx, |password, cx| password.focus(window, cx));
     }
 
-    /// Renders the official component form around the two stable editor entities.
+    /// Renders native labels and component inputs around the two stable editor entities.
     pub fn render(
         &self,
         error_color: gpui::Hsla,
@@ -218,27 +227,74 @@ impl LoginForm {
     ) -> impl IntoElement {
         div()
             .w_full()
+            .min_w_0()
+            .h_auto()
+            .flex_shrink_0()
             .flex()
             .flex_col()
             .gap_4()
             .child(
-                Form::vertical()
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
                     .child(
-                        Field::new()
-                            .label("Username")
-                            .required(true)
-                            .child(Input::new(&self.username)),
+                        div()
+                            .w_full()
+                            .flex_shrink_0()
+                            .flex()
+                            .gap_1()
+                            .text_sm()
+                            .font_medium()
+                            .child("Username")
+                            .child(div().text_color(error_color).child("*")),
                     )
                     .child(
-                        Field::new()
-                            .label("Password")
-                            .required(true)
-                            .child(Input::new(&self.password).mask_toggle()),
+                        Input::new(&self.username)
+                            .w_full()
+                            .min_w_0()
+                            .min_h(gpui::px(36.))
+                            .flex_shrink_0(),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w_full()
+                            .flex_shrink_0()
+                            .flex()
+                            .gap_1()
+                            .text_sm()
+                            .font_medium()
+                            .child("Password")
+                            .child(div().text_color(error_color).child("*")),
+                    )
+                    .child(
+                        Input::new(&self.password)
+                            .w_full()
+                            .min_w_0()
+                            .min_h(gpui::px(36.))
+                            .flex_shrink_0()
+                            .mask_toggle(),
                     ),
             )
             .when_some(self.error.as_ref(), |this, error| {
                 this.child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_shrink_0()
+                        .whitespace_normal()
                         .text_sm()
                         .text_color(error_color)
                         .child(error.summary().to_owned()),
@@ -254,6 +310,7 @@ impl LoginForm {
                     })
                     .primary()
                     .w_full()
+                    .flex_shrink_0()
                     .disabled(self.is_submitting())
                     .on_click(submit),
             )
@@ -263,6 +320,57 @@ impl LoginForm {
 #[cfg(test)]
 mod tests {
     use super::LoginCredentials;
+    use gpui::{
+        AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _, Window, div, point, px, size,
+    };
+    use gpui_component::Root;
+    use std::{cell::RefCell, rc::Rc};
+
+    struct Harness {
+        login: super::LoginForm,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(self.login.render(gpui::rgb(0xb91c1c).into(), |_, _, _| {}))
+        }
+    }
+
+    #[gpui::test]
+    fn cleared_password_editor_cannot_restore_a_secret_with_undo_or_redo(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let captured = Rc::new(RefCell::new(None));
+        let capture = captured.clone();
+        let (root, cx) = cx.add_window_view(move |window, cx| {
+            let harness = cx.new(|cx| Harness {
+                login: super::LoginForm::new(window, cx),
+            });
+            capture.replace(Some(harness.clone()));
+            Root::new(harness, window, cx)
+        });
+        let harness = captured.borrow_mut().take().unwrap();
+        let retained = cx.update(|window, app| {
+            harness.update(app, |view, cx| {
+                let retained = view.login.password_input();
+                retained.update(cx, |input, cx| input.insert("never-restore-this-password", window, cx));
+                assert_eq!(retained.read(cx).value().as_str(), "never-restore-this-password");
+                view.login.clear_sensitive(window, cx);
+                assert_eq!(retained.entity_id(), view.login.password_entity_id());
+                view.login.focus_password(window, cx);
+                retained
+            })
+        });
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.draw(point(px(0.), px(0.)), size(px(800.), px(600.)), |_, _| root.clone());
+        }
+        cx.dispatch_action(gpui_component::input::Undo);
+        cx.dispatch_action(gpui_component::input::Redo);
+        cx.run_until_parked();
+        cx.read(|app| assert!(retained.read(app).value().is_empty()));
+    }
 
     #[test]
     fn credentials_debug_redacts_username_and_password() {

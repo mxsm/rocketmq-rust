@@ -1054,18 +1054,24 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         let store_path_root_dir = &self.broker_runtime_inner.message_store_config().store_path_root_dir;
         let commit_log_dir = std::path::Path::new(store_path_root_dir.as_str());
         if commit_log_dir.exists() {
-            let disks = Disks::new_with_refreshed_list();
-            let path_str = commit_log_dir.to_str().unwrap();
-            for disk in &disks {
-                if disk.mount_point().to_str() == Some(path_str) {
-                    runtime_info.insert(
-                        "commitLogDirCapacity".to_string(),
-                        format!(
-                            "Total : {}, Free : {}.",
-                            mix_all::human_readable_byte_count(disk.total_space() as i64, false),
-                            mix_all::human_readable_byte_count(disk.available_space() as i64, false,)
-                        ),
-                    );
+            match Disks::new_with_refreshed_list() {
+                Ok(disks) => {
+                    let path_str = commit_log_dir.to_str().unwrap();
+                    for disk in &disks {
+                        if disk.mount_point().to_str() == Some(path_str) {
+                            runtime_info.insert(
+                                "commitLogDirCapacity".to_string(),
+                                format!(
+                                    "Total : {}, Free : {}.",
+                                    mix_all::human_readable_byte_count(disk.total_space() as i64, false),
+                                    mix_all::human_readable_byte_count(disk.available_space() as i64, false,)
+                                ),
+                            );
+                        }
+                    }
+                }
+                Err(_) => {
+                    warn!("disk information is unavailable; omitting commit log capacity from runtime diagnostics");
                 }
             }
         }

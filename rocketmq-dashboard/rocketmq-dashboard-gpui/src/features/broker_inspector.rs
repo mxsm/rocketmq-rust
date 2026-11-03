@@ -17,8 +17,8 @@
 use std::collections::BTreeMap;
 
 use gpui::{
-    AppContext as _, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
+    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, StyledExt as _, WindowExt as _,
@@ -115,6 +115,8 @@ impl Render for ConfigEditor {
 
 pub struct BrokerInspector {
     services: AppServices,
+    session_owner: Option<crate::services::SessionState>,
+    access_task: Option<Task<()>>,
     revision: u64,
     active_tab: BrokerTab,
     store: InspectorStore,
@@ -147,8 +149,11 @@ impl BrokerInspector {
                     cx.notify();
                 }
             });
+        let session_owner = services.current_session();
         let mut inspector = Self {
             services,
+            session_owner,
+            access_task: None,
             revision,
             active_tab: tab,
             store: InspectorStore::new(identity, revision),
@@ -206,6 +211,18 @@ impl BrokerInspector {
     }
 
     #[cfg(test)]
+    pub(super) fn take_query_tasks_for_test(&mut self) -> Vec<Task<()>> {
+        [
+            self.overview_task.take(),
+            self.runtime_task.take(),
+            self.config_task.take(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    #[cfg(test)]
     pub(super) fn submit_value_for_test(
         &mut self,
         key: &str,
@@ -218,6 +235,8 @@ impl BrokerInspector {
     }
 
     pub(super) fn clear_for_environment(&mut self, revision: u64, cx: &mut Context<Self>) {
+        self.access_task = None;
+        self.session_owner = None;
         self.revision = revision;
         self.overview_task = None;
         self.runtime_task = None;
@@ -247,6 +266,9 @@ impl BrokerInspector {
     }
 
     fn refresh_overview(&mut self, cx: &mut Context<Self>) {
+        if self.services.current_session() != self.session_owner {
+            return;
+        }
         let Some(request) = self.store.begin_overview(self.revision) else {
             return;
         };
@@ -266,6 +288,9 @@ impl BrokerInspector {
     }
 
     fn refresh_runtime(&mut self, cx: &mut Context<Self>) {
+        if self.services.current_session() != self.session_owner {
+            return;
+        }
         let Some(request) = self.store.begin_runtime(self.revision) else {
             return;
         };
@@ -282,6 +307,9 @@ impl BrokerInspector {
     }
 
     fn refresh_config(&mut self, preserve_draft: bool, cx: &mut Context<Self>) {
+        if self.services.current_session() != self.session_owner {
+            return;
+        }
         if preserve_draft {
             self.sync_draft_from_inputs(cx);
         }
@@ -576,6 +604,8 @@ impl BrokerInspector {
     fn render_runtime_entry(&self, index: usize, entry: &RuntimeEntry, cx: &mut Context<Self>) -> gpui::Div {
         let theme = cx.theme();
         let copy_value = entry.copy_value().map(str::to_owned);
+        let session_owner = self.session_owner.clone();
+        let revision = self.revision;
         div()
             .flex()
             .items_start()
@@ -592,9 +622,16 @@ impl BrokerInspector {
                     Button::new(("copy-runtime", index))
                         .label("Copy")
                         .ghost()
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
-                        }),
+                        .on_click(cx.listener(move |inspector, _, window, cx| {
+                            inspector.access_task = Some(crate::components::protected_action::copy(
+                                inspector.services.clone(),
+                                session_owner.clone(),
+                                revision,
+                                value.clone(),
+                                window,
+                                cx,
+                            ));
+                        })),
                 )
             })
     }

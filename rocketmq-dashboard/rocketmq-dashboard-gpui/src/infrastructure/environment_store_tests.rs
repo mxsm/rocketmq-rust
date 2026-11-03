@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_dashboard_common::{OperationActor, OperationContext, OperationResource};
+use rocketmq_dashboard_storage::{CONFIG_SCHEMA_VERSION, DesktopConfig, MonitorRule};
 use rocketmq_runtime::{ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
 
 use super::*;
@@ -152,6 +153,7 @@ fn configuration_and_monitor_records_commit_once_with_their_state() {
                 limit: 10,
                 cursor: None,
             })
+            .await
             .unwrap();
         assert_eq!(page.events.len(), 2);
         assert_eq!(

@@ -124,7 +124,7 @@ fn audit_topic_fields_waiter_drop_preserves_intent_actor_environment_and_partial
             result = &mut waiter => panic!("field edit completed before release: {result:?}"),
             result = started => result.unwrap(),
         }
-        let accepted = fixture.services.audit_pending().unwrap().pop().unwrap();
+        let accepted = fixture.services.audit_pending().await.unwrap().pop().unwrap();
         assert_eq!(accepted.topic_fields, expected_fields);
         assert_eq!(accepted.context.environment_id, original_environment);
         drop(waiter);
@@ -173,7 +173,11 @@ fn audit_topic_fields_waiter_drop_preserves_intent_actor_environment_and_partial
     assert_eq!(event.facts.applied_targets, 1);
     assert_eq!(event.facts.unconfirmed_targets, 1);
     assert!(event.facts.refresh_failed);
-    assert!(fixture.services.audit_pending().unwrap().is_empty());
+    assert!(
+        crate::infrastructure::audit_store::persisted_journal(fixture.store.path())
+            .pending()
+            .is_empty()
+    );
     let calls = backend.calls();
     assert_eq!(calls.fields.len(), 1);
     assert_eq!(calls.fields[0].patch, patch);
@@ -298,7 +302,7 @@ fn audit_topic_fields_rejected_backend_retains_intent_and_terminal_retry_never_r
             result = &mut waiter => panic!("field edit completed before release: {result:?}"),
             result = started => result.unwrap(),
         }
-        let accepted = fixture.services.audit_pending().unwrap().pop().unwrap();
+        let accepted = fixture.services.audit_pending().await.unwrap().pop().unwrap();
         let backup = fixture.directory.path().join("saved-config.json");
         std::fs::rename(fixture.store.path(), &backup).unwrap();
         std::fs::create_dir(fixture.store.path()).unwrap();
@@ -330,7 +334,11 @@ fn audit_topic_fields_rejected_backend_retains_intent_and_terminal_retry_never_r
     assert_eq!(events[0].facts.failure_code, Some(AuditFailureCode::Validation));
     assert_eq!(backend.calls().fields.len(), 1);
     assert!(backend.calls().config.is_empty());
-    assert!(fixture.services.audit_pending().unwrap().is_empty());
+    assert!(
+        crate::infrastructure::audit_store::persisted_journal(fixture.store.path())
+            .pending()
+            .is_empty()
+    );
     assert!(!fixture.services.audit_write_warning());
     assert!(
         !std::fs::read_to_string(fixture.store.path())

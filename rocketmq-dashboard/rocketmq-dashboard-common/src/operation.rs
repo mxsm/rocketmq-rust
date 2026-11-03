@@ -53,6 +53,8 @@ pub enum OperationResource {
     Configuration,
     /// The local desktop authentication session; never its password or token.
     LocalSession,
+    /// The non-secret username whose persistent native sessions are being governed.
+    SessionUser(String),
     /// A consumer group rule.
     Monitor(String),
     /// A Topic.

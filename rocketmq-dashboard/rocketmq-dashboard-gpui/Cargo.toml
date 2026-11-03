@@ -36,9 +36,16 @@ categories   = ["development-tools", "gui"]
 readme       = "README.md"
 resolver     = "3"
 
+[features]
+default = []
+storage-sqlite = ["rocketmq-dashboard-storage/sqlite"]
+storage-mysql = ["rocketmq-dashboard-storage/mysql"]
+storage-postgres = ["rocketmq-dashboard-storage/postgres"]
+
 [dependencies]
 # Shared common code
 rocketmq-dashboard-common = { version = "1.1.0", path = "../rocketmq-dashboard-common" }
+rocketmq-dashboard-storage = { version = "1.1.0", path = "../rocketmq-dashboard-storage", default-features = false }
 rocketmq-admin-core = { version = "1.1.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 rocketmq-observability = { version = "1.1.0", path = "../../rocketmq-observability" }
 rocketmq-runtime = { version = "1.1.0", path = "../../rocketmq-runtime" }

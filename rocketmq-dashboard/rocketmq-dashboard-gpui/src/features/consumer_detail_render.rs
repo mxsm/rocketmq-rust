@@ -15,7 +15,7 @@
 //! Typed Consumer clients, queue progress and per-Broker configuration presentation.
 use super::{ConsumerDetail, loading_or_empty, observation_state_label};
 use gpui::prelude::FluentBuilder as _;
-use gpui::{ClipboardItem, Context, InteractiveElement as _, ParentElement as _, Styled as _, Window, div};
+use gpui::{Context, InteractiveElement as _, ParentElement as _, Styled as _, Window, div};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, button::Button, scroll::ScrollableElement as _,
 };
@@ -31,6 +31,9 @@ impl ConsumerDetail {
                     let jstack_client = client.identity.clone();
                     let copy_client = client.identity.as_str().to_owned();
                     let copy_address = client.address.clone();
+                    let client_session = self.session_owner.clone();
+                    let address_session = client_session.clone();
+                    let revision = self.revision;
                     body = body.child(
                         div()
                             .w_full()
@@ -64,18 +67,32 @@ impl ConsumerDetail {
                                             .small()
                                             .outline()
                                             .debug_selector(move || format!("consumer-copy-client-{index}"))
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(copy_client.clone()))
-                                            }),
+                                            .on_click(cx.listener(move |detail, _, window, cx| {
+                                                detail.access_task = Some(crate::components::protected_action::copy(
+                                                    detail.services.clone(),
+                                                    client_session.clone(),
+                                                    revision,
+                                                    copy_client.clone(),
+                                                    window,
+                                                    cx,
+                                                ));
+                                            })),
                                     )
                                     .child(
                                         Button::new(("copy-consumer-address", index))
                                             .label("Copy address")
                                             .small()
                                             .outline()
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(copy_address.clone()))
-                                            }),
+                                            .on_click(cx.listener(move |detail, _, window, cx| {
+                                                detail.access_task = Some(crate::components::protected_action::copy(
+                                                    detail.services.clone(),
+                                                    address_session.clone(),
+                                                    revision,
+                                                    copy_address.clone(),
+                                                    window,
+                                                    cx,
+                                                ));
+                                            })),
                                     ),
                             )
                             .child(

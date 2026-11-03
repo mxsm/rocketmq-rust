@@ -560,6 +560,15 @@ pub async fn connect_tls_stream(
 }
 
 #[cfg(feature = "tls")]
+fn tls_crypto_provider() -> StdArc<tokio_rustls::rustls::crypto::CryptoProvider> {
+    // Feature unification may enable both backends. Keep the fallback local so an
+    // application can still install its own process-wide provider.
+    tokio_rustls::rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| StdArc::new(tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()))
+}
+
+#[cfg(feature = "tls")]
 pub fn build_client_config(
     tls_config: &TlsConfig,
 ) -> Result<tokio_rustls::rustls::ClientConfig, rocketmq_error::SharedError> {
@@ -622,10 +631,13 @@ pub fn build_client_config(
 
     let effective_config = effective_tls_config(tls_config)?;
     let protocol_versions = configured_protocol_versions(&effective_config)?;
-    let client_builder = match protocol_versions.as_deref() {
-        Some(versions) => tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(versions),
-        None => tokio_rustls::rustls::ClientConfig::builder(),
-    };
+    let client_builder = tokio_rustls::rustls::ClientConfig::builder_with_provider(tls_crypto_provider())
+        .with_protocol_versions(
+            protocol_versions
+                .as_deref()
+                .unwrap_or(tokio_rustls::rustls::DEFAULT_VERSIONS),
+        )
+        .map_err(|error| config_error_source("tls.protocols", error))?;
     let builder = if effective_config.test_mode_enable || !effective_config.client.auth_server {
         client_builder
             .dangerous()
@@ -718,12 +730,16 @@ pub fn build_server_acceptor_exact_with_alpn(
         )
     };
 
-    let verifier = build_client_cert_verifier(effective_config)?;
+    let provider = tls_crypto_provider();
+    let verifier = build_client_cert_verifier(effective_config, provider.clone())?;
     let protocol_versions = configured_protocol_versions(effective_config)?;
-    let server_builder = match protocol_versions.as_deref() {
-        Some(versions) => tokio_rustls::rustls::ServerConfig::builder_with_protocol_versions(versions),
-        None => tokio_rustls::rustls::ServerConfig::builder(),
-    };
+    let server_builder = tokio_rustls::rustls::ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(
+            protocol_versions
+                .as_deref()
+                .unwrap_or(tokio_rustls::rustls::DEFAULT_VERSIONS),
+        )
+        .map_err(|error| config_error_source("tls.protocols", error))?;
     let mut server_config = server_builder
         .with_client_cert_verifier(verifier)
         .with_single_cert(certs, key)
@@ -736,6 +752,7 @@ pub fn build_server_acceptor_exact_with_alpn(
 #[cfg(feature = "tls")]
 fn build_client_cert_verifier(
     tls_config: &TlsConfig,
+    provider: StdArc<tokio_rustls::rustls::crypto::CryptoProvider>,
 ) -> Result<StdArc<dyn tokio_rustls::rustls::server::danger::ClientCertVerifier>, rocketmq_error::SharedError> {
     use tokio_rustls::rustls::server::WebPkiClientVerifier;
 
@@ -758,7 +775,7 @@ fn build_client_cert_verifier(
                 )
             })?;
             let root_store = StdArc::new(load_root_store_from_pem(trust_path, "tls.server.trustCertPath")?);
-            let builder = WebPkiClientVerifier::builder(root_store);
+            let builder = WebPkiClientVerifier::builder_with_provider(root_store, provider);
             let builder = if tls_config.server.need_client_auth == TlsClientAuth::Optional {
                 builder.allow_unauthenticated()
             } else {
@@ -1181,10 +1198,20 @@ mod tests {
 
     #[cfg(not(feature = "tls"))]
     #[test]
-    fn tls_disabled_error_mentions_feature() {
+    fn tls_disabled_error_preserves_configuration_contract() {
+        use rocketmq_error::fields;
+        use rocketmq_error::ErrorContext;
+
         let error = tls_disabled_error();
 
-        assert!(error.to_string().contains("tls feature"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+        assert_eq!(
+            error.context(),
+            &ErrorContext::new()
+                .with_text(fields::KEY, "use_tls")
+                .with_secret_presence(fields::VALUE_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT)
+        );
     }
 
     #[cfg(feature = "tls")]
@@ -1239,6 +1266,21 @@ mod tests {
         config.protocols = Some("TLSv1.1".to_string());
         let error = configured_protocol_versions(&config).expect_err("unsupported protocols should fail");
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn tls_config_builders_support_default_and_explicit_protocols() {
+        for protocols in [None, Some("TLSv1.2"), Some("TLSv1.3")] {
+            let config = TlsConfig {
+                test_mode_enable: true,
+                protocols: protocols.map(str::to_owned),
+                ..Default::default()
+            };
+
+            build_client_config(&config).expect("build client TLS configuration");
+            build_server_acceptor_exact(&config).expect("build server TLS configuration");
+        }
     }
 
     #[cfg(feature = "tls")]

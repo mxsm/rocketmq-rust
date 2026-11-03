@@ -510,6 +510,10 @@ fn monitor_environment_clear_drops_drafts_and_stale_results_but_keeps_accepted_w
         .unwrap();
     assert_eq!(event.operation.context.environment_id, original_environment);
     assert_ne!(event.outcome, AuditOutcome::Succeeded);
-    assert!(fixture.services.audit_pending().unwrap().is_empty());
+    assert!(
+        crate::infrastructure::audit_store::persisted_journal(fixture.store.path())
+            .pending()
+            .is_empty()
+    );
     fixture.runtime.shutdown_runtime_blocking().unwrap();
 }

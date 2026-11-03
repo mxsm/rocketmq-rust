@@ -25,7 +25,7 @@ use std::{
 
 use serde::Serialize;
 
-use super::config_store::ConfigStoreFailure;
+use crate::StorageError;
 
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -33,12 +33,11 @@ static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[error("the storage path has no parent")]
 struct InvalidStoragePath;
 
-pub(super) fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigStoreFailure> {
+pub(crate) fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), StorageError> {
     let parent = path
         .parent()
-        .ok_or_else(|| ConfigStoreFailure::validation(InvalidStoragePath))?;
-    fs::create_dir_all(parent)
-        .map_err(|source| ConfigStoreFailure::io("create directory", parent.to_path_buf(), source))?;
+        .ok_or_else(|| StorageError::validation(InvalidStoragePath))?;
+    fs::create_dir_all(parent).map_err(|source| StorageError::io("create directory", parent.to_path_buf(), source))?;
     let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("config.json");
     let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), sequence));
@@ -47,22 +46,21 @@ pub(super) fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Res
     write_and_replace(&temporary, path, value)
 }
 
-fn write_and_replace<T: Serialize>(temporary: &Path, target: &Path, value: &T) -> Result<(), ConfigStoreFailure> {
-    let mut bytes = serde_json::to_vec_pretty(value).map_err(ConfigStoreFailure::validation)?;
+fn write_and_replace<T: Serialize>(temporary: &Path, target: &Path, value: &T) -> Result<(), StorageError> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(StorageError::validation)?;
     bytes.push(b'\n');
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(temporary)
-        .map_err(|source| ConfigStoreFailure::io("create temporary file", temporary.to_path_buf(), source))?;
+        .map_err(|source| StorageError::io("create temporary file", temporary.to_path_buf(), source))?;
     file.write_all(&bytes)
-        .map_err(|source| ConfigStoreFailure::io("write temporary file", temporary.to_path_buf(), source))?;
+        .map_err(|source| StorageError::io("write temporary file", temporary.to_path_buf(), source))?;
     file.sync_all()
-        .map_err(|source| ConfigStoreFailure::io("sync temporary file", temporary.to_path_buf(), source))?;
+        .map_err(|source| StorageError::io("sync temporary file", temporary.to_path_buf(), source))?;
     drop(file);
-    atomic_replace(temporary, target).map_err(|source| {
-        ConfigStoreFailure::io("atomic replacement", target.to_path_buf(), io::Error::other(source))
-    })?;
+    atomic_replace(temporary, target)
+        .map_err(|source| StorageError::io("atomic replacement", target.to_path_buf(), io::Error::other(source)))?;
     sync_parent(target)?;
     Ok(())
 }
@@ -233,19 +231,19 @@ fn atomic_replace_with(temporary: &Path, target: &Path, api: &dyn WindowsReplace
 }
 
 #[cfg(not(windows))]
-fn sync_parent(target: &Path) -> Result<(), ConfigStoreFailure> {
+fn sync_parent(target: &Path) -> Result<(), StorageError> {
     use std::fs::File;
 
     let parent = target
         .parent()
-        .ok_or_else(|| ConfigStoreFailure::validation(InvalidStoragePath))?;
+        .ok_or_else(|| StorageError::validation(InvalidStoragePath))?;
     File::open(parent)
         .and_then(|directory| directory.sync_all())
-        .map_err(|source| ConfigStoreFailure::io("sync directory", parent.to_path_buf(), source))
+        .map_err(|source| StorageError::io("sync directory", parent.to_path_buf(), source))
 }
 
 #[cfg(windows)]
-fn sync_parent(_target: &Path) -> Result<(), ConfigStoreFailure> {
+fn sync_parent(_target: &Path) -> Result<(), StorageError> {
     // ReplaceFileW completes the same-volume atomic replacement. Windows does not expose
     // directory handles through std::fs::File, while the temporary file itself is synced above.
     Ok(())

@@ -18,6 +18,8 @@
 mod cache;
 #[path = "topology/layout.rs"]
 mod layout;
+#[path = "topology/sphere.rs"]
+pub mod sphere;
 pub use cache::*;
 pub use layout::*;
 

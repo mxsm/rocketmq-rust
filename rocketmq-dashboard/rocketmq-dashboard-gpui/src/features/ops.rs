@@ -14,6 +14,9 @@
 
 //! OPS Connection, Security, and Storage product workflows.
 
+#[path = "ops_storage.rs"]
+mod storage;
+
 use std::collections::BTreeMap;
 
 use gpui::{
@@ -82,6 +85,8 @@ pub struct OpsView {
     busy: bool,
     error: Option<UiError>,
     task: Option<Task<()>>,
+    storage: storage::OpsStorage,
+    native_storage: Entity<super::storage_setup::StorageSetupView>,
 }
 
 impl EventEmitter<ConfigUpdated> for OpsView {}
@@ -94,6 +99,14 @@ impl OpsView {
         let environment_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Environment name"));
         let state = services.connection_state();
         let config = state.config;
+        let storage = storage::OpsStorage::new(&config, window, cx);
+        let native_storage = cx.new(|cx| {
+            super::storage_setup::StorageSetupView::new(
+                services.clone(),
+                super::storage_setup::StorageSetupMode::Preferences,
+                cx,
+            )
+        });
         Self {
             services,
             endpoint_input,
@@ -110,11 +123,13 @@ impl OpsView {
             busy: false,
             error: None,
             task: None,
+            storage,
+            native_storage,
         }
     }
 
     /// Synchronizes after startup or a sibling page update without discarding a dirty transport draft.
-    pub fn sync_from_services(&mut self, cx: &mut Context<Self>) {
+    pub fn sync_from_services(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = self.services.connection_state();
         let config = state.config;
         self.environments = state.environments;
@@ -124,6 +139,9 @@ impl OpsView {
         self.config = config;
         if !self.transport_dirty {
             self.transport_draft = self.config.transport;
+        }
+        if !self.storage.dirty {
+            self.storage.reset(&self.config, window, cx);
         }
         self.loaded = true;
         cx.notify();
@@ -151,8 +169,11 @@ impl OpsView {
         }
     }
 
-    fn set_section(&mut self, section: OpsSection, cx: &mut Context<Self>) {
+    fn set_section(&mut self, section: OpsSection, window: &mut Window, cx: &mut Context<Self>) {
         self.section = section;
+        if section == OpsSection::Storage {
+            self.refresh_storage(window, cx);
+        }
         cx.notify();
     }
 
@@ -161,7 +182,7 @@ impl OpsView {
             return;
         }
         if !self.transport_dirty || self.section != OpsSection::Connection {
-            self.set_section(section, cx);
+            self.set_section(section, window, cx);
             return;
         }
         let view = cx.entity().downgrade();
@@ -169,10 +190,10 @@ impl OpsView {
             "Discard transport draft?",
             "TLS/VIP changes have not been saved. Discard them before changing sections?",
             "Discard",
-            move |_, _window, cx| {
+            move |_, window, cx| {
                 let _ = view.update(cx, |this, cx| {
                     this.discard_transport(cx);
-                    this.set_section(section, cx);
+                    this.set_section(section, window, cx);
                 });
                 true
             },
@@ -193,10 +214,17 @@ impl OpsView {
 
     /// Clears edits that belong to the previous environment without cancelling configuration work.
     pub fn clear_environment_drafts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.sync_from_services(cx);
+        self.sync_from_services(window, cx);
         self.transport_draft = self.config.transport;
         self.transport_dirty = false;
         self.health.clear();
+        self.storage.task = None;
+        self.storage.status = None;
+        self.storage.status_error = None;
+        self.storage.loading = false;
+        if self.section == OpsSection::Storage {
+            self.refresh_storage(window, cx);
+        }
         self.endpoint_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
@@ -432,6 +460,7 @@ impl OpsView {
         let services = self.services.clone();
         let request_revision = self.config.revision;
         let transport_save = matches!(mutation, ConfigMutation::SaveTransport(_));
+        let history_save = matches!(mutation, ConfigMutation::SaveHistorySettings { .. });
         let create_environment = matches!(mutation, ConfigMutation::CreateEnvironment(_));
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let (progress, mut updates) = tokio::sync::mpsc::unbounded_channel();
@@ -461,10 +490,16 @@ impl OpsView {
                 this.environments = this.services.connection_state().environments;
                 let stale = match &result {
                     Ok(update) => update.config.revision != current_revision,
-                    Err(_) => current_revision != request_revision && !transport_save,
+                    Err(_) => current_revision != request_revision && !transport_save && !history_save,
                 };
                 if stale {
                     this.config = this.services.connection_state().config;
+                    if !this.storage.dirty {
+                        this.storage.reset(&this.config, window, cx);
+                    }
+                    if this.section == OpsSection::Storage {
+                        this.refresh_visible_storage(window, cx);
+                    }
                     cx.notify();
                     return;
                 }
@@ -474,6 +509,9 @@ impl OpsView {
                         this.transport_draft = this.config.transport;
                         this.transport_dirty = false;
                         this.loaded = true;
+                        if history_save || !this.storage.dirty {
+                            this.storage.reset(&this.config, window, cx);
+                        }
                         this.error = update.connection_warning;
                         if clear_input {
                             this.endpoint_input
@@ -488,13 +526,22 @@ impl OpsView {
                     Err(error) => {
                         // The persisted state may have rolled back, but the attempted draft remains available
                         // for correction and an explicit retry.
-                        if transport_save {
+                        if transport_save || history_save {
                             this.config = this.services.connection_state().config;
-                            this.transport_dirty = true;
+                            if transport_save {
+                                this.transport_dirty = true;
+                            }
                         }
                         this.error = Some(error);
-                        this.endpoint_input.update(cx, |input, cx| input.focus(window, cx));
+                        if history_save {
+                            this.storage.inputs[0].update(cx, |input, cx| input.focus(window, cx));
+                        } else {
+                            this.endpoint_input.update(cx, |input, cx| input.focus(window, cx));
+                        }
                     }
+                }
+                if this.section == OpsSection::Storage {
+                    this.refresh_visible_storage(window, cx);
                 }
                 cx.notify();
             });
@@ -896,37 +943,6 @@ impl OpsView {
                     ),
             )
     }
-
-    fn render_storage(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let theme = cx.theme();
-        let path = self
-            .services
-            .config_path()
-            .map_or_else(|| "Unavailable".into(), |path| path.display().to_string());
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(key_values(
-                [
-                    ("Configuration file", path),
-                    ("Schema version", self.config.schema_version.to_string()),
-                    ("Revision", self.config.revision.to_string()),
-                    ("History store", "Local JSON".into()),
-                    ("History collection", history_collection_label(self.config.foundations)),
-                    ("Monitor store", "Local JSON (no evaluation)".into()),
-                    ("Configuration mode", "Versioned atomic file".into()),
-                ],
-                theme.border,
-                theme.muted_foreground,
-            ))
-            .child(
-                Button::new("reload-storage")
-                    .label("Reload")
-                    .disabled(self.busy)
-                    .on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))),
-            )
-    }
 }
 
 impl Render for OpsView {
@@ -937,7 +953,7 @@ impl Render for OpsView {
                 .size_full()
                 .child(states::loading_state(theme.foreground, theme.muted_foreground));
         }
-        div().size_full().child(
+        div().debug_selector(|| "ops-page-viewport".into()).size_full().child(
             div()
                 .size_full()
                 .overflow_y_scrollbar()
@@ -1004,24 +1020,47 @@ fn section_button(
     active: bool,
     listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> Button {
-    Button::new(id).label(label).selected(active).on_click(listener)
+    Button::new(id)
+        .debug_selector(move || id.into())
+        .label(label)
+        .selected(active)
+        .on_click(listener)
 }
 
-fn key_values<const N: usize>(values: [(&'static str, String); N], border: gpui::Hsla, muted: gpui::Hsla) -> gpui::Div {
+pub(super) fn key_values<const N: usize>(
+    values: [(&'static str, String); N],
+    border: gpui::Hsla,
+    muted: gpui::Hsla,
+) -> gpui::Div {
     div()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
         .rounded(px(8.))
         .border_1()
         .border_color(border)
         .children(values.into_iter().map(|(label, value)| {
             div()
+                .debug_selector(move || format!("ops-value-row-{label}"))
+                .w_full()
+                .min_w_0()
+                .flex_shrink_0()
                 .min_h(px(44.))
                 .px_3()
                 .flex()
                 .items_center()
                 .border_b_1()
                 .border_color(border)
-                .child(div().w(px(180.)).text_color(muted).child(label))
-                .child(div().flex_1().min_w_0().child(value))
+                .child(div().w(px(180.)).flex_shrink_0().text_color(muted).child(label))
+                .child(
+                    div()
+                        .debug_selector(move || format!("ops-value-text-{label}"))
+                        .flex_1()
+                        .min_w_0()
+                        .child(value),
+                )
         }))
 }
 

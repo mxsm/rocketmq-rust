@@ -21,7 +21,10 @@ use rocketmq_runtime::{
     ChildServiceContext, RuntimeConfig, RuntimeError, RuntimeOperation, RuntimeOwner, ShutdownReport,
 };
 
-use super::admin_provider::GpuiAdminProvider;
+use super::{
+    admin_provider::GpuiAdminProvider,
+    config_store::{ConfigStoreFailure, DesktopConfigStore},
+};
 
 /// Runtime bootstrap or shutdown failure at the process boundary.
 #[derive(Clone)]
@@ -180,9 +183,13 @@ fn client_start_failure(owner: RuntimeOwner, source: impl StdError + Send + Sync
 fn finish_shutdown(
     work_report: ShutdownReport,
     client_report: ShutdownReport,
+    storage_result: Result<(), ConfigStoreFailure>,
     owner_result: Result<ShutdownReport, RuntimeError>,
 ) -> Result<ShutdownReport, DesktopRuntimeError> {
     let mut failures = RuntimeCleanupFailures::new();
+    if let Err(error) = storage_result {
+        failures.primary = Some(Arc::new(error));
+    }
     failures.retain_if_unhealthy(ShutdownStage::Work, &work_report);
     failures.retain_if_unhealthy(ShutdownStage::Client, &client_report);
     let owner_report = match owner_result {
@@ -261,30 +268,39 @@ impl DesktopClientRuntime {
         Arc::clone(&self.client_runtime)
     }
 
-    /// Cancels application work, closes provider and client resources, then shuts down the owner.
+    /// Cancels application work, closes provider, storage and client resources, then the owner.
     /// Telemetry remains the caller's owner and must be shut down after this returns.
-    pub fn shutdown(self, provider: Option<Arc<GpuiAdminProvider>>) -> Result<ShutdownReport, DesktopRuntimeError> {
+    pub fn shutdown(
+        self,
+        provider: Option<Arc<GpuiAdminProvider>>,
+        storage: Option<Arc<DesktopConfigStore>>,
+    ) -> Result<ShutdownReport, DesktopRuntimeError> {
         let Self {
             owner,
             application_context,
             work_context,
             client_runtime,
         } = self;
-        let (work_report, client_report) = owner.block_on(async {
+        let (work_report, client_report, storage_result) = owner.block_on(async {
             work_context.task_group().cancel();
             let work_report = work_context.task_group().shutdown(Duration::from_secs(5)).await;
             if let Some(provider) = provider.as_ref() {
                 provider.shutdown().await;
             }
+            let storage_result = match storage.as_ref() {
+                Some(storage) => storage.close().await,
+                None => Ok(()),
+            };
             let client_report = client_runtime.shutdown().await;
-            (work_report, client_report)
+            (work_report, client_report, storage_result)
         });
         drop(provider);
+        drop(storage);
         drop(client_runtime);
         drop(work_context);
         drop(application_context);
         let owner_result = owner.shutdown_runtime_blocking();
-        finish_shutdown(work_report, client_report, owner_result)
+        finish_shutdown(work_report, client_report, storage_result, owner_result)
     }
 }
 
@@ -296,14 +312,46 @@ mod tests {
     #[test]
     fn application_shutdown_closes_client_and_awaits_owned_tasks() {
         let runtime = DesktopClientRuntime::new(TelemetryHandle::noop()).expect("runtime");
+        let directory = tempfile::tempdir().unwrap();
+        let storage = DesktopConfigStore::new(
+            directory.path().join("config.json"),
+            runtime.provider_component("storage"),
+        );
+        let cleanup_storage = Arc::clone(&storage);
+        let context = runtime.component("storage-cleanup");
+        let cancellation = context.task_spawner().cancellation_token();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = Arc::clone(&drained);
+        context
+            .task_group()
+            .spawn_service("storage-cleanup", async move {
+                cleanup_storage.load().await.unwrap();
+                started.send(()).unwrap();
+                cancellation.cancelled().await;
+                cleanup_storage
+                    .load()
+                    .await
+                    .expect("authority stays open while owned work drains");
+                observed.store(true, std::sync::atomic::Ordering::Release);
+            })
+            .unwrap();
+        runtime.owner.block_on(ready).unwrap();
         let provider = GpuiAdminProvider::new(
             runtime.provider_component("provider"),
             runtime.client_runtime(),
             DesktopAuthState::from_process_environment(),
         );
-        let report = runtime.shutdown(Some(provider)).expect("shutdown");
+        let report = runtime
+            .shutdown(Some(provider), Some(Arc::clone(&storage)))
+            .expect("shutdown");
 
         assert!(report.is_healthy());
+        assert!(drained.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            !storage.owns_writer(),
+            "retained services cannot retain the directory writer after shutdown"
+        );
     }
 
     #[test]
@@ -353,6 +401,7 @@ mod tests {
         let error = finish_shutdown(
             unhealthy("private-work-name"),
             unhealthy("private-client-name"),
+            Ok(()),
             Ok(unhealthy("private-owner-name")),
         )
         .expect_err("every unhealthy cleanup report must fail shutdown");

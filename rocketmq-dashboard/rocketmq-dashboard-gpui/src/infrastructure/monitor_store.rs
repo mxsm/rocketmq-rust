@@ -24,8 +24,8 @@ use rocketmq_dashboard_common::{
 #[cfg(test)]
 use rocketmq_dashboard_common::{OperationActor, OperationResource};
 
+pub use rocketmq_dashboard_storage::MonitorRule;
 use rocketmq_runtime::{ChildServiceContext, TaskGroup, TaskId};
-use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::config_store::{ConfigStoreFailure, DesktopConfigStore};
@@ -36,18 +36,6 @@ use super::environment_store::{MonitorMigrationState, StoredMonitorRule};
 #[derive(Debug, thiserror::Error)]
 #[error("Monitor id and consumer group must not be empty")]
 struct InvalidMonitorRule;
-
-/// Original rule payload retained during migration; thresholds live in the versioned envelope.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct MonitorRule {
-    /// Stable rule identity.
-    pub id: String,
-    /// Consumer group selected by the operator.
-    pub consumer_group: String,
-    /// Whether future evaluation should admit the rule.
-    pub enabled: bool,
-}
 
 /// Monitor facade over the canonical configuration/rule/operation document.
 pub struct MonitorStore {

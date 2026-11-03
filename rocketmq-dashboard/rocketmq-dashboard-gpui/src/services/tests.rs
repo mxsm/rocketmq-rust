@@ -14,6 +14,7 @@
 
 use std::{
     collections::VecDeque,
+    path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -95,6 +96,81 @@ fn test_runtime(name: &'static str) -> RuntimeOwner {
         .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory limit"))
         .build()
         .expect("test runtime")
+}
+
+#[test]
+fn peer_configuration_refresh_uses_ordered_invalidation_and_skips_journal_only_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = test_runtime("gpui-peer-configuration");
+    let provider = FakeConnectionProvider::new([]);
+    let (store, services) = real_test_services(&runtime, directory.path().join("config.json"), provider.clone());
+    runtime.block_on(async {
+        services.bootstrap().await.unwrap();
+        let native = store.native_storage().await.unwrap();
+        let peer = DesktopConfigStore::with_native_storage(
+            store.path().to_path_buf(),
+            runtime.root_context().component("peer-config"),
+            native,
+        );
+        let mut config = peer.load().await.unwrap();
+        config.nameservers = vec!["peer:9876".into()];
+        config.current_nameserver = Some("peer:9876".into());
+        let saved = peer.save_next(config).await.unwrap();
+        let mut changes = services.configuration_changes().unwrap();
+        changes.borrow_and_update();
+        store.load().await.unwrap();
+        assert!(changes.has_changed().unwrap());
+        changes.borrow_and_update();
+        let retained = directory.path().join("retained-config.json");
+        std::fs::rename(store.path(), &retained).unwrap();
+        std::fs::create_dir(store.path()).unwrap();
+        let (progress, _) = tokio::sync::mpsc::unbounded_channel();
+        assert!(services.refresh_authority_if_changed(progress).await.is_err());
+        assert!(changes.borrow_and_update().is_none());
+        std::fs::remove_dir(store.path()).unwrap();
+        std::fs::rename(retained, store.path()).unwrap();
+        store.load().await.unwrap();
+        assert!(
+            changes.has_changed().unwrap(),
+            "a recovered read must re-emit the unapplied peer revision"
+        );
+        let (progress, mut events) = tokio::sync::mpsc::unbounded_channel();
+        assert_eq!(
+            services
+                .refresh_authority_if_changed(progress)
+                .await
+                .unwrap()
+                .unwrap()
+                .config,
+            saved
+        );
+        let mut phases = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            phases.push(event.phase);
+        }
+        assert_eq!(
+            phases,
+            [
+                ConfigUpdatePhase::Persisted,
+                ConfigUpdatePhase::ProviderSwitched,
+                ConfigUpdatePhase::Invalidated,
+                ConfigUpdatePhase::HealthRefreshed,
+                ConfigUpdatePhase::Completed
+            ]
+        );
+        assert_eq!(provider.revision.load(Ordering::Acquire), saved.revision);
+        assert_eq!(&*provider.endpoint.lock(), "peer:9876");
+        assert_eq!(services.connection_state().config, saved);
+        changes.borrow_and_update();
+        let (progress, mut events) = tokio::sync::mpsc::unbounded_channel();
+        assert!(services.refresh_authority_if_changed(progress).await.unwrap().is_none());
+        assert!(events.try_recv().is_err());
+        assert!(
+            !changes.has_changed().unwrap(),
+            "refreshing the same config cannot produce an invalidation loop"
+        );
+    });
+    runtime.shutdown_runtime_blocking().unwrap();
 }
 
 fn real_test_services(
