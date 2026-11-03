@@ -193,7 +193,7 @@ fn non_java_remoting_client_route_query_decodes_successfully() {
     let ext = decoded.ext_fields().expect("ext_fields must be present");
     assert_eq!(ext.get("topic").map(CheetahString::as_str), Some("AttributionTest"));
     assert_eq!(ext.get("sysFlag").map(CheetahString::as_str), Some("64"));
-    assert_eq!(ext.get("logicalQueueIdsFilter").map(CheetahString::as_str), Some(""));
+    assert!(!ext.contains_key("logicalQueueIdsFilter"));
 
     let header = decoded
         .decode_command_custom_header::<GetRouteInfoRequestHeader>()

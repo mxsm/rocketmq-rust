@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **fix(protocol):** Support flexible JSON headers from non-Java remoting clients by accepting missing serializeTypeCurrentRPC, numeric and case-insensitive languageCode, and serializeType aliases ([#12090](https://github.com/mxsm/rocketmq-rust/issues/12090)).
+- **fix(protocol):** Support flexible JSON headers from non-Java remoting clients by accepting missing serializeTypeCurrentRPC, numeric and case-insensitive languageCode, serializeType aliases, and scalar extension fields while treating null fields as absent and preserving explicit empty strings ([#12090](https://github.com/mxsm/rocketmq-rust/issues/12090)).
 
 ### Changed
 

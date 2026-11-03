@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use bytes::Bytes;
@@ -89,6 +90,24 @@ impl JsonHeaderFields {
         map
     }
 
+    fn remove_nullified_fields(self, null_offsets: &HashMap<CheetahString, usize>) -> Self {
+        let mut payload = Vec::with_capacity(self.payload.len());
+        let mut entry_count = 0usize;
+        let mut fields = self.iter();
+        loop {
+            let start = fields.cursor;
+            let Some((key, _)) = fields.next_length_prefixed() else {
+                break;
+            };
+            if null_offsets.get(key).is_some_and(|offset| start < *offset) {
+                continue;
+            }
+            payload.extend_from_slice(&self.payload[start..fields.cursor]);
+            entry_count += 1;
+        }
+        Self::from_length_prefixed(payload, entry_count)
+    }
+
     #[inline]
     fn iter(&self) -> JsonHeaderFieldIter<'_> {
         JsonHeaderFieldIter {
@@ -115,7 +134,7 @@ impl<'de> Visitor<'de> for JsonHeaderFieldsVisitor {
     type Value = JsonHeaderFields;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON object whose extension-field values are strings")
+        formatter.write_str("a JSON object whose extension-field values are scalars or null")
     }
 
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -130,20 +149,39 @@ impl<'de> Visitor<'de> for JsonHeaderFieldsVisitor {
             .max(MIN_INITIAL_PAYLOAD_CAPACITY);
         let mut payload = Vec::with_capacity(initial_capacity);
         let mut entry_count = 0usize;
+        let mut null_offsets = None;
 
-        while map
-            .next_key_seed(JsonFieldTextSeed { payload: &mut payload })?
-            .is_some()
-        {
-            map.next_value_seed(JsonFieldTextSeed { payload: &mut payload })?;
-            entry_count = entry_count.saturating_add(1);
+        loop {
+            let entry_start = payload.len();
+            if map
+                .next_key_seed(JsonFieldTextSeed { payload: &mut payload })?
+                .is_none()
+            {
+                break;
+            }
+            let key_end = payload.len();
+            if map
+                .next_value_seed(JsonFieldValueSeed { payload: &mut payload })?
+                .is_some()
+            {
+                entry_count = entry_count.saturating_add(1);
+            } else {
+                let key = std::str::from_utf8(&payload[entry_start + FIELD_LENGTH_BYTES..key_end])
+                    .map_err(serde::de::Error::custom)?;
+                null_offsets
+                    .get_or_insert_with(HashMap::new)
+                    .insert(CheetahString::from_slice(key), entry_start);
+                payload.truncate(entry_start);
+            }
         }
 
-        Ok(JsonHeaderFields {
-            payload: Bytes::from(payload),
-            entry_count,
-            encoding: JsonFieldEncoding::LengthPrefixed,
-        })
+        let fields = JsonHeaderFields::from_length_prefixed(payload, entry_count);
+        if let Some(null_offsets) = null_offsets {
+            // A null clears earlier duplicates, while later non-null values still win.
+            Ok(fields.remove_nullified_fields(&null_offsets))
+        } else {
+            Ok(fields)
+        }
     }
 }
 
@@ -158,6 +196,23 @@ impl<'de> DeserializeSeed<'de> for JsonFieldTextSeed<'_> {
     where
         D: Deserializer<'de>,
     {
+        deserializer
+            .deserialize_str(JsonFieldTextVisitor { payload: self.payload })
+            .map(|_| ())
+    }
+}
+
+struct JsonFieldValueSeed<'a> {
+    payload: &'a mut Vec<u8>,
+}
+
+impl<'de> DeserializeSeed<'de> for JsonFieldValueSeed<'_> {
+    type Value = Option<()>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         deserializer.deserialize_any(JsonFieldTextVisitor { payload: self.payload })
     }
 }
@@ -167,7 +222,7 @@ struct JsonFieldTextVisitor<'a> {
 }
 
 impl JsonFieldTextVisitor<'_> {
-    fn append<E>(self, value: &str) -> Result<(), E>
+    fn append<E>(self, value: &str) -> Result<Option<()>, E>
     where
         E: serde::de::Error,
     {
@@ -178,12 +233,12 @@ impl JsonFieldTextVisitor<'_> {
         self.payload.reserve(additional);
         self.payload.extend_from_slice(&length.to_be_bytes());
         self.payload.extend_from_slice(value.as_bytes());
-        Ok(())
+        Ok(Some(()))
     }
 }
 
 impl<'de> Visitor<'de> for JsonFieldTextVisitor<'_> {
-    type Value = ();
+    type Value = Option<()>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("a JSON extension-field string, number, boolean, or null")
@@ -266,7 +321,7 @@ impl<'de> Visitor<'de> for JsonFieldTextVisitor<'_> {
     where
         E: serde::de::Error,
     {
-        self.append("")
+        Ok(None)
     }
 
     #[inline]
@@ -274,7 +329,7 @@ impl<'de> Visitor<'de> for JsonFieldTextVisitor<'_> {
     where
         E: serde::de::Error,
     {
-        self.append("")
+        Ok(None)
     }
 
     #[inline]
@@ -466,6 +521,36 @@ impl<'a> Iterator for JsonHeaderFieldIter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nulls_clear_prior_duplicates_and_preserve_later_values() {
+        for (object, expected) in [
+            (r#"{"key":"old","key":null,"after":""}"#, vec![("after", "")]),
+            (r#"{"key":null,"key":"new"}"#, vec![("key", "new")]),
+            (
+                r#"{"key":"first","other":"kept","key":null,"key":"last","unused":null}"#,
+                vec![("other", "kept"), ("key", "last")],
+            ),
+            (
+                r#"{"k\u0065y":"old","key":null,"after":"retained"}"#,
+                vec![("after", "retained")],
+            ),
+            (
+                r#"{"key":"first","key":null,"other":"kept","key":"last","key":null}"#,
+                vec![("other", "kept")],
+            ),
+            (r#"{"key":null,"other":null}"#, vec![]),
+        ] {
+            let fields: JsonHeaderFields = serde_json::from_str(object).unwrap();
+            assert_eq!(fields.iter().collect::<Vec<_>>(), expected, "{object}");
+            assert_eq!(fields.len(), expected.len(), "{object}");
+            let map = fields.materialize();
+            assert_eq!(map.len(), expected.len(), "{object}");
+            for (key, value) in expected {
+                assert_eq!(map.get(key).map(CheetahString::as_str), Some(value), "{object}");
+            }
+        }
+    }
 
     #[test]
     fn iterates_all_valid_internal_encodings() {
