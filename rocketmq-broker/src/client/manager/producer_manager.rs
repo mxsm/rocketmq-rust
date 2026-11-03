@@ -20,7 +20,6 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
-use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -36,8 +35,6 @@ use tracing::warn;
 use crate::client::client_session_info::ClientSessionInfo;
 use crate::client::client_session_info::ClientSessionRetirement;
 use crate::client::client_session_info::ClientSessionTransport;
-use crate::client::producer_change_listener::ArcProducerChangeListener;
-use crate::client::producer_group_event::ProducerGroupEvent;
 use crate::client::session_transition_locks::ClientSessionTransitionGuard;
 use crate::client::session_transition_locks::ClientSessionTransitionLocks;
 use crate::types::ProducerGroupName;
@@ -45,14 +42,8 @@ use crate::types::ProducerGroupName;
 /// Timeout for considering a producer session expired (120 seconds in milliseconds).
 const CHANNEL_EXPIRED_TIMEOUT: u64 = 120_000;
 
-struct ProducerSessionRemoval {
-    group: ProducerGroupName,
-    group_table_removed: bool,
-}
-
 #[derive(Default)]
 pub(crate) struct ProducerSessionBatch {
-    removals: Vec<ProducerSessionRemoval>,
     retirements: Vec<ClientSessionRetirement>,
 }
 
@@ -80,8 +71,6 @@ pub struct ProducerManager {
     session_transition_locks: Arc<ClientSessionTransitionLocks>,
     /// Counter for round-robin session selection.
     positive_atomic_counter: Arc<AtomicI32>,
-    /// Listeners notified on producer registration/unregistration events (thread-safe)
-    producer_change_listener_vec: Arc<ArcSwap<Vec<ArcProducerChangeListener>>>,
     /// Optional broker statistics manager (set once during initialization)
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
     /// Broker configuration for feature toggles
@@ -133,7 +122,6 @@ impl ProducerClientRegistration {
     }
 
     pub(crate) fn complete_producer_sessions(&self, batch: ProducerSessionBatch) -> Vec<ClientSessionRetirement> {
-        self.manager.dispatch_producer_session_removals(batch.removals);
         batch.retirements
     }
 
@@ -308,7 +296,6 @@ impl ProducerManager {
             session_registry: Arc::clone(&self.session_registry),
             session_transition_locks: Arc::clone(&self.session_transition_locks),
             positive_atomic_counter: Arc::clone(&self.positive_atomic_counter),
-            producer_change_listener_vec: Arc::clone(&self.producer_change_listener_vec),
             broker_stats_manager: self.broker_stats_manager.clone(),
             broker_config: Arc::clone(&self.broker_config),
         }
@@ -346,7 +333,6 @@ impl ProducerManager {
             session_registry: Arc::new(OnceLock::new()),
             session_transition_locks,
             positive_atomic_counter: Arc::new(AtomicI32::new(0)),
-            producer_change_listener_vec: Arc::new(ArcSwap::from_pointee(Vec::new())),
             broker_stats_manager: None,
             broker_config: Arc::new(ArcSwapOption::empty()),
         }
@@ -370,18 +356,6 @@ impl ProducerManager {
     /// Shared manager views observe subsequent configuration generations.
     pub fn set_broker_config(&self, broker_config: Arc<BrokerConfig>) {
         self.broker_config.store(Some(broker_config));
-    }
-
-    /// Registers a listener for producer registration and unregistration events.
-    ///
-    /// The listener will be invoked synchronously when producers connect, disconnect,
-    /// or when groups are created or removed.
-    pub fn append_producer_change_listener(&self, producer_change_listener: ArcProducerChangeListener) {
-        self.producer_change_listener_vec.rcu(|listeners| {
-            let mut new_listeners = (**listeners).clone();
-            new_listeners.push(Arc::clone(&producer_change_listener));
-            new_listeners
-        });
     }
 }
 
@@ -449,7 +423,7 @@ impl ProducerManager {
             .lock(client.client_id(), client.session_id());
         let batch = self.register_producer_sessions_locked(&transition, groups, client);
         drop(transition);
-        self.dispatch_producer_session_removals(batch.removals);
+        drop(batch);
     }
 
     fn register_producer_sessions_locked(
@@ -481,10 +455,10 @@ impl ProducerManager {
                 .and_then(|session_id| self.session_retirement(session_id))
                 .into_iter()
                 .collect();
-            let removals = replaced_session
-                .map(|session_id| self.unregister_producer_session_all_locked(session_id))
-                .unwrap_or_default();
-            return ProducerSessionBatch { removals, retirements };
+            if let Some(session_id) = replaced_session {
+                self.unregister_producer_session_all_locked(session_id);
+            }
+            return ProducerSessionBatch { retirements };
         }
         if self
             .broker_config
@@ -533,11 +507,11 @@ impl ProducerManager {
             .and_then(|session_id| self.session_retirement(session_id))
             .into_iter()
             .collect();
-        let removals = replaced_session
-            .map(|session_id| self.unregister_producer_session_all_locked(session_id))
-            .unwrap_or_default();
+        if let Some(session_id) = replaced_session {
+            self.unregister_producer_session_all_locked(session_id);
+        }
         info!("producer session heartbeat applied");
-        ProducerSessionBatch { removals, retirements }
+        ProducerSessionBatch { retirements }
     }
 
     fn session_retirement(&self, session_id: SessionId) -> Option<ClientSessionRetirement> {
@@ -552,23 +526,23 @@ impl ProducerManager {
             return;
         };
         let transition = self.session_transition_locks.lock(&client_id, session_id);
-        let removal = self.unregister_producer_session_locked(group, session_id);
+        self.unregister_producer_session_locked(group, session_id);
         drop(transition);
-        self.dispatch_producer_session_removals(removal.into_iter().collect());
     }
 
-    fn unregister_producer_session_locked(&self, group: &str, session_id: SessionId) -> Option<ProducerSessionRemoval> {
-        let sessions = self.group_session_table.get(group)?;
-        let (_, client) = sessions.remove(&session_id)?;
+    fn unregister_producer_session_locked(&self, group: &str, session_id: SessionId) -> bool {
+        let Some(sessions) = self.group_session_table.get(group) else {
+            return false;
+        };
+        let Some((_, client)) = sessions.remove(&session_id) else {
+            return false;
+        };
         let sessions_empty = sessions.is_empty();
         drop(sessions);
-        let group_table_removed = if sessions_empty {
+        if sessions_empty {
             self.group_session_table
-                .remove_if(group, |_, current| current.is_empty())
-                .is_some()
-        } else {
-            false
-        };
+                .remove_if(group, |_, current| current.is_empty());
+        }
         let session_has_groups = self.remove_producer_session_group_index(session_id, group);
         if !session_has_groups {
             self.client_session_table
@@ -577,22 +551,20 @@ impl ProducerManager {
                 .remove_if(&session_id, |_, current| current == client.client_id());
             self.session_transport_table.remove(&session_id);
         }
-        Some(ProducerSessionRemoval {
-            group: group.into(),
-            group_table_removed,
-        })
+        true
     }
 
-    fn unregister_producer_session_all_locked(&self, session_id: SessionId) -> Vec<ProducerSessionRemoval> {
+    fn unregister_producer_session_all_locked(&self, session_id: SessionId) -> bool {
         let groups = self
             .session_to_groups
             .get(&session_id)
             .map(|entry| entry.value().clone())
             .unwrap_or_default();
-        groups
-            .into_iter()
-            .filter_map(|group| self.unregister_producer_session_locked(group.as_str(), session_id))
-            .collect()
+        let mut removed = false;
+        for group in groups {
+            removed |= self.unregister_producer_session_locked(group.as_str(), session_id);
+        }
+        removed
     }
 
     fn do_session_close_event(&self, session_id: SessionId) -> bool {
@@ -600,19 +572,9 @@ impl ProducerManager {
             return false;
         };
         let transition = self.session_transition_locks.lock(&client_id, session_id);
-        let removals = self.unregister_producer_session_all_locked(session_id);
+        let removed = self.unregister_producer_session_all_locked(session_id);
         drop(transition);
-        let removed = !removals.is_empty();
-        self.dispatch_producer_session_removals(removals);
         removed
-    }
-
-    fn dispatch_producer_session_removals(&self, removals: Vec<ProducerSessionRemoval>) {
-        for removal in removals {
-            if removal.group_table_removed && !self.group_online(&removal.group) {
-                self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &removal.group, None);
-            }
-        }
     }
 
     fn remove_producer_session_group_index(&self, session_id: SessionId, group: &str) -> bool {
@@ -632,8 +594,7 @@ impl ProducerManager {
     /// Removes producers that have not sent a heartbeat within the timeout period.
     ///
     /// This method should be invoked periodically by a background task. Producers inactive
-    /// for more than 120 seconds are removed and their sessions are closed. Listeners are
-    /// notified of each removal.
+    /// for more than 120 seconds are removed and their sessions are closed.
     pub(crate) fn scan_inactive_sessions(&self) -> Vec<ClientSessionRetirement> {
         let current_time = current_millis();
         let mut close_handles = Vec::new();
@@ -667,13 +628,11 @@ impl ProducerManager {
                     })
                     .map(|(_, info)| info)
             });
-            let removal = removed.map(|client| {
-                let group_table_removed = self
-                    .group_session_table
-                    .remove_if(&group, |_, sessions| sessions.is_empty())
-                    .is_some();
+            let close_handle = removed.and_then(|client| {
+                self.group_session_table
+                    .remove_if(&group, |_, sessions| sessions.is_empty());
                 let session_has_groups = self.remove_producer_session_group_index(session_id, &group);
-                let close_handle = if !session_has_groups {
+                if !session_has_groups {
                     self.client_session_table
                         .remove_if(client.client_id(), |_, current| *current == session_id);
                     self.session_client_table
@@ -694,41 +653,13 @@ impl ProducerManager {
                     close_handle
                 } else {
                     None
-                };
-                (
-                    ProducerSessionRemoval {
-                        group,
-                        group_table_removed,
-                    },
-                    close_handle,
-                )
+                }
             });
             drop(transition);
-            if let Some((removal, close_handle)) = removal {
-                if let Some(close_handle) = close_handle {
-                    close_handles.push(close_handle);
-                }
-                self.dispatch_producer_session_removals(vec![removal]);
+            if let Some(close_handle) = close_handle {
+                close_handles.push(close_handle);
             }
         }
         close_handles
-    }
-
-    /// Notifies all registered producer change listeners of an event.
-    ///
-    /// # Arguments
-    /// * `event` - The type of event (register/unregister)
-    /// * `group` - The affected producer group
-    /// * `client_session_info` - The affected client session identity (if applicable)
-    fn call_producer_change_listener(
-        &self,
-        event: ProducerGroupEvent,
-        group: &str,
-        client_session_info: Option<&ClientSessionInfo>,
-    ) {
-        let listeners = self.producer_change_listener_vec.load();
-        for listener in listeners.iter() {
-            listener.handle(event, group, client_session_info);
-        }
     }
 }
