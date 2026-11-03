@@ -386,6 +386,7 @@ mod tests {
         let registry = runtime.session_registry_for_test();
         let producer = runtime.runtime_state_mut().producer_manager().clone_shared_state();
         let group = CheetahString::from_static_str("replacement-producer-group");
+        let old_only_group = CheetahString::from_static_str("old-only-producer-group");
         let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
         let (mut old_client, server) = start_processor_server_with_session_registry(
             "broker-session-replacement",
@@ -407,6 +408,9 @@ mod tests {
             .get_available_session(Some(&group))
             .expect("first producer session")
             .session_id();
+        let additional = send_heartbeat(&mut old_client, "replacement-client", &old_only_group, 43).await;
+        assert_eq!(ResponseCode::from(additional.code()), ResponseCode::Success);
+        assert_eq!(producer.group_size(), 2);
 
         let mut replacement_client = server.connect().await;
         let replacement = send_heartbeat(&mut replacement_client, "replacement-client", &group, 42).await;
@@ -425,6 +429,8 @@ mod tests {
         wait_until_session_absent(&registry, old_session).await;
         assert!(!registry.contains(old_session));
         assert!(registry.contains(replacement_session));
+        assert!(!producer.group_online(&old_only_group));
+        assert_eq!(producer.group_size(), 1);
         assert_eq!(
             producer
                 .session_registry()

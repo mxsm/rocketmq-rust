@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove the unused internal Producer change listener framework and notification-only session removal records ([#12166](https://github.com/mxsm/rocketmq-rust/issues/12166)).
 - **refactor(broker):** Remove unused internal attached plugin scaffolding and its unreachable runtime dispatch paths ([#12165](https://github.com/mxsm/rocketmq-rust/issues/12165)).
 - **refactor(broker):** Remove unused internal subscription group pagination and its standalone simulation test ([#12114](https://github.com/mxsm/rocketmq-rust/issues/12114)).
 - **refactor(broker):** Remove the unused internal topic creation helper and its duplicate metadata update path ([#12113](https://github.com/mxsm/rocketmq-rust/issues/12113)).
