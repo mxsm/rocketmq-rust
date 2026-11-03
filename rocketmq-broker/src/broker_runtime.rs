@@ -147,7 +147,6 @@ use crate::offset::manager::broadcast_offset_manager::SCAN_INTERVAL;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
-use crate::plugin::broker_attached_plugin::BrokerAttachedPlugin;
 use crate::processor::ack_message_processor::AckMessageOffsetCapability;
 use crate::processor::ack_message_processor::AckMessageOrderCapability;
 use crate::processor::ack_message_processor::AckMessagePolicy;
@@ -801,7 +800,6 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
     metadata_io: Option<Result<MetadataIoActor, RuntimeError>>,
-    broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
     slave_master_addr: Arc<SlaveMasterAddress>,

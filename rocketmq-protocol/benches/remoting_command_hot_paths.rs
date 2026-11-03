@@ -298,7 +298,9 @@ fn allocation_case<T>(
 
 fn process_rss_bytes() -> u64 {
     let pid = Pid::from_u32(std::process::id());
-    let mut system = ProcessSystem::new();
+    let Ok(mut system) = ProcessSystem::new() else {
+        return 0;
+    };
     system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
     system.process(pid).map_or(0, |process| process.memory())
 }

@@ -108,9 +108,13 @@ where
 
 #[derive(Serialize, Deserialize)]
 pub struct RemotingCommand {
+    #[serde(default)]
     code: i32,
+    #[serde(default, alias = "languageCode")]
     language: LanguageCode,
+    #[serde(default)]
     version: i32,
+    #[serde(default)]
     opaque: i32,
 
     ///flag -> bit: 00
@@ -118,7 +122,9 @@ pub struct RemotingCommand {
     /// Non-zero indicates a response command, while 0 indicates a request command.
     /// The second bit indicates whether it is a one-way request.
     /// Non-zero indicates a one-way request.
+    #[serde(default)]
     flag: i32,
+    #[serde(default)]
     remark: Option<CheetahString>,
 
     #[serde(
@@ -137,7 +143,7 @@ pub struct RemotingCommand {
     command_custom_header: Option<Arc<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     #[serde(skip)]
     custom_header_to_net: bool,
-    #[serde(rename = "serializeTypeCurrentRPC")]
+    #[serde(rename = "serializeTypeCurrentRPC", default, alias = "serializeType")]
     serialize_type: SerializeType,
 }
 
