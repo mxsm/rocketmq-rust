@@ -374,11 +374,11 @@ impl ManagedMemoryBudget {
     }
 }
 
-fn host_physical_memory() -> Option<u64> {
-    let mut system = System::new();
+fn host_physical_memory() -> Result<Option<u64>, sysinfo::Error> {
+    let mut system = System::new()?;
     system.refresh_memory();
     let bytes = system.total_memory();
-    (bytes > 0).then_some(bytes)
+    Ok((bytes > 0).then_some(bytes))
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -588,10 +588,7 @@ fn discover_cgroup_limit(view: &dyn MemoryFileView) -> RuntimeResult<Option<Proc
 }
 
 fn detect_platform_limit(view: &dyn MemoryFileView) -> RuntimeResult<ProcessMemoryLimit> {
-    let host = host_physical_memory().map(|bytes| ProcessMemoryLimit {
-        bytes,
-        source: MemoryLimitSource::HostPhysicalMemory,
-    });
+    let host = host_physical_memory();
     #[cfg(any(target_os = "linux", test))]
     let cgroup = discover_cgroup_limit(view)?;
     #[cfg(not(any(target_os = "linux", test)))]
@@ -601,6 +598,28 @@ fn detect_platform_limit(view: &dyn MemoryFileView) -> RuntimeResult<ProcessMemo
         // additional container constraints.
         let _ = view;
         None
+    };
+
+    resolve_platform_limit(host, cgroup)
+}
+
+fn resolve_platform_limit(
+    host: Result<Option<u64>, sysinfo::Error>,
+    cgroup: Option<ProcessMemoryLimit>,
+) -> RuntimeResult<ProcessMemoryLimit> {
+    let host = match host {
+        Ok(bytes) => bytes.map(|bytes| ProcessMemoryLimit {
+            bytes,
+            source: MemoryLimitSource::HostPhysicalMemory,
+        }),
+        Err(source) => {
+            return cgroup.ok_or_else(|| {
+                RuntimeError::io(
+                    crate::RuntimeOperation::DetectProcessMemoryLimit,
+                    io::Error::other(source),
+                )
+            });
+        }
     };
 
     [cgroup, host]
@@ -635,8 +654,34 @@ fn parse_meminfo_bytes(value: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::error::Error as _;
 
     use super::*;
+
+    #[test]
+    fn a_cgroup_limit_remains_available_when_host_initialization_fails() {
+        let cgroup = ProcessMemoryLimit {
+            bytes: 1024 * 1024 * 1024,
+            source: MemoryLimitSource::CgroupV2,
+        };
+
+        let limit = resolve_platform_limit(Err(sysinfo::Error::Unsupported), Some(cgroup)).unwrap();
+
+        assert_eq!(limit, cgroup);
+    }
+
+    #[test]
+    fn host_initialization_failure_retains_its_source_without_a_cgroup_limit() {
+        let error = resolve_platform_limit(Err(sysinfo::Error::Unsupported), None).unwrap_err();
+
+        assert_eq!(error.operation(), crate::RuntimeOperation::DetectProcessMemoryLimit);
+        assert_eq!(error.code(), rocketmq_error::RUNTIME_IO_FAILED.code());
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .and_then(io::Error::get_ref)
+            .is_some_and(|source| source.is::<sysinfo::Error>()));
+    }
 
     /// A view over an in-memory layout.
     #[derive(Debug, Default)]
