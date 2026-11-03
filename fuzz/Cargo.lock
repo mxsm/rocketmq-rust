@@ -2517,9 +2517,6 @@ dependencies = [
 [[package]]
 name = "rocketmq-error"
 version = "1.1.0"
-dependencies = [
- "thiserror",
-]
 
 [[package]]
 name = "rocketmq-filter"
@@ -2530,7 +2527,6 @@ dependencies = [
  "dashmap",
  "rocketmq-error",
  "rocketmq-model",
- "rocketmq-protocol",
  "serde",
 ]
 

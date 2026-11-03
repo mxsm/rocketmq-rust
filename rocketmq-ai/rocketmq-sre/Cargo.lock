@@ -3413,9 +3413,6 @@ dependencies = [
 [[package]]
 name = "rocketmq-error"
 version = "1.1.0"
-dependencies = [
- "thiserror",
-]
 
 [[package]]
 name = "rocketmq-macros"
