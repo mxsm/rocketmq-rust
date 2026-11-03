@@ -128,6 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(controller):** Retain remoting and Raft listeners through contract-test startup to prevent parallel fixtures from claiming reserved ports ([#12161](https://github.com/mxsm/rocketmq-rust/issues/12161)).
+- **fix(transport):** Select TLS crypto providers explicitly for clients, servers, certificate verification, and SOCKS fixtures so enabling both AWS-LC and Ring no longer causes startup panics; preserve application-installed providers ([#12161](https://github.com/mxsm/rocketmq-rust/issues/12161)).
 - **fix(mcp):** Synchronize the standalone query lockfile with `jsonschema 0.60.1` and its related dependencies to restore locked query and control CI boundary checks after the manifest upgrade ([#11929](https://github.com/mxsm/rocketmq-rust/issues/11929)).
 - **fix(namesrv):** Make the metrics-collection abort cleanup test deterministic by preventing the unregistration worker from gracefully draining between cancellation and abort, while retaining concurrent SDK collection and broker registration checks ([#11824](https://github.com/mxsm/rocketmq-rust/issues/11824)).
 - **fix(mcp):** Synchronize the standalone query lockfile with `jsonschema 0.59.0` to restore locked query and control CI boundary checks ([#11807](https://github.com/mxsm/rocketmq-rust/issues/11807)).
