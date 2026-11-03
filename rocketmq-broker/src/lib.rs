@@ -1281,7 +1281,6 @@ pub(crate) mod metrics;
 pub(crate) mod mqtrace;
 pub(crate) mod offset;
 pub(crate) mod out_api;
-pub(crate) mod plugin;
 pub(crate) mod pop;
 pub(crate) mod processor;
 pub(crate) mod schedule;
