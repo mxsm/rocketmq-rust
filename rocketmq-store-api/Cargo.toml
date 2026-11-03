@@ -28,7 +28,6 @@ rust-version.workspace = true
 default = []
 
 [dependencies]
-rocketmq-model.workspace = true
 rocketmq-error.workspace = true
 rocketmq-security-api.workspace = true
 bytes.workspace = true
@@ -38,4 +37,5 @@ sha2 = "0.11"
 thiserror.workspace = true
 
 [dev-dependencies]
+rocketmq-model.workspace = true
 serde_json.workspace = true

@@ -1429,70 +1429,6 @@ impl SubscriptionGroupManager {
         }
     }
 
-    /// Get a subset of subscription group configurations for pagination
-    ///
-    /// # Arguments
-    /// * `data_version` - Expected data version for consistency check
-    /// * `group_seq` - Starting sequence number for pagination (0-based)
-    /// * `max_group_num` - Maximum number of groups to return
-    ///
-    /// # Returns
-    /// A HashMap containing subscription group configurations for the requested page.
-    /// Returns empty map if data version doesn't match or no groups in range.
-    ///
-    /// # Use Case
-    /// Large-scale clusters can use this for incremental synchronization to avoid
-    /// transferring all group configs at once.
-    pub fn sub_group_table(
-        &self,
-        data_version: &DataVersion,
-        group_seq: usize,
-        max_group_num: usize,
-    ) -> HashMap<CheetahString, Arc<SubscriptionGroupConfig>> {
-        // Check data version consistency
-        let current_version = self.data_version.read();
-        let mut begin_index = group_seq;
-
-        if data_version != &*current_version {
-            begin_index = 0;
-            info!(
-                "Get sub subscription group table from {} due to DataVersion Changed",
-                begin_index
-            );
-        }
-        drop(current_version);
-
-        let mut result = HashMap::new();
-        let total_size = self.subscription_group_table.len();
-
-        if begin_index < total_size {
-            // Sort keys to ensure consistent pagination (like Java's ImmutableSortedMap)
-            let mut sorted_keys: Vec<CheetahString> = self
-                .subscription_group_table
-                .iter()
-                .map(|entry| entry.key().clone())
-                .collect();
-            sorted_keys.sort();
-
-            let end_index = std::cmp::min(begin_index + max_group_num, total_size);
-
-            for key in sorted_keys.iter().skip(begin_index).take(end_index - begin_index) {
-                if let Some(config) = self.subscription_group_table.get(key) {
-                    result.insert(key.clone(), Arc::clone(config.value()));
-                }
-            }
-        }
-
-        info!(
-            "Retrieved {} subscription groups (seq: {}-{})",
-            result.len(),
-            begin_index,
-            begin_index + result.len()
-        );
-
-        result
-    }
-
     /// Get forbidden tables for specified consumer groups
     ///
     /// # Arguments
@@ -2371,36 +2307,6 @@ mod tests {
         // Verify modification
         let updated = table.get(&group_name).unwrap();
         assert!(!updated.value().consume_enable());
-    }
-
-    #[test]
-    fn test_sub_group_table_pagination() {
-        // Test pagination using DashMap directly
-        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
-
-        // Create 10 groups
-        for i in 0_usize..10 {
-            let group_name = CheetahString::from_string(format!("GROUP_{}", i));
-            let config = SubscriptionGroupConfig::new(group_name.clone());
-            table.insert(group_name, Arc::new(config));
-        }
-
-        // Test pagination logic
-        let mut collected = Vec::new();
-        let mut seq = 0;
-
-        for entry in table.iter() {
-            if (3..6).contains(&seq) {
-                collected.push(entry.key().clone());
-            }
-            seq += 1;
-            if seq >= 6 {
-                break;
-            }
-        }
-
-        // Should collect 3 items (seq 3, 4, 5)
-        assert_eq!(collected.len(), 3);
     }
 
     #[test]

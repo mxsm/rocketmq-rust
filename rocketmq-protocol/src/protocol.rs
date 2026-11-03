@@ -276,7 +276,7 @@ impl RemotingCommandType {
 }
 
 #[repr(u8)]
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Default, Hash, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Default, Hash, Copy)]
 pub enum LanguageCode {
     JAVA,
     CPP,
@@ -372,15 +372,56 @@ impl LanguageCode {
             "PHP" => Some(Self::PHP),
             "OMS" => Some(Self::OMS),
             "RUST" => Some(Self::RUST),
-            "NODE_JS" => Some(Self::NODE_JS),
+            "NODE_JS" | "NODEJS" => Some(Self::NODE_JS),
             _ => None,
         }
     }
 }
 
+struct LanguageCodeVisitor;
+
+impl<'de> serde::de::Visitor<'de> for LanguageCodeVisitor {
+    type Value = LanguageCode;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a language code name or integer")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(LanguageCode::get_code_from_name(value).unwrap_or(LanguageCode::OTHER))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(u8::try_from(value).map_or(LanguageCode::OTHER, LanguageCode::from))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(u8::try_from(value).map_or(LanguageCode::OTHER, LanguageCode::from))
+    }
+}
+
+impl<'de> Deserialize<'de> for LanguageCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(LanguageCodeVisitor)
+    }
+}
+
 #[repr(u8)]
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Default)]
 pub enum SerializeType {
+    #[default]
     JSON,
     ROCKETMQ,
 }
@@ -402,6 +443,56 @@ impl SerializeType {
 
     pub fn get_code(&self) -> u8 {
         *self as u8
+    }
+}
+
+struct SerializeTypeVisitor;
+
+impl<'de> serde::de::Visitor<'de> for SerializeTypeVisitor {
+    type Value = SerializeType;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a serialize type name or integer")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        match value.to_ascii_uppercase().as_str() {
+            "JSON" => Ok(SerializeType::JSON),
+            "ROCKETMQ" => Ok(SerializeType::ROCKETMQ),
+            _ => Err(E::custom(format!("unsupported serialize type: {value}"))),
+        }
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        u8::try_from(value)
+            .ok()
+            .and_then(SerializeType::value_of)
+            .ok_or_else(|| E::custom(format!("unsupported serialize type code: {value}")))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        u8::try_from(value)
+            .ok()
+            .and_then(SerializeType::value_of)
+            .ok_or_else(|| E::custom(format!("unsupported serialize type code: {value}")))
+    }
+}
+
+impl<'de> Deserialize<'de> for SerializeType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(SerializeTypeVisitor)
     }
 }
 

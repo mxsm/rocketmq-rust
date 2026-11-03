@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix(protocol):** Support flexible JSON headers from non-Java remoting clients by accepting missing serializeTypeCurrentRPC, numeric and case-insensitive languageCode, serializeType aliases, and scalar extension fields while treating null fields as absent and preserving explicit empty strings ([#12090](https://github.com/mxsm/rocketmq-rust/issues/12090)).
+
 ### Changed
 
+- **chore(dependencies):** Consolidate pending Rust updates to `sysinfo 0.40.1`, `simd-json 0.19.0`, `tonic-prost 0.14.9`, and `tonic-prost-build 0.14.9`; align SRE Kubernetes dependencies at `k8s-openapi 0.29.0` and `kube 5.0.0`, adapt fallible system-information initialization, and synchronize standalone lockfiles ([#12163](https://github.com/mxsm/rocketmq-rust/issues/12163)).
 - **refactor(runtime):** Make file configuration helpers optional behind the default-enabled `config-file` feature, preserving Broker, NameServer, and Controller configuration support while removing format parsers from runtime-only consumers. Consumers using `common::parse_config_file` with default features disabled must enable `config-file` explicitly.
 - **refactor(transport):** Gate HTTP NameServer discovery behind the default-enabled `http-discovery` feature, retaining Client and NameServer discovery while allowing other Transport consumers to omit the HTTP dependency stack. Consumers using these APIs with default features disabled must enable `http-discovery` explicitly.
 - **refactor(dependencies):** Remove unused Observability, Transport, and Broker dependency declarations, avoiding an unused timezone database and redundant compression backend in individual service builds.
@@ -74,6 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(broker):** Remove unused internal attached plugin scaffolding and its unreachable runtime dispatch paths ([#12165](https://github.com/mxsm/rocketmq-rust/issues/12165)).
+- **refactor(broker):** Remove unused internal subscription group pagination and its standalone simulation test ([#12114](https://github.com/mxsm/rocketmq-rust/issues/12114)).
+- **refactor(broker):** Remove the unused internal topic creation helper and its duplicate metadata update path ([#12113](https://github.com/mxsm/rocketmq-rust/issues/12113)).
+- **refactor(broker):** Remove the unused internal ordered-consumption timestamp helper and its dedicated test ([#12167](https://github.com/mxsm/rocketmq-rust/issues/12167)).
 - **refactor(broker):** Remove unused internal NameServer heartbeat broadcasts and their dedicated result types ([#12112](https://github.com/mxsm/rocketmq-rust/issues/12112)).
 - **refactor(broker):** Remove the unused Notification candidate continuation spawner while preserving active pending replay workers and shutdown behavior ([#12080](https://github.com/mxsm/rocketmq-rust/issues/12080)).
 - **refactor(client):** Remove the unused crate-private delayed client action helper; tracked rebalance scheduling is unchanged ([#12079](https://github.com/mxsm/rocketmq-rust/issues/12079)).
