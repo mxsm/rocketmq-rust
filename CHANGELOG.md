@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix(protocol):** Support flexible JSON headers from non-Java remoting clients by accepting missing serializeTypeCurrentRPC, numeric and case-insensitive languageCode, serializeType aliases, and scalar extension fields while treating null fields as absent and preserving explicit empty strings ([#12090](https://github.com/mxsm/rocketmq-rust/issues/12090)).
+
 ### Changed
 
 - **chore(dependencies):** Consolidate pending Rust updates to `sysinfo 0.40.1`, `simd-json 0.19.0`, `tonic-prost 0.14.9`, and `tonic-prost-build 0.14.9`; align SRE Kubernetes dependencies at `k8s-openapi 0.29.0` and `kube 5.0.0`, adapt fallible system-information initialization, and synchronize standalone lockfiles ([#12163](https://github.com/mxsm/rocketmq-rust/issues/12163)).

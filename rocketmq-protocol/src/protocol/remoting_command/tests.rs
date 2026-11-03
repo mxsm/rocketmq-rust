@@ -835,12 +835,119 @@ fn json_raw_fallback_and_mutation_materialize_the_compatibility_map() {
 }
 
 #[test]
-fn json_envelope_rejects_non_string_extension_field_values() {
-    for value in ["7", "true", "null", "{}", "[]"] {
+fn json_envelope_accepts_scalar_fields_and_omits_nulls() {
+    for value in ["{}", "[]"] {
         let mut header = json_header_with_ext_fields(&format!(r#"{{"value":{value}}}"#));
         let header_length = header.len();
 
         assert!(RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON).is_err());
+    }
+
+    for (value, expected) in [
+        ("7", Some("7")),
+        ("null", None),
+        ("true", Some("true")),
+        (r#""""#, Some("")),
+    ] {
+        let mut header = json_header_with_ext_fields(&format!(r#"{{"value":{value}}}"#));
+        let header_length = header.len();
+        let cmd = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .expect("scalar extension fields should decode");
+        assert_eq!(
+            cmd.expect("command should decode")
+                .ext_fields()
+                .and_then(|f| f.get("value"))
+                .map(CheetahString::as_str),
+            expected
+        );
+    }
+}
+
+#[test]
+fn json_null_optional_fields_preserve_defaults_on_raw_and_map_paths() {
+    use crate::protocol::command_custom_header::FromMap;
+    use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+
+    let mut header = json_header_with_ext_fields(
+        r#"{"topic":"Test","acceptStandardJsonOnly":null,"bname":null,"nsd":null,"after":"retained"}"#,
+    );
+    let header_length = header.len();
+    let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+        .unwrap()
+        .unwrap();
+    assert!(command.ext_fields.is_json_raw());
+    assert!(!command.ext_fields.has_materialized_map());
+
+    let standard = command
+        .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+        .unwrap();
+    let fast = command
+        .decode_command_custom_header_fast::<GetRouteInfoRequestHeader>()
+        .unwrap();
+    assert!(!command.ext_fields.has_materialized_map());
+
+    let fields = command.ext_fields().unwrap();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields.get("after").map(CheetahString::as_str), Some("retained"));
+    let materialized = <GetRouteInfoRequestHeader as FromMap>::from(fields).unwrap();
+    for decoded in [standard, fast, materialized] {
+        assert_eq!(decoded.topic, "Test");
+        assert_eq!(decoded.accept_standard_json_only, None);
+        let rpc = decoded.topic_request_header.unwrap().rpc_request_header.unwrap();
+        assert_eq!(rpc.broker_name, None);
+        assert_eq!(rpc.namespaced, None);
+    }
+}
+
+#[test]
+fn json_empty_strings_remain_distinct_from_null_fields() {
+    use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+
+    let mut header = json_header_with_ext_fields(r#"{"topic":"Test","bname":"","unused":null}"#);
+    let header_length = header.len();
+    let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+        .unwrap()
+        .unwrap();
+    let decoded = command
+        .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+        .unwrap();
+    assert_eq!(
+        decoded
+            .topic_request_header
+            .unwrap()
+            .get_broker_name()
+            .map(CheetahString::as_str),
+        Some("")
+    );
+    let fields = command.ext_fields().unwrap();
+    assert_eq!(fields.get("bname").map(CheetahString::as_str), Some(""));
+    assert!(!fields.contains_key("unused"));
+}
+
+#[test]
+fn json_null_fields_preserve_alias_precedence_on_raw_and_map_paths() {
+    use crate::protocol::command_custom_header::FromMap;
+    use crate::rpc::rpc_request_header::RpcRequestHeader;
+
+    for (fields, expected) in [
+        (r#"{"bname":"stale","brokerName":"legacy","bname":null}"#, "legacy"),
+        (r#"{"bname":null,"brokerName":"legacy"}"#, "legacy"),
+        (
+            r#"{"brokerName":"legacy","bname":null,"bname":"canonical"}"#,
+            "canonical",
+        ),
+    ] {
+        let mut header = json_header_with_ext_fields(fields);
+        let header_length = header.len();
+        let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+        let raw = command.decode_command_custom_header::<RpcRequestHeader>().unwrap();
+        assert!(!command.ext_fields.has_materialized_map());
+        let materialized = <RpcRequestHeader as FromMap>::from(command.ext_fields().unwrap()).unwrap();
+        for decoded in [raw, materialized] {
+            assert_eq!(decoded.broker_name.as_deref(), Some(expected), "{fields}");
+        }
     }
 }
 
