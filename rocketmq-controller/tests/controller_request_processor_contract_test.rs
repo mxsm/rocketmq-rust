@@ -55,6 +55,7 @@ use rocketmq_transport::api::DefaultRequestProcessor;
 use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::RemotingClient;
 use rocketmq_transport::api::TransportClientConfig;
+use tokio::net::TcpListener;
 use tokio::time::sleep;
 
 const CLUSTER_NAME: &str = "contract-cluster";
@@ -78,7 +79,9 @@ struct ReplicaSeed {
 
 impl ProcessorHarness {
     async fn new() -> Self {
-        let (remoting_addr, raft_addr) = reserve_controller_addresses();
+        let (remoting, raft) = reserve_controller_listeners().await;
+        let remoting_addr = remoting.local_addr().expect("remoting address");
+        let raft_addr = raft.local_addr().expect("raft address");
         let config = ControllerConfig::default()
             .with_node_info(1, remoting_addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr: raft_addr }])
@@ -96,7 +99,9 @@ impl ProcessorHarness {
             .expect("create controller manager"),
         );
         manager.initialize().await.expect("initialize controller manager");
-        manager.start().await.expect("start controller manager");
+        rocketmq_controller::bench_support::start_controller_with_bound_listeners(&manager, remoting, raft)
+            .await
+            .expect("start controller manager with reserved listeners");
 
         let mut nodes = BTreeMap::new();
         nodes.insert(
@@ -315,15 +320,11 @@ impl ProcessorHarness {
     }
 }
 
-fn reserve_controller_addresses() -> (SocketAddr, SocketAddr) {
-    let remoting = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve remoting address");
-    let raft = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve raft address");
-    let addresses = (
-        remoting.local_addr().expect("remoting address"),
-        raft.local_addr().expect("raft address"),
-    );
-    drop((remoting, raft));
-    addresses
+async fn reserve_controller_listeners() -> (TcpListener, TcpListener) {
+    // Startup consumes these sockets, so parallel fixtures cannot claim their ports.
+    let remoting = TcpListener::bind("127.0.0.1:0").await.expect("bind remoting listener");
+    let raft = TcpListener::bind("127.0.0.1:0").await.expect("bind Raft listener");
+    (remoting, raft)
 }
 
 async fn wait_for_leader(manager: &Arc<ControllerManager>) {
