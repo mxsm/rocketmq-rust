@@ -3961,7 +3961,6 @@ dependencies = [
  "rocketmq-observability",
  "rocketmq-protocol",
  "rocketmq-runtime",
- "rocketmq-security-api",
  "rocketmq-transport",
  "serde",
  "serde_json",
