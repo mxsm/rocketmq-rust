@@ -569,9 +569,13 @@ impl OpenRaftController {
                     .replicas_info_manager()
                     .current_write_authority(&request.cluster_name, &request.broker_name)
             });
-            self.write_lease_grant_gate
-                .lock()
-                .allow(leader_term, authority, Instant::now())
+            self.write_lease_grant_gate.lock().allow(
+                leader_term,
+                &request.cluster_name,
+                &request.broker_name,
+                authority,
+                Instant::now(),
+            )
         });
 
         match self
