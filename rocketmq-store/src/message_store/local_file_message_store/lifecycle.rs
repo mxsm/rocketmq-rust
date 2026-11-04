@@ -597,8 +597,6 @@ impl LocalFileMessageStore {
         let start_result: Result<(), StoreError> = async {
             self.allocate_mapped_file_service.start();
 
-            self.index_service.start();
-
             #[cfg(feature = "tieredstore")]
             if let Some(tiered_store) = self.tiered_store.as_ref() {
                 tiered_store.start().await?;

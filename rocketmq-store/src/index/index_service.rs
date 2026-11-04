@@ -153,11 +153,6 @@ impl IndexServiceAdapter {
         }
     }
 
-    #[inline]
-    pub fn start(&self) {
-        // Empty implementation
-    }
-
     pub fn shutdown(&self) {
         self.shutdown_with_callbacks(|| {}, || {});
     }
