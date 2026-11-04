@@ -34,6 +34,7 @@ mod engine;
 mod feed;
 mod near_wheel;
 mod service;
+mod shadow;
 
 pub(crate) use engine::NativeRecallVerdict;
 pub(crate) use feed::NativeDeliveryFeed;

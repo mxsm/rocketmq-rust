@@ -323,6 +323,7 @@ pub(crate) struct HAReplicaStoreHandle {
     /// The end of what every CommitLog dispatcher has seen.
     dispatch_frontier: Arc<AtomicI64>,
     native_timer: Option<Arc<NativeTimerService>>,
+    native_shadow: Option<Arc<NativeTimerService>>,
     runtime_scope: StoreRuntimeScope,
 }
 
@@ -481,7 +482,8 @@ impl HAReplicaStoreHandle {
         }
         self.reput_notify.rewind_to(offset);
         self.dispatch_frontier.fetch_min(offset, Ordering::AcqRel);
-        if let Some(native_timer) = self.native_timer.clone() {
+        for native_timer in self.native_timer.iter().chain(&self.native_shadow) {
+            let native_timer = Arc::clone(native_timer);
             self.runtime_scope
                 .spawn_io("ha-cut-native-timers", move || native_timer.cut_back(offset))
                 .await?
@@ -755,6 +757,10 @@ pub struct LocalFileMessageStore {
     native_timer_cleanup_pin: Arc<AtomicI64>,
     /// The native deliveries Reput dispatches while this Broker is a slave.
     native_delivery_feed: Arc<NativeDeliveryFeed>,
+    /// The native timer engine in shadow, `[store.timerNative] shadowEnable` under another mode.
+    native_shadow: Option<Arc<NativeTimerService>>,
+    /// The other engines' deliveries, which the shadow compares itself with.
+    native_shadow_feed: Arc<NativeDeliveryFeed>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_cleanup_pin: Arc<AtomicI64>,
     #[cfg(feature = "extended_timeline")]
@@ -1656,6 +1662,14 @@ impl MessageStoreEngine for LocalFileMessageStore {
                 ) {
                     result.insert("timerNativePipelineMetrics".to_string(), pipeline_metrics);
                 }
+            }
+        }
+        if let Some(native_shadow) = self.native_shadow.as_ref() {
+            if let Ok(shadow_metrics) = serde_json::to_string(&native_shadow.runtime_metrics()) {
+                result.insert("timerNativeShadowMetrics".to_string(), shadow_metrics);
+            }
+            if let Ok(shadow_samples) = serde_json::to_string(&native_shadow.shadow_samples()) {
+                result.insert("timerNativeShadowSamples".to_string(), shadow_samples);
             }
         }
         result.insert(

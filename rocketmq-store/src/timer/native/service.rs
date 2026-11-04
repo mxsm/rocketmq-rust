@@ -72,6 +72,10 @@ use super::engine::NativeTimerEngine;
 use super::engine::NativeTimerSource;
 use super::feed::NativeDeliveryFeed;
 use super::feed::NativeFeedMark;
+use super::feed::NativeTimerOwner;
+use super::shadow::NativeShadowReport;
+use super::shadow::NativeShadowSample;
+use super::shadow::NativeShadowVerdict;
 use crate::base::message_result::PutMessageResult;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::queue::CqUnit;
@@ -102,6 +106,10 @@ const ROLE_FILE: &str = "timer-native-role.meta";
 /// Marks a native engine that drained while another mode was active, so the store no longer
 /// opens it in that mode.
 const RETIRED_FILE: &str = "timer-native.retired";
+/// Directory under the store root that a shadow keeps all its files in.
+const SHADOW_DIR: &str = "timer-native-shadow";
+/// Deliveries the shadow never found due that one sweep keeps as samples.
+const SHADOW_SWEEP_SAMPLES: usize = 8;
 
 /// What the native engine does in a store.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +118,9 @@ pub(crate) enum NativeServiceRole {
     Active,
     /// Another mode is active, and the engine still delivers the timers it admitted before.
     Draining,
+    /// Another mode is active, and a second engine follows its timers to compare itself with it,
+    /// delivering nothing: `[store.timerNative] shadowEnable`.
+    Shadow,
 }
 
 impl NativeServiceRole {
@@ -121,6 +132,12 @@ impl NativeServiceRole {
         }
         let store_root = Path::new(config.store_path_root_dir.as_str());
         (store_root.join(NATIVE_TIMER_DIR).exists() && !retired_marker(store_root).exists()).then_some(Self::Draining)
+    }
+
+    /// The role of the second native engine of a store opened with `config`: a shadow, when one
+    /// is set up beside another mode. Under `native` there is nothing to compare with.
+    pub(crate) fn shadow_of(config: &MessageStoreConfig) -> Option<Self> {
+        (config.timer_native.shadow_enable && config.timer_store_mode != TimerStoreMode::Native).then_some(Self::Shadow)
     }
 }
 
@@ -228,6 +245,8 @@ pub(crate) struct NativeTimerService {
     feed: Arc<NativeDeliveryFeed>,
     /// Where the next start reads the deliveries back from.
     feed_mark: NativeFeedMark,
+    /// What this engine found, when it is a shadow.
+    shadow: Option<NativeShadowReport>,
     /// The mark this run wrote last.
     written_feed_mark: AtomicI64,
     /// The end of what every CommitLog dispatcher has seen, -1 before the first dispatch.
@@ -256,15 +275,17 @@ impl NativeTimerService {
         metrics: TimerMetricsRecorder,
     ) -> Result<Self, NativeServiceError> {
         let clock: Arc<dyn TimerClock> = Arc::new(SystemTimerClock::default());
-        let store_root = config.store_path_root_dir.as_str();
-        let retired = retired_marker(Path::new(store_root));
-        let starts_at_queue_end = !Path::new(store_root).join(NATIVE_TIMER_DIR).exists() || retired.exists();
-        let (engine, checkpoint) = NativeTimerEngine::open(
-            Path::new(store_root),
-            NativeTimerConfig::from_store(config),
-            clock.wall_time_ms(),
-        )?;
-        let role = TimerRoleState::named(store_root, ROLE_FILE);
+        let store_root = match service_role {
+            NativeServiceRole::Shadow => Path::new(config.store_path_root_dir.as_str()).join(SHADOW_DIR),
+            NativeServiceRole::Active | NativeServiceRole::Draining => {
+                PathBuf::from(config.store_path_root_dir.as_str())
+            }
+        };
+        let retired = retired_marker(&store_root);
+        let starts_at_queue_end = !store_root.join(NATIVE_TIMER_DIR).exists() || retired.exists();
+        let (engine, checkpoint) =
+            NativeTimerEngine::open(&store_root, NativeTimerConfig::from_store(config), clock.wall_time_ms())?;
+        let role = TimerRoleState::named(&store_root.to_string_lossy(), ROLE_FILE);
         role.load().map_err(NativeServiceError::Role)?;
         cleanup_pin.store(
             checkpoint.map_or(0, |checkpoint| checkpoint.commit_log_fence),
@@ -308,7 +329,13 @@ impl NativeTimerService {
             retired_marker: retired,
             batches_out: AtomicUsize::new(0),
             feed,
-            feed_mark: NativeFeedMark::new(store_root),
+            feed_mark: NativeFeedMark::new(&store_root),
+            shadow: (service_role == NativeServiceRole::Shadow).then(|| {
+                NativeShadowReport::new(
+                    i64::try_from(native.shadow_grace_ms).unwrap_or(i64::MAX),
+                    i64::try_from(config.timer_precision_ms).unwrap_or(i64::MAX),
+                )
+            }),
             written_feed_mark: AtomicI64::new(-1),
             dispatched,
             metrics,
@@ -490,6 +517,46 @@ impl NativeTimerService {
         match self.service_role {
             NativeServiceRole::Active => "active",
             NativeServiceRole::Draining => "draining",
+            NativeServiceRole::Shadow => "shadow",
+        }
+    }
+
+    /// Whose timers this engine indexes.
+    fn timer_owner(&self) -> NativeTimerOwner {
+        match self.service_role {
+            NativeServiceRole::Shadow => NativeTimerOwner::OtherEngines,
+            NativeServiceRole::Active | NativeServiceRole::Draining => NativeTimerOwner::Native,
+        }
+    }
+
+    /// The newest differences a shadow found, oldest first; none for another role.
+    pub(crate) fn shadow_samples(&self) -> Vec<NativeShadowSample> {
+        self.shadow
+            .as_ref()
+            .map(NativeShadowReport::samples)
+            .unwrap_or_default()
+    }
+
+    /// Counts the active engine's deliveries this shadow never found due. A shadow behind its
+    /// own deadlines by more than the grace period would only find them late, so it waits.
+    fn sweep_unindexed(&self) {
+        let Some(report) = self.shadow.as_ref() else {
+            return;
+        };
+        let now_ms = self.now_ms();
+        let grace_ms = report.grace_ms();
+        if self
+            .engine
+            .next_deadline_ms()
+            .is_some_and(|deadline| deadline < now_ms.saturating_sub(grace_ms))
+        {
+            return;
+        }
+        let (total, samples) = self
+            .feed
+            .expire_seen_before(now_ms.saturating_sub(grace_ms.saturating_mul(2)), SHADOW_SWEEP_SAMPLES);
+        if total > 0 {
+            report.record_unindexed(&samples, total);
         }
     }
 
@@ -506,7 +573,7 @@ impl NativeTimerService {
             .iter()
             .filter(|blocked| blocked.is_some())
             .count();
-        BTreeMap::from([
+        let mut metrics = BTreeMap::from([
             ("wheelTimers", count(counts.wheel)),
             ("dayBuckets", count(counts.days)),
             ("hourBuckets", count(counts.hours)),
@@ -533,7 +600,11 @@ impl NativeTimerService {
             ("cleanedUp", total(&counters.cleaned_up)),
             ("skipped", total(&counters.skipped)),
             ("followed", total(&counters.followed)),
-        ])
+        ]);
+        if let Some(report) = self.shadow.as_ref() {
+            metrics.extend(report.metrics());
+        }
+        metrics
     }
 
     pub(crate) fn pipeline_diagnostics(&self) -> Option<TimerPipelineDiagnostics> {
@@ -586,7 +657,13 @@ impl NativeTimerService {
         for (unit, frame) in units.iter().zip(frames) {
             match frame {
                 TimerSourceRead::Frame { bytes, message } => {
-                    sources.extend(native_source(unit, bytes, &message, self.settings.precision_ms));
+                    sources.extend(native_source(
+                        unit,
+                        bytes,
+                        &message,
+                        self.settings.precision_ms,
+                        self.timer_owner(),
+                    ));
                 }
                 _ if self.settings.skip_unknown_error => {
                     warn!("skip an unreadable native timer source; timerSkipUnknownError is on");
@@ -607,7 +684,8 @@ impl NativeTimerService {
                 .rejected
                 .iter()
                 .any(|(cq_offset, _)| *cq_offset == source.cq_offset);
-            if matches!(source.kind, NativeSourceKind::Timer { .. }) && !rejected {
+            // A shadow's timers were counted by the engine that admitted them.
+            if matches!(source.kind, NativeSourceKind::Timer { .. }) && !rejected && self.shadow.is_none() {
                 self.metrics.record_enqueue_total(Some(&source.real_topic));
             }
         }
@@ -667,7 +745,7 @@ impl NativeTimerService {
                         continue;
                     };
                     timers.extend(
-                        native_source(unit, bytes, &message, self.settings.precision_ms)
+                        native_source(unit, bytes, &message, self.settings.precision_ms, self.timer_owner())
                             .and_then(|source| self.engine.cut_timer_of(&source, now_ms)),
                     );
                 }
@@ -793,6 +871,11 @@ impl NativeTimerService {
                 let writer = ObservingWriter { feed: &self.feed };
                 join_all(batches.into_iter().map(|batch| batch.write(&writer, 0, 1))).await
             }
+            DueMode::Shadow => {
+                // One at a time for the same reason.
+                let writer = ShadowWriter { service: self, now_ms };
+                join_all(batches.into_iter().map(|batch| batch.write(&writer, 0, 1))).await
+            }
         };
         let mut settled_total = 0usize;
         for batch in written {
@@ -813,7 +896,7 @@ impl NativeTimerService {
                     Counters::add(&counters.cleaned_up, report.cleaned_up);
                     Counters::add(&counters.skipped, report.skipped);
                 }
-                DueMode::Observe => Counters::add(&counters.followed, settled),
+                DueMode::Observe | DueMode::Shadow => Counters::add(&counters.followed, settled),
             }
         }
         self.batches_out.fetch_sub(1, Ordering::AcqRel);
@@ -1023,12 +1106,17 @@ fn write_marker(path: &Path) -> std::io::Result<()> {
 /// engine or a record without a deadline. Recalls of every engine are indexed: Recall tags a
 /// tombstone for the engine that admits new timers, which after a switch of `timerStoreMode` is
 /// not always the engine that admitted the timer.
-fn native_source(unit: &CqUnit, frame: Bytes, message: &MessageExt, precision_ms: i64) -> Option<NativeTimerSource> {
+fn native_source(
+    unit: &CqUnit,
+    frame: Bytes,
+    message: &MessageExt,
+    precision_ms: i64,
+    owner: NativeTimerOwner,
+) -> Option<NativeTimerSource> {
     let property = |name: &'static str| message.property(&CheetahString::from_static_str(name));
     let recall_key = property(TIMER_DELETE_UNIQUE_KEY);
-    let native = property(MessageConst::TIMER_ENGINE_TYPE)
-        .is_some_and(|engine| engine.as_str() == TimerEngineId::Native.as_str());
-    if recall_key.is_none() && !native {
+    let engine = property(MessageConst::TIMER_ENGINE_TYPE);
+    if recall_key.is_none() && !owner.owns(engine.as_ref().map(|engine| engine.as_str())) {
         return None;
     }
     // `TIMER_OUT_MS` is the start of the precision slot, which can come before the deadline.
@@ -1082,7 +1170,7 @@ struct NativeWriter<'a> {
 }
 
 impl NativeTimerWriter for NativeWriter<'_> {
-    async fn write(&self, message: MessageExtBrokerInner, epoch: u64) -> NativeWriteOutcome {
+    async fn write(&self, message: MessageExtBrokerInner, epoch: u64, _due_ms: i64) -> NativeWriteOutcome {
         // Checked again right before the write: a demotion fences every batch still out.
         if !self.service.role.is_current_delivery_epoch(epoch) {
             return NativeWriteOutcome::Stays;
@@ -1104,13 +1192,40 @@ impl NativeTimerWriter for NativeWriter<'_> {
     }
 }
 
+/// Takes a due timer out of the wheel once the active engine delivered it, or its grace period
+/// ran out, and records how the two compare. A shadow writes nothing.
+struct ShadowWriter<'a> {
+    service: &'a NativeTimerService,
+    now_ms: i64,
+}
+
+impl NativeTimerWriter for ShadowWriter<'_> {
+    async fn write(&self, message: MessageExtBrokerInner, _epoch: u64, due_ms: i64) -> NativeWriteOutcome {
+        let Some(report) = self.service.shadow.as_ref() else {
+            return NativeWriteOutcome::Stays;
+        };
+        let Some(token) = message.property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        )) else {
+            report.record_untracked();
+            return NativeWriteOutcome::Dropped;
+        };
+        let delivered_ms = self.service.feed.take_seen(&token);
+        match report.judge(token.as_str(), due_ms, delivered_ms, self.now_ms) {
+            NativeShadowVerdict::Matched => NativeWriteOutcome::Written,
+            NativeShadowVerdict::Waits => NativeWriteOutcome::Stays,
+            NativeShadowVerdict::NotDelivered => NativeWriteOutcome::Dropped,
+        }
+    }
+}
+
 /// Counts a due timer delivered once its master's message for it was dispatched here.
 struct ObservingWriter<'a> {
     feed: &'a NativeDeliveryFeed,
 }
 
 impl NativeTimerWriter for ObservingWriter<'_> {
-    async fn write(&self, message: MessageExtBrokerInner, _epoch: u64) -> NativeWriteOutcome {
+    async fn write(&self, message: MessageExtBrokerInner, _epoch: u64, _due_ms: i64) -> NativeWriteOutcome {
         let token = message.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
         ));
@@ -1132,6 +1247,8 @@ enum DueMode {
     Write { epoch: u64 },
     /// Follow the master's writes.
     Observe,
+    /// Compare with the active engine's deliveries, as a shadow.
+    Shadow,
 }
 
 /// A lane claimed for one Due batch, released when dropped.
@@ -1202,9 +1319,15 @@ impl TimerEngine for NativeTimerHandle {
         // Only a master runs Due batches; a slave follows its master's deliveries here, by a
         // Due batch at a time: a Source batch holds far fewer timers than a master delivers.
         if !self.0.role.is_active() {
+            let mode = if self.0.shadow.is_some() {
+                DueMode::Shadow
+            } else {
+                DueMode::Observe
+            };
             self.0
-                .deliver_due(DueMode::Observe, self.0.pipeline_config.timer_due_batch_messages)
+                .deliver_due(mode, self.0.pipeline_config.timer_due_batch_messages)
                 .await?;
+            self.0.sweep_unindexed();
         }
         Ok(EngineBatchProgress {
             messages,

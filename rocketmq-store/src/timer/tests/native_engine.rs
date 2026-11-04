@@ -968,3 +968,147 @@ async fn a_role_change_whose_epoch_cannot_persist_fails_and_stays_fenced() {
     drop(native_timer);
     close(store).await;
 }
+
+/// Opens a store whose Java-compatible engine is active, with a native engine in shadow.
+async fn open_with_shadow(root: &Path) -> LocalFileMessageStore {
+    open_with(
+        root,
+        TimerStoreMode::JavaCompat,
+        TimerNativeConfig {
+            lane_count: 4,
+            shadow_enable: true,
+            ..TimerNativeConfig::default()
+        },
+    )
+    .await
+    .expect("open a store with a native shadow")
+}
+
+fn java_token(unique_key: &str) -> String {
+    format!("F:1:{unique_key}:0:0")
+}
+
+/// A timer the Java-compatible engine admitted, with the delivery token it gives it.
+fn java_timer(deliver_ms: i64, unique_key: &str) -> MessageExtBrokerInner {
+    with_property(
+        java(timer_message(deliver_ms, unique_key)),
+        MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        java_token(unique_key),
+    )
+}
+
+/// The message the active Java-compatible engine wrote for timer `unique_key`.
+fn delivered_by_active(unique_key: &str) -> MessageExtBrokerInner {
+    with_property(
+        delivered_by_master(unique_key),
+        MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        java_token(unique_key),
+    )
+}
+
+fn shadow_metrics(store: &LocalFileMessageStore) -> HashMap<String, i64> {
+    serde_json::from_str(&runtime_info(store, "timerNativeShadowMetrics")).unwrap()
+}
+
+#[tokio::test]
+async fn a_shadow_compares_itself_with_the_active_engine_and_writes_nothing() {
+    let root = tempdir().unwrap();
+    let mut store = open_with_shadow(root.path()).await;
+    assert!(store.native_timer().is_none(), "the native engine itself does not run");
+    let shadow = store.native_shadow().cloned().expect("a native shadow");
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(
+        &mut store,
+        vec![
+            java_timer(due_ms, "delivered"),
+            java_timer(due_ms, "late"),
+            native(timer_message(due_ms, "native")),
+        ],
+    )
+    .await;
+    put_all(&mut store, vec![delivered_by_active("delivered")]).await;
+
+    shadow.set_clock(clock_at(due_ms + 1_000));
+    shadow.process_once().await;
+
+    let metrics = shadow_metrics(&store);
+    assert_eq!(
+        (
+            metrics["shadowMatched"],
+            metrics["shadowNotDelivered"],
+            metrics["indexed"]
+        ),
+        (1, 0, 2),
+        "the native timer is not the shadow's"
+    );
+
+    shadow.set_clock(clock_at(due_ms + 61_000));
+    shadow.process_once().await;
+
+    assert_eq!(shadow_metrics(&store)["shadowNotDelivered"], 1);
+    assert_eq!(
+        delivered_in_order(&store),
+        ["delivered"],
+        "only the active engine wrote"
+    );
+    assert!(root.path().join("timer-native-shadow").join("timer-native").exists());
+    assert!(
+        !root.path().join("timer-native").exists(),
+        "the shadow keeps its files apart"
+    );
+    drop(shadow);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_shadow_counts_deliveries_it_never_found_due() {
+    let root = tempdir().unwrap();
+    let mut store = open_with_shadow(root.path()).await;
+    let shadow = store.native_shadow().cloned().unwrap();
+    put_all(&mut store, vec![delivered_by_active("unknown")]).await;
+
+    shadow.set_clock(clock_at(current_millis() as i64 + 60_000));
+    shadow.process_once().await;
+    assert_eq!(
+        shadow_metrics(&store)["shadowUnindexed"],
+        0,
+        "not before twice the grace period"
+    );
+
+    shadow.set_clock(clock_at(current_millis() as i64 + 121_000));
+    shadow.process_once().await;
+
+    assert_eq!(shadow_metrics(&store)["shadowUnindexed"], 1);
+    let samples = runtime_info(&store, "timerNativeShadowSamples");
+    assert!(
+        samples.contains("unindexed") && samples.contains(&java_token("unknown")),
+        "{samples}"
+    );
+    drop(shadow);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_shadow_matches_a_delivery_stored_before_a_restart() {
+    let root = tempdir().unwrap();
+    let due_ms = current_millis() as i64 + 30_000;
+    let mut store = open_with_shadow(root.path()).await;
+    let shadow = store.native_shadow().cloned().unwrap();
+    put_all(&mut store, vec![java_timer(due_ms, "early")]).await;
+    // The active engine delivered it before the shadow found it due.
+    put_all(&mut store, vec![delivered_by_active("early")]).await;
+    shadow.process_once().await;
+    drop(shadow);
+    close(store).await;
+
+    let store = open_with_shadow(root.path()).await;
+    let shadow = store.native_shadow().cloned().unwrap();
+    shadow.set_clock(clock_at(due_ms + 1_000));
+    shadow.process_once().await;
+
+    let metrics = shadow_metrics(&store);
+    assert_eq!((metrics["shadowMatched"], metrics["shadowNotDelivered"]), (1, 0));
+    assert_eq!(metrics["shadowEarly"], 1);
+    drop(shadow);
+    close(store).await;
+}

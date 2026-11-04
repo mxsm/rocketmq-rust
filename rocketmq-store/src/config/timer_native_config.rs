@@ -43,6 +43,14 @@ pub struct TimerNativeConfig {
     pub delivery_batch_messages: usize,
     /// Writes one batch keeps in flight, so the CommitLog can merge them.
     pub delivery_inflight_writes: usize,
+    /// Runs the engine in shadow beside the engine another `timerStoreMode` makes active: it
+    /// indexes the timers that engine admits and compares when each comes due with when that
+    /// engine delivers it, and delivers nothing. Its files are kept apart under
+    /// `timer-native-shadow`, so a later switch to `native` does not take them over.
+    pub shadow_enable: bool,
+    /// How long after the shadow finds a timer due the active engine's delivery is waited for,
+    /// before the timer counts as not delivered.
+    pub shadow_grace_ms: u64,
 }
 
 impl Default for TimerNativeConfig {
@@ -57,6 +65,8 @@ impl Default for TimerNativeConfig {
             checkpoint_interval_ms: 5_000,
             delivery_batch_messages: 512,
             delivery_inflight_writes: 32,
+            shadow_enable: false,
+            shadow_grace_ms: 60_000,
         }
     }
 }

@@ -312,9 +312,10 @@ impl LocalFileMessageStore {
     }
 
     /// Reads the native timer's deliveries back from the CommitLog, from `start` to the confirm
-    /// offset, into the feed that lost them with the last run. A slave then follows the timers
-    /// they name, and a master does not write those messages again.
-    pub(super) fn replay_native_deliveries(&self, start: i64) {
+    /// offset, into `feed`, which lost them with the last run. A slave then follows the timers
+    /// they name, a master does not write those messages again, and a shadow still matches the
+    /// active engine's deliveries.
+    pub(super) fn replay_native_deliveries(&self, feed: &NativeDeliveryFeed, start: i64) {
         let commit_log = self.commit_log.read_handle();
         let end = commit_log.get_confirm_offset();
         let mut offset = start.max(commit_log.get_min_offset());
@@ -328,7 +329,7 @@ impl LocalFileMessageStore {
         let read_bytes = reput_read_max_bytes(self.message_store_config.as_ref());
         let mut replayed = 0usize;
         let stopped = commit_log.walk_records(offset, end, read_bytes, |request| {
-            self.native_delivery_feed.replay(request);
+            feed.replay(request);
             replayed += 1;
         });
         info!(

@@ -109,7 +109,12 @@ impl Writer {
 }
 
 impl NativeTimerWriter for Writer {
-    fn write(&self, message: MessageExtBrokerInner, _epoch: u64) -> impl Future<Output = NativeWriteOutcome> + Send {
+    fn write(
+        &self,
+        message: MessageExtBrokerInner,
+        _epoch: u64,
+        _due_ms: i64,
+    ) -> impl Future<Output = NativeWriteOutcome> + Send {
         let outcome = if self.stays.lock().contains(&unique_key(&message)) {
             NativeWriteOutcome::Stays
         } else {

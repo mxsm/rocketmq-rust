@@ -49,24 +49,58 @@ const FEED_CAPACITY: usize = 1 << 20;
 /// File under the store's `config` directory that holds the mark.
 const FEED_MARK_FILE: &str = "timer-native-feed.meta";
 
+/// The engine whose timers a native engine instance follows, and whose delivery tokens its feed
+/// keeps.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum NativeTimerOwner {
+    /// Its own: the instance delivers the native timers.
+    #[default]
+    Native,
+    /// The other engines': a shadow compares itself with the active one.
+    OtherEngines,
+}
+
+impl NativeTimerOwner {
+    /// Whether a timer or a delivery stamped with engine `engine` belongs to this owner.
+    pub(crate) fn owns(self, engine: Option<&str>) -> bool {
+        let native = engine == Some(TimerEngineId::Native.as_str());
+        match self {
+            Self::Native => native,
+            Self::OtherEngines => !native,
+        }
+    }
+}
+
 /// The dispatched messages that carry one token. A client that sends a timer again gives both
 /// copies the same token, and each copy needs one message.
 struct KeptToken {
     lowest_offset: i64,
     highest_offset: i64,
     messages: u32,
+    /// When the first copy was stored.
+    seen_ms: i64,
 }
 
-/// Delivery tokens of the native timers whose message Reput dispatched while this Broker did
-/// not deliver.
+/// Delivery tokens of the timers whose message Reput dispatched while this Broker did not
+/// deliver them: the native ones, or for a shadow the active engine's.
 #[derive(Default)]
 pub(crate) struct NativeDeliveryFeed {
+    owner: NativeTimerOwner,
     observing: AtomicBool,
     tokens: Mutex<HashMap<CheetahString, KeptToken>>,
     full: AtomicBool,
 }
 
 impl NativeDeliveryFeed {
+    /// A feed of the other engines' deliveries, kept whatever role this Broker has.
+    pub(crate) fn of_other_engines() -> Self {
+        Self {
+            owner: NativeTimerOwner::OtherEngines,
+            observing: AtomicBool::new(true),
+            ..Self::default()
+        }
+    }
+
     /// Starts or stops keeping tokens: a Broker that delivers writes the messages itself.
     pub(crate) fn set_observing(&self, observing: bool) {
         self.observing.store(observing, Ordering::Release);
@@ -79,15 +113,37 @@ impl NativeDeliveryFeed {
 
     /// Takes `token` when a message it names was dispatched.
     pub(crate) fn take(&self, token: &CheetahString) -> bool {
+        self.take_seen(token).is_some()
+    }
+
+    /// Takes `token` like [`Self::take`], and says when the first message it names was stored.
+    pub(crate) fn take_seen(&self, token: &CheetahString) -> Option<i64> {
         let mut tokens = self.tokens.lock();
-        let Some(kept) = tokens.get_mut(token) else {
-            return false;
-        };
+        let kept = tokens.get_mut(token)?;
+        let seen_ms = kept.seen_ms;
         kept.messages -= 1;
         if kept.messages == 0 {
             tokens.remove(token);
         }
-        true
+        Some(seen_ms)
+    }
+
+    /// Drops the tokens first stored before `before_ms`, and returns how many there were, with
+    /// up to `samples` of them and when they were stored.
+    pub(crate) fn expire_seen_before(&self, before_ms: i64, samples: usize) -> (usize, Vec<(String, i64)>) {
+        let mut expired = 0;
+        let mut kept_samples = Vec::new();
+        self.tokens.lock().retain(|token, kept| {
+            if kept.seen_ms >= before_ms {
+                return true;
+            }
+            expired += 1;
+            if kept_samples.len() < samples {
+                kept_samples.push((token.to_string(), kept.seen_ms));
+            }
+            false
+        });
+        (expired, kept_samples)
     }
 
     /// Drops the tokens of what was dispatched from the CommitLog at or past `offset`, which is
@@ -132,7 +188,7 @@ impl NativeDeliveryFeed {
         else {
             return;
         };
-        if !is_native_token(token) {
+        if !self.owner.owns(token.split_once(':').map(|(engine, _)| engine)) {
             return;
         }
         let offset = request.commit_log_offset;
@@ -144,6 +200,7 @@ impl NativeDeliveryFeed {
                 kept.messages += 1;
             }
             kept.lowest_offset = kept.lowest_offset.min(offset);
+            kept.seen_ms = kept.seen_ms.min(request.store_timestamp);
             return;
         }
         if tokens.len() >= FEED_CAPACITY {
@@ -158,6 +215,7 @@ impl NativeDeliveryFeed {
                 lowest_offset: offset,
                 highest_offset: offset,
                 messages: 1,
+                seen_ms: request.store_timestamp,
             },
         );
     }
@@ -197,13 +255,6 @@ impl NativeFeedMark {
     }
 }
 
-/// Whether `token` is one the Broker gave a native timer: `N:<format>:...`.
-fn is_native_token(token: &str) -> bool {
-    token
-        .split_once(':')
-        .is_some_and(|(engine, _)| engine == TimerEngineId::Native.as_str())
-}
-
 impl CommitLogDispatcher for NativeDeliveryFeed {
     fn supports_parallel_dispatch(&self) -> bool {
         true
@@ -237,6 +288,30 @@ mod tests {
             commit_log_offset: offset,
             ..dispatched("TopicA", token)
         }
+    }
+
+    #[test]
+    fn a_feed_of_the_other_engines_keeps_their_deliveries_and_when_they_were_stored() {
+        let feed = NativeDeliveryFeed::of_other_engines();
+        for (stored_ms, token) in [
+            (500, "F:1:java:0:0"),
+            (600, "N:1:native:0:0"),
+            (700, "R:1:timeline:0:0"),
+        ] {
+            feed.dispatch(&mut DispatchRequest {
+                store_timestamp: stored_ms,
+                ..dispatched("TopicA", token)
+            });
+        }
+
+        let token = |token: &'static str| CheetahString::from_static_str(token);
+        assert_eq!(feed.take_seen(&token("F:1:java:0:0")), Some(500));
+        assert_eq!(feed.take_seen(&token("N:1:native:0:0")), None);
+        assert_eq!(
+            feed.expire_seen_before(701, 4),
+            (1, vec![("R:1:timeline:0:0".to_owned(), 700)])
+        );
+        assert_eq!(feed.len(), 0);
     }
 
     #[test]
