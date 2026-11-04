@@ -320,6 +320,10 @@ pub(crate) struct HAReplicaStoreHandle {
     commit_log: CommitLogReplicaHandle,
     consume_queue_store: ConsumeQueueStore,
     reput_notify: ReputNotifyHandle,
+    /// The end of what every CommitLog dispatcher has seen.
+    dispatch_frontier: Arc<AtomicI64>,
+    native_timer: Option<Arc<NativeTimerService>>,
+    runtime_scope: StoreRuntimeScope,
 }
 
 impl HAReplicaStoreHandle {
@@ -453,6 +457,67 @@ impl HAReplicaStoreHandle {
             .max(0);
         self.commit_log
             .cut_unfinished_record(start, dispatch::reput_read_max_bytes(&self.message_store_config))
+            .await
+    }
+
+    /// Cuts the log back to `offset`, with what was dispatched from the part that goes: the
+    /// consume queues, Reput's position and what a native timer engine took from it. A master
+    /// that accepts writes without waiting for its replicas dispatched its whole log, and a
+    /// replica what the master let it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when Reput does not come to rest within `dispatch_timeout`, or a step of the cut
+    /// fails. Each step leaves alone what is cut already, so a later cut completes this one.
+    pub(crate) async fn cut_back_to(&self, offset: i64, dispatch_timeout: Duration) -> Result<(), StoreError> {
+        // First, or Reput could still read what is about to go.
+        self.publish_confirm_offset(self.get_confirm_offset_directly().min(offset));
+        if !self.wait_until_dispatched(dispatch_timeout).await {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Append)
+                    .in_component(StoreComponent::CommitLog)
+                    .with_detail("Reput did not stop in time to cut the CommitLog back"),
+            );
+        }
+        self.reput_notify.rewind_to(offset);
+        self.dispatch_frontier.fetch_min(offset, Ordering::AcqRel);
+        if let Some(native_timer) = self.native_timer.clone() {
+            self.runtime_scope
+                .spawn_io("ha-cut-native-timers", move || native_timer.cut_back(offset))
+                .await?
+                .map_err(|error| {
+                    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
+                        .in_component(StoreComponent::CommitLog)
+                        .with_detail("the native timer engine could not take back what is cut off")
+                        .with_source(error)
+                })?;
+        }
+        let consume_queue_store = self.consume_queue_store.clone();
+        let consume_queues_cut = self
+            .runtime_scope
+            .spawn_io("ha-cut-consume-queues", move || {
+                consume_queue_store.truncate_dirty_with_outcome(offset)
+            })
+            .await?;
+        if !consume_queues_cut {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
+                    .in_component(StoreComponent::CommitLog)
+                    .with_detail("the consume queues could not be cut back to the new master"),
+            );
+        }
+        if !self.commit_log.truncate_tail(offset).await {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
+                    .in_component(StoreComponent::CommitLog)
+                    .with_detail("the CommitLog could not be cut back to the new master"),
+            );
+        }
+        let replica_store = self.clone();
+        self.runtime_scope
+            .spawn_io("ha-recover-topic-queue-table", move || {
+                replica_store.recover_topic_queue_table()
+            })
             .await
     }
 

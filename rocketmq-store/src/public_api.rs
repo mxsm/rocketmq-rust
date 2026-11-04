@@ -107,6 +107,8 @@ pub use crate::ha::transfer_engine::TransferEnginePreference;
 pub use crate::ha::transfer_engine::TransferStats;
 pub use crate::ha::transfer_metrics::HaTransferMetrics;
 pub use crate::ha::transfer_metrics::TransferFallbackSnapshot;
+pub use crate::ha::EpochLog;
+pub use crate::ha::EpochStart;
 pub use crate::hook::put_message_hook::PutMessageHook;
 pub use crate::inspection::inspect_commit_log_record;
 pub use crate::inspection::CommitLogRecord;

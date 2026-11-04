@@ -621,6 +621,64 @@ impl NativeTimerService {
         Ok(usize::try_from(passed_through.saturating_sub(frontier)).unwrap_or(usize::MAX))
     }
 
+    /// Takes back what came from the CommitLog at or past `offset`, before the Timer CQ and the
+    /// CommitLog lose it. Delivery tokens go, the Source goes back to read the records that take
+    /// their place, and the timers already indexed from those records stay away from delivery.
+    /// A timer this Broker delivered there stays delivered: its new master delivers it as well.
+    ///
+    /// The cut must wait for Reput to rest, and for this to return.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of saving the cut timers or the checkpoint that makes the Source's new
+    /// position durable. Nothing depends on a cut that failed: the next one starts over.
+    pub(crate) fn cut_back(&self, offset: i64) -> Result<(), NativeEngineError> {
+        let source = self.source.lock();
+        self.feed.forget_from(offset);
+        let queue = self
+            .context
+            .find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0);
+        if let Some(queue) = queue {
+            let (min_offset, mut first_cut) = {
+                let queue = queue.read();
+                (queue.get_min_offset_in_queue(), queue.get_max_offset_in_queue())
+            };
+            while first_cut > min_offset && queue.read().get(first_cut - 1).is_some_and(|unit| unit.pos >= offset) {
+                first_cut -= 1;
+            }
+            let frontier = self.engine.source_frontier();
+            let mut timers = Vec::new();
+            let now_ms = self.now_ms();
+            let mut next = first_cut;
+            while next < frontier {
+                let units: Vec<CqUnit> = (next..frontier.min(next.saturating_add(CUT_READ_BATCH)))
+                    .map_while(|cq_offset| queue.read().get(cq_offset))
+                    .collect();
+                let Some(last) = units.last() else {
+                    break;
+                };
+                next = last.queue_offset.saturating_add(1);
+                let locators: Vec<_> = units.iter().map(|unit| (unit.pos, unit.size)).collect();
+                let bytes = units.iter().map(|unit| usize::try_from(unit.size).unwrap_or(0)).sum();
+                let frames = read_timer_source_frames(self.context.commit_log(), &locators, bytes);
+                for (unit, frame) in units.iter().zip(frames) {
+                    let TimerSourceRead::Frame { bytes, message } = frame else {
+                        warn!("a native timer source a cut removes cannot be read");
+                        continue;
+                    };
+                    timers.extend(
+                        native_source(unit, bytes, &message, self.settings.precision_ms)
+                            .and_then(|source| self.engine.cut_timer_of(&source, now_ms)),
+                    );
+                }
+            }
+            self.engine.cut_source(first_cut, &timers)?;
+            *self.visibility.lock() = None;
+        }
+        drop(source);
+        self.checkpoint_blocking()
+    }
+
     /// Moves the engine's visibility watermark to the wall time of the last snapshot the Source
     /// has indexed through, and takes a new one. A snapshot taken when every record is indexed
     /// resolves at once, so an idle Timer CQ adds no delay.
@@ -851,6 +909,7 @@ impl NativeTimerService {
             .map_or_else(|| self.context.commit_log().get_max_offset(), |unit| unit.pos);
         let checkpoint = self.engine.checkpoint(source_fence, self.now_ms())?;
         self.cleanup_pin.store(checkpoint.commit_log_fence, Ordering::Release);
+        self.engine.forget_cut_timers(&checkpoint.lane_watermarks);
         // Only now: the mark must not pass what the checkpoint on disk has not settled.
         if let Some(feed_mark) = feed_mark {
             if self.written_feed_mark.swap(feed_mark, Ordering::AcqRel) != feed_mark {
@@ -1062,6 +1121,9 @@ impl NativeTimerWriter for ObservingWriter<'_> {
         }
     }
 }
+
+/// Timer CQ records a cut reads at a time.
+const CUT_READ_BATCH: i64 = 1024;
 
 /// How a Due batch takes its timers out of the wheel.
 #[derive(Clone, Copy)]

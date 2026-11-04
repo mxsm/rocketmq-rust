@@ -38,10 +38,15 @@ use rocketmq_store_local::timer::native_storage::NativeStorageError;
 use rocketmq_store_local::timer::native_storage::NativeTimerStorage;
 use rocketmq_store_local::timer::payload_record::TimerPayloadRecordV1;
 use thiserror::Error;
+use tracing::warn;
 
 use super::cancel_set::CancelSet;
 use super::cancel_set::NativeRecall;
 use super::config::NativeTimerConfig;
+use super::cut::NativeCutDeadline;
+use super::cut::NativeCutSource;
+use super::cut::NativeCutTimer;
+use super::cut::NativeCutTimers;
 use super::near_wheel::NearWheel;
 
 mod collect;
@@ -62,6 +67,8 @@ pub(crate) enum NativeEngineError {
     UnsplitHour(NativeBucketId),
     #[error("native timer {0} has no readable copy")]
     NotCopied(i64),
+    #[error("the native timers of a CommitLog cut cannot be saved")]
+    CutTimers(#[source] std::io::Error),
 }
 
 /// One Timer CQ record for the engine to index, its properties already read.
@@ -220,6 +227,8 @@ pub(crate) struct NativeTimerEngine {
     /// Timer CQ offsets of the timers in the wheel whose message already landed. A write in
     /// front of them stayed, so they went back with it to keep the lane's order.
     pub(super) landed: Mutex<HashSet<i64>>,
+    /// The timers whose source a cut removed, whose entries may still come due.
+    pub(super) cut: NativeCutTimers,
 }
 
 impl NativeTimerEngine {
@@ -242,6 +251,7 @@ impl NativeTimerEngine {
             payload_segment_bytes: config.payload_segment_bytes,
             ..NativeStorageConfig::new(config.lane_count)
         };
+        let cut = NativeCutTimers::open(store_root.as_ref());
         let (storage, checkpoint) = NativeTimerStorage::open(store_root, storage_config, now_ms)?;
         let mut days = BTreeSet::new();
         let mut hours = BTreeSet::new();
@@ -314,6 +324,7 @@ impl NativeTimerEngine {
             storage,
             commit: Mutex::new(()),
             landed: Mutex::new(HashSet::new()),
+            cut,
         };
         Ok((engine, checkpoint))
     }
@@ -329,6 +340,49 @@ impl NativeTimerEngine {
     pub(crate) fn start_source_at(&self, offset: i64) {
         let mut state = self.state.lock();
         state.source_frontier = state.source_frontier.max(offset);
+    }
+
+    /// Takes the frontier back to `offset`, where the Timer CQ ends after a CommitLog cut, and
+    /// keeps `timers`, indexed from the records the cut removes, away from delivery. The new
+    /// records that take those offsets are indexed from there.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeEngineError::CutTimers`] when `timers` cannot be saved; the frontier
+    /// stays where it was then.
+    pub(crate) fn cut_source(&self, offset: i64, timers: &[NativeCutTimer]) -> Result<(), NativeEngineError> {
+        self.cut.add(timers).map_err(NativeEngineError::CutTimers)?;
+        let mut state = self.state.lock();
+        state.source_frontier = state.source_frontier.min(offset);
+        drop(state);
+        self.landed.lock().retain(|cq_offset| *cq_offset < offset);
+        Ok(())
+    }
+
+    /// What the engine keeps of `source`, a timer record that is being cut off at `now_ms`.
+    pub(crate) fn cut_timer_of(&self, source: &NativeTimerSource, now_ms: i64) -> Option<NativeCutTimer> {
+        let NativeSourceKind::Timer { unique_key } = &source.kind else {
+            return None;
+        };
+        Some(NativeCutTimer {
+            source: NativeCutSource {
+                cq_offset: source.cq_offset,
+                key_hash: native_key_hash(unique_key.as_bytes()),
+                commit_log_offset: source.commit_log_offset,
+            },
+            deadline: NativeCutDeadline {
+                lane: native_lane(&source.real_topic, source.real_queue_id, self.config.lane_count),
+                // An entry is indexed no later than its own deadline or the time it is indexed.
+                due_by_ms: source.due_ms.max(now_ms),
+            },
+        })
+    }
+
+    /// Forgets the cut timers a checkpoint's `watermarks` have passed.
+    pub(crate) fn forget_cut_timers(&self, watermarks: &[NativeDueCursor]) {
+        if let Err(error) = self.cut.prune(watermarks) {
+            warn!(%error, "save the cut native timers failed");
+        }
     }
 
     /// Whether every timer indexed so far is delivered or cancelled: no day or hour bucket
@@ -379,6 +433,16 @@ impl NativeTimerEngine {
             }
             match &source.kind {
                 NativeSourceKind::Timer { unique_key } => {
+                    let key_hash = native_key_hash(unique_key.as_bytes());
+                    if !self.cut.is_empty()
+                        && self.cut.restore(&NativeCutSource {
+                            cq_offset: source.cq_offset,
+                            key_hash,
+                            commit_log_offset: source.commit_log_offset,
+                        })
+                    {
+                        continue;
+                    }
                     let lane = native_lane(&source.real_topic, source.real_queue_id, self.config.lane_count);
                     let taken = state.taken_through(lane);
                     let cursor = NativeDueCursor {
@@ -396,7 +460,7 @@ impl NativeTimerEngine {
                             offset: source.commit_log_offset,
                         },
                         generation: source.generation,
-                        key_hash: native_key_hash(unique_key.as_bytes()),
+                        key_hash,
                         size: source.size,
                         lane,
                     };

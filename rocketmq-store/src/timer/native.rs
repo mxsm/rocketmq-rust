@@ -28,6 +28,7 @@
 
 mod cancel_set;
 mod config;
+mod cut;
 mod delivery;
 mod engine;
 mod feed;

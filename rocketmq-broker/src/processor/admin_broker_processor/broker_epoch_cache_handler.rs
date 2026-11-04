@@ -14,10 +14,12 @@
 
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntry;
 use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
+use rocketmq_store::HAService;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
@@ -45,16 +47,13 @@ impl BrokerEpochCacheHandler {
             ));
         }
 
-        let replicas_manage = match broker_runtime_inner.replicas_manager() {
-            Some(replicas_manage) => replicas_manage,
-            None => {
-                return Ok(Some(
-                    response
-                        .set_code(ResponseCode::SystemError)
-                        .set_remark("replicas manager is not initialized"),
-                ));
-            }
-        };
+        if broker_runtime_inner.replicas_manager().is_none() {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("replicas manager is not initialized"),
+            ));
+        }
 
         let broker_identity = &broker_config.broker_identity;
 
@@ -69,11 +68,20 @@ impl BrokerEpochCacheHandler {
             }
         };
 
+        // Empty until this Broker first became master, which a replica waiting for it can tell.
+        let epoch_list = message_store
+            .get_ha_service()
+            .map(HAService::epoch_log)
+            .unwrap_or_default()
+            .entries()
+            .iter()
+            .map(|entry| EpochEntry::new(entry.epoch, entry.start_offset))
+            .collect();
         let entry_code = EpochEntryCache::new(
             &broker_identity.broker_cluster_name,
             broker_config.broker_name(),
             broker_identity.broker_id,
-            replicas_manage.get_epoch_entries(),
+            epoch_list,
             message_store.get_max_phy_offset() as u64,
         );
 

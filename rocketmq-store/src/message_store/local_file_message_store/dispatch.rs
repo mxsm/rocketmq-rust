@@ -600,6 +600,7 @@ pub(super) struct ReputNotifyHandle {
     dispatch_progress_notify: Arc<Notify>,
     inflight_dispatch_batches: Arc<AtomicU64>,
     started: Arc<parking_lot::Mutex<Option<ReputMessageServiceInner>>>,
+    position: Arc<parking_lot::Mutex<Option<Arc<AtomicI64>>>>,
 }
 
 impl ReputNotifyHandle {
@@ -613,6 +614,15 @@ impl ReputNotifyHandle {
     /// whereas Java's reput service polls every millisecond.
     pub(super) fn notify_dispatchable(&self) {
         self.new_message_notify.notify_one();
+    }
+
+    /// Sends the reader back to `offset`, for a CommitLog that is losing what follows it. The
+    /// reader must be at rest and the confirm offset no higher than `offset`, so that it stays
+    /// there until new data comes.
+    pub(super) fn rewind_to(&self, offset: i64) {
+        if let Some(position) = self.position.lock().as_ref() {
+            position.fetch_min(offset, Ordering::AcqRel);
+        }
     }
 
     /// Waits until every dispatcher saw all that is dispatchable, or `timeout` passes, and says
@@ -664,6 +674,8 @@ pub(super) struct ReputMessageService {
     pub(super) inner: Option<ReputMessageServiceInner>,
     /// `inner` while the service runs, for the handles given out before it started.
     pub(super) started: Arc<parking_lot::Mutex<Option<ReputMessageServiceInner>>>,
+    /// `reput_from_offset`, for the handles given out before it was set.
+    pub(super) position: Arc<parking_lot::Mutex<Option<Arc<AtomicI64>>>>,
     pub(super) task_group: Option<rocketmq_runtime::TaskGroup>,
 }
 
@@ -683,6 +695,7 @@ impl ReputMessageService {
             dispatch_progress_notify: Arc::clone(&self.dispatch_progress_notify),
             inflight_dispatch_batches: Arc::clone(&self.inflight_dispatch_batches),
             started: Arc::clone(&self.started),
+            position: Arc::clone(&self.position),
         }
     }
 
@@ -696,6 +709,11 @@ impl ReputMessageService {
 
     pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
         self.reput_from_offset = Some(Arc::new(AtomicI64::new(reput_from_offset)));
+        self.publish_position();
+    }
+
+    fn publish_position(&self) {
+        self.position.lock().clone_from(&self.reput_from_offset);
     }
 
     /// Notify that new messages have arrived and need to be reput
@@ -722,6 +740,9 @@ impl ReputMessageService {
         let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<ReputDispatchEvent>(128);
         self.dispatch_tx = Some(dispatch_tx.clone());
         self.shutdown_token = CancellationToken::new();
+        self.reput_from_offset
+            .get_or_insert_with(|| Arc::new(AtomicI64::new(0)));
+        self.publish_position();
         let reput_from_offset = self
             .reput_from_offset
             .get_or_insert_with(|| Arc::new(AtomicI64::new(0)))
@@ -930,6 +951,7 @@ impl ReputMessageService {
         }
         if self.reput_from_offset.is_none() {
             self.reput_from_offset = Some(Arc::new(AtomicI64::new(0)));
+            self.publish_position();
         }
         if self.inner.is_none() {
             let reput_from_offset = self

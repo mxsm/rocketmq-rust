@@ -1577,6 +1577,7 @@ async fn the_wait_for_dispatch_lasts_until_the_last_batch_reached_the_dispatcher
         dispatch_tx: None,
         inner: None,
         started: Arc::new(parking_lot::Mutex::new(Some(inner))),
+        position: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
     let handle = service.notify_handle();
@@ -1608,6 +1609,7 @@ async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
         dispatch_tx: None,
         inner: None,
         started: Arc::new(parking_lot::Mutex::new(None)),
+        position: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
     let reput_from_offset = inner.reput_from_offset.clone();
@@ -1645,6 +1647,7 @@ async fn release_checkpoint_waits_for_inflight_dispatch_batch_completion() {
         dispatch_tx: None,
         inner: Some(reput_inner_for_store(&store)),
         started: Arc::new(parking_lot::Mutex::new(None)),
+        position: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
 
@@ -1678,6 +1681,7 @@ async fn reput_shutdown_releases_the_runtime_context() {
             ..reput_inner_for_store(&store)
         }),
         started: Arc::new(parking_lot::Mutex::new(None)),
+        position: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
 

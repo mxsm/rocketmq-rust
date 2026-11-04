@@ -21,6 +21,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 
@@ -538,6 +539,102 @@ async fn a_slave_follows_its_master_and_a_promotion_writes_only_what_the_master_
     assert_eq!(native_timer.process_once().await, 2);
     store.reput_once().await;
     assert_eq!(delivered_in_order(&store), ["n0", "n2", "n1"]);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_cut_takes_back_what_the_native_engine_took_from_the_records_it_removes() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    put_all(&mut store, vec![native(timer_message(due_ms, "kept"))]).await;
+    let join_point = store.get_max_phy_offset();
+    // What the new master does not hold: a timer, and the old master's delivery of `kept`.
+    put_all(&mut store, vec![native(timer_message(due_ms, "gone"))]).await;
+    native_timer.index_all().await;
+    put_all(&mut store, vec![delivered_by_master("kept")]).await;
+    assert_eq!(native_metrics(&store)["followedTokens"], 1);
+
+    store
+        .ha_replica_store_handle()
+        .cut_back_to(join_point, Duration::from_secs(5))
+        .await
+        .expect("cut back");
+
+    assert_eq!(native_metrics(&store)["followedTokens"], 0);
+    // A timer of the new master takes the place of the one that went, in the CommitLog and in
+    // the Timer CQ. The entry of the old one must not read it.
+    put_all(&mut store, vec![native(timer_message(due_ms + 1, "new"))]).await;
+    native_timer.set_delivering(true);
+    assert_eq!(native_timer.process_once().await, 3);
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["kept", "new"]);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn a_timer_sent_again_to_the_place_a_cut_took_it_from_is_delivered_once() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    let join_point = store.get_max_phy_offset();
+    put_all(&mut store, vec![native(timer_message(due_ms, "again"))]).await;
+    native_timer.index_all().await;
+
+    store
+        .ha_replica_store_handle()
+        .cut_back_to(join_point, Duration::from_secs(5))
+        .await
+        .expect("cut back");
+
+    put_all(&mut store, vec![native(timer_message(due_ms, "again"))]).await;
+    native_timer.set_delivering(true);
+    native_timer.process_once().await;
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["again"]);
+    drop(native_timer);
+    close(store).await;
+}
+
+#[tokio::test]
+async fn cut_timers_stay_away_from_delivery_after_a_restart() {
+    let root = tempdir().unwrap();
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open a native store");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(false);
+    let due_ms = current_millis() as i64 - 1_000;
+    let join_point = store.get_max_phy_offset();
+    put_all(&mut store, vec![native(timer_message(due_ms, "gone"))]).await;
+    native_timer.index_all().await;
+    store
+        .ha_replica_store_handle()
+        .cut_back_to(join_point, Duration::from_secs(5))
+        .await
+        .expect("cut back");
+    put_all(&mut store, vec![native(timer_message(due_ms + 1, "new"))]).await;
+    drop(native_timer);
+    close(store).await;
+
+    let mut store = open(root.path(), TimerStoreMode::Native)
+        .await
+        .expect("open the store again");
+    let native_timer = store.native_timer().cloned().unwrap();
+    native_timer.set_delivering(true);
+    native_timer.process_once().await;
+    store.reput_once().await;
+    assert_eq!(delivered_in_order(&store), ["new"]);
     drop(native_timer);
     close(store).await;
 }

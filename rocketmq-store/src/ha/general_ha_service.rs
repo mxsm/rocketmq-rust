@@ -22,6 +22,7 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::WriteAuthority;
+use rocketmq_store_local::ha::epoch::EpochLog;
 use tokio::sync::watch;
 use tokio::sync::Notify;
 
@@ -218,6 +219,20 @@ impl HAService for GeneralHAService {
         match self {
             GeneralHAService::DefaultHAService(service) => service.shutdown().await,
             GeneralHAService::AutoSwitchHAService(service) => service.shutdown().await,
+        }
+    }
+
+    fn epoch_log(&self) -> EpochLog {
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.epoch_log(),
+            GeneralHAService::AutoSwitchHAService(service) => service.epoch_log(),
+        }
+    }
+
+    async fn join_master(&self, master: &EpochLog, master_end: i64) -> Result<(), StoreError> {
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.join_master(master, master_end).await,
+            GeneralHAService::AutoSwitchHAService(service) => service.join_master(master, master_end).await,
         }
     }
 

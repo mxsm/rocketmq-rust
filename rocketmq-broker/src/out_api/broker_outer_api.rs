@@ -46,6 +46,7 @@ use rocketmq_protocol::protocol::body::broker_body::register_broker_body::Regist
 use rocketmq_protocol::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
 use rocketmq_protocol::protocol::body::controller_write_lease::ControllerWriteLeaseGrant;
 use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
+use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
 use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
@@ -604,6 +605,42 @@ impl BrokerOuterAPI {
             _ => Err(crate::broker_error::broker_operation_failed_with_address(
                 "get_max_offset",
                 response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            )),
+        }
+    }
+
+    /// The master terms of the Broker at `addr`, and where its CommitLog ends.
+    pub async fn get_broker_epoch_cache(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> crate::broker_error::BrokerResult<EpochEntryCache> {
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetBrokerEpochCache);
+        let response = match self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await
+        {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_broker_epoch_cache", rejection));
+            }
+            Ok(OutboundRequestResult::Contract(contract)) => {
+                return Err(broker_request_contract_error(contract));
+            }
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
+        };
+        let code = response.code();
+        match (ResponseCode::from(code), response.get_body()) {
+            (ResponseCode::Success, Some(body)) => EpochEntryCache::decode(body)
+                .map_err(|error| crate::broker_error::invalid_argument(format!("invalid broker epoch cache: {error}"))),
+            _ => Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_broker_epoch_cache",
+                code,
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 Some(addr.to_string()),
             )),
