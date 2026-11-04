@@ -45,15 +45,15 @@ pub(crate) use route_lookup::ClusterTestTopicRouteResolution;
 pub(crate) use route_lookup::TransportClusterTestRouteLookup;
 
 pub struct ClusterTestRequestProcessor {
-    name_server_runtime_inner: NameServerRuntimeHandle,
+    name_server_runtime_handle: NameServerRuntimeHandle,
     command_factory: RemotingCommandFactory,
 }
 
 impl ClusterTestRequestProcessor {
-    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
-        let command_factory = name_server_runtime_inner.remoting_command_factory();
+    pub(crate) fn new(name_server_runtime_handle: NameServerRuntimeHandle) -> Self {
+        let command_factory = name_server_runtime_handle.remoting_command_factory();
         Self {
-            name_server_runtime_inner,
+            name_server_runtime_handle,
             command_factory,
         }
     }
@@ -65,10 +65,10 @@ impl ClusterTestRequestProcessor {
         let request_header = request
             .decode_command_custom_header::<GetRouteInfoRequestHeader>()
             .map_err(crate::namesrv_error::from_error)?;
-        let route_config = self.name_server_runtime_inner.name_server_config();
+        let route_config = self.name_server_runtime_handle.name_server_config();
 
         let mut topic_route_data = match self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
@@ -78,11 +78,11 @@ impl ClusterTestRequestProcessor {
         };
 
         if let Some(route_data) = topic_route_data.as_mut() {
-            route_data.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
+            route_data.order_topic_conf = self.name_server_runtime_handle.kvconfig_manager().get_kvconfig(
                 &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
                 &request_header.topic,
             );
-        } else if let Some(cluster_test_route_lookup) = self.name_server_runtime_inner.cluster_test_route_lookup() {
+        } else if let Some(cluster_test_route_lookup) = self.name_server_runtime_handle.cluster_test_route_lookup() {
             match cluster_test_route_lookup
                 .lookup_topic_route(&request_header.topic)
                 .await
@@ -140,7 +140,7 @@ impl ClusterTestRequestProcessor {
         request: &mut RemotingCommand,
     ) -> crate::NameServerResult<Option<RemotingCommand>> {
         let _runtime_guard = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .upgrade()
             .ok_or_else(|| crate::namesrv_error::not_initialized("namesrv-runtime"))?;
         let request_code = RequestCode::from(request.code());

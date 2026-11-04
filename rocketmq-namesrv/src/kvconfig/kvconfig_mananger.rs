@@ -76,8 +76,8 @@ fn load_config_table_with(
 pub struct KVConfigManager {
     /// Configuration storage: namespace -> (key -> value)
     pub(crate) config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>>,
-    /// Runtime inner for accessing configuration
-    pub(crate) name_server_runtime_inner: NameServerRuntimeHandle,
+    /// Non-owning handle to the NameServer runtime, used to access configuration
+    pub(crate) name_server_runtime_handle: NameServerRuntimeHandle,
     /// Bounded, lifecycle-owned durable-before-publish mutation service.
     mutation_service: Result<KvMutationService, SharedError>,
     /// Production persistence owner. Absence is retained only for legacy
@@ -90,13 +90,14 @@ impl KVConfigManager {
     ///
     /// # Arguments
     ///
-    /// * `namesrv_config` - The configuration for the Namesrv.
+    /// * `name_server_runtime_handle` - Non-owning handle to the NameServer runtime;
+    ///   holds a weak reference to the runtime root and provides access to configuration.
     ///
     /// # Returns
     ///
     /// A new `KVConfigManager` instance.
     pub(crate) fn new(
-        name_server_runtime_inner: NameServerRuntimeHandle,
+        name_server_runtime_handle: NameServerRuntimeHandle,
         metadata_io: Option<Result<MetadataIoActor, RuntimeError>>,
         service_context: &ChildServiceContext,
         target: PathBuf,
@@ -126,7 +127,7 @@ impl KVConfigManager {
         };
         Self {
             config_table,
-            name_server_runtime_inner,
+            name_server_runtime_handle,
             mutation_service,
             metadata_io,
         }
@@ -165,7 +166,7 @@ impl KVConfigManager {
     /// A reference to the Namesrv configuration.
     #[inline]
     pub fn get_namesrv_config(&self) -> Arc<NamesrvConfig> {
-        self.name_server_runtime_inner.name_server_config()
+        self.name_server_runtime_handle.name_server_config()
     }
 
     /// Gets the number of pending changes since last persistence
@@ -187,7 +188,7 @@ impl KVConfigManager {
     /// - `Ok(())` if loading succeeds or file doesn't exist
     /// - `Err(SharedError)` if deserialization fails
     pub fn load(&self) -> NameServerResult<()> {
-        let namesrv_config = self.name_server_runtime_inner.name_server_config();
+        let namesrv_config = self.name_server_runtime_handle.name_server_config();
         let config_path = Path::new(namesrv_config.kv_config_path.as_str());
         let config_table =
             load_config_table_with(config_path, |path| std::fs::read_to_string(path)).inspect_err(|error| {
@@ -222,7 +223,7 @@ impl KVConfigManager {
     /// - `Ok(())` if update succeeds
     /// - `Err(SharedError)` if validation fails
     pub fn update_namesrv_config(&self, updates: HashMap<CheetahString, CheetahString>) -> NameServerResult<()> {
-        let result = self.name_server_runtime_inner.update_name_server_config(updates);
+        let result = self.name_server_runtime_handle.update_name_server_config(updates);
 
         if result.is_ok() {
             debug!("Namesrv configuration updated successfully");

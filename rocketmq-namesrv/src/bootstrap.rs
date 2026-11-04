@@ -599,7 +599,7 @@ impl NameServerRuntime {
             .map_err(|error| namesrv_startup_failed("start broker session observer", error))?;
 
         let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
-        let name_server_runtime_inner = NameServerRuntimeHandle::new(&self.inner);
+        let name_server_runtime_handle = NameServerRuntimeHandle::new(&self.inner);
         let task_group = self.inner.component_task_group("namesrv.scheduled");
         let scheduled_tasks = ScheduledTaskGroup::new(task_group);
         let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
@@ -610,10 +610,10 @@ impl NameServerRuntime {
 
         scheduled_tasks
             .schedule(config, ScheduledExecutionPolicy::default(), move || {
-                let name_server_runtime_inner = name_server_runtime_inner.clone();
+                let name_server_runtime_handle = name_server_runtime_handle.clone();
                 async move {
                     debug!("Running scheduled broker health check");
-                    if let Some(runtime) = name_server_runtime_inner.upgrade() {
+                    if let Some(runtime) = name_server_runtime_handle.upgrade() {
                         let route_info_manager = runtime.route_info_manager();
                         route_info_manager.scan_not_active_broker();
                     }

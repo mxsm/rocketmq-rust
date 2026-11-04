@@ -58,7 +58,7 @@ thread_local! {
 
 /// Client request processor for handling route info queries
 pub struct ClientRequestProcessor {
-    name_server_runtime_inner: NameServerRuntimeHandle,
+    name_server_runtime_handle: NameServerRuntimeHandle,
     command_factory: RemotingCommandFactory,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
@@ -78,7 +78,7 @@ impl ClientRequestProcessor {
         request: &mut RemotingCommand,
     ) -> crate::NameServerResult<Option<RemotingCommand>> {
         let _runtime_guard = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .upgrade()
             .ok_or_else(|| crate::namesrv_error::not_initialized("namesrv-runtime"))?;
         let request_code = RequestCode::from(request.code());
@@ -90,12 +90,12 @@ impl ClientRequestProcessor {
         self.get_route_info_by_topic(request)
     }
 
-    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
-        let command_factory = name_server_runtime_inner.remoting_command_factory();
+    pub(crate) fn new(name_server_runtime_handle: NameServerRuntimeHandle) -> Self {
+        let command_factory = name_server_runtime_handle.remoting_command_factory();
         Self {
             need_check_namesrv_ready: AtomicBool::new(true),
             startup_time_millis: time_utils::current_millis(),
-            name_server_runtime_inner,
+            name_server_runtime_handle,
             command_factory,
         }
     }
@@ -115,7 +115,7 @@ impl ClientRequestProcessor {
                 return Err(crate::namesrv_error::from_error(error));
             }
         };
-        let route_config = self.name_server_runtime_inner.name_server_config();
+        let route_config = self.name_server_runtime_handle.name_server_config();
 
         if route_config.need_wait_for_service {
             let elapsed_millis = time_utils::current_millis().saturating_sub(self.startup_time_millis);
@@ -138,7 +138,7 @@ impl ClientRequestProcessor {
 
         // Lookup topic route data
         let topic_route_view = match self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .load_topic_route_view(request_header.topic.as_ref())
         {
@@ -155,11 +155,11 @@ impl ClientRequestProcessor {
                 return Err(error);
             }
         };
-        let metrics = self.name_server_runtime_inner.namesrv_metrics();
+        let metrics = self.name_server_runtime_handle.namesrv_metrics();
         if metrics.should_record_route_freshness(route_config.route_freshness_sample_interval) {
             metrics.record_route_freshness_sampled();
             if let Some(freshness_ms) = self
-                .name_server_runtime_inner
+                .name_server_runtime_handle
                 .route_info_manager()
                 .route_freshness_millis(topic_route_view.route_data())
             {
@@ -173,7 +173,7 @@ impl ClientRequestProcessor {
         let mut route_with_order_config;
         let topic_route_data = if route_config.order_message_enable {
             route_with_order_config = topic_route_view.route_data().as_ref().clone();
-            route_with_order_config.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
+            route_with_order_config.order_topic_conf = self.name_server_runtime_handle.kvconfig_manager().get_kvconfig(
                 &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
                 &request_header.topic,
             );
@@ -227,7 +227,7 @@ impl ClientRequestProcessor {
                 topic_route_view.variant(),
                 encoding,
             );
-            let cache = self.name_server_runtime_inner.route_response_cache();
+            let cache = self.name_server_runtime_handle.route_response_cache();
             cache.get_or_try_insert_with(key, encode).map(|cache_result| {
                 if metrics.is_enabled() {
                     let cache_event = match cache_result.status {
@@ -243,7 +243,7 @@ impl ClientRequestProcessor {
             if metrics.is_enabled() {
                 metrics.record_route_cache(
                     NameServerRouteCacheEvent::Bypass,
-                    self.name_server_runtime_inner
+                    self.name_server_runtime_handle
                         .route_response_cache()
                         .stats()
                         .weighted_size,
