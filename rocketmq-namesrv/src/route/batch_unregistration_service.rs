@@ -89,7 +89,7 @@ struct PendingUnregistrationKey {
 }
 
 pub(crate) struct BatchUnregistrationService {
-    name_server_runtime_inner: NameServerRuntimeHandle,
+    name_server_runtime_handle: NameServerRuntimeHandle,
     queue: UnregistrationQueue,
     lifecycle: parking_lot::Mutex<ServiceLifecycle>,
     batch_size: usize,
@@ -107,7 +107,7 @@ enum ServiceLifecycle {
 
 impl BatchUnregistrationService {
     pub(crate) fn new(
-        name_server_runtime_inner: NameServerRuntimeHandle,
+        name_server_runtime_handle: NameServerRuntimeHandle,
         queue_capacity: usize,
         batch_size: usize,
         batch_time: Duration,
@@ -115,7 +115,7 @@ impl BatchUnregistrationService {
     ) -> Self {
         let (queue, rx) = UnregistrationQueue::new(queue_capacity, metrics.clone());
         BatchUnregistrationService {
-            name_server_runtime_inner,
+            name_server_runtime_handle,
             queue,
             lifecycle: parking_lot::Mutex::new(ServiceLifecycle::Created(rx)),
             batch_size,
@@ -143,7 +143,7 @@ impl BatchUnregistrationService {
         match self.queue.submit(request) {
             Submission::Queued | Submission::Coalesced => true,
             Submission::Fallback(reason, request) => {
-                let Some(runtime) = self.name_server_runtime_inner.upgrade() else {
+                let Some(runtime) = self.name_server_runtime_handle.upgrade() else {
                     warn!("cannot process unregister request because NameServer runtime is unavailable");
                     return false;
                 };
@@ -183,11 +183,11 @@ impl BatchUnregistrationService {
             ));
         };
         let runtime = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .upgrade()
             .ok_or_else(|| crate::namesrv_error::not_initialized("namesrv.batch-unregistration.runtime"))?;
         let task_group = runtime.component_task_group("namesrv.batch-unregistration");
-        let name_server_runtime_inner = self.name_server_runtime_inner.clone();
+        let name_server_runtime_handle = self.name_server_runtime_handle.clone();
         let shutdown_token = task_group.cancellation_token();
         let batch_size = self.batch_size;
         let batch_time = self.batch_time;
@@ -196,7 +196,7 @@ impl BatchUnregistrationService {
             .spawn_service("namesrv.batch-unregistration", async move {
                 info!("BatchUnregistrationService started");
                 run_batch_unregistration_service(
-                    name_server_runtime_inner,
+                    name_server_runtime_handle,
                     rx,
                     shutdown_token,
                     batch_size,
@@ -266,7 +266,7 @@ impl BatchUnregistrationService {
 }
 
 async fn run_batch_unregistration_service(
-    name_server_runtime_inner: NameServerRuntimeHandle,
+    name_server_runtime_handle: NameServerRuntimeHandle,
     mut rx: UnregistrationReceiver,
     shutdown_token: CancellationToken,
     batch_size: usize,
@@ -289,7 +289,7 @@ async fn run_batch_unregistration_service(
         };
 
         let batch = collect_batch(batch, &mut rx, &shutdown_token, batch_size, batch_time).await;
-        let Some(runtime) = name_server_runtime_inner.upgrade() else {
+        let Some(runtime) = name_server_runtime_handle.upgrade() else {
             info!("BatchUnregistrationService stopped because NameServer runtime was released");
             break;
         };

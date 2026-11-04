@@ -129,7 +129,7 @@ pub struct RouteInfoManager {
     route_mutations: RouteMutationCoordinator,
 
     // Runtime and lifecycle components
-    name_server_runtime_inner: NameServerRuntimeHandle,
+    name_server_runtime_handle: NameServerRuntimeHandle,
     session_registry: Arc<SessionRegistry>,
     un_register_service: Arc<BatchUnregistrationService>,
     metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
@@ -148,7 +148,7 @@ pub struct RouteInfoManager {
 impl RouteInfoManager {
     /// Create a route manager with mutable source tables and snapshot publication.
     pub(crate) fn new(
-        name_server_runtime_inner: NameServerRuntimeHandle,
+        name_server_runtime_handle: NameServerRuntimeHandle,
         session_registry: Arc<SessionRegistry>,
         queue_capacity: usize,
         unregister_batch_size: usize,
@@ -159,7 +159,7 @@ impl RouteInfoManager {
         metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
     ) -> Self {
         let un_register_service = Arc::new(BatchUnregistrationService::new(
-            name_server_runtime_inner.clone(),
+            name_server_runtime_handle.clone(),
             queue_capacity,
             unregister_batch_size,
             unregister_batch_time,
@@ -176,7 +176,7 @@ impl RouteInfoManager {
             topic_queue_mapping_info_table: TopicQueueMappingInfoTable::with_capacity(256),
             route_mutations: RouteMutationCoordinator::with_metrics(metrics.clone()),
 
-            name_server_runtime_inner,
+            name_server_runtime_handle,
             session_registry,
             un_register_service,
             metrics,
@@ -494,7 +494,7 @@ impl RouteInfoManager {
         }
 
         let delta_enabled = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .name_server_config()
             .enable_registration_delta;
         if !delta_enabled || broker_topology_changed || filter_servers_changed {
@@ -523,7 +523,7 @@ impl RouteInfoManager {
         // Step 8: Notify if min broker ID changed
         if is_min_broker_id_changed
             && self
-                .name_server_runtime_inner
+                .name_server_runtime_handle
                 .name_server_config()
                 .notify_min_broker_id_changed
         {
@@ -707,7 +707,7 @@ impl RouteInfoManager {
         // Delete topics that don't exist in tcTable from the current broker
         // Static topic is not supported if topicQueueMappingInfoMap is empty
         if self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .name_server_config()
             .delete_topic_with_broker_registration
             && topic_queue_mapping_info_map.is_empty()
@@ -975,7 +975,7 @@ impl RouteInfoManager {
 
         // Create remoting command
         let request = build_min_broker_id_change_request(
-            &self.name_server_runtime_inner.remoting_command_factory(),
+            &self.name_server_runtime_handle.remoting_command_factory(),
             request_header,
         );
         let notification_version = self.min_broker_notify_sequence.fetch_add(1, Ordering::Relaxed) + 1;
@@ -983,13 +983,13 @@ impl RouteInfoManager {
             .insert(broker_name.clone(), notification_version);
 
         // Send notification to each broker asynchronously
-        let task_group = self.name_server_runtime_inner.task_group();
-        let remoting_client = self.name_server_runtime_inner.clone();
+        let task_group = self.name_server_runtime_handle.task_group();
+        let name_server_runtime_handle = self.name_server_runtime_handle.clone();
         let broker_name = broker_name.clone();
         let notification_versions = Arc::clone(&self.min_broker_notify_versions);
         let concurrency = self.min_broker_notify_concurrency;
         if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
-            let Some(runtime) = remoting_client.upgrade() else {
+            let Some(runtime) = name_server_runtime_handle.upgrade() else {
                 return;
             };
             let client = runtime.remoting_client().clone();
@@ -1480,7 +1480,7 @@ impl RouteInfoManager {
         // Step 6: Notify min broker ID changed if needed
         if !need_notify_broker_map.is_empty()
             && self
-                .name_server_runtime_inner
+                .name_server_runtime_handle
                 .name_server_config()
                 .notify_min_broker_id_changed
         {
@@ -1584,7 +1584,7 @@ impl RouteInfoManager {
         );
 
         if !self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .name_server_config()
             .support_acting_master
             || topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX)

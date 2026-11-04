@@ -76,7 +76,7 @@ use crate::route::types::BrokerSession;
 use crate::NamesrvConfig;
 
 pub struct DefaultRequestProcessor {
-    name_server_runtime_inner: NameServerRuntimeHandle,
+    name_server_runtime_handle: NameServerRuntimeHandle,
     command_factory: RemotingCommandFactory,
 }
 
@@ -109,7 +109,7 @@ impl DefaultRequestProcessor {
         broker_session: Option<BrokerSession>,
     ) -> crate::NameServerResult<Option<RemotingCommand>> {
         let _runtime_guard = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .upgrade()
             .ok_or_else(|| crate::namesrv_error::not_initialized("namesrv-runtime"))?;
         let request_code = RequestCode::from(request.code());
@@ -184,7 +184,7 @@ impl DefaultRequestProcessor {
             ));
         }
 
-        self.name_server_runtime_inner
+        self.name_server_runtime_handle
             .kvconfig_manager()
             .put_kv_config(
                 request_header.namespace,
@@ -202,7 +202,7 @@ impl DefaultRequestProcessor {
             .map_err(crate::namesrv_error::from_error)?;
 
         let value = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .kvconfig_manager()
             .get_kvconfig(&request_header.namespace, &request_header.key);
 
@@ -222,7 +222,7 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<DeleteKVConfigRequestHeader>()
             .map_err(crate::namesrv_error::from_error)?;
 
-        self.name_server_runtime_inner
+        self.name_server_runtime_handle
             .kvconfig_manager()
             .delete_kv_config(
                 &request_header.namespace,
@@ -247,12 +247,12 @@ impl DefaultRequestProcessor {
 
         // Check if broker topic config has changed
         let changed = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .is_broker_topic_config_changed(&request_header.cluster_name, &request_header.broker_addr, &data_version);
 
         // Update broker timestamp
-        self.name_server_runtime_inner
+        self.name_server_runtime_handle
             .route_info_manager()
             .update_broker_info_update_timestamp(
                 request_header.cluster_name.clone(),
@@ -266,7 +266,7 @@ impl DefaultRequestProcessor {
 
         // Query and attach broker topic config if available
         if let Some(topic_config) = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .query_broker_topic_config(request_header.cluster_name, request_header.broker_addr)
         {
@@ -282,10 +282,10 @@ impl DefaultRequestProcessor {
 
 #[allow(clippy::new_without_default)]
 impl DefaultRequestProcessor {
-    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
-        let command_factory = name_server_runtime_inner.remoting_command_factory();
+    pub(crate) fn new(name_server_runtime_handle: NameServerRuntimeHandle) -> Self {
+        let command_factory = name_server_runtime_handle.remoting_command_factory();
         Self {
-            name_server_runtime_inner,
+            name_server_runtime_handle,
             command_factory,
         }
     }
@@ -314,7 +314,7 @@ impl DefaultRequestProcessor {
         let mut filter_server_list = Vec::new();
         if broker_version >= RocketMqVersion::V3_0_11 {
             let decode_limits = self
-                .name_server_runtime_inner
+                .name_server_runtime_handle
                 .name_server_config()
                 .register_broker_decode_limits();
             let register_broker_body =
@@ -324,7 +324,7 @@ impl DefaultRequestProcessor {
         } else {
             topic_config_wrapper = extract_register_topic_config_from_request(request)?;
         }
-        self.name_server_runtime_inner
+        self.name_server_runtime_handle
             .route_info_manager()
             .record_registration_decode(
                 wire_bytes,
@@ -337,7 +337,7 @@ impl DefaultRequestProcessor {
             .transpose()
             .map_err(|_| crate::namesrv_error::invalid_configuration("heartbeatTimeoutMillis"))?;
         let register_broker_result = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .register_broker_session(
                 request_header.cluster_name,
@@ -355,12 +355,12 @@ impl DefaultRequestProcessor {
                 broker_session,
             )?;
         if self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .name_server_config()
             .return_order_topic_config_to_broker
         {
             if let Some(value) = self
-                .name_server_runtime_inner
+                .name_server_runtime_handle
                 .kvconfig_manager()
                 .get_kv_list_by_namespace(&CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG))
             {
@@ -380,7 +380,7 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<UnRegisterBrokerRequestHeader>()
             .map_err(crate::namesrv_error::from_error)?;
         if !self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .submit_unregister_broker_request(request_header)
         {
@@ -423,7 +423,7 @@ impl DefaultRequestProcessor {
         let request_header = request
             .decode_command_custom_header::<BrokerHeartbeatRequestHeader>()
             .map_err(crate::namesrv_error::from_error)?;
-        self.name_server_runtime_inner
+        self.name_server_runtime_handle
             .route_info_manager()
             .update_broker_info_update_timestamp_for_session(
                 request_header.cluster_name,
@@ -439,7 +439,7 @@ impl DefaultRequestProcessor {
             .map_err(crate::namesrv_error::from_error)?;
 
         let broker_member_group = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .get_broker_member_group(request_header.cluster_name, request_header.broker_name);
         let response_body = GetBrokerMemberGroupResponseBody { broker_member_group };
@@ -449,7 +449,7 @@ impl DefaultRequestProcessor {
 
     fn get_broker_cluster_info(&self, _request: &mut RemotingCommand) -> crate::NameServerResult<RemotingCommand> {
         let vec = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .get_all_cluster_info()
             .encode()
@@ -465,7 +465,7 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<WipeWritePermOfBrokerRequestHeader>()
             .map_err(crate::namesrv_error::from_error)?;
         let wipe_topic_cnt = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .wipe_write_perm_of_broker_by_lock(request_header.broker_name.to_string());
         Ok(self
@@ -478,7 +478,7 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<AddWritePermOfBrokerRequestHeader>()
             .map_err(crate::namesrv_error::from_error)?;
         let add_topic_cnt = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .add_write_perm_of_broker_by_lock(request_header.broker_name.to_string());
         Ok(self
@@ -491,12 +491,12 @@ impl DefaultRequestProcessor {
         _request: &mut RemotingCommand,
     ) -> crate::NameServerResult<RemotingCommand> {
         if self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .name_server_config()
             .enable_all_topic_list
         {
             let topics = TopicList {
-                topic_list: self.name_server_runtime_inner.route_info_manager().get_all_topics(),
+                topic_list: self.name_server_runtime_handle.route_info_manager().get_all_topics(),
                 broker_addr: None,
             };
             let body = topics.encode().map_err(crate::namesrv_error::from_error)?;
@@ -512,7 +512,7 @@ impl DefaultRequestProcessor {
         let request_header = request
             .decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()
             .map_err(crate::namesrv_error::from_error)?;
-        self.name_server_runtime_inner
+        self.name_server_runtime_handle
             .route_info_manager()
             .delete_topic(request_header.topic, request_header.cluster_name);
         Ok(self.command_factory.create_success_response_command())
@@ -526,7 +526,7 @@ impl DefaultRequestProcessor {
             let topic_route_data = TopicRouteData::decode(body)
                 .map_err(|error| crate::namesrv_error::request_body_source("decode-topic-route", error))?;
             if !topic_route_data.queue_datas.is_empty() {
-                self.name_server_runtime_inner
+                self.name_server_runtime_handle
                     .route_info_manager()
                     .register_topic(request_header.topic, topic_route_data.queue_datas)
             }
@@ -539,7 +539,7 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<GetKVListByNamespaceRequestHeader>()
             .map_err(crate::namesrv_error::from_error)?;
         let value = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .kvconfig_manager()
             .get_kv_list_by_namespace(&request_header.namespace);
         if let Some(value) = value {
@@ -552,7 +552,7 @@ impl DefaultRequestProcessor {
     }
 
     fn get_topics_by_cluster(&self, request: &mut RemotingCommand) -> crate::NameServerResult<RemotingCommand> {
-        if !self.name_server_runtime_inner.name_server_config().enable_topic_list {
+        if !self.name_server_runtime_handle.name_server_config().enable_topic_list {
             return Ok(error_response(
                 PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE),
                 RemotingErrorTarget::Fresh(&self.command_factory),
@@ -564,7 +564,7 @@ impl DefaultRequestProcessor {
             .map_err(crate::namesrv_error::from_error)?;
         let topics_by_cluster = TopicList {
             topic_list: self
-                .name_server_runtime_inner
+                .name_server_runtime_handle
                 .route_info_manager()
                 .get_topics_by_cluster(request_header.cluster.as_str())?,
             broker_addr: None,
@@ -578,7 +578,7 @@ impl DefaultRequestProcessor {
         _request: &mut RemotingCommand,
     ) -> crate::NameServerResult<RemotingCommand> {
         let topic_list = self
-            .name_server_runtime_inner
+            .name_server_runtime_handle
             .route_info_manager()
             .get_system_topic_list();
         let body = topic_list.encode().map_err(crate::namesrv_error::from_error)?;
@@ -586,8 +586,8 @@ impl DefaultRequestProcessor {
     }
 
     fn get_unit_topic_list(&self, _request: &mut RemotingCommand) -> crate::NameServerResult<RemotingCommand> {
-        if self.name_server_runtime_inner.name_server_config().enable_topic_list {
-            let topic_list = self.name_server_runtime_inner.route_info_manager().get_unit_topics();
+        if self.name_server_runtime_handle.name_server_config().enable_topic_list {
+            let topic_list = self.name_server_runtime_handle.route_info_manager().get_unit_topics();
             let body = topic_list.encode().map_err(crate::namesrv_error::from_error)?;
             return Ok(self.command_factory.create_success_response_command().set_body(body));
         }
@@ -598,9 +598,9 @@ impl DefaultRequestProcessor {
     }
 
     fn get_has_unit_sub_topic_list(&self, _request: &mut RemotingCommand) -> crate::NameServerResult<RemotingCommand> {
-        if self.name_server_runtime_inner.name_server_config().enable_topic_list {
+        if self.name_server_runtime_handle.name_server_config().enable_topic_list {
             let topic_list = self
-                .name_server_runtime_inner
+                .name_server_runtime_handle
                 .route_info_manager()
                 .get_has_unit_sub_topic_list();
             let body = topic_list.encode().map_err(crate::namesrv_error::from_error)?;
@@ -616,9 +616,9 @@ impl DefaultRequestProcessor {
         &self,
         _request: &mut RemotingCommand,
     ) -> crate::NameServerResult<RemotingCommand> {
-        if self.name_server_runtime_inner.name_server_config().enable_topic_list {
+        if self.name_server_runtime_handle.name_server_config().enable_topic_list {
             let topic_list = self
-                .name_server_runtime_inner
+                .name_server_runtime_handle
                 .route_info_manager()
                 .get_has_unit_sub_ununit_topic_list();
             return Ok(self
@@ -657,7 +657,7 @@ impl DefaultRequestProcessor {
             };
             if validate_blacklist_config_exist(
                 &properties,
-                &build_effective_config_blacklist(&self.name_server_runtime_inner.name_server_config()),
+                &build_effective_config_blacklist(&self.name_server_runtime_handle.name_server_config()),
             ) {
                 return Ok(error_response(
                     PublicErrorView::descriptor_only(&AUTH_PERMISSION_DENIED),
@@ -665,7 +665,11 @@ impl DefaultRequestProcessor {
                 ));
             }
 
-            update_report = Some(self.name_server_runtime_inner.update_runtime_config(properties).await?);
+            update_report = Some(
+                self.name_server_runtime_handle
+                    .update_runtime_config(properties)
+                    .await?,
+            );
         }
 
         let mut response = self
@@ -697,7 +701,7 @@ impl DefaultRequestProcessor {
             return Ok(create_namesrv_config_success_response(&self.command_factory, None));
         }
 
-        let result = match self.name_server_runtime_inner.get_all_configs_format_string() {
+        let result = match self.name_server_runtime_handle.get_all_configs_format_string() {
             Ok(content) => create_namesrv_config_success_response(&self.command_factory, Some(content.into_bytes())),
             Err(source) => {
                 let error = crate::namesrv_error::io("encode-namesrv-configuration", std::io::Error::other(source));

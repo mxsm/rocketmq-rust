@@ -294,7 +294,7 @@ async fn dropping_a_partial_batch_clears_pending_before_a_closed_queue_retry() {
     assert!(service.submit(header.clone()));
     let rx = take_receiver(&service);
     let mut worker = Box::pin(run_batch_unregistration_service(
-        service.name_server_runtime_inner.clone(),
+        service.name_server_runtime_handle.clone(),
         rx,
         CancellationToken::new(),
         100,
@@ -349,7 +349,7 @@ async fn dropping_an_unpolled_worker_releases_buffered_requests() {
         assert!(service.submit(broker_request(index).header));
     }
     let worker = run_batch_unregistration_service(
-        service.name_server_runtime_inner.clone(),
+        service.name_server_runtime_handle.clone(),
         take_receiver(&service),
         CancellationToken::new(),
         100,
@@ -373,7 +373,7 @@ async fn cancellation_between_batches_closes_and_drains_the_worker() {
     }
     let cancellation = CancellationToken::new();
     let mut worker = Box::pin(run_batch_unregistration_service(
-        service.name_server_runtime_inner.clone(),
+        service.name_server_runtime_handle.clone(),
         take_receiver(&service),
         cancellation.clone(),
         2,
@@ -460,9 +460,9 @@ async fn releasing_runtime_drops_the_batch_and_remaining_queue() {
     }
     let rx = take_receiver(&service);
     drop(bootstrap);
-    assert!(service.name_server_runtime_inner.upgrade().is_none());
+    assert!(service.name_server_runtime_handle.upgrade().is_none());
     run_batch_unregistration_service(
-        service.name_server_runtime_inner.clone(),
+        service.name_server_runtime_handle.clone(),
         rx,
         CancellationToken::new(),
         1,

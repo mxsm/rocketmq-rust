@@ -24,14 +24,14 @@ use tracing::warn;
 use crate::bootstrap::NameServerRuntimeHandle;
 
 pub struct BrokerHousekeepingService {
-    name_server_runtime_inner: NameServerRuntimeHandle,
+    name_server_runtime_handle: NameServerRuntimeHandle,
     active_sessions: dashmap::DashSet<SessionId>,
 }
 
 impl BrokerHousekeepingService {
-    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
+    pub(crate) fn new(name_server_runtime_handle: NameServerRuntimeHandle) -> Self {
         Self {
-            name_server_runtime_inner,
+            name_server_runtime_handle,
             active_sessions: dashmap::DashSet::new(),
         }
     }
@@ -61,7 +61,7 @@ impl BrokerHousekeepingService {
     }
 
     fn on_event(&self, event: SessionEvent) {
-        let Some(runtime) = self.name_server_runtime_inner.upgrade() else {
+        let Some(runtime) = self.name_server_runtime_handle.upgrade() else {
             return;
         };
         match event {
