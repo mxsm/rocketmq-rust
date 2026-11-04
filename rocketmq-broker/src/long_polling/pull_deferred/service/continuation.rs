@@ -31,11 +31,6 @@ use crate::long_polling::pull_deferred::index::PullCriteriaIndex;
 use crate::long_polling::pull_deferred::index::PullCriteriaKey;
 use crate::long_polling::pull_deferred::index::PullScanCursor;
 
-enum PullContinuationKind {
-    Arrival(OwnedPullArrival),
-    Forced,
-}
-
 struct OwnedPullArrival {
     topic: CheetahString,
     queue_id: i32,
@@ -90,11 +85,10 @@ impl OwnedPullArrival {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum PullPendingArrivalKey {
     Arrival(u64, PullCriteriaKey),
-    Forced,
 }
 
 pub(crate) struct PullPendingArrival {
-    kind: PullContinuationKind,
+    arrival: OwnedPullArrival,
     cursor: PullScanCursor,
     reason: DeferredWakeReason,
     retained_bytes: usize,
@@ -105,20 +99,11 @@ impl PullPendingArrival {
         let retained_bytes = OwnedPullArrival::retained_bytes(arrival)?;
         let owned = OwnedPullArrival::try_from_view(arrival)?;
         Ok(Self {
-            kind: PullContinuationKind::Arrival(owned),
+            arrival: owned,
             cursor,
             reason: DeferredWakeReason::MessageArrived,
             retained_bytes,
         })
-    }
-
-    pub(super) fn forced(cursor: PullScanCursor) -> Self {
-        Self {
-            kind: PullContinuationKind::Forced,
-            cursor,
-            reason: DeferredWakeReason::ForcedRefresh,
-            retained_bytes: size_of::<Self>().max(1),
-        }
     }
 
     pub(crate) const fn reason(&self) -> DeferredWakeReason {
@@ -131,12 +116,7 @@ impl PullPendingArrival {
         scan_limit: NonZeroUsize,
         candidate_limit: NonZeroUsize,
     ) -> PullCandidateBatch {
-        match &self.kind {
-            PullContinuationKind::Arrival(owned) => {
-                index.reserve_matching_batch(&owned.view(), &mut self.cursor, scan_limit, candidate_limit)
-            }
-            PullContinuationKind::Forced => index.reserve_forced_batch(&mut self.cursor, scan_limit, candidate_limit),
-        }
+        index.reserve_matching_batch(&self.arrival.view(), &mut self.cursor, scan_limit, candidate_limit)
     }
 }
 
@@ -175,24 +155,6 @@ impl PullArrivalContinuation {
         let pending = PullPendingArrival::arrival(arrival, cursor)?;
         let retained_bytes = pending.retained_bytes();
         match admission.reserve(retained_bytes)? {
-            PullContinuationReservationStatus::Reserved(permit) => {
-                Ok(PullContinuationAdmissionStatus::Admitted(Self {
-                    pending,
-                    _permit: permit,
-                }))
-            }
-            PullContinuationReservationStatus::Rejected(rejection) => {
-                Ok(PullContinuationAdmissionStatus::Rejected(rejection))
-            }
-        }
-    }
-
-    pub(super) fn forced(
-        admission: &Arc<PullContinuationAdmission>,
-        cursor: PullScanCursor,
-    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
-        let pending = PullPendingArrival::forced(cursor);
-        match admission.reserve(pending.retained_bytes())? {
             PullContinuationReservationStatus::Reserved(permit) => {
                 Ok(PullContinuationAdmissionStatus::Admitted(Self {
                     pending,
