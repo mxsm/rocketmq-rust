@@ -4456,7 +4456,6 @@ dependencies = [
  "rocketmq-observability",
  "rocketmq-protocol",
  "rocketmq-runtime",
- "rocketmq-security-api",
  "rocketmq-transport",
  "rocksdb",
  "serde",
@@ -4993,7 +4992,6 @@ dependencies = [
 name = "rocketmq-store"
 version = "1.1.0"
 dependencies = [
- "anyhow",
  "arc-swap",
  "bytes",
  "cheetah-string",
@@ -5002,7 +5000,6 @@ dependencies = [
  "dirs",
  "fs2",
  "futures-util",
- "hashbrown 0.17.1",
  "libc",
  "memmap2",
  "parking_lot 0.13.0",
