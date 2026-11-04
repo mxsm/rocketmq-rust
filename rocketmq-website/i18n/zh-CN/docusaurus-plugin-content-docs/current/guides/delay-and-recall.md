@@ -128,6 +128,8 @@ maxDelayDays = 400
 | `checkpointIntervalMs` | `5000` | 已索引的定时消息与投递进度落盘的间隔 |
 | `deliveryBatchMessages` | `512` | 每个通道每批投递的到期定时消息数 |
 | `deliveryInflightWrites` | `32` | 每批同时进行中的写入数 |
+| `shadowEnable` | `false` | 在其他 `timerStoreMode` 下以 shadow 方式运行 native 引擎，见下文 |
+| `shadowGraceMs` | `60000` | shadow 等待活动引擎投递一条到期定时消息的时长 |
 
 每条定时消息都由接纳它的引擎投递，因此 `timerStoreMode` 可以双向切换：
 
@@ -141,6 +143,27 @@ Broker 运行时信息用三项描述 native 引擎：`timerNativeRole`（`activ
 在主从部署中，从节点会索引 native 定时消息，并通过主节点写入的消息跟随其投递进度。因此从节点被提升为主节点后，只会写入原主节点尚未写入的定时消息。Broker 重启时会从 CommitLog 读回最多 1 GiB 的近期投递记录，所以从节点能继续跟随主节点，主节点也不会重复写入这些消息。与标准引擎一样，故障切换前后仍可能重复投递一条定时消息。
 
 checkpoint 使投递进度落盘后，已投递定时消息的文件及其副本会被删除，它们引用的 CommitLog 文件也可以被正常清理。召回在其目标定时消息投递后会从内存中移除，但磁盘上的召回日志暂不会压缩。
+
+### 以 shadow 方式将 native 引擎与活动引擎对比
+
+切换到 `native` 之前，可以在 `[store.timerNative]` 下设置 `shadowEnable = true`，同时保持当前的 `timerStoreMode` 不变。
+
+- **shadow 做什么。** 第二个 native 引擎会索引活动引擎接纳的每条定时消息，并在到期时把它移出时间轮，与 native 引擎真正投递时的做法一致。
+- **shadow 不做什么。** 它不写任何消息，也不获取投递租约，不会阻止 CommitLog 清理。
+- **文件放在哪里。** 所有文件都放在存储根目录的 `timer-native-shadow/` 下，因此之后切换到 `native` 时会从空状态开始。
+
+shadow 通过双方共有的投递令牌，把每条到期定时消息与活动引擎的投递对应起来。Broker 运行时信息会给出两项：
+
+- **`timerNativeShadowMetrics`** 包含 native 引擎的各项指标，外加以下计数：
+  - `shadowMatched`：找到了对应投递的定时消息数。
+  - `shadowOnTime`、`shadowLateWithin1s`、`shadowLateWithin5s`、`shadowLateWithin30s` 和 `shadowLateOver30s`：活动引擎存储这些投递的时间比 shadow 的到期时间晚了多少。
+  - `shadowMaxLatenessMs`：其中最晚的一条。
+  - `shadowEarly`：比到期时间早出超过 `timerPrecisionMs` 的投递。
+  - `shadowNotDelivered`：到期后 `shadowGraceMs` 内仍未投递的定时消息。
+  - `shadowUnindexed`：shadow 从未发现到期的投递。这类投递要等两倍宽限期后才计入，并且只在 shadow 跟得上自身到期时间时才统计。
+- **`timerNativeShadowSamples`** 列出最近 64 条差异及其投递令牌。
+
+shadow 在重启后会像 native 引擎一样读回令牌。从节点运行自己的 shadow，并与其复制到的投递进行对比。在 `timerStoreMode = "native"` 下，该配置不起作用。
 
 ## 示例与验证范围
 

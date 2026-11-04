@@ -128,6 +128,8 @@ maxDelayDays = 400
 | `checkpointIntervalMs` | `5000` | How often indexed timers and delivery progress are made durable |
 | `deliveryBatchMessages` | `512` | Due timers one lane delivers per batch |
 | `deliveryInflightWrites` | `32` | Writes one batch keeps in flight |
+| `shadowEnable` | `false` | Runs the native engine in shadow under another `timerStoreMode`, see below |
+| `shadowGraceMs` | `60000` | How long a shadow waits for the active engine's delivery of a due timer |
 
 Each timer is delivered by the engine that admitted it, so `timerStoreMode` can be switched in both directions:
 
@@ -141,6 +143,27 @@ Broker runtime info describes the native engine in three entries: `timerNativeRo
 In a master/slave group, a slave indexes native timers and follows its master's deliveries through the messages the master writes. A slave promoted to master therefore writes only the timers its old master had not written. A Broker that restarts reads up to 1 GiB of its recent deliveries back from the CommitLog, so a slave goes on following its master and a master does not write those messages again. As with the standard engine, a timer can still be delivered twice around a failover.
 
 Once a checkpoint makes their delivery durable, the files of delivered timers and their payload copies are deleted, and the CommitLog files they referred to are released for cleanup. A recall is dropped from memory once the timer it names is delivered, but the recall log on disk is not yet compacted.
+
+### Compare the native engine with the active one in shadow
+
+Before switching to `native`, set `shadowEnable = true` under `[store.timerNative]` and keep the current `timerStoreMode`.
+
+- **What the shadow does.** A second native engine indexes every timer the active engine admits and takes each one out of its wheel when it comes due, as the native engine would deliver it.
+- **What it does not do.** It writes no message, never takes the delivery lease, and does not hold back CommitLog cleanup.
+- **Where its files go.** Everything is kept under `timer-native-shadow/` in the store root, so a later switch to `native` starts empty.
+
+The shadow matches each due timer with the active engine's delivery through the delivery token both carry. Broker runtime info then reports two entries:
+
+- **`timerNativeShadowMetrics`** holds the native engine metrics plus these counters:
+  - `shadowMatched`: timers whose delivery was found.
+  - `shadowOnTime`, `shadowLateWithin1s`, `shadowLateWithin5s`, `shadowLateWithin30s` and `shadowLateOver30s`: how much later than the shadow's deadline the active engine stored those deliveries.
+  - `shadowMaxLatenessMs`: the latest of them.
+  - `shadowEarly`: deliveries earlier than the deadline by more than `timerPrecisionMs`.
+  - `shadowNotDelivered`: timers not delivered within `shadowGraceMs` of their deadline.
+  - `shadowUnindexed`: deliveries the shadow never found due. These are counted after twice the grace period, and only while the shadow keeps up with its own deadlines.
+- **`timerNativeShadowSamples`** lists the 64 newest differences with their delivery tokens.
+
+The shadow reads its tokens back after a restart as the native engine does. A slave runs its own shadow and compares it with the deliveries it replicates. The flag does nothing under `timerStoreMode = "native"`.
 
 ## Example and validation scope
 
