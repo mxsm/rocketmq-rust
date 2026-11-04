@@ -1429,45 +1429,6 @@ impl SubscriptionGroupManager {
         }
     }
 
-    /// Get forbidden tables for specified consumer groups
-    ///
-    /// # Arguments
-    /// * `group_set` - Set of consumer group names to query
-    ///
-    /// # Returns
-    /// A nested HashMap: group -> (topic -> forbidden_bitmap)
-    /// Only includes groups that exist in group_set and have forbidden entries.
-    ///
-    /// # Use Case
-    /// Batch query optimization for checking forbidden status of multiple groups
-    pub fn sub_forbidden_table(
-        &self,
-        group_set: &std::collections::HashSet<CheetahString>,
-    ) -> HashMap<CheetahString, HashMap<CheetahString, i32>> {
-        let mut result = HashMap::new();
-
-        for group in group_set {
-            if let Some(topic_map) = self.forbidden_table.get(group) {
-                let topics: HashMap<_, _> = topic_map
-                    .iter()
-                    .map(|entry| (entry.key().clone(), *entry.value()))
-                    .collect();
-
-                if !topics.is_empty() {
-                    result.insert(group.clone(), topics);
-                }
-            }
-        }
-
-        info!(
-            "Retrieved forbidden tables for {} groups (out of {} requested)",
-            result.len(),
-            group_set.len()
-        );
-
-        result
-    }
-
     /// Load only the data version from configuration file without loading full config
     ///
     /// # Returns
@@ -2307,44 +2268,6 @@ mod tests {
         // Verify modification
         let updated = table.get(&group_name).unwrap();
         assert!(!updated.value().consume_enable());
-    }
-
-    #[test]
-    fn test_sub_forbidden_table_batch_query() {
-        // Test batch query of forbidden table
-        let forbidden_table: DashMap<CheetahString, DashMap<CheetahString, i32>> = DashMap::new();
-
-        // Setup test data
-        for i in 0..5 {
-            let group = CheetahString::from_string(format!("GROUP_{}", i));
-            let topics = DashMap::new();
-            topics.insert(CheetahString::from_string(format!("TOPIC_{}", i)), 1 << i);
-            forbidden_table.insert(group, topics);
-        }
-
-        // Query subset
-        let mut query_set = std::collections::HashSet::new();
-        query_set.insert(CheetahString::from_static_str("GROUP_1"));
-        query_set.insert(CheetahString::from_static_str("GROUP_3"));
-        query_set.insert(CheetahString::from_static_str("GROUP_9")); // Non-existent
-
-        let mut result = HashMap::new();
-        for group in &query_set {
-            if let Some(topic_map) = forbidden_table.get(group) {
-                let topics: HashMap<_, _> = topic_map
-                    .iter()
-                    .map(|entry| (entry.key().clone(), *entry.value()))
-                    .collect();
-                if !topics.is_empty() {
-                    result.insert(group.clone(), topics);
-                }
-            }
-        }
-
-        // Should only have 2 results (GROUP_1 and GROUP_3)
-        assert_eq!(result.len(), 2);
-        assert!(result.contains_key(&CheetahString::from_static_str("GROUP_1")));
-        assert!(result.contains_key(&CheetahString::from_static_str("GROUP_3")));
     }
 
     #[test]
