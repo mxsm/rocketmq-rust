@@ -29,7 +29,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
 use crate::admission::AdmissionPermit;
-use crate::backend::TransportWriteHalf;
 use crate::deadline::RequestDeadline;
 use crate::error_helpers::serialization_failed;
 use crate::file_region::FileRegion;
@@ -43,6 +42,7 @@ use crate::file_region_writer::record_selection_failure;
 #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
 use crate::file_region_writer::record_sendfile_bytes;
 use crate::file_region_writer::write_portable_file_region;
+use crate::transport_halves::TransportWriteHalf;
 
 const QUEUED_WRITE_WAITING: u8 = 0;
 const QUEUED_WRITE_CLAIMED: u8 = 1;

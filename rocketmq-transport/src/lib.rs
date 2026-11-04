@@ -27,7 +27,6 @@
 //! offload, remote acknowledgement, or support for `MSG_ZEROCOPY`.
 
 mod admission;
-mod backend;
 mod base;
 #[cfg(feature = "test-support")]
 pub mod benchmark_support;
@@ -73,6 +72,7 @@ mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 mod tls;
+mod transport_halves;
 mod write_result;
 mod write_strategy;
 mod writer_runtime;
