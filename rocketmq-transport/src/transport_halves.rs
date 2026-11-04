@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Read and write half wrappers for native TCP and boxed asynchronous transports.
+//!
+//! This module owns [`TransportReadHalf`] and [`TransportWriteHalf`]. Byte I/O is delegated to
+//! the selected half, while framing is handled by the connection's codec, reader, and writer.
+//! Retaining the native TCP write half allows the writer to use native file transfers when
+//! eligible. TLS negotiation and file-transfer policy remain in their existing owners.
+
 use std::io;
 use std::io::IoSlice;
 use std::pin::Pin;
