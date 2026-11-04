@@ -1768,6 +1768,51 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::admin::MessageTraceRecordsRead",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MessageTraceRecordsRead",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "bounded trace records and truncation status for an exact trace topic read",
+          "removal_condition": "retain while the admin trace-read capability remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::admin::{AclWorkspaceDocuments, AclWorkspaceReadKind, MQAdminAclWorkspaceReadExt}",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::{AclWorkspaceDocuments, AclWorkspaceReadKind, MQAdminAclWorkspaceReadExt}",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "feature-gated ACL document reads that preserve field presence and redact Debug output",
+          "removal_condition": "retain while the admin ACL-read capability remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::admin::{AclWorkspaceWrite, MQAdminAclWorkspaceMutationExt}",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::{AclWorkspaceWrite, MQAdminAclWorkspaceMutationExt}",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "feature-gated structured ACL mutations at an explicitly selected broker address",
+          "removal_condition": "retain while the admin ACL-mutation capability remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::admin::{MQAdminMessageTargetReadExt, MessageTargetLookup}",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::{MQAdminMessageTargetReadExt, MessageTargetLookup}",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "message reads through a trusted broker target without connecting to an address embedded in a message ID",
+          "removal_condition": "retain while explicitly targeted admin message reads remain supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::admin::{MQAdminResolvedMessageMutationExt, ResolvedMessageConsumeRequest}",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::{MQAdminResolvedMessageMutationExt, ResolvedMessageConsumeRequest}",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "feature-gated direct consumption of an already verified message through its trusted broker",
+          "removal_condition": "retain while the resolved-message consumption capability remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::admin::MutationBrokerLogFilterStatus",
           "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MutationBrokerLogFilterStatus",
           "owner": "client",
@@ -2271,7 +2316,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 253
+      "maximum_exports": 257
     },
     "rocketmq-model": {
       "entries": [
@@ -4200,6 +4245,24 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::base::append_hold::hold_until_appended",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::base::append_hold::hold_until_appended",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "retain a caller-owned value until the current task appends or the enclosing scope ends",
+          "removal_condition": "retain while append-scoped ownership remains supported"
+        },
+        {
+          "category": "experimental",
+          "declaration": "pub use crate::base::append_hold::release_held_until_appended",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::base::append_hold::release_held_until_appended",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "hidden test hook for simulating the append that releases a held value",
+          "removal_condition": "narrow or remove when callers no longer need to simulate an append"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::base::backend_ops::MessageStoreShutdownReport",
           "identity": "rocketmq-store/src/public_api.rs:pub use crate::base::backend_ops::MessageStoreShutdownReport",
           "owner": "store",
@@ -6026,7 +6089,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 207
+      "maximum_exports": 209
     },
     "rocketmq-store-local": {
       "entries": [
@@ -7650,6 +7713,15 @@
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::request_ordering::release_request_ordering",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_ordering::release_request_ordering",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "release the current task's ordering slot after non-overlapping request work completes",
+          "removal_condition": "retain while ordered handlers support early ordering release"
         },
         {
           "category": "stable",

@@ -102,7 +102,7 @@ print(json.dumps([finding.as_dict() for finding in findings]))
         )
 
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
-        self.assertIn("CORE_RELEASE_SCOPE_OK packages=27 workspace_exclusions=1", completed.stdout)
+        self.assertIn("CORE_RELEASE_SCOPE_OK packages=27 workspace_exclusions=2", completed.stdout)
 
     def test_public_helpers_expose_core_and_excluded_projects(self) -> None:
         code = """
@@ -110,7 +110,7 @@ import core_release_scope as scope
 loaded = scope.load_scope()
 assert len(scope.core_packages(loaded)) == 27
 assert {item['name'] for item in scope.excluded_projects(loaded)} >= {
-    'rocketmq-dashboard-common', 'rocketmq-mcp', 'rocketmq-sre'
+    'rocketmq-dashboard-common', 'rocketmq-dashboard-storage', 'rocketmq-mcp', 'rocketmq-sre'
 }
 """
         completed = subprocess.run(
@@ -132,6 +132,7 @@ assert scope.package_for_path('rocketmq-client/src/lib.rs', loaded) == 'rocketmq
 assert scope.package_for_path('rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/lib.rs', loaded) == 'rocketmq-admin-core'
 assert scope.path_in_scope('rocketmq-client/src/lib.rs', 'core-release', loaded)
 assert not scope.path_in_scope('rocketmq-dashboard/rocketmq-dashboard-common/src/lib.rs', 'core-release', loaded)
+assert not scope.path_in_scope('rocketmq-dashboard/rocketmq-dashboard-storage/src/lib.rs', 'core-release', loaded)
 assert not scope.path_in_scope('rocketmq-ai/rocketmq-mcp/src/main.rs', 'core-release', loaded)
 assert scope.path_in_scope('rocketmq-dashboard/rocketmq-dashboard-common/src/lib.rs', 'repo-global', loaded)
 assert scope.path_in_scope('rocketmq-client/src/lib.rs', 'all', loaded)
