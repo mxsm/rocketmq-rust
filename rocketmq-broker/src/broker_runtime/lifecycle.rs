@@ -1205,6 +1205,16 @@ impl BrokerRuntime {
             self.lifecycle.startup_journal.complete(BrokerComponent::Registration);
         }
 
+        let registration = if registration_ready {
+            BrokerRegistration::Registered
+        } else if broker_config.enable_controller_mode && self.composition.state.online_role_state.is_isolated() {
+            // As Java's ReplicasManager does, keep trying rather than give up on the process: the
+            // heartbeat cycle bootstraps an isolated Broker against the Controllers again.
+            warn!("no Controller assigned this Broker a role yet; it stays isolated and keeps trying");
+            BrokerRegistration::AwaitingController
+        } else {
+            BrokerRegistration::Unregistered
+        };
         let live_broker_config = self.composition.state.broker_config();
         // Controller-mode brokers start fenced and acquire write authority only after the
         // Controller assigns a role and grants a lease. Process readiness therefore depends on
@@ -1229,7 +1239,7 @@ impl BrokerRuntime {
             fast_listener,
             processors_started,
             security_ready,
-            registration_ready,
+            registration,
         )
         .validate()?;
         info!(

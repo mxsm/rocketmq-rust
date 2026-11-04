@@ -135,6 +135,7 @@ use crate::hook::schedule_message_hook::ScheduleMessageHook;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::lifecycle::BrokerComponent;
 use crate::lifecycle::BrokerReadiness;
+use crate::lifecycle::BrokerRegistration;
 use crate::lifecycle::BrokerStartupError;
 use crate::lifecycle::StartupJournal;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;

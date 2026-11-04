@@ -31,6 +31,7 @@ use rocketmq_error::ViewContextViolation;
 
 pub(crate) use components::BrokerComponent;
 pub use components::BrokerReadiness;
+pub use components::BrokerRegistration;
 pub(crate) use components::StartupJournal;
 
 /// Marker for a broker whose configuration has been assembled but whose durable state has not
