@@ -131,7 +131,7 @@ def build_plan(repo, output, name, profile, offset=0, with_proxy=False,
                 "configStorePath": f"{home(node)}/data/controller.properties",
                 "controllerStorePath": f"{home(node)}/data/controller",
                 "storagePath": f"{home(node)}/data/raft",
-                "storageBackend": "RocksDB",
+                "storageEngineType": "RocksDB",
                 "electionTimeoutMs": 1000, "heartbeatIntervalMs": 300,
                 "enableElectUncleanMaster": False, "enableElectUncleanMasterLocal": False,
             })

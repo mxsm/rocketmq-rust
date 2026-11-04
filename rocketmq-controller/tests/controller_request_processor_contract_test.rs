@@ -848,6 +848,32 @@ async fn controller_request_contract_update_controller_config() {
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission, "{key}");
     }
 
+    // Update using canonical storageEngineType
+    let response = harness
+        .send(
+            RemotingCommand::create_remoting_command(RequestCode::UpdateControllerConfig)
+                .set_body(b"storageEngineType=File".to_vec()),
+        )
+        .await;
+    assert_eq!(response.code(), ResponseCode::Success as i32);
+    assert_eq!(
+        harness.manager.controller_config().storage_engine_type,
+        StorageEngineType::File
+    );
+
+    // Update using legacy storageBackend alias
+    let response = harness
+        .send(
+            RemotingCommand::create_remoting_command(RequestCode::UpdateControllerConfig)
+                .set_body(b"storageBackend=Memory".to_vec()),
+        )
+        .await;
+    assert_eq!(response.code(), ResponseCode::Success as i32);
+    assert_eq!(
+        harness.manager.controller_config().storage_engine_type,
+        StorageEngineType::Memory
+    );
+
     harness.shutdown().await;
 }
 
@@ -863,7 +889,7 @@ async fn controller_request_contract_get_controller_config() {
     assert_eq!(response.code(), ResponseCode::Success as i32);
     let body = String::from_utf8(response.body().expect("get controller config response body").to_vec())
         .expect("decode controller config body as utf8");
-    assert!(body.contains("storageBackend=memory"));
+    assert!(body.contains("storageEngineType=memory"));
     assert!(body.contains("notifyBrokerRoleChanged=true"));
     assert!(body.contains("scanNotActiveBrokerInterval=5000"));
 

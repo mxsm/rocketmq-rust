@@ -82,6 +82,8 @@ class PrepareClusterTests(unittest.TestCase):
         self.assertEqual([node["id"] for node in initialized], [controllers[0]["id"]])
         for node in controllers:
             config = tomllib.loads(files[f"conf/{node['id']}.toml"])
+            self.assertEqual("RocksDB", config["storageEngineType"])
+            self.assertNotIn("storageBackend", config)
             self.assertEqual({peer["addr"] for peer in config["raftPeers"]}, raft)
             self.assertEqual({peer["addr"] for peer in config["controllerPeers"]}, remoting)
             self.assertEqual(next(peer["addr"] for peer in config["raftPeers"] if peer["id"] == config["nodeId"]), config["raftListenAddr"])

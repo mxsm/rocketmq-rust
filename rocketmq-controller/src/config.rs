@@ -202,4 +202,33 @@ mod tests {
             reader.await.expect("reader task must complete");
         }
     }
+
+    #[tokio::test]
+    async fn rejected_duplicate_storage_selector_update_keeps_the_previous_snapshot() {
+        let handle = ControllerConfigHandle::new(ControllerConfig::test_config());
+        let previous = handle.snapshot();
+        let mut properties = std::collections::HashMap::new();
+        properties.insert("storageEngineType".to_string(), "Memory".to_string());
+        properties.insert("storageBackend".to_string(), "Memory".to_string());
+
+        assert!(handle.update(properties).await.is_err());
+
+        let current = handle.snapshot();
+        assert!(std::sync::Arc::ptr_eq(&previous, &current));
+        assert_eq!(current.storage_engine_type, previous.storage_engine_type);
+    }
+
+    #[tokio::test]
+    async fn rejected_invalid_storage_selector_update_keeps_the_previous_snapshot() {
+        let handle = ControllerConfigHandle::new(ControllerConfig::test_config());
+        let previous = handle.snapshot();
+        let mut properties = std::collections::HashMap::new();
+        properties.insert("storageEngineType".to_string(), "invalid_engine".to_string());
+
+        assert!(handle.update(properties).await.is_err());
+
+        let current = handle.snapshot();
+        assert!(std::sync::Arc::ptr_eq(&previous, &current));
+        assert_eq!(current.storage_engine_type, previous.storage_engine_type);
+    }
 }

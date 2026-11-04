@@ -694,7 +694,7 @@ data:
     snapshotLogsSinceLast = 5000
     snapshotMaxLogEntriesToKeep = 1000
     storagePath = "/var/lib/rocketmq/controller/node-1"
-    storageBackend = "RocksDB"
+    storageEngineType = "RocksDB"
     enableElectUncleanMasterLocal = false
     authenticationEnabled = true
     authorizationEnabled = true
@@ -767,7 +767,7 @@ data:
     snapshotLogsSinceLast = 5000
     snapshotMaxLogEntriesToKeep = 1000
     storagePath = "/var/lib/rocketmq/controller/node-2"
-    storageBackend = "RocksDB"
+    storageEngineType = "RocksDB"
     enableElectUncleanMasterLocal = false
     authenticationEnabled = true
     authorizationEnabled = true
@@ -840,7 +840,7 @@ data:
     snapshotLogsSinceLast = 5000
     snapshotMaxLogEntriesToKeep = 1000
     storagePath = "/var/lib/rocketmq/controller/node-3"
-    storageBackend = "RocksDB"
+    storageEngineType = "RocksDB"
     enableElectUncleanMasterLocal = false
     authenticationEnabled = true
     authorizationEnabled = true
