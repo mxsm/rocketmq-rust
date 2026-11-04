@@ -509,10 +509,7 @@ impl CommitLog {
             message_store_config.linux_memory_lock_warn_only,
             memory_lock_budget_bytes,
         ));
-        let append_message_callback = Arc::new(DefaultAppendMessageCallback::new(
-            message_store_config.clone(),
-            topic_config_table.clone(),
-        ));
+        let append_message_callback = Arc::new(DefaultAppendMessageCallback::new(topic_config_table.clone()));
         let put_message_lock = Arc::new(tokio::sync::Mutex::new(()));
         let flush_manager = DefaultFlushManager::new(
             runtime_scope.clone(),
