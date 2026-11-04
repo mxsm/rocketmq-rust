@@ -362,10 +362,15 @@ impl LocalFileMessageStore {
         };
         // Reput hands the native engine its master's deliveries while this Broker is a slave.
         let native_delivery_feed = Arc::new(NativeDeliveryFeed::default());
+        // A native engine in shadow compares itself with the active engine's deliveries.
+        let native_shadow_feed = Arc::new(NativeDeliveryFeed::of_other_engines());
         let dispatcher_vec = {
             let mut dispatcher_vec = dispatcher_vec;
             if NativeServiceRole::of(message_store_config.as_ref()).is_some() {
                 dispatcher_vec.push(native_delivery_feed.clone());
+            }
+            if NativeServiceRole::shadow_of(message_store_config.as_ref()).is_some() {
+                dispatcher_vec.push(native_shadow_feed.clone());
             }
             dispatcher_vec
         };
@@ -577,6 +582,8 @@ impl LocalFileMessageStore {
             native_timer: None,
             native_timer_cleanup_pin,
             native_delivery_feed,
+            native_shadow: None,
+            native_shadow_feed,
             #[cfg(feature = "extended_timeline")]
             extended_timeline_cleanup_pin,
             #[cfg(feature = "extended_timeline")]
@@ -735,6 +742,7 @@ impl LocalFileMessageStore {
             reput_notify: self.reput_message_service.notify_handle(),
             dispatch_frontier: self.dispatcher.published_frontier_handle(),
             native_timer: self.native_timer.clone(),
+            native_shadow: self.native_shadow.clone(),
             runtime_scope: self.runtime_scope.clone(),
         }
     }
@@ -977,6 +985,27 @@ impl LocalFileMessageStore {
             })?;
             self.native_timer = Some(Arc::new(native_timer));
         }
+        if let (true, Some(shadow_role), None) = (
+            self.message_store_config.is_timer_wheel_enable(),
+            NativeServiceRole::shadow_of(self.message_store_config.as_ref()),
+            self.native_shadow.as_ref(),
+        ) {
+            // Its own cleanup pin, which nothing reads: a shadow never holds the CommitLog back.
+            let native_shadow = NativeTimerService::open(
+                self.message_store_config.as_ref(),
+                self.timer_store_context(),
+                self.runtime_scope.clone(),
+                Arc::new(AtomicI64::new(-1)),
+                shadow_role,
+                Arc::clone(&self.native_shadow_feed),
+                self.dispatcher.published_frontier_handle(),
+                self.telemetry.timer().clone(),
+            )
+            .map_err(|error| {
+                store_read_error(StoreOperation::Load, "failed to open the native timer shadow").with_source(error)
+            })?;
+            self.native_shadow = Some(Arc::new(native_shadow));
+        }
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
             && !self.message_store_config.duplication_enable
         {
@@ -1024,6 +1053,12 @@ impl LocalFileMessageStore {
     #[inline]
     pub(crate) fn native_timer(&self) -> Option<&Arc<NativeTimerService>> {
         self.native_timer.as_ref()
+    }
+
+    /// The native timer engine running in shadow beside another mode.
+    #[inline]
+    pub(crate) fn native_shadow(&self) -> Option<&Arc<NativeTimerService>> {
+        self.native_shadow.as_ref()
     }
 
     pub(super) fn enabled_rocksdb_specific_options(message_store_config: &MessageStoreConfig) -> Vec<&'static str> {
@@ -1078,6 +1113,19 @@ impl LocalFileMessageStore {
                     ),
                 ));
             }
+        }
+        if NativeServiceRole::shadow_of(self.message_store_config.as_ref()).is_some()
+            && !self.message_store_config.is_timer_wheel_enable()
+        {
+            return Err(store_config_error(
+                StoreOperation::Load,
+                "the native timer shadow requires timer_wheel_enable=true".to_string(),
+            ));
+        }
+        if self.message_store_config.timer_native.shadow_enable
+            && self.message_store_config.timer_store_mode == TimerStoreMode::Native
+        {
+            warn!("timerNative.shadowEnable does nothing under timerStoreMode = native");
         }
         match NativeServiceRole::of(self.message_store_config.as_ref()) {
             Some(_) if !self.message_store_config.is_timer_wheel_enable() => {

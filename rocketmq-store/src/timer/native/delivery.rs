@@ -58,9 +58,14 @@ pub(crate) enum NativeCommitLogRead {
 
 /// Writes a due timer's message to its real topic.
 pub(crate) trait NativeTimerWriter {
-    /// Writes `message` for delivery epoch `epoch`, and says what the write means for its
-    /// timer: a write for an epoch that is no longer current must stay.
-    fn write(&self, message: MessageExtBrokerInner, epoch: u64) -> impl Future<Output = NativeWriteOutcome> + Send;
+    /// Writes `message` of the timer due at `due_ms` for delivery epoch `epoch`, and says what
+    /// the write means for its timer: a write for an epoch that is no longer current must stay.
+    fn write(
+        &self,
+        message: MessageExtBrokerInner,
+        epoch: u64,
+        due_ms: i64,
+    ) -> impl Future<Output = NativeWriteOutcome> + Send;
 }
 
 /// What a delivery write means for its timer.
@@ -365,7 +370,8 @@ impl NativeDueBatch {
                 in_flight.push_back(match delivery {
                     NativeDelivery::Write { entry, message } => {
                         entries.push(entry);
-                        Either::Left(writer.write(message, epoch).map(NativeOutcome::from))
+                        let due_ms = entry.due_ms;
+                        Either::Left(writer.write(message, epoch, due_ms).map(NativeOutcome::from))
                     }
                     NativeDelivery::Settled { entry, reason } => {
                         entries.push(entry);

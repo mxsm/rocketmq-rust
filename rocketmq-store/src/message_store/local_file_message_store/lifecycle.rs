@@ -530,7 +530,15 @@ impl LocalFileMessageStore {
                     error!("load the native timer engine failed: {error}");
                     result = false;
                 } else if let Some(start) = native_timer.replay_start() {
-                    self.replay_native_deliveries(start);
+                    self.replay_native_deliveries(&self.native_delivery_feed, start);
+                }
+            }
+            if let Some(native_shadow) = self.native_shadow.as_ref() {
+                if let Err(error) = native_shadow.load() {
+                    error!("load the native timer shadow failed: {error}");
+                    result = false;
+                } else if let Some(start) = native_shadow.replay_start() {
+                    self.replay_native_deliveries(&self.native_shadow_feed, start);
                 }
             }
             #[cfg(feature = "extended_timeline")]
@@ -637,6 +645,9 @@ impl LocalFileMessageStore {
             }
             if let Some(native_timer) = self.native_timer.as_ref() {
                 native_timer.start();
+            }
+            if let Some(native_shadow) = self.native_shadow.as_ref() {
+                native_shadow.start();
             }
             self.sync_timer_message_store_role();
             #[cfg(feature = "extended_timeline")]
@@ -874,7 +885,7 @@ impl LocalFileMessageStore {
                 if persist_timer_storage {
                     timer_message_store.shutdown_storage_with_persistence();
                 }
-                if let Some(native_timer) = self.native_timer.clone() {
+                for native_timer in self.native_timer.iter().chain(&self.native_shadow) {
                     let _ = native_timer.stop_gracefully().await;
                     if persist_timer_storage {
                         native_timer.persist_at_shutdown(self.dispatch_behind_bytes() <= 0);
