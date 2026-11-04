@@ -6824,6 +6824,51 @@ async fn rejected_controller_demotion_publishes_fenced_policy_without_starting_s
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn controller_mode_broker_started_before_its_controllers_waits_isolated_and_joins_them() {
+    let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
+    let base_port = allocate_controller_test_base_port();
+    let root = controller_cluster_root("controller-mode-late-controllers");
+    // The addresses `start_controller_cluster` binds, before anything listens there.
+    let controller_addrs = CheetahString::from_string(
+        (1..=3)
+            .map(|index| format!("127.0.0.1:{}", base_port + index))
+            .collect::<Vec<_>>()
+            .join(";"),
+    );
+    let mut broker = new_controller_mode_runtime(
+        &root,
+        "controller-mode-late-broker",
+        base_port + 21,
+        base_port + 22,
+        controller_addrs,
+    );
+    initialize_controller_mode_broker(&mut broker, "broker").await;
+
+    let readiness = broker
+        .start()
+        .await
+        .expect("a Broker without a reachable Controller starts and waits");
+
+    assert_eq!(
+        readiness.registration(),
+        crate::lifecycle::BrokerRegistration::AwaitingController
+    );
+    assert!(broker.composition.state.online_role_state.is_isolated());
+
+    let (controllers, _) = start_controller_cluster(base_port, &root).await;
+    wait_until(
+        Duration::from_secs(60),
+        || !broker.composition.state.online_role_state.is_isolated(),
+        "the Broker to take the role a Controller assigns it",
+    )
+    .await;
+
+    broker.shutdown().await;
+    shutdown_controller_cluster(&controllers).await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn three_controller_two_broker_controller_mode_bootstrap() {
     let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
     let base_port = allocate_controller_test_base_port();
