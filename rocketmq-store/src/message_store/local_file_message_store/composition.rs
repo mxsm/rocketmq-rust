@@ -547,6 +547,7 @@ impl LocalFileMessageStore {
                 dispatch_tx: None,
                 inner: None,
                 started: Arc::new(parking_lot::Mutex::new(None)),
+                position: Arc::new(parking_lot::Mutex::new(None)),
                 task_group: None,
             },
             background_index_rebuild_service: BackgroundIndexRebuildService::new(),
@@ -732,6 +733,9 @@ impl LocalFileMessageStore {
             commit_log: self.commit_log.replica_handle(),
             consume_queue_store: self.consume_queue_store.clone(),
             reput_notify: self.reput_message_service.notify_handle(),
+            dispatch_frontier: self.dispatcher.published_frontier_handle(),
+            native_timer: self.native_timer.clone(),
+            runtime_scope: self.runtime_scope.clone(),
         }
     }
 

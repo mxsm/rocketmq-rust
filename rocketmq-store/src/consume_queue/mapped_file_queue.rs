@@ -439,22 +439,10 @@ pub(crate) struct MappedFileQueueAppendHandle {
 }
 
 impl MappedFileQueueAppendHandle {
-    /// Moves the last file back to `offset`, which must lie inside it, and says whether it did.
-    pub(crate) fn truncate_last_file(&self, offset: i64) -> bool {
+    /// Cuts the queue back to `offset`, and says whether all of it went.
+    pub(crate) fn truncate_tail(&self, offset: i64) -> bool {
         let _guard = self.runtime_state.commit_lock().lock();
-        let Some(mapped_file) = self.mapped_files.snapshot().last().cloned() else {
-            return false;
-        };
-        let Ok(position) = i32::try_from(offset - mapped_file.get_file_from_offset() as i64) else {
-            return false;
-        };
-        if position < 0 {
-            return false;
-        }
-        mapped_file.set_wrote_position(position);
-        mapped_file.set_committed_position(position);
-        mapped_file.set_flushed_position(position);
-        true
+        truncate_mapped_files(&self.mapped_files, self.mapped_file_size, offset)
     }
 
     pub(crate) fn fence_writes(&self) {
@@ -966,6 +954,74 @@ impl MappedFileQueueFlushHandle {
     }
 }
 
+/// Cuts `mapped_files` back to `offset`, and says whether all of it went. The caller holds the
+/// queue's commit lock.
+fn truncate_mapped_files(mapped_files: &MappedFileGeneration, mapped_file_size: u64, offset: i64) -> bool {
+    let is_managed = !mapped_files.allows_legacy_namespace_mutation();
+    let mut removal_candidates = Vec::new();
+    let mut position_updates = Vec::new();
+
+    let current_files = mapped_files.snapshot();
+    for mapped_file in current_files.iter() {
+        match mapped_file_queue_truncate_action(offset, mapped_file_size, mapped_file.get_file_from_offset()) {
+            MappedFileQueueTruncateAction::Retain => {}
+            MappedFileQueueTruncateAction::Truncate(position) => {
+                position_updates.push((Arc::clone(mapped_file), position));
+            }
+            MappedFileQueueTruncateAction::Remove => {
+                removal_candidates.push(mapped_file.clone());
+            }
+        }
+    }
+
+    if is_managed && removal_candidates.is_empty() {
+        for (mapped_file, position) in position_updates {
+            mapped_file.set_wrote_position(position);
+            mapped_file.set_committed_position(position);
+            mapped_file.set_flushed_position(position);
+        }
+        return true;
+    }
+    if let Some((runtime, generation)) = mapped_files.managed_runtime_generation() {
+        let ordered_candidates: Vec<_> = removal_candidates.into_iter().rev().collect();
+        let expected = ordered_candidates.len();
+        let submitted = submit_managed_retirements(
+            &runtime,
+            &generation,
+            ordered_candidates,
+            ManagedRetirementReason::OffsetTruncate,
+        );
+        if usize::try_from(submitted).ok() != Some(expected) {
+            warn!(
+                offset,
+                expected, submitted, "managed tail retirement remains pending; retained positions were not truncated"
+            );
+            return false;
+        }
+        for (mapped_file, position) in position_updates {
+            mapped_file.set_wrote_position(position);
+            mapped_file.set_committed_position(position);
+            mapped_file.set_flushed_position(position);
+        }
+        return true;
+    }
+    if is_managed {
+        return false;
+    }
+    for (mapped_file, position) in position_updates {
+        mapped_file.set_wrote_position(position);
+        mapped_file.set_committed_position(position);
+        mapped_file.set_flushed_position(position);
+    }
+
+    // Tail deletion runs newest-to-oldest. If one attempt is deferred, any already removed
+    // candidates still form a contiguous suffix and the remaining identities stay tracked.
+    let ordered_candidates: Vec<_> = removal_candidates.into_iter().rev().collect();
+    let (deletion, complete) = destroy_mapped_files_in_order(&ordered_candidates, 1000);
+    mapped_files.apply_legacy_namespace_removal(deletion);
+    complete
+}
+
 pub struct MappedFileQueue {
     storage: MappedFileQueueStorage<MappedFileGeneration>,
 
@@ -1325,74 +1381,7 @@ impl MappedFileQueue {
         if began_in_legacy_mode && self.is_managed() {
             return false;
         }
-        let mut removal_candidates = Vec::new();
-        let mut position_updates = Vec::new();
-
-        let current_files = self.storage.mapped_files().snapshot();
-        for mapped_file in current_files.iter() {
-            match mapped_file_queue_truncate_action(
-                offset,
-                self.storage.mapped_file_size(),
-                mapped_file.get_file_from_offset(),
-            ) {
-                MappedFileQueueTruncateAction::Retain => {}
-                MappedFileQueueTruncateAction::Truncate(position) => {
-                    position_updates.push((Arc::clone(mapped_file), position));
-                }
-                MappedFileQueueTruncateAction::Remove => {
-                    removal_candidates.push(mapped_file.clone());
-                }
-            }
-        }
-
-        if self.is_managed() && removal_candidates.is_empty() {
-            for (mapped_file, position) in position_updates {
-                mapped_file.set_wrote_position(position);
-                mapped_file.set_committed_position(position);
-                mapped_file.set_flushed_position(position);
-            }
-            return true;
-        }
-        if let Some((runtime, generation)) = self.storage.mapped_files().managed_runtime_generation() {
-            let ordered_candidates: Vec<_> = removal_candidates.into_iter().rev().collect();
-            let expected = ordered_candidates.len();
-            let submitted = submit_managed_retirements(
-                &runtime,
-                &generation,
-                ordered_candidates,
-                ManagedRetirementReason::OffsetTruncate,
-            );
-            if usize::try_from(submitted).ok() != Some(expected) {
-                warn!(
-                    offset,
-                    expected,
-                    submitted,
-                    "managed tail retirement remains pending; retained positions were not truncated"
-                );
-                return false;
-            }
-            for (mapped_file, position) in position_updates {
-                mapped_file.set_wrote_position(position);
-                mapped_file.set_committed_position(position);
-                mapped_file.set_flushed_position(position);
-            }
-            return true;
-        }
-        if self.is_managed() {
-            return false;
-        }
-        for (mapped_file, position) in position_updates {
-            mapped_file.set_wrote_position(position);
-            mapped_file.set_committed_position(position);
-            mapped_file.set_flushed_position(position);
-        }
-
-        // Tail deletion runs newest-to-oldest. If one attempt is deferred, any already removed
-        // candidates still form a contiguous suffix and the remaining identities stay tracked.
-        let ordered_candidates: Vec<_> = removal_candidates.into_iter().rev().collect();
-        let (deletion, complete) = destroy_mapped_files_in_order(&ordered_candidates, 1000);
-        self.apply_namespace_removal_under_maintenance_lock(deletion);
-        complete
+        truncate_mapped_files(self.storage.mapped_files(), self.storage.mapped_file_size(), offset)
     }
 
     #[inline]

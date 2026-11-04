@@ -238,13 +238,29 @@ impl ReplicationStateRoot {
         Some(next)
     }
 
-    /// Forgets a disconnected replica. Returns whether it was committed or proposed.
+    /// Proposes to drop a disconnected replica. Returns whether the proposal changed.
+    ///
+    /// A committed member stays committed: the Controller can still elect it, so acknowledgements
+    /// and the confirm offset go on counting it until the Controller commits the smaller set.
     pub fn remove_replica(&self, slave_broker_id: i64) -> bool {
         let mut tracker = self.tracker();
-        let removed = tracker.local_sync_state_set.remove(&slave_broker_id);
-        let unproposed = tracker.remote_sync_state_set.remove(&slave_broker_id);
         tracker.connection_caught_up_time_table.remove(&slave_broker_id);
-        removed || unproposed
+        let mut next = if self.is_synchronizing_sync_state_set() {
+            tracker.remote_sync_state_set.clone()
+        } else {
+            tracker.local_sync_state_set.clone()
+        };
+        if !next.remove(&slave_broker_id) {
+            return false;
+        }
+        if next == tracker.local_sync_state_set {
+            self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
+            tracker.remote_sync_state_set.clear();
+        } else {
+            self.is_synchronizing_sync_state_set.store(true, Ordering::SeqCst);
+            tracker.remote_sync_state_set = next;
+        }
+        true
     }
 
     pub fn tracked_sync_state_set_size(&self) -> Option<usize> {
@@ -310,6 +326,8 @@ impl ReplicationStateRoot {
     }
 }
 
+/// The offset every member of the sync state set holds, so that any of them can be elected
+/// without losing what was confirmed. A member without an acknowledgement holds it back.
 pub fn compute_confirm_offset(
     current_confirm_offset: i64,
     max_phy_offset: i64,
@@ -321,20 +339,11 @@ pub fn compute_confirm_offset(
         .filter(|replica| replica.in_sync && replica.slave_ack_offset > 0)
         .map(|replica| replica.slave_ack_offset)
         .collect::<Vec<_>>();
-    let candidate_offsets = if in_sync_offsets.is_empty() {
-        replicas
-            .iter()
-            .filter(|replica| replica.slave_ack_offset > 0)
-            .map(|replica| replica.slave_ack_offset)
-            .collect::<Vec<_>>()
-    } else {
-        in_sync_offsets
-    };
 
-    if expected_sync_state_set_size.saturating_sub(1) > candidate_offsets.len() {
+    if expected_sync_state_set_size.saturating_sub(1) > in_sync_offsets.len() {
         return current_confirm_offset;
     }
-    candidate_offsets.into_iter().min().unwrap_or(max_phy_offset)
+    in_sync_offsets.into_iter().min().unwrap_or(max_phy_offset)
 }
 
 #[cfg(test)]
@@ -401,6 +410,27 @@ mod tests {
     }
 
     #[test]
+    fn a_lost_member_counts_until_the_controller_drops_it() {
+        let root = ReplicationStateRoot::new(true);
+        root.set_local_broker_id(1);
+        root.replace_sync_state_set(HashSet::from([1, 2, 3]));
+        root.record_caught_up(3, 1_000);
+
+        assert!(root.remove_replica(2));
+        assert!(!root.remove_replica(2));
+
+        assert_eq!(root.local_sync_state_set(), HashSet::from([1, 2, 3]));
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 2, 3]));
+        assert_eq!(root.tracked_sync_state_set_size(), Some(3));
+        assert_eq!(root.maybe_shrink_sync_state_set(1_000, 100), HashSet::from([1, 3]));
+
+        root.replace_sync_state_set(HashSet::from([1, 3]));
+
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 3]));
+        assert_eq!(root.tracked_sync_state_set_size(), Some(2));
+    }
+
+    #[test]
     fn shrink_keeps_fresh_pending_additions_and_drops_stale_members() {
         let root = ReplicationStateRoot::new(true);
         root.set_local_broker_id(1);
@@ -436,6 +466,15 @@ mod tests {
         }];
         assert_eq!(compute_confirm_offset(64, 256, 2, &replicas), 128);
         assert_eq!(compute_confirm_offset(64, 256, 3, &replicas), 64);
+    }
+
+    #[test]
+    fn confirm_offset_ignores_a_replica_outside_the_sync_state_set() {
+        let replicas = [HAReplicaRuntimeSnapshot {
+            slave_ack_offset: 128,
+            in_sync: false,
+        }];
+        assert_eq!(compute_confirm_offset(64, 256, 2, &replicas), 64);
     }
 
     #[test]

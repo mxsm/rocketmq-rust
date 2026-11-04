@@ -408,7 +408,7 @@ impl CommitLogReplicaHandle {
             return Ok(None);
         }
         let cut_bytes = usize::try_from(end - whole_end).unwrap_or(usize::MAX);
-        if cut_bytes > read_bytes || !self.append.truncate_last_file(whole_end) {
+        if cut_bytes > read_bytes || !self.append.truncate_tail(whole_end) {
             return Err(
                 StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
                     .in_component(StoreComponent::CommitLog)
@@ -416,6 +416,12 @@ impl CommitLogReplicaHandle {
             );
         }
         Ok(Some(whole_end))
+    }
+
+    /// Cuts the log back to `offset`, a record boundary, and says whether all of it went.
+    pub(crate) async fn truncate_tail(&self, offset: i64) -> bool {
+        let _lock = self.put_message_lock.lock().await;
+        self.append.truncate_tail(offset)
     }
 
     pub(crate) async fn append_data(

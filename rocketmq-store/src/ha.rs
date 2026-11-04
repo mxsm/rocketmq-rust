@@ -28,6 +28,8 @@ pub mod ha_connection_state;
 pub mod ha_connection_state_notification_request;
 mod ha_connection_state_notification_service;
 pub mod ha_service;
+pub use rocketmq_store_local::ha::epoch::EpochLog;
+pub use rocketmq_store_local::ha::epoch::EpochStart;
 pub mod transfer_engine;
 pub mod transfer_metrics;
 pub(crate) mod write_lease;

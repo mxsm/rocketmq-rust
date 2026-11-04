@@ -90,6 +90,19 @@ impl NativeDeliveryFeed {
         true
     }
 
+    /// Drops the tokens of what was dispatched from the CommitLog at or past `offset`, which is
+    /// being cut off: this Broker's new master has not delivered those timers.
+    pub(crate) fn forget_from(&self, offset: i64) {
+        self.tokens.lock().retain(|_, kept| {
+            if kept.highest_offset >= offset && kept.lowest_offset < offset {
+                // Where the copies between them lie is not kept; the lowest is sure to stay.
+                kept.highest_offset = kept.lowest_offset;
+                kept.messages = 1;
+            }
+            kept.lowest_offset < offset
+        });
+    }
+
     /// The lowest CommitLog offset a kept token came from.
     pub(crate) fn lowest_offset(&self) -> Option<i64> {
         self.tokens.lock().values().map(|kept| kept.lowest_offset).min()
@@ -217,6 +230,36 @@ mod tests {
             )])),
             ..DispatchRequest::default()
         }
+    }
+
+    fn dispatched_at(offset: i64, token: &str) -> DispatchRequest {
+        DispatchRequest {
+            commit_log_offset: offset,
+            ..dispatched("TopicA", token)
+        }
+    }
+
+    #[test]
+    fn a_cut_drops_the_tokens_of_what_it_cuts_off() {
+        let feed = NativeDeliveryFeed::default();
+        feed.set_observing(true);
+        for (offset, token) in [
+            (10, "N:1:kept:0:0"),
+            (50, "N:1:cut:0:0"),
+            (20, "N:1:both:0:0"),
+            (60, "N:1:both:0:0"),
+        ] {
+            feed.dispatch(&mut dispatched_at(offset, token));
+        }
+
+        feed.forget_from(50);
+
+        let token = |token: &'static str| CheetahString::from_static_str(token);
+        assert!(!feed.take(&token("N:1:cut:0:0")));
+        assert!(feed.take(&token("N:1:kept:0:0")));
+        assert!(feed.take(&token("N:1:both:0:0")));
+        assert!(!feed.take(&token("N:1:both:0:0")), "only the copy behind the cut stays");
+        assert_eq!(feed.len(), 0);
     }
 
     #[test]

@@ -22,7 +22,6 @@ use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all::MASTER_ID;
-use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntry;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store_api::MasterEpoch;
@@ -235,12 +234,6 @@ impl ReplicasManager {
             "ReplicasManager shutdown, broker_controller_id={}, register_state={:?}",
             self.broker_controller_id, self.register_state
         );
-    }
-
-    pub fn get_epoch_entries(&self) -> Vec<EpochEntry> {
-        self.write_authority
-            .map(|authority| vec![EpochEntry::new(authority.master_epoch().get(), 0)])
-            .unwrap_or_default()
     }
 
     pub fn broker_controller_id(&self) -> u64 {

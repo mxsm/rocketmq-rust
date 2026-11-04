@@ -6624,7 +6624,7 @@ async fn apply_message_store_role_change_promotes_store_to_master() {
         .data_plane
         .escape_bridge_owner
         .store_capability()
-        .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 2)
+        .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 2, None)
         .await
         .expect("promote store to master");
     assert!(applied, "store promotion should pass every fail-closed preflight");
@@ -6672,6 +6672,7 @@ async fn apply_message_store_role_change_demotes_store_to_slave() {
             7,
             Some(&CheetahString::from_static_str("127.0.0.1:10911")),
             3,
+            None,
         )
         .await
         .expect("demote store to slave");

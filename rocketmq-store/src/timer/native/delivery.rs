@@ -32,6 +32,7 @@ use rocketmq_store_local::timer::native_format::NativeDueCursor;
 use rocketmq_store_local::timer::native_format::NativeIndexEntry;
 use rocketmq_store_local::timer::native_format::NativeLocator;
 
+use super::cut::NativeCutSource;
 use super::engine::NativeDueTimer;
 use super::engine::NativeEngineError;
 use super::engine::NativeTimerEngine;
@@ -81,7 +82,7 @@ pub(crate) enum NativeSettled {
     Landed,
     /// A recall cancelled it.
     Recalled,
-    /// CommitLog cleanup deleted its record.
+    /// CommitLog cleanup deleted its record, or a cut did.
     CleanedUp,
     /// Its record could not be read, and `timerSkipUnknownError` lets it go.
     Unreadable,
@@ -254,6 +255,12 @@ impl NativeTimerEngine {
 
     fn delivery_of(&self, timer: NativeDueTimer, reader: &impl NativeCommitLogReader) -> NativeDelivery {
         let NativeDueTimer { entry, recalls } = timer;
+        if self.was_cut(&entry) {
+            return NativeDelivery::Settled {
+                entry,
+                reason: NativeSettled::CleanedUp,
+            };
+        }
         if self.landed.lock().contains(&entry.cq_offset) {
             return NativeDelivery::Settled {
                 entry,
@@ -280,6 +287,25 @@ impl NativeTimerEngine {
                 reason: NativeSettled::Unroutable,
             },
         }
+    }
+
+    /// Whether `entry` came from a record a CommitLog cut removed.
+    fn was_cut(&self, entry: &NativeIndexEntry) -> bool {
+        if self.cut.is_empty() {
+            return false;
+        }
+        let commit_log_offset = match entry.locator {
+            NativeLocator::CommitLog { offset } => offset,
+            NativeLocator::Payload { .. } => match self.read_payload(entry) {
+                Ok(record) => record.source_physical_offset,
+                Err(_) => return false,
+            },
+        };
+        self.cut.contains(&NativeCutSource {
+            cq_offset: entry.cq_offset,
+            key_hash: entry.key_hash,
+            commit_log_offset,
+        })
     }
 
     /// The timer message of `entry`, or why it cannot be read.

@@ -27,6 +27,7 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
+use rocketmq_store_local::ha::epoch::EpochLog;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::select;
@@ -682,6 +683,14 @@ impl HAService for DefaultHAService {
                 .shutdown_until(ShutdownDeadline::after(Duration::from_secs(3)))
                 .await;
         }
+    }
+
+    fn epoch_log(&self) -> EpochLog {
+        EpochLog::default()
+    }
+
+    async fn join_master(&self, _master: &EpochLog, _master_end: i64) -> Result<(), StoreError> {
+        Ok(())
     }
 
     async fn change_to_master(&self, _master_epoch: i32) -> Result<bool, StoreError> {
@@ -1456,7 +1465,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_connection_callback_prunes_auto_switch_sync_state_set() {
+    async fn remove_connection_callback_proposes_the_shrink_to_the_controller() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-default-ha-remove-callback-{}", current_millis()));
         let general_service = new_auto_switch_service(&temp_root);
@@ -1480,7 +1489,16 @@ mod tests {
 
         service.handle_connection_removed(&connection);
 
-        assert_eq!(auto_switch_service.get_local_sync_state_set(), HashSet::from([7_i64]));
+        assert_eq!(auto_switch_service.get_sync_state_set(), HashSet::from([7_i64, 9_i64]));
+        assert_eq!(
+            auto_switch_service.local_sync_state_set_size(0),
+            2,
+            "the Controller can still elect the lost member, so what it may lack stays unconfirmed"
+        );
+        assert_eq!(
+            auto_switch_service.maybe_shrink_sync_state_set(),
+            HashSet::from([7_i64])
+        );
         assert!(
             changes.has_changed().expect("publisher alive"),
             "a removed member must wake the Broker to report the shrink"

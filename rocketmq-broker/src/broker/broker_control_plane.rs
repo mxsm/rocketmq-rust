@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 
 #[cfg(test)]
 use std::future::Future;
@@ -31,9 +33,12 @@ use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerM
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::BrokerReplicationStore;
+use rocketmq_store::EpochLog;
+use rocketmq_store::EpochStart;
 #[cfg(test)]
 use rocketmq_store::StoreError;
 use tokio::sync::Mutex as TokioMutex;
+use tracing::warn;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::broker::broker_pre_online_capability::BrokerRegistrationCapability;
@@ -43,6 +48,7 @@ use crate::controller::replicas_manager::BrokerReplicaRole;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::EscapeBridgeStoreCapability;
+use crate::failover::escape_bridge_capability::MasterLog;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::pop_message_processor::capability::PopPolicyState;
 use crate::processor::pull_message_processor::capability::PullMessagePolicyState;
@@ -56,6 +62,15 @@ pub(crate) mod sync_state_set;
 #[cfg(test)]
 pub(crate) type ControllerStoreRoleAction =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<bool, StoreError>> + Send>> + Send + Sync>;
+
+/// How often a replica asks a new master for its log, and how long it waits in between. The
+/// master answers without its new term until its own promotion is done, which waits up to
+/// 30 seconds for what it replicated to be dispatched.
+const MASTER_LOG_ATTEMPTS: u32 = 400;
+const MASTER_LOG_RETRY_DELAY: Duration = Duration::from_millis(100);
+const MASTER_LOG_TIMEOUT_MILLIS: u64 = 3_000;
+/// Failed requests a replica puts up with: a master that does not answer at all is not busy.
+const MASTER_LOG_FAILURES: u32 = 5;
 
 /// Shared controller state with a separate asynchronous operation gate.
 ///
@@ -233,6 +248,52 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         clippy::too_many_arguments,
         reason = "preserves the controller notification protocol"
     )]
+    /// What the master of `master_epoch` reports of its CommitLog, once it took that term up.
+    ///
+    /// A replica that never hears from it goes on without, and replicates from its own end: the
+    /// HA client could not reach that master either.
+    async fn fetch_master_log(&self, master_address: &CheetahString, master_epoch: i32) -> Option<MasterLog> {
+        let mut failures = 0;
+        for _ in 0..MASTER_LOG_ATTEMPTS {
+            if self.shutdown.load(Ordering::Acquire) {
+                return None;
+            }
+            match self
+                .broker_outer_api
+                .get_broker_epoch_cache(master_address, MASTER_LOG_TIMEOUT_MILLIS)
+                .await
+            {
+                Ok(cache) => {
+                    let epochs = EpochLog::new(
+                        cache
+                            .get_epoch_list()
+                            .iter()
+                            .map(|entry| EpochStart {
+                                epoch: entry.get_epoch(),
+                                start_offset: entry.get_start_offset(),
+                            })
+                            .collect(),
+                    );
+                    if epochs.last_epoch().is_some_and(|epoch| epoch >= master_epoch) {
+                        return Some(MasterLog {
+                            epochs,
+                            end_offset: i64::try_from(cache.get_max_offset()).unwrap_or(i64::MAX),
+                        });
+                    }
+                }
+                Err(_) => {
+                    failures += 1;
+                    if failures >= MASTER_LOG_FAILURES {
+                        break;
+                    }
+                }
+            }
+            tokio::time::sleep(MASTER_LOG_RETRY_DELAY).await;
+        }
+        warn!(%master_address, master_epoch, "joining a master without its log; a replica ahead of it stays ahead");
+        None
+    }
+
     pub(crate) async fn apply_controller_role_change(
         &self,
         controller_leader_address: Option<CheetahString>,
@@ -294,6 +355,12 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             None
         };
 
+        // After the fence: this waits for the new master to finish its own promotion.
+        let master_log = match outcome.slave_master_address() {
+            Some(master_address) => self.fetch_master_log(master_address, outcome.master_epoch).await,
+            None => None,
+        };
+
         #[cfg(test)]
         let store_role_action = self.store_role_action.lock().clone();
         #[cfg(test)]
@@ -307,6 +374,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         outcome.local_broker_id,
                         outcome.slave_master_address(),
                         outcome.master_epoch,
+                        master_log.as_ref(),
                     )
                     .await
             }
@@ -321,6 +389,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 outcome.local_broker_id,
                 outcome.slave_master_address(),
                 outcome.master_epoch,
+                master_log.as_ref(),
             )
             .await
             .map_err(|error| crate::broker_error::internal("apply controller role to message store", error))?;

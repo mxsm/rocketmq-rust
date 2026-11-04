@@ -14,6 +14,7 @@
 
 pub mod connection_state;
 pub mod connection_state_notification_request;
+pub mod epoch;
 pub mod flow;
 pub mod replication;
 pub mod transfer_engine;
