@@ -1862,7 +1862,13 @@ where
     };
 
     // Build command
-    let mut request = command_factory.create_request_command(RequestCode::SendMessage, request_header);
+    let mut request = if crate::implementation::mq_client_api_impl::send_smart_msg() {
+        let request_header =
+            rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2::create_send_message_request_header_v2_with_move(request_header);
+        command_factory.create_request_command(RequestCode::SendMessageV2, request_header)
+    } else {
+        command_factory.create_request_command(RequestCode::SendMessage, request_header)
+    };
 
     // Set body (zero-copy: Bytes is reference-counted)
     if let Some(body) = msg.get_body() {

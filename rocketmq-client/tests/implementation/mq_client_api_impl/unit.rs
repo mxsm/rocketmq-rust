@@ -1430,3 +1430,13 @@ fn async_retry_request_sends_custom_header_on_clone_and_final_attempt() {
     );
     assert!(retry_request.is_consumed());
 }
+
+#[test]
+fn send_smart_msg_defaults_on_and_parses_like_java_boolean() {
+    assert!(super::send_smart_msg_enabled(None));
+    assert!(super::send_smart_msg_enabled(Some("true")));
+    assert!(super::send_smart_msg_enabled(Some("TRUE")));
+    assert!(!super::send_smart_msg_enabled(Some("false")));
+    assert!(!super::send_smart_msg_enabled(Some("1")));
+    assert!(!super::send_smart_msg_enabled(Some("")));
+}
