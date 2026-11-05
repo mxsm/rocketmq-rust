@@ -1065,41 +1065,6 @@ impl SubscriptionGroupManager {
             .unwrap_or(0)
     }
 
-    /// Disable consume capability for a specific consumer group
-    ///
-    /// # Arguments
-    /// * `group_name` - The name of the consumer group to disable
-    ///
-    /// # Returns
-    /// Returns the updated config if the group exists, None otherwise
-    pub fn disable_consume(&self, group_name: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
-        let result = {
-            let _transition = self.metadata_transition.lock();
-            let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
-                let mut new_config = (**entry.value()).clone();
-                new_config.set_consume_enable(false);
-                let arc_config = Arc::new(new_config);
-                *entry.value_mut() = Arc::clone(&arc_config);
-                arc_config
-            });
-            if result.is_some() {
-                self.data_version
-                    .write()
-                    .next_version_with(self.state_machine_version.get());
-            }
-            result
-        };
-
-        if result.is_some() {
-            self.persist_after_mutation("disable-consume");
-            info!("Disabled consume for group: {}", group_name);
-        } else {
-            warn!("Cannot disable consume, group not found: {}", group_name);
-        }
-
-        result
-    }
-
     pub(crate) fn disable_consume_for_lag(
         &self,
         group_name: &CheetahString,
@@ -1138,42 +1103,6 @@ impl SubscriptionGroupManager {
 
     pub(crate) fn slow_consumer_marker(&self, group_name: &CheetahString) -> Option<SlowConsumerDisableMarker> {
         self.slow_consumer_markers.get(group_name).map(|marker| marker.clone())
-    }
-
-    /// Enable consume capability for a specific consumer group
-    ///
-    /// # Arguments
-    /// * `group_name` - The name of the consumer group to enable
-    ///
-    /// # Returns
-    /// Returns the updated config if the group exists, None otherwise
-    pub fn enable_consume(&self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
-        let result = {
-            let _transition = self.metadata_transition.lock();
-            let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
-                let mut new_config = (**entry.value()).clone();
-                new_config.set_consume_enable(true);
-                let arc_config = Arc::new(new_config);
-                *entry.value_mut() = Arc::clone(&arc_config);
-                arc_config
-            });
-            if result.is_some() {
-                self.slow_consumer_markers.remove(group_name);
-                self.data_version
-                    .write()
-                    .next_version_with(self.state_machine_version.get());
-            }
-            result
-        };
-
-        if result.is_some() {
-            self.persist_after_mutation("enable-consume");
-            info!("Enabled consume for group: {}", group_name);
-        } else {
-            warn!("Cannot enable consume, group not found: {}", group_name);
-        }
-
-        result
     }
 
     /// Check if consume is enabled for a specific consumer group
