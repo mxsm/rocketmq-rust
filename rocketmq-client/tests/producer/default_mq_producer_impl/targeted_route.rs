@@ -215,7 +215,7 @@ async fn targeted_queue_send_does_not_add_route_attempts_to_the_automatic_retry_
             &MessageQueue::from_parts("targeted-topic", "broker-a", 2),
             CommunicationMode::Sync,
             None,
-            Some(&TopicPublishInfo::new()),
+            Some(&Arc::new(TopicPublishInfo::new())),
             RequestDeadline::from_timeout_millis(2_000),
             &fixture.producer.runtime_snapshot(),
         )

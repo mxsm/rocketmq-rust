@@ -32,7 +32,7 @@ impl MQClientAPIImpl {
     )]
     pub(super) async fn handle_async_retry_input(
         mq_fault_strategy: &MQFaultStrategy,
-        topic_publish_info: &mut Option<TopicPublishInfo>,
+        topic_publish_info: &mut Option<Arc<TopicPublishInfo>>,
         instance: Option<&Arc<MQClientInstance>>,
         current_broker_name: &mut CheetahString,
         current_addr: &mut CheetahString,
@@ -124,7 +124,7 @@ impl MQClientAPIImpl {
     pub(super) async fn execute_async_retry_action(
         action: RetryAction,
         mq_fault_strategy: &MQFaultStrategy,
-        topic_publish_info: &mut Option<TopicPublishInfo>,
+        topic_publish_info: &mut Option<Arc<TopicPublishInfo>>,
         instance: Option<&Arc<MQClientInstance>>,
         current_broker_name: &mut CheetahString,
         current_addr: &mut CheetahString,
@@ -155,7 +155,7 @@ impl MQClientAPIImpl {
             RetryAction::SwitchBroker => {
                 let Some((retry_addr, retry_broker_name)) = Self::select_async_retry_target(
                     mq_fault_strategy,
-                    topic_publish_info.as_ref(),
+                    topic_publish_info.as_deref(),
                     instance,
                     current_broker_name,
                 )
@@ -172,7 +172,7 @@ impl MQClientAPIImpl {
 
     pub(super) async fn refresh_async_retry_route(
         mq_fault_strategy: &MQFaultStrategy,
-        topic_publish_info: &mut Option<TopicPublishInfo>,
+        topic_publish_info: &mut Option<Arc<TopicPublishInfo>>,
         instance: Option<&Arc<MQClientInstance>>,
         current_broker_name: &mut CheetahString,
         current_addr: &mut CheetahString,
@@ -183,8 +183,8 @@ impl MQClientAPIImpl {
         let Some(refreshed) = instance.refresh_topic_route_info_once(msg_topic, deadline).await? else {
             return Err(RetryInput::RouteUnavailable);
         };
-        *topic_publish_info = Some(refreshed);
-        let mq = Self::select_async_retry_queue(mq_fault_strategy, topic_publish_info.as_ref(), current_broker_name)
+        *topic_publish_info = Some(Arc::new(refreshed));
+        let mq = Self::select_async_retry_queue(mq_fault_strategy, topic_publish_info.as_deref(), current_broker_name)
             .ok_or(RetryInput::RouteUnavailable)?;
         let broker_name = instance.get_broker_name_from_message_queue(&mq).await;
         let broker_addr = instance

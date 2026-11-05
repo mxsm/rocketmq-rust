@@ -617,7 +617,7 @@ impl DefaultMQProducerImpl {
         mq: &MessageQueue,
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
-        topic_publish_info: Option<&TopicPublishInfo>,
+        topic_publish_info: Option<&TopicPublishInfoSnapshot>,
         timeout: u64,
     ) -> crate::ClientResult<Option<SendResult>>
     where
@@ -664,7 +664,7 @@ impl DefaultMQProducerImpl {
         mq: &MessageQueue,
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
-        topic_publish_info: Option<&TopicPublishInfo>,
+        topic_publish_info: Option<&TopicPublishInfoSnapshot>,
         deadline: RequestDeadline,
         runtime: &ProducerRuntimeSnapshot,
     ) -> Result<Option<SendResult>, RetryInput>
