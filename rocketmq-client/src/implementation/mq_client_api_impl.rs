@@ -365,8 +365,9 @@ struct AsyncRetryRequest {
 }
 
 impl AsyncRetryRequest {
-    fn new(mut request: RemotingCommand) -> Self {
-        request.materialize_custom_header_to_ext_fields();
+    fn new(request: RemotingCommand) -> Self {
+        // The typed header is shared by every clone, so retries re-encode it directly instead of
+        // carrying a materialized field map in each attempt.
         Self {
             template: Some(request),
         }
