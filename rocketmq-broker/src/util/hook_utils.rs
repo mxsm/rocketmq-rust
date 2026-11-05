@@ -38,6 +38,7 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::TimerMessageStore;
 use rocketmq_store::TIMER_TOPIC;
+use rocketmq_store_api::TimerStoreMode;
 use tracing::error;
 use tracing::warn;
 
@@ -148,14 +149,18 @@ impl HookUtils {
         let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
         if tran_type == MessageSysFlag::TRANSACTION_NOT_TYPE || tran_type == MessageSysFlag::TRANSACTION_COMMIT_TYPE {
             if !Self::is_rolled_timer_message(msg) && Self::check_if_timer_message(msg) {
-                if !message_store_config.timer_wheel_enable {
-                    // wheel timer is not enabled, reject the message
-                    return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerNotEnable));
+                // The Extended Timeline admits timers without the file timer wheel, which does not
+                // load beside it.
+                if message_store_config.timer_store_mode != TimerStoreMode::ExtendedTimeline {
+                    if !message_store_config.timer_wheel_enable {
+                        // wheel timer is not enabled, reject the message
+                        return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerNotEnable));
+                    }
+                    if timer_message_store.is_none() {
+                        warn!("timer message store is unavailable while timer wheel is enabled");
+                        return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerNotEnable));
+                    }
                 }
-                let Some(timer_message_store) = timer_message_store else {
-                    warn!("timer message store is unavailable while timer wheel is enabled");
-                    return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerNotEnable));
-                };
                 if let Some(transform_res) =
                     Self::transform_timer_message(timer_message_store, message_store_config, msg)
                 {
@@ -233,7 +238,7 @@ impl HookUtils {
     }
 
     fn transform_timer_message(
-        timer_message_store: &TimerMessageStore,
+        timer_message_store: Option<&TimerMessageStore>,
         message_store_config: &MessageStoreConfig,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
@@ -280,7 +285,9 @@ impl HookUtils {
                 }
             };
 
-        if route.rejects_congested_slots && timer_message_store.is_reject(normalized.timer_out_ms) {
+        if route.rejects_congested_slots
+            && timer_message_store.is_some_and(|store| store.is_reject(normalized.timer_out_ms))
+        {
             return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl));
         }
 
@@ -411,7 +418,6 @@ mod tests {
     use rocketmq_store::PutMessageStatus;
     use rocketmq_store::TIMER_TOPIC;
     use rocketmq_store_api::TimerEngineId;
-    use rocketmq_store_api::TimerStoreMode;
 
     use super::*;
 
@@ -444,7 +450,7 @@ mod tests {
             CheetahString::from_string((current_millis() + 60_000).to_string()),
         );
 
-        let result = HookUtils::transform_timer_message(&timer_message_store, &message_store_config, &mut msg);
+        let result = HookUtils::transform_timer_message(Some(&timer_message_store), &message_store_config, &mut msg);
 
         assert!(
             result.is_none(),
@@ -508,7 +514,7 @@ mod tests {
             CheetahString::from_static_str("1500"),
         );
 
-        let result = HookUtils::transform_timer_message(&timer_message_store, &message_store_config, &mut msg);
+        let result = HookUtils::transform_timer_message(Some(&timer_message_store), &message_store_config, &mut msg);
 
         assert!(result.is_none());
         assert_eq!(msg.topic().as_str(), TIMER_TOPIC);
@@ -545,7 +551,7 @@ mod tests {
             CheetahString::from_static_str("1"),
         );
 
-        let result = HookUtils::transform_timer_message(&timer_message_store, &message_store_config, &mut msg);
+        let result = HookUtils::transform_timer_message(Some(&timer_message_store), &message_store_config, &mut msg);
 
         assert!(result.is_none());
         assert_eq!(msg.topic().as_str(), TIMER_TOPIC);
@@ -574,7 +580,7 @@ mod tests {
             CheetahString::from_static_str("2000"),
         );
 
-        let result = HookUtils::transform_timer_message(&timer_message_store, &message_store_config, &mut msg);
+        let result = HookUtils::transform_timer_message(Some(&timer_message_store), &message_store_config, &mut msg);
 
         assert_eq!(
             result.unwrap().put_message_status(),
@@ -594,7 +600,7 @@ mod tests {
         );
         assert_eq!(
             HookUtils::transform_timer_message(
-                &timer_message_store,
+                Some(&timer_message_store),
                 &MessageStoreConfig::default(),
                 &mut invalid_value,
             )
@@ -614,7 +620,7 @@ mod tests {
             ..MessageStoreConfig::default()
         };
         assert_eq!(
-            HookUtils::transform_timer_message(&timer_message_store, &config, &mut zero_precision)
+            HookUtils::transform_timer_message(Some(&timer_message_store), &config, &mut zero_precision)
                 .unwrap()
                 .put_message_status(),
             PutMessageStatus::WheelTimerMsgIllegal
@@ -698,7 +704,7 @@ mod tests {
         let mut msg = timer_message_due_in(10 * 86_400_000);
 
         let result =
-            HookUtils::transform_timer_message(&timer_message_store, &extended_admission_config(true), &mut msg);
+            HookUtils::transform_timer_message(Some(&timer_message_store), &extended_admission_config(true), &mut msg);
 
         assert!(result.is_none());
         assert_eq!(
@@ -715,7 +721,7 @@ mod tests {
         let mut beyond_horizon = timer_message_due_in(31 * 86_400_000);
         assert_eq!(
             HookUtils::transform_timer_message(
-                &timer_message_store,
+                Some(&timer_message_store),
                 &extended_admission_config(true),
                 &mut beyond_horizon
             )
@@ -734,7 +740,7 @@ mod tests {
         // A year is beyond every other engine's horizon but inside the native 400 days.
         let mut msg = timer_message_due_in(365 * 86_400_000);
 
-        let result = HookUtils::transform_timer_message(&timer_message_store, &native_config, &mut msg);
+        let result = HookUtils::transform_timer_message(Some(&timer_message_store), &native_config, &mut msg);
 
         assert!(result.is_none());
         assert_eq!(
@@ -750,7 +756,7 @@ mod tests {
 
         let mut beyond_horizon = timer_message_due_in(401 * 86_400_000);
         assert_eq!(
-            HookUtils::transform_timer_message(&timer_message_store, &native_config, &mut beyond_horizon)
+            HookUtils::transform_timer_message(Some(&timer_message_store), &native_config, &mut beyond_horizon)
                 .map(|result| result.put_message_status()),
             Some(PutMessageStatus::WheelTimerMsgIllegal)
         );
@@ -762,11 +768,32 @@ mod tests {
         let mut msg = timer_message_due_in(60_000);
 
         let result =
-            HookUtils::transform_timer_message(&timer_message_store, &extended_admission_config(false), &mut msg);
+            HookUtils::transform_timer_message(Some(&timer_message_store), &extended_admission_config(false), &mut msg);
 
         assert_eq!(
             result.map(|result| result.put_message_status()),
             Some(PutMessageStatus::ServiceNotAvailable)
+        );
+    }
+
+    #[test]
+    fn extended_route_admits_timers_without_the_file_timer_wheel() {
+        // An Extended store refuses to load with the file timer wheel enabled.
+        let config = MessageStoreConfig {
+            timer_wheel_enable: false,
+            ..extended_admission_config(true)
+        };
+        let mut msg = timer_message_due_in(60_000);
+
+        let result = HookUtils::handle_schedule_message(&config, None, 18, &mut msg);
+
+        assert!(result.is_none(), "the timer is admitted");
+        assert_eq!(msg.topic().as_str(), TIMER_TOPIC);
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some(TimerEngineId::ExtendedTimeline.as_str())
         );
     }
 
