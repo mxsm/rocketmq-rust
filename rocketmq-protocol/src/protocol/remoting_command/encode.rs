@@ -15,14 +15,39 @@
 use bytes::Bytes;
 use bytes::BytesMut;
 
+use super::extension_fields::ExtensionFields;
 use super::RemotingCommand;
 use super::SerializeType;
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::HeaderMap;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 mod json;
 mod rocketmq;
 
 impl RemotingCommand {
+    /// Returns the extension fields that can follow a directly encoded `header`.
+    ///
+    /// `Some(None)` means there are none. `Some(Some(fields))` is a plain field map whose keys all
+    /// lie outside the header's schema: such a key never collides with a typed field, so writing
+    /// the typed fields and then these produces the same field set that materializing would.
+    /// `None` means the command must take the materializing encoder (the header is already
+    /// materialized, the fields came from the wire, or a key belongs to the header).
+    pub(super) fn direct_header_extra_fields(&self, header: &dyn CommandCustomHeader) -> Option<Option<&HeaderMap>> {
+        if self.custom_header_to_net {
+            return None;
+        }
+        match &self.ext_fields {
+            ExtensionFields::Absent => Some(None),
+            ExtensionFields::Materialized(fields)
+                if fields.keys().all(|key| header.resolve_wire_key(key.as_str()).is_none()) =>
+            {
+                Some((!fields.is_empty()).then_some(fields))
+            }
+            _ => None,
+        }
+    }
+
     #[inline]
     pub(super) fn try_header_encode(&mut self) -> rocketmq_error::Result<Bytes> {
         match self.serialize_type {

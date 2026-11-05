@@ -246,6 +246,7 @@ impl RocketMQSerializable {
     pub(crate) fn try_rocketmq_protocol_encode_direct(
         cmd: &RemotingCommand,
         header: &dyn CommandCustomHeader,
+        extra_fields: Option<&HashMap<CheetahString, CheetahString>>,
         buf: &mut BytesMut,
     ) -> Result<usize, ProtocolContractViolation> {
         const FIXED_HEADER_LENGTH: usize = 21;
@@ -261,6 +262,9 @@ impl RocketMQSerializable {
         buf.extend_from_slice(&fixed);
 
         header.encode_direct_binary(buf)?;
+        if let Some(extra_fields) = extra_fields {
+            Self::write_ext_fields(buf, extra_fields)?;
+        }
 
         let ext_fields_length = Self::checked_ext_fields_length(buf.len() - begin_index - FIXED_HEADER_LENGTH)?;
         let map_len_index = begin_index + EXT_FIELDS_LENGTH_OFFSET;

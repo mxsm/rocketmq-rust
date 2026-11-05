@@ -1331,3 +1331,89 @@ fn legacy_header_and_fast_facades_map_typed_failures_without_mutation() {
         assert_eq!(destination.as_ref(), b"prefix");
     }
 }
+
+mod direct_extra_fields {
+    use super::*;
+    use crate::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+    use crate::protocol::EncodedFrame;
+
+    fn decode_wire(command: RemotingCommand) -> RemotingCommand {
+        let wire = EncodedFrame::from_command(command)
+            .expect("command should encode")
+            .into_bytes();
+        RemotingCommand::decode(&mut BytesMut::from(wire.as_ref()))
+            .expect("encoded command should decode")
+            .expect("encoded command should be one complete frame")
+    }
+
+    fn send_response(serialize_type: SerializeType, dynamic: &[(&'static str, &'static str)]) -> RemotingCommand {
+        let mut response = RemotingCommand::create_response_command_with_code(0)
+            .set_opaque(42)
+            .set_serialize_type(serialize_type);
+        response.set_command_custom_header_ref(SendMessageResponseHeader::new(
+            CheetahString::from_static_str("C0A8000100002A9F0000000000000F00"),
+            3,
+            123_456,
+            Some(CheetahString::from_static_str("tx-1")),
+            None,
+            None,
+        ));
+        for (key, value) in dynamic {
+            response.add_ext_field(*key, CheetahString::from_static_str(value));
+        }
+        response
+    }
+
+    fn decoded_fields(command: RemotingCommand) -> HashMap<CheetahString, CheetahString> {
+        decode_wire(command)
+            .ext_fields()
+            .cloned()
+            .expect("decoded command should carry extension fields")
+    }
+
+    fn materialized(mut command: RemotingCommand) -> RemotingCommand {
+        command.materialize_custom_header_to_ext_fields();
+        command
+    }
+
+    #[test]
+    fn direct_header_with_dynamic_fields_matches_the_materialized_encoding() {
+        let dynamic = [("MSG_REGION", "DefaultRegion"), ("TRACE_ON", "true")];
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let direct = decoded_fields(send_response(serialize_type, &dynamic));
+            let expected = decoded_fields(materialized(send_response(serialize_type, &dynamic)));
+
+            assert_eq!(direct, expected, "{serialize_type:?}");
+            assert_eq!(
+                direct.get("MSG_REGION").map(CheetahString::as_str),
+                Some("DefaultRegion")
+            );
+            assert_eq!(direct.get("queueId").map(CheetahString::as_str), Some("3"));
+            let header = decode_wire(send_response(serialize_type, &dynamic))
+                .decode_command_custom_header_fast::<SendMessageResponseHeader>()
+                .expect("typed response header should decode");
+            assert_eq!(header.queue_offset(), 123_456);
+            assert_eq!(header.transaction_id(), Some("tx-1"));
+        }
+    }
+
+    #[test]
+    fn dynamic_field_that_names_a_header_field_keeps_the_merge_rules() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            // Same value as the typed field: the merge accepts it, the direct writer must not see it.
+            let dynamic = [("queueId", "3"), ("MSG_REGION", "DefaultRegion")];
+            let command = send_response(serialize_type, &dynamic);
+            let header = command.command_custom_header_ref().expect("typed header");
+            assert!(
+                command.direct_header_extra_fields(header).is_none(),
+                "a key owned by the header must take the materializing encoder"
+            );
+
+            assert_eq!(
+                decoded_fields(send_response(serialize_type, &dynamic)),
+                decoded_fields(materialized(send_response(serialize_type, &dynamic))),
+                "{serialize_type:?}"
+            );
+        }
+    }
+}
