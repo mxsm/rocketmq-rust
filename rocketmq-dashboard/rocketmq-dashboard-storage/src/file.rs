@@ -32,7 +32,7 @@ use crate::{
 
 /// Never replaced or removed, so every native instance locks the same file object.
 struct DirectoryWriter {
-    _file: File,
+    file: File,
 }
 
 impl DirectoryWriter {
@@ -47,10 +47,18 @@ impl DirectoryWriter {
             .open(directory.join(".dashboard-writer.lock"))
             .map_err(|_| StorageError::new(StorageErrorKind::Io))?;
         match file.try_lock() {
-            Ok(()) => Ok(Self { _file: file }),
+            Ok(()) => Ok(Self { file }),
             Err(TryLockError::WouldBlock) => Err(StorageError::new(StorageErrorKind::WriterUnavailable)),
             Err(TryLockError::Error(_)) => Err(StorageError::new(StorageErrorKind::Io)),
         }
+    }
+}
+
+impl Drop for DirectoryWriter {
+    fn drop(&mut self) {
+        // A child can retain an inherited descriptor until exec, so closing ours alone
+        // does not necessarily release the lock when this writer's ownership ends.
+        let _ = self.file.unlock();
     }
 }
 
@@ -477,4 +485,27 @@ fn read_sessions(path: &Path) -> Result<SessionDocument, StorageError> {
         serde_json::from_slice(&bytes).map_err(|_| StorageError::new(StorageErrorKind::InvalidDocument))?;
     sessions.validate()?;
     Ok(sessions)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writer_drop_releases_lock_while_a_duplicate_handle_survives() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let writer = DirectoryWriter::acquire(&path).unwrap();
+        let duplicate = writer.file.try_clone().unwrap();
+        drop(writer);
+
+        let replacement = DirectoryWriter::acquire(&path).unwrap();
+        drop(duplicate);
+        assert!(matches!(
+            DirectoryWriter::acquire(&path),
+            Err(error) if error.kind() == StorageErrorKind::WriterUnavailable
+        ));
+        drop(replacement);
+        assert!(DirectoryWriter::acquire(&path).is_ok());
+    }
 }
