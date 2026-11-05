@@ -33,7 +33,6 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::common::topic::TopicValidator;
-use rocketmq_model::common::TopicSysFlag;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
@@ -1078,48 +1077,6 @@ impl TopicConfigManager {
             return is_change;
         }
         false
-    }
-
-    pub fn update_topic_unit_flag(
-        &self,
-        topic: &str,
-        unit: bool,
-        state_machine_version: i64,
-    ) -> Option<TopicConfigUpdate> {
-        let update = self.update_existing_topic(topic, state_machine_version, |topic_config| {
-            let old_topic_sys_flag = topic_config.topic_sys_flag;
-            topic_config.topic_sys_flag = if unit {
-                TopicSysFlag::set_unit_flag(old_topic_sys_flag)
-            } else {
-                TopicSysFlag::clear_unit_flag(old_topic_sys_flag)
-            };
-            info!(
-                "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
-                old_topic_sys_flag, topic_config.topic_sys_flag
-            );
-        });
-        update
-    }
-
-    pub fn update_topic_unit_sub_flag(
-        &self,
-        topic: &str,
-        has_unit_sub: bool,
-        state_machine_version: i64,
-    ) -> Option<TopicConfigUpdate> {
-        let update = self.update_existing_topic(topic, state_machine_version, |topic_config| {
-            let old_topic_sys_flag = topic_config.topic_sys_flag;
-            topic_config.topic_sys_flag = if has_unit_sub {
-                TopicSysFlag::set_unit_sub_flag(old_topic_sys_flag)
-            } else {
-                TopicSysFlag::clear_unit_sub_flag(old_topic_sys_flag)
-            };
-            info!(
-                "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
-                old_topic_sys_flag, topic_config.topic_sys_flag
-            );
-        });
-        update
     }
 
     pub fn load_data_version(&self) -> bool {
