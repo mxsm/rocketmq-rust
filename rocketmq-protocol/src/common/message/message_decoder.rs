@@ -210,7 +210,14 @@ pub fn decode(
     is_set_properties_string: bool,
     check_crc: bool,
 ) -> Option<MessageExt> {
-    let frame = crate::protocol::body::message_codec::decode_message_frame(byte_buffer).ok()?;
+    use crate::protocol::body::message_codec::PropertiesString;
+
+    let properties_string = if is_set_properties_string {
+        PropertiesString::Keep
+    } else {
+        PropertiesString::Skip
+    };
+    let frame = crate::protocol::body::message_codec::decode_message_frame_with(byte_buffer, properties_string).ok()?;
 
     if read_body && !frame.body.is_empty() && check_crc && crc32(&frame.body) != frame.body_crc {
         return None;
@@ -372,22 +379,47 @@ where
         let Some(frame) = split_next_message_frame(byte_buffer) else {
             break;
         };
-        let mut metadata_frame = frame.clone();
-        let Some(metadata) = decode(&mut metadata_frame, false, false, false, false, false) else {
+        // Decode each frame once. The filter still sees the message without its body; only an
+        // accepted message gets its body back and, when asked, decompressed.
+        let mut frame = frame;
+        let Some(mut msg_ext) = decode(&mut frame, read_body, false, false, false, false) else {
             break;
         };
-        if !should_decode_body(&metadata) {
+        let body = msg_ext.message.take_body();
+        if !should_decode_body(&msg_ext) {
             continue;
         }
-
-        let mut full_frame = frame;
-        if let Some(msg_ext) = decode(&mut full_frame, read_body, decompress_body, false, false, false) {
-            messages.push(msg_ext);
-        } else {
-            break;
+        if let Some(body) = body {
+            msg_ext.message.set_body(Some(body));
+            if decompress_body && !decompress_message_body(&mut msg_ext) {
+                break;
+            }
         }
+        messages.push(msg_ext);
     }
     messages
+}
+
+/// Decompresses a decoded message's body in place when its system flag marks it compressed,
+/// exactly as [`decode`] does when asked to. Returns `false` when the body cannot be decompressed.
+fn decompress_message_body(msg_ext: &mut MessageExt) -> bool {
+    let sys_flag = msg_ext.sys_flag();
+    if (sys_flag & MessageSysFlag::COMPRESSED_FLAG) != MessageSysFlag::COMPRESSED_FLAG {
+        return true;
+    }
+    let Some(body) = msg_ext.message.get_body().filter(|body| !body.is_empty()) else {
+        return true;
+    };
+    let Ok(compression_type) = MessageSysFlag::try_get_compression_type(sys_flag) else {
+        return false;
+    };
+    match compression_type.try_decompression(body) {
+        Ok(decompressed) => {
+            msg_ext.message.set_body(Some(decompressed));
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 pub fn decodes_batch_client(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageClientExt> {
@@ -943,6 +975,43 @@ mod tests {
         assert_eq!(inspected.len(), 2);
         assert_eq!(inspected[0], (0, false, Some(CheetahString::from_static_str("Skip"))));
         assert_eq!(inspected[1], (1, false, Some(CheetahString::from_static_str("Keep"))));
+    }
+
+    #[test]
+    fn metadata_filter_decompresses_only_accepted_frames_like_a_plain_decode() {
+        let mut payload = BytesMut::new();
+        let mut accepted_wire = BytesMut::new();
+        for (queue_offset, tag) in [(0, "Skip"), (1, "Keep"), (2, "Skip"), (3, "Keep")] {
+            let mut message = message_ext_with_tag(queue_offset, tag, 256);
+            message.set_sys_flag(MessageSysFlag::COMPRESSED_FLAG | MessageSysFlag::COMPRESSION_ZSTD_TYPE);
+            let encoded = encode(&message, true).expect("compressed message should encode");
+            payload.put_slice(&encoded);
+            if tag == "Keep" {
+                accepted_wire.put_slice(&encoded);
+            }
+        }
+        let mut payload = payload.freeze();
+        let mut accepted_wire = accepted_wire.freeze();
+
+        let filtered = decodes_batch_with_metadata_filter(&mut payload, true, true, |metadata| {
+            metadata.tags().as_deref() == Some("Keep")
+        });
+        let expected = decodes_batch(&mut accepted_wire, true, true);
+
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(payload.len(), 0);
+        for (decoded, reference) in filtered.iter().zip(&expected) {
+            assert_eq!(decoded.queue_offset(), reference.queue_offset());
+            assert_eq!(decoded.get_body(), reference.get_body());
+            assert_eq!(
+                decoded.get_body().map(Bytes::len),
+                Some(256),
+                "the accepted body is decompressed"
+            );
+            assert_eq!(decoded.msg_id(), reference.msg_id());
+            assert_eq!(decoded.get_properties(), reference.get_properties());
+            assert_eq!(decoded.sys_flag(), reference.sys_flag());
+        }
     }
 
     #[test]
