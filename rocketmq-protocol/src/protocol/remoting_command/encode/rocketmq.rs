@@ -34,13 +34,14 @@ impl RemotingCommand {
 
         let capability = self.custom_header_encode_capability();
 
-        let direct_header = (capability == HeaderEncodeCapability::DirectBinary
-            && self.remark.is_none()
-            && self.ext_fields.is_absent())
-        .then(|| self.command_custom_header_ref())
-        .flatten();
+        let direct_header = (capability == HeaderEncodeCapability::DirectBinary && self.remark.is_none())
+            .then(|| self.command_custom_header_ref())
+            .flatten()
+            .and_then(|header| Some((header, self.direct_header_extra_fields(header)?)));
         let header_size = match direct_header {
-            Some(header) => RocketMQSerializable::try_rocketmq_protocol_encode_direct(self, header, dst),
+            Some((header, extra_fields)) => {
+                RocketMQSerializable::try_rocketmq_protocol_encode_direct(self, header, extra_fields, dst)
+            }
             None => RocketMQSerializable::try_rocketmq_protocol_encode_with_capability(self, dst, capability),
         }
         .map_err(crate::protocol::header_codec::into_error)?;
