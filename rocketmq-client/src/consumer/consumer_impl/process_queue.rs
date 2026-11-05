@@ -29,7 +29,6 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_protocol::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Serialize;
-use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -69,8 +68,10 @@ impl ProcessQueueStore {
 }
 
 pub struct ProcessQueue {
-    store: RwLock<ProcessQueueStore>,
-    pub(crate) consume_lock: Arc<RwLock<()>>,
+    /// Message bookkeeping. Every critical section is short and synchronous, so a blocking lock
+    /// is cheaper than an async one; a guard must never be held across `.await`.
+    store: parking_lot::RwLock<ProcessQueueStore>,
+    pub(crate) consume_lock: Arc<tokio::sync::RwLock<()>>,
 
     msg_count: AtomicI64,
     msg_size: AtomicU64,
@@ -138,8 +139,8 @@ impl ProcessQueue {
     pub fn new() -> Self {
         let now = current_millis();
         ProcessQueue {
-            store: RwLock::new(ProcessQueueStore::new()),
-            consume_lock: Arc::new(RwLock::new(())),
+            store: parking_lot::RwLock::new(ProcessQueueStore::new()),
+            consume_lock: Arc::new(tokio::sync::RwLock::new(())),
 
             msg_count: AtomicI64::new(0),
             msg_size: AtomicU64::new(0),
@@ -199,10 +200,10 @@ impl ProcessQueue {
         }
 
         let consume_timeout = push_consumer.consumer_config_snapshot().consume_timeout;
-        let loop_ = 16.min(self.store.read().await.messages.len());
+        let loop_ = 16.min(self.store.read().messages.len());
         for _ in 0..loop_ {
             let msg = {
-                let store = self.store.read().await;
+                let store = self.store.read();
                 if let Some((offset, value)) = store.messages.first() {
                     let consume_start_timestamp = store.consume_start_timestamps.get(&offset).copied().or_else(|| {
                         MessageAccessor::get_consume_start_time_stamp(value.as_ref())
@@ -242,7 +243,7 @@ impl ProcessQueue {
             );
 
             let should_remove = {
-                let store = self.store.read().await;
+                let store = self.store.read();
                 store
                     .messages
                     .first_offset()
@@ -274,7 +275,7 @@ impl ProcessQueue {
         let mut inserted_min_offset = i64::MAX;
         let mut inserted_max_offset = i64::MIN;
         {
-            let mut store = self.store.write().await;
+            let mut store = self.store.write();
             store.messages.reserve(messages.len());
             for message in messages {
                 let queue_offset = message.queue_offset;
@@ -332,7 +333,7 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn mark_messages_consuming(&self, messages: &[Arc<MessageExt>], timestamp: u64) {
-        let mut store = self.store.write().await;
+        let mut store = self.store.write();
         for message in messages {
             if store.messages.contains_key(&message.queue_offset) {
                 store.consume_start_timestamps.insert(message.queue_offset, timestamp);
@@ -342,7 +343,7 @@ impl ProcessQueue {
 
     pub(crate) async fn remove_message(&self, messages: &[Arc<MessageExt>]) -> i64 {
         let now = current_millis();
-        let mut store = self.store.write().await;
+        let mut store = self.store.write();
 
         self.last_consume_timestamp.store(now, Ordering::Release);
 
@@ -392,14 +393,14 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn rollback(&self) {
-        let mut store = self.store.write().await;
+        let mut store = self.store.write();
         let mut consuming = std::mem::take(&mut store.consuming_msg_orderly_tree_map);
         store.messages.append_from_btree_map(&mut consuming);
         self.refresh_offset_snapshot(&store);
     }
 
     pub(crate) async fn commit(&self) -> i64 {
-        let mut store = self.store.write().await;
+        let mut store = self.store.write();
         let offset = store
             .consuming_msg_orderly_tree_map
             .last_key_value()
@@ -423,7 +424,7 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn make_message_to_consume_again(&self, messages: &[Arc<MessageExt>]) {
-        let mut store = self.store.write().await;
+        let mut store = self.store.write();
         for message in messages {
             store.consuming_msg_orderly_tree_map.remove(&message.queue_offset);
             store.messages.insert(message.queue_offset, message.clone());
@@ -434,7 +435,7 @@ impl ProcessQueue {
     pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<Arc<MessageExt>> {
         let mut messages = Vec::with_capacity(batch_size as usize);
         let now = current_millis();
-        let mut store = self.store.write().await;
+        let mut store = self.store.write();
 
         self.last_consume_timestamp.store(now, Ordering::Release);
 
@@ -462,11 +463,11 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn contains_message(&self, message_ext: &MessageExt) -> bool {
-        self.store.read().await.messages.contains_key(&message_ext.queue_offset)
+        self.store.read().messages.contains_key(&message_ext.queue_offset)
     }
 
     pub(crate) async fn clear(&self) {
-        let mut store = self.store.write().await;
+        let mut store = self.store.write();
         store.messages.clear();
         store.consuming_msg_orderly_tree_map.clear();
         store.consume_start_timestamps.clear();
@@ -508,7 +509,7 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn fill_process_queue_info(&self, info: &mut ProcessQueueInfo) {
-        let store = self.store.read().await;
+        let store = self.store.read();
 
         if !store.messages.is_empty() {
             if let Some((min_offset, max_offset)) = store.messages.offset_span() {
@@ -539,7 +540,7 @@ impl ProcessQueue {
     }
     /// Returns `Some((min_offset, max_offset))` of the pending message tree, or `None` if empty.
     pub(crate) async fn get_offset_span(&self) -> Option<(i64, i64)> {
-        let store = self.store.read().await;
+        let store = self.store.read();
         store.messages.offset_span()
     }
 
@@ -567,7 +568,7 @@ impl ProcessQueue {
         if self.msg_count.load(Ordering::Acquire) <= 0 {
             return false;
         }
-        !self.store.read().await.messages.is_empty()
+        !self.store.read().messages.is_empty()
     }
 
     pub(crate) fn get_last_pull_timestamp(&self) -> u64 {
@@ -821,10 +822,10 @@ mod tests {
         pq.mark_messages_consuming(&messages, 42).await;
 
         assert!(MessageAccessor::get_consume_start_time_stamp(shared_message.as_ref()).is_none());
-        assert_eq!(pq.store.read().await.consume_start_timestamps.get(&0), Some(&42));
+        assert_eq!(pq.store.read().consume_start_timestamps.get(&0), Some(&42));
 
         pq.remove_message(&messages).await;
-        assert!(pq.store.read().await.consume_start_timestamps.is_empty());
+        assert!(pq.store.read().consume_start_timestamps.is_empty());
     }
 
     #[tokio::test]
@@ -869,7 +870,7 @@ mod tests {
 
         assert_eq!(taken.len(), 5);
 
-        let store = pq.store.read().await;
+        let store = pq.store.read();
         assert_eq!(store.consuming_msg_orderly_tree_map.len(), 5);
 
         for msg in &taken {
@@ -986,15 +987,15 @@ mod tests {
         let taken = pq.take_messages(5).await;
         assert_eq!(taken.len(), 5);
 
-        let pending_len = pq.store.read().await.messages.len();
+        let pending_len = pq.store.read().messages.len();
         assert_eq!(pending_len, 5);
 
         pq.rollback().await;
 
-        let pending_len_after = pq.store.read().await.messages.len();
+        let pending_len_after = pq.store.read().messages.len();
         assert_eq!(pending_len_after, 10);
 
-        let consuming_map_len = pq.store.read().await.consuming_msg_orderly_tree_map.len();
+        let consuming_map_len = pq.store.read().consuming_msg_orderly_tree_map.len();
         assert_eq!(consuming_map_len, 0);
     }
 
@@ -1014,7 +1015,7 @@ mod tests {
         assert_eq!(offset, 5);
         assert_eq!(pq.msg_count(), 5);
 
-        let consuming_map_len = pq.store.read().await.consuming_msg_orderly_tree_map.len();
+        let consuming_map_len = pq.store.read().consuming_msg_orderly_tree_map.len();
         assert_eq!(consuming_map_len, 0);
     }
 
@@ -1102,10 +1103,10 @@ mod tests {
         assert_eq!(pq.msg_count(), 0);
         assert_eq!(pq.msg_size(), 0);
 
-        let pending_len = pq.store.read().await.messages.len();
+        let pending_len = pq.store.read().messages.len();
         assert_eq!(pending_len, 0);
 
-        let consuming_map_len = pq.store.read().await.consuming_msg_orderly_tree_map.len();
+        let consuming_map_len = pq.store.read().consuming_msg_orderly_tree_map.len();
         assert_eq!(consuming_map_len, 0);
     }
 
@@ -1196,7 +1197,7 @@ mod tests {
 
         pq.put_message(&msgs).await;
 
-        let store = pq.store.read().await;
+        let store = pq.store.read();
         assert_eq!(store.messages.storage_kind(), "contiguous");
         assert_eq!(store.messages.len(), 8);
         assert_eq!(store.messages.offset_span(), Some((0, 7)));
@@ -1209,7 +1210,7 @@ mod tests {
 
         pq.put_message(&msgs).await;
 
-        let store = pq.store.read().await;
+        let store = pq.store.read();
         assert_eq!(store.messages.storage_kind(), "btree");
         assert_eq!(store.messages.len(), 3);
         assert_eq!(store.messages.offset_span(), Some((5, 10)));
@@ -1226,7 +1227,7 @@ mod tests {
         assert_eq!(pq.msg_count(), 4);
         assert_eq!(pq.get_max_span().await, 4);
 
-        let store = pq.store.read().await;
+        let store = pq.store.read();
         assert_eq!(store.messages.storage_kind(), "btree");
         assert_eq!(store.messages.offset_span(), Some((0, 4)));
         assert!(!store.messages.contains_key(&2));
@@ -1265,7 +1266,7 @@ mod tests {
 
         pq.put_message(&msgs).await;
 
-        let max_offset = pq.store.read().await.queue_offset_max;
+        let max_offset = pq.store.read().queue_offset_max;
         assert_eq!(max_offset, 9);
     }
 
