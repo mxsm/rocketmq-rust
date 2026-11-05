@@ -18,6 +18,41 @@ pub mod moment_stats_item_set;
 pub mod stats_item;
 pub mod stats_item_set;
 pub mod stats_snapshot;
+mod striped_counter;
+
+use std::cell::RefCell;
+
+thread_local! {
+    static STATS_KEY: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Builds a stats key in a reused per-thread buffer and passes it to `use_key`.
+///
+/// Stats sets look keys up by `&str` and copy a key only when they create an item, so composite
+/// keys such as `topic@group` built here keep the per-message path free of allocations. A nested
+/// call gets a fresh buffer instead of the shared one.
+pub fn with_stats_key<R>(build: impl FnOnce(&mut String), use_key: impl FnOnce(&str) -> R) -> R {
+    STATS_KEY.with(|buffer| match buffer.try_borrow_mut() {
+        Ok(mut key) => {
+            key.clear();
+            build(&mut key);
+            use_key(&key)
+        }
+        Err(_) => {
+            let mut key = String::new();
+            build(&mut key);
+            use_key(&key)
+        }
+    })
+}
+
+/// Appends the `topic@group` key used by group statistics.
+#[inline]
+pub fn push_topic_group_key(key: &mut String, topic: &str, group: &str) {
+    key.push_str(topic);
+    key.push('@');
+    key.push_str(group);
+}
 
 pub struct Stats;
 
