@@ -49,6 +49,25 @@ pub struct DecodedMessageFrame {
 }
 
 pub fn decode_message_frame(input: &mut Bytes) -> Result<DecodedMessageFrame> {
+    decode_message_frame_with(input, PropertiesString::Keep)
+}
+
+/// Whether a decoded frame also carries its raw properties text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PropertiesString {
+    /// Copy the raw text into [`DecodedMessageFrame::properties_string`].
+    Keep,
+    /// Leave `properties_string` empty. The parsed `properties` map is filled either way.
+    Skip,
+}
+
+/// Decodes one frame like [`decode_message_frame`], copying the raw properties text only when
+/// `properties_string` asks for it. Consumers that only read the parsed map skip one copy of every
+/// message's properties.
+pub(crate) fn decode_message_frame_with(
+    input: &mut Bytes,
+    properties_string: PropertiesString,
+) -> Result<DecodedMessageFrame> {
     let initial_len = input.remaining();
     let store_size = read_i32(input)?;
     if store_size <= 0 || store_size as usize > initial_len {
@@ -83,7 +102,10 @@ pub fn decode_message_frame(input: &mut Bytes) -> Result<DecodedMessageFrame> {
         .map_err(invalid_source)?;
     let property_len = usize::try_from(read_i16(input)?).map_err(|_| invalid("negative properties length"))?;
     let property_bytes = take(input, property_len)?;
-    let properties_string = CheetahString::from(String::from_utf8_lossy(&property_bytes).as_ref());
+    let properties_string = match properties_string {
+        PropertiesString::Keep => CheetahString::from(String::from_utf8_lossy(&property_bytes).as_ref()),
+        PropertiesString::Skip => CheetahString::empty(),
+    };
     let properties = decode_properties(&property_bytes);
 
     Ok(DecodedMessageFrame {
