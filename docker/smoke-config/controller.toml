@@ -22,7 +22,7 @@ controllerPeers = []
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
 storagePath = "/var/lib/rocketmq/controller"
-storageBackend = "Memory"
+storageEngineType = "Memory"
 enableElectUncleanMasterLocal = false
 
 [[raftPeers]]

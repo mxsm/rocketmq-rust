@@ -20,7 +20,7 @@ feature 在依赖图中累加。某条依赖边禁用默认 feature，不能移�
 | --- | --- | --- | --- |
 | [`rocketmq-broker`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/Cargo.toml) | `local_file_store` | `rocksdb_store`，别名 `rocksdb-store`；`extended_timeline`；`tieredstore` | 选择兼容的存储/定时配置；构建选择不会迁移已有数据。 |
 | [`rocketmq-namesrv`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-namesrv/Cargo.toml) | `tls` | `embedded-controller` | TLS 仍需端点配置。嵌入式 Controller 还需 `enableControllerInNamesrv` 及 Controller 配置。 |
-| [`rocketmq-controller`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-controller/Cargo.toml) | `storage-rocksdb` | `storage-file`；`dev-single` 启用 `storage-file` | `storageBackend` 应匹配已编译实现。`dev-single` 本身不会改变默认的 `RocksDB` 配置值。 |
+| [`rocketmq-controller`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-controller/Cargo.toml) | `storage-rocksdb` | `storage-file`；`dev-single` 启用 `storage-file` | `storageEngineType`（或兼容别名 `storageBackend`）应匹配已编译实现。`dev-single` 本身不会改变默认的 `RocksDB` 配置值。 |
 | [`rocketmq-proxy`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-proxy/Cargo.toml) | `cluster-mode` 和 `local-mode` | `tls`；`tieredstore` 同时启用 Local 模式 | 选择 `mode = "cluster"` 或 `"local"`。内置 gRPC TLS 同时要求 TLS feature 和 TLS 材料。 |
 | [`rocketmq-client-rust`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/Cargo.toml) | `admin-full`，展开为 `admin-read` 和 `admin-mutation` | `nameserver-dns-discovery`；下文列出的独立遥测 features | 注入应用持有的客户端运行时并配置发现。管理 API 已编译不代表能够绕过认证或授权。 |
 
@@ -90,6 +90,6 @@ cargo build -p rocketmq-proxy --no-default-features --features cluster-mode
 cargo build -p rocketmq-controller --no-default-features --features dev-single
 ```
 
-最后一条命令选择文件存储支持，应配套使用 `storageBackend = "File"` 及预期的单节点开发配置。这些是不同构建选择的示例，并非要求构建全部组合。对于嵌入式应用，应检查该应用自己的 manifest 和 feature 图，因为它可能与上述包级命令不同。
+最后一条命令选择文件存储支持，应配套使用 `storageEngineType = "File"` 及预期的单节点开发配置。这些是不同构建选择的示例，并非要求构建全部组合。对于嵌入式应用，应检查该应用自己的 manifest 和 feature 图，因为它可能与上述包级命令不同。
 
-Controller 的 `File` 后端仅在启用 `dev-single` 时可用，单独选择 `storage-file` 不会启用运行时 File 路径。该开发配置还需显式设置 `storageBackend = "File"`。
+Controller 的 `File` 后端仅在启用 `dev-single` 时可用，单独选择 `storage-file` 不会启用运行时 File 路径。该开发配置还需显式设置 `storageEngineType = "File"`。

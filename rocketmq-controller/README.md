@@ -64,8 +64,8 @@ record and manifest writes succeed.
 - Stable Rust `1.95.0` is the workspace minimum and the repository build toolchain.
 - Build this crate with the pinned repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - `ROCKETMQ_HOME` or `rocketmqHome` must be set before starting the controller binary.
-- The default feature set enables RocksDB and the default configuration uses `storageBackend = "RocksDB"`.
-- Use `storageBackend = "File"` only when building with the opt-in `storage-file` feature.
+- The default feature set enables RocksDB and the default configuration uses `storageEngineType = "RocksDB"` (`storageBackend` is accepted as a legacy input alias).
+- Use `storageEngineType = "File"` only when building with the opt-in `storage-file` feature.
 
 ## Build
 
@@ -114,7 +114,7 @@ controllerPeers = []
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
 storagePath = "/opt/rocketmq/controller/node-1"
-storageBackend = "RocksDB"
+storageEngineType = "RocksDB"
 enableElectUncleanMasterLocal = false
 
 [[raftPeers]]
@@ -233,8 +233,8 @@ The application supplies its owned `ChildServiceContext` and closes the RuntimeO
 
 | Feature | Default | Purpose |
 |---------|---------|---------|
-| `storage-file` | No | Enables the file-based controller storage backend for `storageBackend = "File"`. |
-| `storage-rocksdb` | Yes | Enables the default RocksDB backend for `storageBackend = "RocksDB"`. |
+| `storage-file` | No | Enables the file-based controller storage backend for `storageEngineType = "File"`. |
+| `storage-rocksdb` | Yes | Enables the default RocksDB backend for `storageEngineType = "RocksDB"`. |
 | `metrics` | No | Enables controller metrics integration through `rocketmq-observability`. |
 | `metrics-otlp` | No | Enables OTLP metrics export support. |
 | `metrics-prometheus` | No | Enables Prometheus metrics export support. |

@@ -48,12 +48,15 @@ pub struct RaftPeer {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StorageEngineType {
     /// RocksDB storage
+    #[serde(alias = "rocks_db", alias = "rocksdb", alias = "Rocksdb")]
     RocksDB,
 
     /// File-based storage
+    #[serde(alias = "file", alias = "FILE")]
     File,
 
     /// In-memory storage (for testing)
+    #[serde(alias = "memory", alias = "MEMORY")]
     Memory,
 }
 
@@ -239,7 +242,7 @@ pub struct ControllerConfig {
     pub storage_path: String,
 
     /// Storage engine selected for local Controller artifacts.
-    #[serde(rename = "storageBackend")]
+    #[serde(rename = "storageEngineType", alias = "storageBackend")]
     pub storage_engine_type: StorageEngineType,
 
     /// Whether the controller may elect an unclean master on this node
@@ -298,7 +301,9 @@ fn parse_update_value<T>(key: &'static str, value: &str) -> ControllerResult<T>
 where
     T: DeserializeOwned,
 {
-    serde_json::from_str(value).map_err(|error| crate::error::configuration_invalid_by(key, error))
+    serde_json::from_str(value)
+        .or_else(|_| serde_json::from_str(&format!("\"{value}\"")))
+        .map_err(|error| crate::error::configuration_invalid_by(key, error))
 }
 
 fn unknown_update_key(_key: &str) -> rocketmq_error::Error {
@@ -606,7 +611,12 @@ impl ControllerConfig {
 
     /// Check if a configuration key is in the blacklist
     pub fn is_config_in_blacklist(&self, key: &str) -> bool {
-        self.config_black_list.split(';').any(|item| item.trim() == key)
+        self.config_black_list.split(';').any(|item| {
+            let trimmed = item.trim();
+            trimmed == key
+                || (trimmed == "storageEngineType" && key == "storageBackend")
+                || (trimmed == "storageBackend" && key == "storageEngineType")
+        })
     }
 
     /// Validate the configuration
@@ -766,7 +776,7 @@ impl ControllerConfig {
         write_property!("snapshotLogsSinceLast={}", self.snapshot_logs_since_last);
         write_property!("snapshotMaxLogEntriesToKeep={}", self.snapshot_max_log_entries_to_keep);
         write_property!("storagePath={}", self.storage_path);
-        write_property!("storageBackend={}", self.storage_engine_type);
+        write_property!("storageEngineType={}", self.storage_engine_type);
         write_property!(
             "enableElectUncleanMasterLocal={}",
             self.enable_elect_unclean_master_local
@@ -776,6 +786,9 @@ impl ControllerConfig {
     }
     pub async fn update(&mut self, properties: HashMap<String, String>) -> ControllerResult<()> {
         let _lock = self.rw_lock.write().await;
+        if properties.contains_key("storageEngineType") && properties.contains_key("storageBackend") {
+            return Err(crate::error::configuration_invalid("storageEngineType"));
+        }
         for (key, value) in &properties {
             match key.as_str() {
                 "rocketmqHome" => {
@@ -914,8 +927,15 @@ impl ControllerConfig {
                     self.storage_path = value.clone();
                 }
 
-                "storageBackend" => {
-                    self.storage_engine_type = parse_update_value::<StorageEngineType>("storageBackend", value)?;
+                "storageEngineType" | "storageBackend" => {
+                    self.storage_engine_type = parse_update_value::<StorageEngineType>(
+                        if key == "storageBackend" {
+                            "storageBackend"
+                        } else {
+                            "storageEngineType"
+                        },
+                        value,
+                    )?;
                 }
 
                 "enableElectUncleanMasterLocal" => {
@@ -968,19 +988,37 @@ path = "/rocketmq"
     }
 
     #[test]
-    fn storage_engine_type_round_trips_through_storage_backend_key() {
-        let config = parse_controller_toml(
+    fn storage_engine_type_round_trips_through_canonical_and_legacy_keys() {
+        let canonical = parse_controller_toml(
+            r#"
+storageEngineType = "Memory"
+"#,
+        )
+        .expect("storageEngineType should select the Controller storage engine");
+        assert_eq!(canonical.storage_engine_type, StorageEngineType::Memory);
+
+        let legacy = parse_controller_toml(
             r#"
 storageBackend = "Memory"
 "#,
         )
-        .expect("storageBackend should select the Controller storage engine");
-        assert_eq!(config.storage_engine_type, StorageEngineType::Memory);
+        .expect("storageBackend legacy alias should select the Controller storage engine");
+        assert_eq!(legacy.storage_engine_type, StorageEngineType::Memory);
 
-        let value = serde_json::to_value(&config).expect("Controller configuration should serialize");
+        // When both spellings are present, deserialization must fail
+        assert!(parse_controller_toml(
+            r#"
+storageEngineType = "Memory"
+storageBackend = "Memory"
+"#,
+        )
+        .is_err());
+
+        // Serialized output must contain canonical storageEngineType only
+        let value = serde_json::to_value(&canonical).expect("Controller configuration should serialize");
         let object = value.as_object().expect("controller config is an object");
-        assert_eq!(value["storageBackend"], "Memory");
-        assert!(!object.contains_key("storageEngineType"));
+        assert_eq!(value["storageEngineType"], "Memory");
+        assert!(!object.contains_key("storageBackend"));
 
         let restored: ControllerConfig =
             serde_json::from_value(value).expect("serialized Controller configuration should deserialize");
@@ -1200,7 +1238,7 @@ storageBackend = "Memory"
         assert!(result.contains("scanNotActiveBrokerInterval=10000"));
         assert!(result.contains("controllerThreadPoolNums=32"));
         assert!(result.contains("enableElectUncleanMaster=true"));
-        assert!(result.contains("storageBackend=rocks_db"));
+        assert!(result.contains("storageEngineType=rocks_db"));
     }
 
     #[test]
