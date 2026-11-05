@@ -54,8 +54,8 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
-use crate::runtime::spawn_client_blocking_io_with_context;
 use crate::runtime::spawn_client_tracked_task_with_context;
+use crate::runtime::spawn_consume_listener_with_context;
 use crate::runtime::ClientTrackedTaskHandle;
 use rocketmq_runtime::ChildServiceContext;
 
@@ -481,10 +481,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         let listener = self.message_listener.clone();
         let group_for_span = self.consumer_group.clone();
         let telemetry_handle = self.telemetry_handle.clone();
-        let status = spawn_client_blocking_io_with_context(
-            &self.service_context,
-            "client.concurrent.consume_direct",
-            move || {
+        let status =
+            spawn_consume_listener_with_context(&self.service_context, "client.concurrent.consume_direct", move || {
                 let context = ConsumeConcurrentlyContext::new(mq);
                 let msgs_refs: Vec<&MessageExt> = msgs.iter().map(|m| m.as_ref()).collect();
                 let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
@@ -524,15 +522,14 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                     }
                 }
                 result
-            },
-        )
-        .await
-        .unwrap_or_else(|join_err| {
-            error!("consume_message_directly task panicked: {:?}", join_err);
-            Err(crate::ClientError::illegal_argument(format!(
-                "consume_message_directly task panicked: {join_err:?}"
-            )))
-        });
+            })
+            .await
+            .unwrap_or_else(|join_err| {
+                error!("consume_message_directly task panicked: {:?}", join_err);
+                Err(crate::ClientError::illegal_argument(format!(
+                    "consume_message_directly task panicked: {join_err:?}"
+                )))
+            });
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
         self.client_metrics.record_consume(1, consume_rt);
@@ -724,7 +721,7 @@ impl ConsumeRequest {
             let group_for_err = self.consumer_group.clone();
             let process_span_for_blocking = process_span.clone();
 
-            let (blocking_status, blocking_has_exception, returned_context) = spawn_client_blocking_io_with_context(
+            let (blocking_status, blocking_has_exception, returned_context) = spawn_consume_listener_with_context(
                 &consume_message_concurrently_service.service_context,
                 "client.concurrent.consume",
                 move || {

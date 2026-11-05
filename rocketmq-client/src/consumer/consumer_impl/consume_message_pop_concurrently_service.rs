@@ -53,7 +53,7 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
-use crate::runtime::spawn_client_blocking_io_with_context;
+use crate::runtime::spawn_consume_listener_with_context;
 use rocketmq_runtime::ChildServiceContext;
 
 const POP_CONCURRENT_SCHEDULER_CAPACITY: usize = 4_096;
@@ -221,7 +221,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let group_for_span = self.consumer_group.clone();
         let telemetry_handle = self.telemetry_handle.clone();
-        let status_result = spawn_client_blocking_io_with_context(
+        let status_result = spawn_consume_listener_with_context(
             &self.service_context,
             "client.pop_concurrent.consume_direct",
             move || {
@@ -663,7 +663,7 @@ impl ConsumeRequest {
             ack_index: i32::MAX,
         };
         let process_span_for_blocking = process_span.clone();
-        let blocking_result = spawn_client_blocking_io_with_context(
+        let blocking_result = spawn_consume_listener_with_context(
             &consume_message_concurrently_service.service_context,
             "client.pop_concurrent.consume",
             move || {

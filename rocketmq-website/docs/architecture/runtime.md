@@ -59,7 +59,7 @@ Task-group admission moves through open, closing, closed and shutdown-completed 
 
 ## Blocking work retains capacity until it exits
 
-Child contexts expose managed `storage_io`, `metadata_io` and `cpu_crypto` executors. Lanes have individual concurrency/queue policies and share the owner's global blocking admission budget. Each lane admits waiters in arrival order, and a release wakes at most one waiter. Cloning a lane does not create another pool.
+Child contexts expose managed `storage_io`, `metadata_io` and `cpu_crypto` executors. Lanes have individual concurrency/queue policies and share the owner's global blocking admission budget. Each lane admits waiters in arrival order, and a release wakes at most one waiter. Cloning a lane does not create another pool. A fourth lane, `consume_listener`, runs user consume listeners on capacity of its own outside that budget (64 by default), so slow listeners and the managed lanes cannot starve each other.
 
 Queue timeout bounds admission waiting. Task timeout bounds the caller's wait after admission. Absolute-deadline methods cap both phases with the same deadline. An already-running blocking closure cannot be stopped merely by dropping its future or timing out its caller.
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -55,6 +56,7 @@ fn managed_lanes_execute_on_the_owner_when_called_from_a_foreign_runtime() {
             BlockingLane::StorageIo,
             BlockingLane::MetadataIo,
             BlockingLane::CpuCrypto,
+            BlockingLane::ConsumeListener,
         ] {
             let executor = service.blocking(lane).clone();
             let actual = executor
@@ -64,6 +66,61 @@ fn managed_lanes_execute_on_the_owner_when_called_from_a_foreign_runtime() {
             assert_eq!(actual, owner_id, "{lane:?} must use its injected runtime");
             assert!(executor.snapshot().tasks.is_empty());
             assert_eq!(executor.snapshot().global_running, 0);
+        }
+    });
+    assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
+}
+
+/// On a one-CPU profile the shared lanes hold only a few slots, yet twenty listener calls must
+/// all run at once, and storage I/O must still be admitted while every listener blocks.
+#[test]
+fn consume_listener_lane_runs_twenty_calls_on_one_cpu_without_taking_managed_slots() {
+    const LISTENERS: usize = 20;
+    let owner = owner();
+    let service = owner.root_context().component("consumer");
+    owner.block_on(async {
+        let entered = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        let mut calls = tokio::task::JoinSet::new();
+        for _ in 0..LISTENERS {
+            let executor = service.consume_listener().clone();
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            calls.spawn(async move {
+                executor
+                    .spawn_io("listener", move || {
+                        entered.fetch_add(1, Ordering::SeqCst);
+                        let deadline = Instant::now() + Duration::from_secs(10);
+                        while !release.load(Ordering::SeqCst) && Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                    })
+                    .await
+            });
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while entered.load(Ordering::SeqCst) < LISTENERS && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            entered.load(Ordering::SeqCst),
+            LISTENERS,
+            "every listener call runs at once"
+        );
+        assert_eq!(service.consume_listener().snapshot().global_running, LISTENERS);
+
+        let storage = service.storage_io().spawn_io("storage", || 7).await.unwrap();
+        assert_eq!(storage, 7, "managed lanes are admitted while listeners block");
+        assert_eq!(
+            service.storage_io().snapshot().global_running,
+            0,
+            "listener calls do not occupy the shared budget"
+        );
+
+        release.store(true, Ordering::SeqCst);
+        while let Some(call) = calls.join_next().await {
+            call.unwrap().unwrap();
         }
     });
     assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());

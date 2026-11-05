@@ -251,16 +251,22 @@ crate 之外的 `match` 需要通配分支。
 | `storage_io()` | `StorageIo` | 短时存储和文件系统操作。 |
 | `metadata_io()` | `MetadataIo` | 元数据持久化。 |
 | `cpu_crypto()` | `CpuCrypto` | 有界 CPU 或密码学计算。 |
+| `consume_listener()` | `ConsumeListener` | 用户的消费监听器，可能在整个消费超时内阻塞。 |
 
 同一运行时所有者的受管通道共享全局准入预算，上限为
 `RuntimeConfig::max_blocking_threads`。每个通道还有独立的并发上限和队列限制。
 空闲容量可以借用；当某通道有等待者时，其预留容量会受到保护，不再借给新的借用者。
 克隆执行器或派生上下文共享已有容量，不会创建另一个线程池。
 
+`ConsumeListener` 不在这份预算之内。它有独立的容量（`BlockingLanePolicies::consume_listener`，
+默认 64，与 CPU 数无关），队列可容纳 1,024 个调用、最多等待 15 分钟；对正在运行的监听器，
+调用方最多等待一天。因此慢监听器不会占用存储或元数据 I/O 所依赖的槽位，这些通道也不会挤占监听器。
+
 同一通道的等待者按到达顺序获准，新提交不会越过本通道已排队的等待者。释放的槽位直接
 交给能够使用它的等待者，只唤醒这一个等待者；仍低于预留容量的通道优先。Tokio 阻塞线程池
-的线程数为 `RuntimeConfig::tokio_blocking_threads()`：受管容量再加 `max(2, 容量 / 8)`
-的余量，使直接调用的 `spawn_blocking`、DNS 解析和 `tokio::fs` 不会占用已准入工作所依赖的线程。
+的线程数为 `RuntimeConfig::tokio_blocking_threads()`：受管容量、消费监听器容量，再加
+`max(2, 受管容量 / 8)` 的余量，使直接调用的 `spawn_blocking`、DNS 解析和 `tokio::fs`
+不会占用已准入工作所依赖的线程。Tokio 按需创建这些线程，没有消费者的进程不会因监听器容量多占线程。
 
 `max_queue_depth` 在准入队列已满时拒绝提交。`queue_timeout` 限制等待执行容量的时间；
 `task_timeout` 限制准入后调用方的等待时间。`spawn_until` 和 `spawn_io_until`

@@ -125,10 +125,15 @@ impl RuntimeConfig {
         (self.max_blocking_threads / 8).max(2)
     }
 
-    /// Size of the Tokio blocking pool: the managed capacity plus
-    /// [`Self::blocking_thread_headroom`].
+    /// Size of the Tokio blocking pool: the managed capacity, the consume
+    /// listener lane's own capacity, and [`Self::blocking_thread_headroom`].
+    ///
+    /// Tokio starts blocking threads on demand and retires idle ones after
+    /// [`Self::thread_keep_alive`], so a process without consumers does not
+    /// keep the listener threads alive.
     pub fn tokio_blocking_threads(&self) -> usize {
         self.max_blocking_threads
+            .saturating_add(self.blocking_lane_policies.consume_listener.max_concurrency)
             .saturating_add(self.blocking_thread_headroom())
     }
 
@@ -225,8 +230,11 @@ mod tests {
         assert_eq!(capped.max_blocking_threads, MAX_ENTRYPOINT_BLOCKING_THREADS);
         assert_eq!(
             RuntimeConfig::for_parallelism("headroom-test", 32).tokio_blocking_threads(),
-            128 + 16
+            128 + 64 + 16
         );
+        let single_cpu = RuntimeConfig::for_parallelism("single-cpu-test", 1);
+        assert_eq!(single_cpu.blocking_lane_policies.consume_listener.max_concurrency, 64);
+        assert_eq!(single_cpu.tokio_blocking_threads(), 4 + 64 + 2);
     }
 
     #[test]
@@ -235,7 +243,11 @@ mod tests {
             .with_max_blocking_threads(6)
             .expect("explicit safe limit");
         assert_eq!(config.max_blocking_threads, 6);
-        assert_eq!(config.tokio_blocking_threads(), 8);
+        assert_eq!(config.tokio_blocking_threads(), 6 + 64 + 2);
+        assert_eq!(
+            config.blocking_lane_policies.consume_listener.max_concurrency, 64,
+            "an explicit managed limit leaves the listener lane's own capacity alone"
+        );
         assert_eq!(config.blocking_lane_policies.storage_io.max_concurrency, 6);
         assert_eq!(config.blocking_lane_policies.metadata_io.max_concurrency, 6);
         assert!(config.blocking_lane_policies.cpu_crypto.max_concurrency <= 6);

@@ -60,8 +60,8 @@ use crate::consumer::message_queue_lock::MessageQueueLock;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::runtime::schedule_client_fixed_delay_task_with_context;
-use crate::runtime::spawn_client_blocking_io_with_context;
 use crate::runtime::spawn_client_task_with_context;
+use crate::runtime::spawn_consume_listener_with_context;
 use crate::runtime::ClientScheduledTaskHandle;
 use rocketmq_runtime::ChildServiceContext;
 
@@ -1011,7 +1011,7 @@ impl ConsumeRequest {
                 let mq_for_spawn = self.message_queue.clone();
                 let consumer_group_for_span = self.consumer_group.clone();
                 let telemetry_handle = consume_message_orderly_service_inner.telemetry_handle.clone();
-                let (consume_result, context, process_span) = spawn_client_blocking_io_with_context(
+                let (consume_result, context, process_span) = spawn_consume_listener_with_context(
                     &consume_message_orderly_service_inner.service_context,
                     "client.orderly.consume",
                     move || {

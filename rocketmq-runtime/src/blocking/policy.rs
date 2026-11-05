@@ -91,19 +91,53 @@ pub enum BlockingLane {
     MetadataIo,
     /// Represents the cpu crypto case.
     CpuCrypto,
+    /// User consume listeners, which may block for a whole consume timeout.
+    ///
+    /// Unlike the other lanes this one does not draw from the global blocking
+    /// budget: it has a capacity of its own, and the Tokio blocking pool is
+    /// sized to hold it as well, so a slow listener cannot take slots that
+    /// storage or metadata I/O count on, and they cannot starve listeners.
+    ConsumeListener,
 }
 
 impl BlockingLane {
-    pub(crate) const ALL: [Self; 3] = [Self::StorageIo, Self::MetadataIo, Self::CpuCrypto];
+    pub(crate) const ALL: [Self; 4] = [
+        Self::StorageIo,
+        Self::MetadataIo,
+        Self::CpuCrypto,
+        Self::ConsumeListener,
+    ];
+
+    /// Lanes that share the runtime's global blocking budget.
+    pub(crate) const MANAGED: [Self; 3] = [Self::StorageIo, Self::MetadataIo, Self::CpuCrypto];
 
     pub(crate) const fn index(self) -> usize {
         match self {
             Self::StorageIo => 0,
             Self::MetadataIo => 1,
             Self::CpuCrypto => 2,
+            Self::ConsumeListener => 3,
         }
     }
 }
+
+/// Default listener capacity: the default `consume_thread_max` of one push
+/// consumer. Like Java's consume thread pool it does not depend on the CPU
+/// count, because listeners usually wait on I/O.
+const CONSUME_LISTENER_DEFAULT_CONCURRENCY: usize = 64;
+
+/// Listener calls queued behind a busy lane wait rather than being rejected;
+/// each consumer already bounds its own in-flight calls.
+const CONSUME_LISTENER_DEFAULT_QUEUE_DEPTH: usize = 1024;
+
+/// Java's default `consumeTimeout`. A call still queued after this long is
+/// rejected, and a call running longer is logged when it finishes.
+const CONSUME_LISTENER_DEFAULT_QUEUE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// How long a caller keeps waiting on a running listener. A listener cannot be
+/// interrupted; one that overruns `consumeTimeout` is handled by the consumer's
+/// expiry cleanup, so the caller does not give up early and cause a duplicate.
+const CONSUME_LISTENER_DEFAULT_TASK_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Represents blocking lane policies.
 #[derive(Debug, Clone)]
@@ -114,6 +148,9 @@ pub struct BlockingLanePolicies {
     pub metadata_io: BlockingPoolPolicy,
     /// The cpu crypto value.
     pub cpu_crypto: BlockingPoolPolicy,
+    /// The consume listener value. Its capacity is not part of the global
+    /// blocking budget; see [`BlockingLane::ConsumeListener`].
+    pub consume_listener: BlockingPoolPolicy,
 }
 
 impl BlockingLanePolicies {
@@ -138,9 +175,19 @@ impl BlockingLanePolicies {
                 max_queue_depth: parallelism.saturating_mul(4).max(8),
                 ..BlockingPoolPolicy::default()
             },
+            consume_listener: BlockingPoolPolicy {
+                name: "rocketmq-blocking.consume-listener".to_string(),
+                max_concurrency: CONSUME_LISTENER_DEFAULT_CONCURRENCY,
+                max_queue_depth: CONSUME_LISTENER_DEFAULT_QUEUE_DEPTH,
+                queue_timeout: CONSUME_LISTENER_DEFAULT_QUEUE_TIMEOUT,
+                task_timeout: CONSUME_LISTENER_DEFAULT_TASK_TIMEOUT,
+                warn_after: CONSUME_LISTENER_DEFAULT_QUEUE_TIMEOUT,
+            },
         }
     }
 
+    /// Caps the lanes that share the global budget. The consume listener lane
+    /// keeps its own capacity.
     pub(crate) fn cap_concurrency(&mut self, global_capacity: usize) {
         self.storage_io.max_concurrency = self.storage_io.max_concurrency.min(global_capacity).max(1);
         self.metadata_io.max_concurrency = self.metadata_io.max_concurrency.min(global_capacity).max(1);
@@ -155,12 +202,13 @@ impl BlockingLanePolicies {
     pub fn validate(&self) -> Result<(), RuntimeContractViolation> {
         self.storage_io.validate()?;
         self.metadata_io.validate()?;
-        self.cpu_crypto.validate()
+        self.cpu_crypto.validate()?;
+        self.consume_listener.validate()
     }
 
     pub(crate) fn validate_for_global_capacity(&self, global_capacity: usize) -> Result<(), RuntimeContractViolation> {
         self.validate()?;
-        if global_capacity < BlockingLane::ALL.len() {
+        if global_capacity < BlockingLane::MANAGED.len() {
             return Err(RuntimeContractViolation::InvalidConfiguration {
                 policy: RuntimeContractPolicy::BlockingGlobalCapacityCoversLanes,
             });
@@ -179,6 +227,7 @@ impl BlockingLanePolicies {
             BlockingLane::StorageIo => &self.storage_io,
             BlockingLane::MetadataIo => &self.metadata_io,
             BlockingLane::CpuCrypto => &self.cpu_crypto,
+            BlockingLane::ConsumeListener => &self.consume_listener,
         }
     }
 
@@ -187,9 +236,11 @@ impl BlockingLanePolicies {
             BlockingLane::StorageIo => self.storage_io.max_concurrency,
             BlockingLane::MetadataIo => self.metadata_io.max_concurrency,
             BlockingLane::CpuCrypto => self.cpu_crypto.max_concurrency,
+            BlockingLane::ConsumeListener => self.consume_listener.max_concurrency,
         }
     }
 
+    /// Sum of the ceilings of the lanes that share the global budget.
     pub(crate) fn total_max_concurrency(&self) -> usize {
         self.storage_io
             .max_concurrency
@@ -203,12 +254,15 @@ impl BlockingLanePolicies {
         storage_io.name = format!("{}.storage-io", policy.name);
         let mut metadata_io = policy.clone();
         metadata_io.name = format!("{}.metadata-io", policy.name);
-        let mut cpu_crypto = policy;
-        cpu_crypto.name = format!("{}.cpu-crypto", cpu_crypto.name);
+        let mut cpu_crypto = policy.clone();
+        cpu_crypto.name = format!("{}.cpu-crypto", policy.name);
+        let mut consume_listener = policy;
+        consume_listener.name = format!("{}.consume-listener", consume_listener.name);
         Self {
             storage_io,
             metadata_io,
             cpu_crypto,
+            consume_listener,
         }
     }
 }

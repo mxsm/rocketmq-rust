@@ -458,10 +458,11 @@ const RUNTIME_TASK_KINDS: [RuntimeTaskKindV1; 7] = [
 ];
 
 #[cfg(feature = "otel-metrics")]
-const RUNTIME_BLOCKING_LANES: [RuntimeBlockingLaneV1; 3] = [
+const RUNTIME_BLOCKING_LANES: [RuntimeBlockingLaneV1; 4] = [
     RuntimeBlockingLaneV1::StorageIo,
     RuntimeBlockingLaneV1::MetadataIo,
     RuntimeBlockingLaneV1::CpuCrypto,
+    RuntimeBlockingLaneV1::ConsumeListener,
 ];
 
 const fn component_name(component: RuntimeComponent) -> &'static str {
@@ -496,6 +497,7 @@ const fn lane_name(lane: RuntimeBlockingLaneV1) -> &'static str {
         RuntimeBlockingLaneV1::StorageIo => "storage_io",
         RuntimeBlockingLaneV1::MetadataIo => "metadata_io",
         RuntimeBlockingLaneV1::CpuCrypto => "cpu_crypto",
+        RuntimeBlockingLaneV1::ConsumeListener => "consume_listener",
     }
 }
 
