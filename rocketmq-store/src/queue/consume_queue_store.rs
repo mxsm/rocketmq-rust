@@ -233,6 +233,10 @@ pub trait ConsumeQueueStoreTrait: Sync + Any {
 
     /// Get the consume queue table
     ///
+    /// The table is for reading and iteration. Queues are added and removed only through the
+    /// store, which keeps its lookup index in step with the table; a queue inserted directly into
+    /// the returned table is not found by the store's lookups.
+    ///
     /// # Returns
     /// The consume queue table mapping topics to queues
     fn get_consume_queue_table(&self) -> Arc<ConsumeQueueTable>;

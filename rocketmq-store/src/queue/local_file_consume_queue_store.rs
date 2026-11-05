@@ -168,9 +168,43 @@ struct Inner {
     pub(crate) broker_config: Arc<StoreRuntimeConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
     pub(crate) consume_queue_table: Arc<ConsumeQueueTable>,
+    /// Read view of `consume_queue_table` for lookups on the send, dispatch and pull paths.
+    ///
+    /// Every write to the table republishes the changed topic here while still holding the table
+    /// lock, so after each write the index holds the same queues. Lookups then take one map shard
+    /// lock instead of the table's global mutex, and topics on different shards do not contend.
+    /// Each topic's queues are copied on write, which keeps an update proportional to that topic's
+    /// queue count even with many LMQ topics.
+    queue_index: DashMap<CheetahString, Arc<HashMap<i32, ArcConsumeQueue>>>,
     managed_lifecycle_runtime: RwLock<Option<ManagedLifecycleRuntime>>,
-    /// Serializes queue admission with destructive work for the same topic.
-    topic_lifecycle_locks: parking_lot::Mutex<HashMap<CheetahString, Arc<RwLock<()>>>>,
+    /// Serializes queue admission with destructive work for the same topic. Entries are never
+    /// removed, so a topic keeps one fence for the store's lifetime.
+    topic_lifecycle_locks: DashMap<CheetahString, Arc<RwLock<()>>>,
+}
+
+impl Inner {
+    /// Republishes `topic` in [`Self::queue_index`] from the locked table.
+    ///
+    /// Callers hold the `consume_queue_table` lock, which serializes publications.
+    fn publish_topic_index(
+        &self,
+        table: &HashMap<CheetahString, HashMap<i32, ArcConsumeQueue>>,
+        topic: &CheetahString,
+    ) {
+        match table.get(topic) {
+            Some(queues) if !queues.is_empty() => {
+                self.queue_index.insert(topic.clone(), Arc::new(queues.clone()));
+            }
+            _ => {
+                self.queue_index.remove(topic);
+            }
+        }
+    }
+
+    #[inline]
+    fn find_indexed_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+        self.queue_index.get(topic)?.get(&queue_id).cloned()
+    }
 }
 
 #[derive(Clone)]
@@ -361,25 +395,23 @@ impl ConsumeQueueStore {
     }
 
     fn topic_lifecycle_lock(&self, topic: &CheetahString) -> Arc<RwLock<()>> {
-        self.inner
-            .topic_lifecycle_locks
-            .lock()
-            .entry(topic.clone())
-            .or_insert_with(|| Arc::new(RwLock::new(())))
-            .clone()
+        if let Some(lock) = self.inner.topic_lifecycle_locks.get(topic) {
+            return Arc::clone(lock.value());
+        }
+        Arc::clone(
+            self.inner
+                .topic_lifecycle_locks
+                .entry(topic.clone())
+                .or_insert_with(|| Arc::new(RwLock::new(())))
+                .value(),
+        )
     }
 
     fn find_or_create_consume_queue_unfenced(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue {
-        let managed_runtime = self.inner.managed_lifecycle_runtime.read().clone();
         drive_find_or_create_consume_queue(
+            || self.inner.find_indexed_queue(topic, queue_id),
             || {
-                self.inner
-                    .consume_queue_table
-                    .lock()
-                    .get(topic)
-                    .and_then(|topic_map| topic_map.get(&queue_id).cloned())
-            },
-            || {
+                let managed_runtime = self.inner.managed_lifecycle_runtime.read().clone();
                 let context = self
                     .inner
                     .context
@@ -443,14 +475,15 @@ impl ConsumeQueueStore {
                 }
             },
             |new_queue| {
-                self.inner
-                    .consume_queue_table
-                    .lock()
+                let mut table = self.inner.consume_queue_table.lock();
+                let queue = table
                     .entry(topic.clone())
                     .or_default()
                     .entry(queue_id)
                     .or_insert(new_queue)
-                    .clone()
+                    .clone();
+                self.inner.publish_topic_index(&table, topic);
+                queue
             },
         )
     }
@@ -489,6 +522,7 @@ impl ConsumeQueueStore {
         match queues.get(&queue_id) {
             Some(current) if current.ptr_eq(expected) => {
                 queues.remove(&queue_id);
+                self.inner.publish_topic_index(&table, topic);
                 true
             }
             None => true,
@@ -502,6 +536,7 @@ impl ConsumeQueueStore {
         let empty = table.get(topic).is_none_or(HashMap::is_empty);
         if empty {
             table.remove(topic);
+            self.inner.publish_topic_index(&table, topic);
         }
         empty
     }
@@ -934,6 +969,9 @@ impl ConsumeQueueStore {
                 if remove_topic {
                     consume_queue_table.remove(&topic);
                 }
+                if removed {
+                    self.inner.publish_topic_index(&consume_queue_table, &topic);
+                }
                 removed
             };
 
@@ -949,9 +987,7 @@ impl ConsumeQueueStore {
     }
 
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
-        let table = self.inner.consume_queue_table.lock();
-        let queue_table = table.get(topic)?;
-        queue_table.get(&queue_id).cloned()
+        self.inner.find_indexed_queue(topic, queue_id)
     }
 
     fn encode_cq_unit(cq_unit: &CqUnit) -> Bytes {
@@ -979,8 +1015,9 @@ impl ConsumeQueueStore {
                 broker_config,
                 queue_offset_operator: Default::default(),
                 consume_queue_table: Arc::new(Default::default()),
+                queue_index: DashMap::new(),
                 managed_lifecycle_runtime: RwLock::new(None),
-                topic_lifecycle_locks: parking_lot::Mutex::new(HashMap::new()),
+                topic_lifecycle_locks: DashMap::new(),
             })),
         }
     }
@@ -1625,8 +1662,11 @@ impl ConsumeQueueStore {
     #[inline]
     fn put_consume_queue(&self, topic: CheetahString, queue_id: i32, consume_queue: ArcConsumeQueue) {
         let mut consume_queue_table = self.inner.consume_queue_table.lock();
-        let topic_table = consume_queue_table.entry(topic).or_default();
-        topic_table.insert(queue_id, consume_queue);
+        consume_queue_table
+            .entry(topic.clone())
+            .or_default()
+            .insert(queue_id, consume_queue);
+        self.inner.publish_topic_index(&consume_queue_table, &topic);
     }
 
     #[inline]
@@ -2202,13 +2242,7 @@ mod tests {
         let topic = CheetahString::from_static_str("TrackingTopic0");
         let expected = store.find_consume_queue_map(&topic).expect("tracked topic");
         let unexpected = expected.get(&0).expect("tracked queue").clone();
-        store
-            .inner
-            .consume_queue_table
-            .lock()
-            .get_mut(&topic)
-            .expect("tracked topic")
-            .insert(1, unexpected);
+        store.put_consume_queue(topic.clone(), 1, unexpected);
 
         assert!(!store.remove_topic_if_empty(&topic));
         assert_eq!(store.find_consume_queue_map(&topic).expect("topic retained").len(), 2);
@@ -2345,6 +2379,58 @@ mod tests {
         );
         store.set_context(message_store.consume_queue_context());
         (store, simple_store_path)
+    }
+
+    #[test]
+    fn queue_lookups_follow_every_table_write() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("IndexedTopic");
+        let (store, _) = consume_queue_load_store(root.path(), &topic);
+
+        assert!(store.find_consume_queue(&topic, 0).is_none());
+        let created = store.find_or_create_consume_queue(&topic, 0);
+        let found = store.find_consume_queue(&topic, 0).expect("a created queue is indexed");
+        assert!(found.ptr_eq(&created));
+        assert!(store.find_or_create_consume_queue(&topic, 0).ptr_eq(&created));
+
+        assert!(store.remove_destroyed_topic_queue(&topic, 0, &created));
+        assert!(
+            store.find_consume_queue(&topic, 0).is_none(),
+            "a removed queue leaves the index"
+        );
+        assert!(store.remove_topic_if_empty(&topic));
+        assert!(!store.inner.queue_index.contains_key(&topic));
+
+        let replacement = store.find_or_create_consume_queue(&topic, 0);
+        assert!(!replacement.ptr_eq(&created));
+        assert!(store
+            .find_consume_queue(&topic, 0)
+            .expect("the replacement is indexed")
+            .ptr_eq(&replacement));
+    }
+
+    #[test]
+    fn concurrent_creators_of_one_queue_share_a_single_instance() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("RacingTopic");
+        let (store, _) = consume_queue_load_store(root.path(), &topic);
+
+        let queues = std::thread::scope(|scope| {
+            let creators = (0..8)
+                .map(|_| scope.spawn(|| store.find_or_create_consume_queue(&topic, 3)))
+                .collect::<Vec<_>>();
+            creators
+                .into_iter()
+                .map(|creator| creator.join().expect("creator thread"))
+                .collect::<Vec<_>>()
+        });
+
+        assert!(queues.iter().all(|queue| queue.ptr_eq(&queues[0])));
+        assert!(store
+            .find_consume_queue(&topic, 3)
+            .expect("the shared queue is indexed")
+            .ptr_eq(&queues[0]));
+        assert_eq!(store.inner.consume_queue_table.lock()[&topic].len(), 1);
     }
 
     #[test]
@@ -2577,13 +2663,7 @@ mod tests {
             ..DispatchRequest::default()
         });
 
-        store
-            .inner
-            .consume_queue_table
-            .lock()
-            .entry(topic.clone())
-            .or_default()
-            .insert(queue_id, ArcConsumeQueue::new(Box::new(batch_queue)));
+        store.put_consume_queue(topic.clone(), queue_id, ArcConsumeQueue::new(Box::new(batch_queue)));
 
         let bytes = crate::runtime::test_runtime_owner().block_on(store.get(&topic, queue_id, 0));
 
