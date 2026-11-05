@@ -35,8 +35,9 @@ pub struct MQFaultStrategy {
     latency_fault_tolerance: Arc<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
     send_latency_fault_enable: Arc<AtomicBool>,
     start_detector_enable: Arc<AtomicBool>,
-    latency_max: Vec<u64>,
-    not_available_duration: Vec<u64>,
+    // Shared so the per-send snapshot clone does not copy the tables.
+    latency_max: Arc<[u64]>,
+    not_available_duration: Arc<[u64]>,
 }
 
 impl MQFaultStrategy {
@@ -72,8 +73,8 @@ impl MQFaultStrategy {
             latency_fault_tolerance: Arc::clone(&latency_fault_tolerance),
             send_latency_fault_enable: Arc::new(AtomicBool::new(client_config.send_latency_enable)),
             start_detector_enable: Arc::new(AtomicBool::new(client_config.start_detector_enable)),
-            latency_max: Self::DEFAULT_LATENCY_MAX.to_vec(),
-            not_available_duration: Self::DEFAULT_NOT_AVAILABLE_DURATION.to_vec(),
+            latency_max: Arc::from(Self::DEFAULT_LATENCY_MAX.as_slice()),
+            not_available_duration: Arc::from(Self::DEFAULT_NOT_AVAILABLE_DURATION.as_slice()),
         }
     }
 
@@ -161,7 +162,7 @@ impl MQFaultStrategy {
     }
 
     pub fn set_latency_max(&mut self, latency_max: impl Into<Vec<u64>>) {
-        self.latency_max = latency_max.into();
+        self.latency_max = Arc::from(latency_max.into());
     }
 
     pub fn get_not_available_duration(&self) -> &[u64] {
@@ -169,7 +170,7 @@ impl MQFaultStrategy {
     }
 
     pub fn set_not_available_duration(&mut self, not_available_duration: impl Into<Vec<u64>>) {
-        self.not_available_duration = not_available_duration.into();
+        self.not_available_duration = Arc::from(not_available_duration.into());
     }
 
     pub async fn update_fault_item(

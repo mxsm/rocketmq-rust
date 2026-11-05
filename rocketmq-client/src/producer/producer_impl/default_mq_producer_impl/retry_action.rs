@@ -65,7 +65,7 @@ impl DefaultMQProducerImpl {
         &self,
         queued_retry_queue: &mut Option<MessageQueue>,
         topic: &CheetahString,
-        current_publish_info: &mut TopicPublishInfo,
+        current_publish_info: &mut TopicPublishInfoSnapshot,
         last_broker_name: Option<&CheetahString>,
         reset_index: bool,
         producer_config: &ProducerConfig,
@@ -86,7 +86,7 @@ impl DefaultMQProducerImpl {
         else {
             return Err(RetryInput::RouteUnavailable);
         };
-        *current_publish_info = publish_info;
+        *current_publish_info = Arc::new(publish_info);
         self.select_one_message_queue(current_publish_info, last_broker_name, reset_index)
             .ok_or(RetryInput::RouteUnavailable)
     }
@@ -122,7 +122,7 @@ impl DefaultMQProducerImpl {
         action: RetryAction,
         ctx: &SendContext,
         topic: &CheetahString,
-        current_publish_info: &mut TopicPublishInfo,
+        current_publish_info: &mut TopicPublishInfoSnapshot,
         current_queue: &MessageQueue,
         queued_retry_queue: &mut Option<MessageQueue>,
     ) -> Result<bool, RetryInput> {
@@ -140,7 +140,7 @@ impl DefaultMQProducerImpl {
                 let Some(publish_info) = instance.refresh_topic_route_info_once(topic, ctx.deadline).await? else {
                     return Err(RetryInput::RouteUnavailable);
                 };
-                *current_publish_info = publish_info;
+                *current_publish_info = Arc::new(publish_info);
             }
             RetryAction::RefreshLeader => return Ok(false),
             RetryAction::SwitchBroker => {}

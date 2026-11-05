@@ -249,14 +249,21 @@ where
         not_available_duration: u64,
         reachable: bool,
     ) {
-        let entry = self
-            .fault_item_table
-            .entry(name.clone())
-            .or_insert_with(|| Arc::new(FaultItem::new(name.clone())));
+        // Every successful send updates its broker's item. Look it up under the shard read lock and
+        // only take the write lock the first time a broker is seen; the item's fields are atomic.
+        let existing = self.fault_item_table.get(&name).map(|item| Arc::clone(item.value()));
+        let item = existing.unwrap_or_else(|| {
+            Arc::clone(
+                self.fault_item_table
+                    .entry(name.clone())
+                    .or_insert_with(|| Arc::new(FaultItem::new(name.clone())))
+                    .value(),
+            )
+        });
 
-        entry.set_current_latency(current_latency);
-        entry.update_not_available_duration_at(not_available_duration, self.clock.now_millis());
-        entry.set_reachable(reachable);
+        item.set_current_latency(current_latency);
+        item.update_not_available_duration_at(not_available_duration, self.clock.now_millis());
+        item.set_reachable(reachable);
 
         if !reachable {
             info!("{} is unreachable, it will not be used until it's reachable", name);

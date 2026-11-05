@@ -15,6 +15,7 @@
 use super::callback_executor::ClientCallbackExecutor;
 use super::request_builder::heartbeat_request;
 use super::*;
+use crate::producer::default_mq_producer::ProducerConfig;
 
 impl MQClientAPIImpl {
     #[allow(
@@ -30,7 +31,7 @@ impl MQClientAPIImpl {
         deadline: RequestDeadline,
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
-        topic_publish_info: Option<&TopicPublishInfo>,
+        topic_publish_info: Option<&Arc<TopicPublishInfo>>,
         instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         context: &mut Option<SendMessageContext<'_>>,
@@ -219,7 +220,7 @@ impl MQClientAPIImpl {
         deadline: RequestDeadline,
         request: RemotingCommand,
         send_callback: Option<ArcSendCallback>,
-        topic_publish_info: Option<&TopicPublishInfo>,
+        topic_publish_info: Option<&Arc<TopicPublishInfo>>,
         instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         context: &mut Option<SendMessageContext<'_>>,
@@ -264,7 +265,6 @@ impl MQClientAPIImpl {
         let instance_cloned = instance.clone();
         let mq_fault_strategy = producer.fault_strategy_snapshot();
         let producer_config = producer.producer_config_snapshot();
-        let retry_response_codes = producer_config.retry_response_codes().clone();
         let retry_not_store_ok = producer_config.retry_another_broker_when_not_store_ok();
         // Snapshot only the immutable hook capability and context data needed by the callback.
         let context_data = context.as_ref().map(|c| AsyncSendHookContext {
@@ -297,7 +297,7 @@ impl MQClientAPIImpl {
             topic_publish_info_cloned,
             instance_cloned,
             retry_times_when_send_failed,
-            retry_response_codes,
+            producer_config,
             retry_not_store_ok,
             context_data,
         )
@@ -323,13 +323,14 @@ impl MQClientAPIImpl {
         deadline: RequestDeadline,
         current_request: RemotingCommand,
         send_callback: Option<ArcSendCallback>,
-        mut topic_publish_info: Option<TopicPublishInfo>,
+        mut topic_publish_info: Option<Arc<TopicPublishInfo>>,
         instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
-        retry_response_codes: HashSet<i32>,
+        producer_config: Arc<ProducerConfig>,
         retry_not_store_ok: bool,
         context_data: Option<AsyncSendHookContext>,
     ) {
+        let retry_response_codes = producer_config.retry_response_codes();
         let max_attempts = retry_times_when_send_failed.saturating_add(1);
         let mut retry_count = 0_u32;
         let mut retry_request = AsyncRetryRequest::new(current_request);
@@ -424,7 +425,7 @@ impl MQClientAPIImpl {
                                 max_attempts,
                                 attempt,
                                 deadline,
-                                &retry_response_codes,
+                                retry_response_codes,
                                 input,
                                 cost,
                                 &msg_topic,
@@ -507,7 +508,7 @@ impl MQClientAPIImpl {
                                     attempt,
                                     max_attempts,
                                     remaining: deadline.remaining(),
-                                    producer_retry_response_codes: Some(&retry_response_codes),
+                                    producer_retry_response_codes: Some(retry_response_codes),
                                     retry_not_store_ok,
                                 },
                                 &status_input,
@@ -605,7 +606,7 @@ impl MQClientAPIImpl {
                         max_attempts,
                         attempt,
                         deadline,
-                        &retry_response_codes,
+                        retry_response_codes,
                         input,
                         cost,
                         &msg_topic,
@@ -634,7 +635,7 @@ impl MQClientAPIImpl {
                         max_attempts,
                         attempt,
                         deadline,
-                        &retry_response_codes,
+                        retry_response_codes,
                         input,
                         cost,
                         &msg_topic,
@@ -664,7 +665,7 @@ impl MQClientAPIImpl {
                         max_attempts,
                         attempt,
                         deadline,
-                        &retry_response_codes,
+                        retry_response_codes,
                         input,
                         cost,
                         &msg_topic,
