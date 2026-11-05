@@ -58,36 +58,6 @@ where
         })
     }
 
-    /// Avoids copying callback metadata when a signal for this target is
-    /// already retained. An active replay observes `dirty` before completing;
-    /// an inactive replay is compacted to a target refresh immediately.
-    pub(crate) fn coalesce_existing(&self, key: &K) -> bool {
-        if self.closed.load(Ordering::Acquire) {
-            return false;
-        }
-        let mut state = self.state.lock();
-        if state.closed {
-            return false;
-        }
-        let Some(entry) = state.entries.get_mut(key) else {
-            return false;
-        };
-        if entry.active {
-            entry.dirty = true;
-            return true;
-        }
-        let previous = entry.charged_bytes;
-        let value = entry
-            .value
-            .as_mut()
-            .expect("inactive pending arrival retains its value");
-        value.coalesce_refresh();
-        let current = value.retained_bytes().max(1);
-        entry.charged_bytes = current;
-        state.bytes = state.bytes.saturating_sub(previous).saturating_add(current);
-        true
-    }
-
     pub(crate) fn insert(
         self: &Arc<Self>,
         key: K,
