@@ -238,7 +238,7 @@ impl DefaultAppendMessageCallback {
                 };
             }
         };
-        let physical_offsets = finalized.physical_offsets().collect::<Vec<_>>();
+        let physical_offsets = PhysicalOffsets::collect(finalized.physical_offsets());
         let mut lease = match mapped_file.reserve_write(reservation_size) {
             Ok(Some(lease)) => lease,
             Ok(None) => {
@@ -301,7 +301,7 @@ impl DefaultAppendMessageCallback {
                 };
             }
         }
-        publish_physical_offsets(&physical_offsets);
+        publish_physical_offsets(physical_offsets.as_slice());
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
             wrote_offset,
@@ -309,9 +309,34 @@ impl DefaultAppendMessageCallback {
             store_timestamp,
             logics_offset: queue_offset,
             msg_num: message_num,
-            msg_id_supplier: Some(message_id_supplier(wrote_offset, &physical_offsets)),
+            msg_id_supplier: Some(message_id_supplier(wrote_offset, physical_offsets.as_slice())),
             page_cache_rt: started.elapsed().as_millis() as i64,
             ..Default::default()
+        }
+    }
+}
+
+/// Physical offsets of the frames one append wrote. A single message, the common case, keeps its
+/// offset inline instead of allocating while the CommitLog writer lock is held.
+enum PhysicalOffsets {
+    One([i64; 1]),
+    Many(Vec<i64>),
+}
+
+impl PhysicalOffsets {
+    fn collect(mut offsets: impl ExactSizeIterator<Item = i64>) -> Self {
+        if offsets.len() == 1 {
+            if let Some(offset) = offsets.next() {
+                return Self::One([offset]);
+            }
+        }
+        Self::Many(offsets.collect())
+    }
+
+    fn as_slice(&self) -> &[i64] {
+        match self {
+            Self::One(offset) => offset,
+            Self::Many(offsets) => offsets,
         }
     }
 }
