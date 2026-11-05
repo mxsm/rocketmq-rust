@@ -1417,61 +1417,6 @@ impl SubscriptionGroupManager {
             .collect()
     }
 
-    /// Get statistics about subscription groups
-    ///
-    /// # Returns
-    /// A tuple of (total_groups, enabled_groups, disabled_groups)
-    pub fn get_statistics(&self) -> (usize, usize, usize) {
-        let total = self.subscription_group_table.len();
-        let mut enabled = 0;
-        let mut disabled = 0;
-
-        for entry in self.subscription_group_table.iter() {
-            if entry.value().consume_enable() {
-                enabled += 1;
-            } else {
-                disabled += 1;
-            }
-        }
-
-        (total, enabled, disabled)
-    }
-
-    /// Get detailed statistics about forbidden table
-    ///
-    /// # Returns
-    /// A tuple of (groups_with_forbidden, total_forbidden_topics, total_forbidden_flags)
-    pub fn get_forbidden_statistics(&self) -> (usize, usize, usize) {
-        let groups_with_forbidden = self.forbidden_table.len();
-        let mut total_topics = 0;
-        let mut total_flags = 0;
-
-        for entry in self.forbidden_table.iter() {
-            let topic_map = entry.value();
-            total_topics += topic_map.len();
-
-            for topic_entry in topic_map.iter() {
-                // Count number of set bits in the forbidden value
-                let forbidden_value = *topic_entry.value();
-                total_flags += forbidden_value.count_ones() as usize;
-            }
-        }
-
-        (groups_with_forbidden, total_topics, total_flags)
-    }
-
-    /// Print comprehensive statistics to log
-    pub fn log_statistics(&self) {
-        let (total_groups, enabled, disabled) = self.get_statistics();
-        let (forbidden_groups, forbidden_topics, forbidden_flags) = self.get_forbidden_statistics();
-
-        info!(
-            "SubscriptionGroupManager Statistics: Total Groups: {}, Enabled: {}, Disabled: {}, Forbidden Groups: {}, \
-             Forbidden Topics: {}, Active Forbidden Flags: {}",
-            total_groups, enabled, disabled, forbidden_groups, forbidden_topics, forbidden_flags
-        );
-    }
-
     /// Check if a group exists
     pub fn group_exists(&self, group_name: &str) -> bool {
         self.subscription_group_table.contains_key(group_name)
@@ -2219,57 +2164,6 @@ mod tests {
         let invalid_indices = vec![-1, 32, 100];
         for idx in invalid_indices {
             assert!(!(0..32).contains(&idx));
-        }
-    }
-
-    #[test]
-    fn test_statistics_calculation() {
-        // Test statistics using DashMap
-        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
-
-        // Create mixed groups
-        for i in 0_usize..10 {
-            let group_name = CheetahString::from_string(format!("GROUP_{}", i));
-            let mut config = SubscriptionGroupConfig::new(group_name.clone());
-
-            // Disable every other group
-            if i.is_multiple_of(2) {
-                config.set_consume_enable(false);
-            }
-
-            table.insert(group_name, Arc::new(config));
-        }
-
-        let total = table.len();
-        let mut enabled = 0;
-        let mut disabled = 0;
-
-        for entry in table.iter() {
-            if entry.value().consume_enable() {
-                enabled += 1;
-            } else {
-                disabled += 1;
-            }
-        }
-
-        assert_eq!(total, 10);
-        assert_eq!(enabled, 5);
-        assert_eq!(disabled, 5);
-    }
-
-    #[test]
-    fn test_forbidden_statistics_bit_counting() {
-        // Test counting set bits in forbidden values
-        let test_values: Vec<(i32, u32)> = vec![
-            (0b0000i32, 0),
-            (0b0001i32, 1),
-            (0b1111i32, 4),
-            (0b10101010i32, 4),
-            (0b11111111i32, 8),
-        ];
-
-        for (value, expected_count) in test_values {
-            assert_eq!(value.count_ones(), expected_count);
         }
     }
 
