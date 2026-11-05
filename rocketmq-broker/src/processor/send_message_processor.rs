@@ -113,6 +113,7 @@ use capability::SendMessagePolicy;
 use capability::SendMessageProcessorContext;
 use message_builder::clear_reserved_properties;
 use message_builder::enrich_parsed_send_message_request_properties;
+use message_builder::enrich_send_message_properties;
 use message_builder::recall_handle_topic_and_timestamp;
 use message_builder::should_create_uniq_key;
 use structured_store::append_message_with_control_reply;
@@ -246,6 +247,9 @@ where
     }
 
     fn observe_response(&self, observation: ResponseObservation) {
+        if !self.has_send_message_hook() {
+            return;
+        }
         let Some(observation) = observation.write_projection() else {
             return;
         };
@@ -397,10 +401,20 @@ where
             return BrokerResponseParts::from_command(response)?.into_response_action();
         }
 
-        let (send_message_context, mut request_properties) =
-            self.inner
-                .build_msg_context_at(&policy, inbound_peer, &mut request_header, request, parsed_properties);
-        self.inner.execute_send_message_hook_before(&send_message_context);
+        // The Broker registers no send hooks of its own. Without one, only the Broker-owned
+        // properties are added; no hook context is built and no after-reply record is kept.
+        let (send_message_context, mut request_properties) = if self.has_send_message_hook() {
+            let built =
+                self.inner
+                    .build_msg_context_at(&policy, inbound_peer, &mut request_header, request, parsed_properties);
+            self.inner.execute_send_message_hook_before(&built.0);
+            built
+        } else {
+            (
+                SendMessageContext::default(),
+                enrich_send_message_properties(parsed_properties, policy.region_id.clone(), policy.trace_on),
+            )
+        };
         clear_reserved_properties(&mut request_header, &mut request_properties);
 
         if request_header.is_batch() {
@@ -928,6 +942,9 @@ where
             (Some(response), _) => (response, false),
             (None, after_canonical_write) => (response, after_canonical_write),
         };
+        if !self.has_send_message_hook() {
+            return BrokerResponseParts::from_command(response)?.into_response_action();
+        }
         if after_canonical_write && !original_oneway {
             self.inner
                 .update_send_message_context_from_response(&response, &mut send_message_context);
@@ -951,6 +968,9 @@ where
             (Some(response), _) => (response, false),
             (None, after_canonical_write) => (response, after_canonical_write),
         };
+        if !self.has_send_message_hook() {
+            return (response, StoreHookCompletion::NoAfterHook);
+        }
         if after_canonical_write && !original_oneway {
             self.inner
                 .update_send_message_context_from_response(&response, &mut send_message_context);
