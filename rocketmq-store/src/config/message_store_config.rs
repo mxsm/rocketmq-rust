@@ -781,6 +781,9 @@ pub struct MessageStoreConfig {
     pub timer_file_format: TimerFileFormat,
 
     /// Enables the non-delivering Extended Timeline shadow pipeline.
+    ///
+    /// Deprecated with the Extended Timeline; `timer_native.shadow_enable` compares the native
+    /// engine instead.
     #[serde(default)]
     pub timer_extended_shadow_enable: bool,
 

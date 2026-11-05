@@ -1084,6 +1084,22 @@ impl LocalFileMessageStore {
         enabled
     }
 
+    /// Warns about configuration that is still accepted but will be removed.
+    pub(super) fn warn_deprecated_configuration(&self) {
+        if self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+            warn!(
+                "timerStoreMode = extended_timeline is deprecated and will be removed; stop the Broker and move its \
+                 timers to the native engine with `rocketmq-cli-rust migrate-extended-timers`"
+            );
+        }
+        if self.message_store_config.timer_extended_shadow_enable {
+            warn!(
+                "timerExtendedShadowEnable is deprecated with the Extended Timeline and will be removed; compare the \
+                 native engine in shadow with timerNative.shadowEnable instead"
+            );
+        }
+    }
+
     pub(super) fn validate_supported_configuration(&self) -> Result<(), StoreError> {
         if Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
             return Err(

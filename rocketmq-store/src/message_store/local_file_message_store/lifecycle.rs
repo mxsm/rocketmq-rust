@@ -697,6 +697,7 @@ impl LocalFileMessageStore {
 
     pub(super) async fn initialize_store(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
+        self.warn_deprecated_configuration();
         self.ensure_operational_root_lease(StoreOperation::Load)?;
         match self.lifecycle_state() {
             LocalStoreState::Created | LocalStoreState::Shutdown => {}
