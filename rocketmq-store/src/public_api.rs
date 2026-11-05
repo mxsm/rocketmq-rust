@@ -186,6 +186,14 @@ pub use crate::store_path_config_helper::get_timer_metrics_path;
 pub use crate::store_path_config_helper::get_timer_wheel_path;
 pub use crate::store_ports::MessageStore;
 pub use crate::telemetry::StoreTelemetry;
+#[cfg(feature = "extended_timeline")]
+pub use crate::timer::native::migrate_extended_timers_to_native;
+#[cfg(feature = "extended_timeline")]
+pub use crate::timer::native::ExtendedTimerMigrationBlocker;
+#[cfg(feature = "extended_timeline")]
+pub use crate::timer::native::ExtendedTimerMigrationMode;
+#[cfg(feature = "extended_timeline")]
+pub use crate::timer::native::ExtendedTimerMigrationReport;
 pub use crate::timer::pipeline::TimerPipelineDiagnostics;
 #[cfg(feature = "extended_timeline")]
 pub use crate::timer::timeline::TimelineAdmissionDecision;

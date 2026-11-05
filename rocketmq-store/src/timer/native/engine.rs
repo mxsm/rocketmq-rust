@@ -126,6 +126,15 @@ pub(crate) struct NativeIngestReport {
     pub(crate) rejected: Vec<(i64, NativeRejection)>,
 }
 
+/// Which timers an ingest copies out of the CommitLog.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeCopies {
+    /// Those due past the mid horizon, which the CommitLog may drop first.
+    PastMidHorizon,
+    /// Every one.
+    All,
+}
+
 /// What a [`NativeTimerEngine`] holds, and how far it got.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NativeEngineCounts {
@@ -421,6 +430,32 @@ impl NativeTimerEngine {
         next_source_offset: i64,
         now_ms: i64,
     ) -> Result<NativeIngestReport, NativeEngineError> {
+        self.ingest_copying(sources, next_source_offset, now_ms, NativeCopies::PastMidHorizon)
+    }
+
+    /// Indexes timers another engine admitted, every one of them copied: their CommitLog
+    /// records may already be gone, and nothing pins them for this engine. Nothing is synced;
+    /// a checkpoint makes them durable.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::ingest`].
+    pub(crate) fn adopt(
+        &self,
+        sources: &[NativeTimerSource],
+        now_ms: i64,
+    ) -> Result<NativeIngestReport, NativeEngineError> {
+        let frontier = self.source_frontier();
+        self.ingest_copying(sources, frontier, now_ms, NativeCopies::All)
+    }
+
+    fn ingest_copying(
+        &self,
+        sources: &[NativeTimerSource],
+        next_source_offset: i64,
+        now_ms: i64,
+        copy: NativeCopies,
+    ) -> Result<NativeIngestReport, NativeEngineError> {
         let mut report = NativeIngestReport::default();
         let mut timers: BTreeMap<NativeBucketId, Vec<NativeIndexEntry>> = BTreeMap::new();
         let mut copies: BTreeMap<i32, Vec<(Vec<u8>, NativeIndexEntry)>> = BTreeMap::new();
@@ -465,7 +500,7 @@ impl NativeTimerEngine {
                         lane,
                     };
                     // Due after the CommitLog may have dropped its source: copy the record.
-                    if due_ms >= now_ms.saturating_add(self.config.mid_horizon_ms) {
+                    if copy == NativeCopies::All || due_ms >= now_ms.saturating_add(self.config.mid_horizon_ms) {
                         match self.copy_of(source, &entry) {
                             Ok((day, record)) => copies.entry(day).or_default().push((record, entry)),
                             Err(rejection) => report.rejected.push((source.cq_offset, rejection)),

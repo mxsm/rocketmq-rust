@@ -527,12 +527,13 @@ fn read_failure(component: &'static str) -> CanonicalError {
     crate::errors::storage_read_failed(component)
 }
 
-struct OfflineLock {
+/// The store's exclusive lock, which a running Broker holds.
+pub(crate) struct OfflineLock {
     file: File,
 }
 
 impl OfflineLock {
-    fn acquire(store_root: &Path) -> Result<Self, CanonicalError> {
+    pub(crate) fn acquire(store_root: &Path) -> Result<Self, CanonicalError> {
         let path = store_root.join("lock");
         let file = OpenOptions::new()
             .read(true)

@@ -28,6 +28,8 @@ use rocketmq_store_inspect::command_line::RootCli;
 use rocketmq_store_inspect::content_show::print_content;
 use rocketmq_store_inspect::downgrade_preflight::run_preflight;
 use rocketmq_store_inspect::downgrade_preflight::DowngradePreflightRequest;
+use rocketmq_store_inspect::extended_migration::run_extended_migration;
+use rocketmq_store_inspect::extended_migration::ExtendedMigrationRequest;
 use rocketmq_store_inspect::multipath_consolidate::consolidate_multipath;
 use rocketmq_store_inspect::multipath_consolidate::ConsolidationRequest;
 
@@ -152,6 +154,41 @@ fn run() -> StoreInspectionExitStatus {
             }
             Err(error) => return render_error(&error, verbosity),
         },
+        Commands::MigrateExtendedTimers {
+            config,
+            dry_run,
+            output,
+        } => {
+            let mode = if dry_run {
+                rocketmq_store::ExtendedTimerMigrationMode::DryRun
+            } else {
+                rocketmq_store::ExtendedTimerMigrationMode::Apply
+            };
+            match run_extended_migration(&ExtendedMigrationRequest::new(config, mode)) {
+                Ok(report) => {
+                    let body = match serde_json::to_string_pretty(&report) {
+                        Ok(body) => format!("{body}\n"),
+                        Err(error) => {
+                            return render_error(
+                                &serialization_error("serialize_extended_migration_report", error),
+                                verbosity,
+                            );
+                        }
+                    };
+                    if let Some(path) = output {
+                        if let Err(error) = std::fs::write(&path, body) {
+                            return render_error(&storage_write_error("write_migration_report", error), verbosity);
+                        }
+                    } else {
+                        print!("{body}");
+                    }
+                    if !report.blockers.is_empty() {
+                        return StoreInspectionExitStatus::PolicyRefused;
+                    }
+                }
+                Err(error) => return render_error(&error, verbosity),
+            }
+        }
     }
     StoreInspectionExitStatus::Completed
 }

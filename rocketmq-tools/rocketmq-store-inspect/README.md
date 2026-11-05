@@ -72,10 +72,39 @@ copies into staging, checks byte equality, synchronizes files and publishes the 
 with a rename. It leaves source files intact and prints a JSON report.
 See [consolidation](src/multipath_consolidate.rs) for the exact supported layout checks.
 
+## Migrate Extended Timeline timers to the native engine
+
+A store that the Extended Timeline owns loads in no other `timerStoreMode`. Stop the Broker,
+then move its timers to the native timer engine:
+
+```bash
+rocketmq-cli-rust migrate-extended-timers --config /etc/rocketmq-rust/broker.toml --dry-run
+rocketmq-cli-rust migrate-extended-timers --config /etc/rocketmq-rust/broker.toml
+```
+
+The command reads the `[store]` section of the Broker configuration, takes the Store lock and
+prints a JSON report, or writes it to `--output`. `--dry-run` counts what would move and changes
+nothing. Without it, the native engine indexes every pending, ready or delivering timer with a
+copy of its message, checkpoints them, and the `timer-extended` directory and the
+`config/timer-store-owner.meta` marker are renamed with a `.migrated` suffix. The report names the
+new directory under `backup`; keep it until the native engine has delivered the migrated timers.
+
+- Timers whose delivery was under way (`delivering`) may be delivered a second time. Timers whose
+  message was already written (`committed`), and delivered, cancelled or quarantined ones
+  (`finished`), are left out.
+- The command changes nothing and exits with code `2` when the report lists `blockers`: timers
+  whose message the Extended Timeline has not copied yet (run the Broker in `extended_timeline`
+  mode until it has), or timers due later than `timerNative.maxDelayDays` admits.
+- A run that stops partway can be run again.
+
+Before starting the Broker, set `timerStoreMode = "native"` and `timerWheelEnable = true`, and
+remove `timerExtendedAdmissionEnable`, `timerExtendedActivationEpoch` and the other
+`timerExtended*` settings, which only the Extended mode accepts.
+
 ## Source and validation
 
 [CLI arguments](src/command_line.rs), [entrypoint](src/bin/rocketmq_cli.rs),
-[downgrade policy](src/downgrade_preflight.rs) and [tests](tests).
+[downgrade policy](src/downgrade_preflight.rs), [Extended migration](src/extended_migration.rs) and [tests](tests).
 
 ```bash
 cargo fmt -p rocketmq-store-inspect -- --check
