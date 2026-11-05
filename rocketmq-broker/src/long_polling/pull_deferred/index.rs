@@ -365,33 +365,6 @@ where
             .is_some_and(|bucket| !bucket.is_empty())
     }
 
-    pub(crate) fn reserve_forced_batch(
-        &self,
-        cursor: &mut PullScanCursor,
-        scan_limit: NonZeroUsize,
-        candidate_limit: NonZeroUsize,
-    ) -> PullCandidateBatch<I> {
-        let mut candidates = Vec::new();
-        let mut inspected = 0;
-        let mut exhausted = false;
-        while inspected < scan_limit.get() && candidates.len() < candidate_limit.get() {
-            let Some(snapshot) = self.next_forced_snapshot(cursor.after_sequence) else {
-                exhausted = true;
-                break;
-            };
-            cursor.after_sequence = Some(snapshot.sequence);
-            inspected += 1;
-            if let Some(candidate) = self.try_reserve_candidate(snapshot) {
-                candidates.push(candidate);
-            }
-        }
-        PullCandidateBatch {
-            candidates,
-            inspected,
-            exhausted,
-        }
-    }
-
     fn next_snapshot(&self, key: &PullCriteriaKey, after: Option<u64>) -> Option<PullCandidateSnapshot<I>> {
         let state = self.inner.state.lock();
         state.buckets.get(key)?.iter().find_map(|record| {
@@ -402,22 +375,6 @@ where
                 criteria: Arc::clone(&record.criteria),
             })
         })
-    }
-
-    fn next_forced_snapshot(&self, after: Option<u64>) -> Option<PullCandidateSnapshot<I>> {
-        let state = self.inner.state.lock();
-        state
-            .buckets
-            .iter()
-            .flat_map(|(key, bucket)| bucket.iter().map(move |record| (key, record)))
-            .filter(|(_, record)| after.is_none_or(|after| record.sequence > after))
-            .min_by_key(|(_, record)| record.sequence)
-            .map(|(key, record)| PullCandidateSnapshot {
-                key: key.clone(),
-                id: record.id,
-                sequence: record.sequence,
-                criteria: Arc::clone(&record.criteria),
-            })
     }
 
     fn try_reserve_candidate(&self, snapshot: PullCandidateSnapshot<I>) -> Option<PullCandidateReservation<I>> {

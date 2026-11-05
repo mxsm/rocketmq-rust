@@ -680,27 +680,12 @@ impl PullDeferredService {
         PullScanCursor::new()
     }
 
-    pub(crate) fn reserve_forced_batch(&self, cursor: &mut PullScanCursor) -> PullCandidateBatch {
-        if self.closed.load(Ordering::Acquire) {
-            return PullCandidateBatch::empty();
-        }
-        self.index
-            .reserve_forced_batch(cursor, self.scan_limit, self.candidate_limit)
-    }
-
     pub(crate) fn admit_arrival_continuation(
         &self,
         arrival: PullArrivalView<'_>,
         cursor: PullScanCursor,
     ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
         PullArrivalContinuation::arrival(&self.continuation_admission, arrival, cursor)
-    }
-
-    pub(crate) fn admit_forced_continuation(
-        &self,
-        cursor: PullScanCursor,
-    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
-        PullArrivalContinuation::forced(&self.continuation_admission, cursor)
     }
 
     pub(crate) fn reserve_continuation_batch(&self, continuation: &mut PullArrivalContinuation) -> PullCandidateBatch {
@@ -721,29 +706,6 @@ impl PullDeferredService {
         );
         let pending = PullPendingArrival::arrival(arrival, cursor).map_err(PullPendingArrivalError::Continuation)?;
         match self.pending_arrivals.insert(key, pending) {
-            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PullArrivalLatchStatus::Latched),
-            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::Closed)) => {
-                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::Closed))
-            }
-            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::CountFull)) => {
-                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::CountFull))
-            }
-            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::BytesFull)) => {
-                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::BytesFull))
-            }
-            Err(error) => Err(PullPendingArrivalError::Latch(error)),
-        }
-    }
-
-    pub(crate) fn latch_forced(
-        &self,
-        cursor: PullScanCursor,
-    ) -> Result<PullArrivalLatchStatus, PullPendingArrivalError> {
-        let key = PullPendingArrivalKey::Forced;
-        if self.pending_arrivals.coalesce_existing(&key) {
-            return Ok(PullArrivalLatchStatus::Latched);
-        }
-        match self.pending_arrivals.insert(key, PullPendingArrival::forced(cursor)) {
             Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PullArrivalLatchStatus::Latched),
             Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::Closed)) => {
                 Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::Closed))
@@ -877,24 +839,6 @@ impl PullDeferredService {
             |cursor| {
                 self.index
                     .reserve_matching_batch(&arrival, cursor, self.scan_limit, self.candidate_limit)
-            },
-            &mut submit,
-        )
-    }
-
-    /// Test helper that selects every indexed waiter for master-online refresh.
-    #[cfg(test)]
-    pub(crate) fn produce_forced<S, E>(&self, mut submit: S) -> Result<PullProducerStats, E>
-    where
-        S: FnMut(Vec<PullCandidateReservation>) -> Result<(), E>,
-    {
-        if self.closed.load(Ordering::Acquire) {
-            return Ok(PullProducerStats::default());
-        }
-        self.produce_batches(
-            |cursor| {
-                self.index
-                    .reserve_forced_batch(cursor, self.scan_limit, self.candidate_limit)
             },
             &mut submit,
         )
