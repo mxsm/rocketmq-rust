@@ -14,6 +14,7 @@
 
 //! Store-owned CommitLog append worker and per-request result projection.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,6 +61,8 @@ use super::PutMessageStatus;
 use crate::base::message_result::AppendExecutionEvidence;
 use crate::base::message_result::AppendMessageResult;
 use crate::ha::ha_service::HAService;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
+use crate::queue::QueueOffsetHandle;
 
 const APPEND_WORKER_NAME: &str = "commitlog-append-sequencer";
 const APPEND_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -89,6 +92,17 @@ pub(super) struct SequencedBatchAppend {
 #[derive(Clone)]
 pub(super) struct CommitLogAppendPort {
     sender: AppendSequencerSender<AppendRequest>,
+    queue_offsets: ConsumeQueueLookupHandle,
+}
+
+/// Whether appending a message with `sys_flag` assigns and advances its queue offset. Prepared
+/// and rolled-back transaction messages do neither.
+#[inline]
+fn takes_queue_offset(sys_flag: i32) -> bool {
+    matches!(
+        MessageSysFlag::get_transaction_value(sys_flag),
+        MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE
+    )
 }
 
 impl CommitLogAppendPort {
@@ -99,10 +113,12 @@ impl CommitLogAppendPort {
         assign_queue_offset: bool,
     ) -> SequencedMessageAppend {
         let (completion, response) = oneshot::channel();
+        let queue_offset = self.resolve_queue_offset(&message);
         let request = AppendRequest::Message {
             message,
             prepared,
             assign_queue_offset,
+            queue_offset,
             completion,
         };
         let retained_bytes = request.retained_bytes();
@@ -125,10 +141,12 @@ impl CommitLogAppendPort {
         context: PutMessageContext,
     ) -> SequencedBatchAppend {
         let (completion, response) = oneshot::channel();
+        let queue_offset = self.resolve_queue_offset(&batch.message_ext_broker_inner);
         let request = AppendRequest::Batch {
             batch,
             prepared,
             context,
+            queue_offset,
             completion,
         };
         let retained_bytes = request.retained_bytes();
@@ -142,6 +160,16 @@ impl CommitLogAppendPort {
                 result: PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
             }
         })
+    }
+
+    /// Resolves the queue offset slot in the caller's task, so the writer lock only reads and
+    /// advances it. The consume queue lookup and key formatting stay out of the critical section.
+    fn resolve_queue_offset(&self, message: &MessageExtBrokerInner) -> Option<QueueOffsetHandle> {
+        if !takes_queue_offset(message.sys_flag()) {
+            return None;
+        }
+        self.queue_offsets
+            .resolve_queue_offset(message.get_topic(), message.queue_id())
     }
 
     pub(super) fn close(&self) {
@@ -177,7 +205,10 @@ impl CommitLogAppendRuntime {
         processor: CommitLogAppendProcessor,
     ) -> Result<Self, CommitLogAppendStartError> {
         let (sender, receiver) = AppendSequencer::bounded(config)?;
-        let port = CommitLogAppendPort { sender };
+        let port = CommitLogAppendPort {
+            sender,
+            queue_offsets: processor.consume_queue_store.lookup_handle(),
+        };
         let task_group = runtime_scope.task_group(APPEND_WORKER_NAME);
         let cancellation = task_group.cancellation_token();
         let worker_port = port.clone();
@@ -211,12 +242,14 @@ enum AppendRequest {
         message: MessageExtBrokerInner,
         prepared: PreparedPayload,
         assign_queue_offset: bool,
+        queue_offset: Option<QueueOffsetHandle>,
         completion: oneshot::Sender<SequencedMessageAppend>,
     },
     Batch {
         batch: MessageExtBatch,
         prepared: PreparedPayload,
         context: PutMessageContext,
+        queue_offset: Option<QueueOffsetHandle>,
         completion: oneshot::Sender<SequencedBatchAppend>,
     },
 }
@@ -254,6 +287,7 @@ impl AppendRequest {
                 mut message,
                 prepared,
                 assign_queue_offset,
+                queue_offset,
                 completion,
             } => {
                 if !duplication_enable {
@@ -265,6 +299,7 @@ impl AppendRequest {
                     message,
                     prepared,
                     assign_queue_offset,
+                    queue_offset,
                     message_count,
                     completion,
                 }
@@ -273,6 +308,7 @@ impl AppendRequest {
                 mut batch,
                 prepared,
                 context,
+                queue_offset,
                 completion,
             } => {
                 batch.message_ext_broker_inner.message_ext_inner.store_timestamp =
@@ -282,6 +318,7 @@ impl AppendRequest {
                     batch,
                     prepared,
                     context,
+                    queue_offset,
                     message_count,
                     completion,
                 }
@@ -296,6 +333,7 @@ enum ReadyAppend {
         message: MessageExtBrokerInner,
         prepared: PreparedPayload,
         assign_queue_offset: bool,
+        queue_offset: Option<QueueOffsetHandle>,
         message_count: i16,
         completion: oneshot::Sender<SequencedMessageAppend>,
     },
@@ -303,6 +341,7 @@ enum ReadyAppend {
         batch: MessageExtBatch,
         prepared: PreparedPayload,
         context: PutMessageContext,
+        queue_offset: Option<QueueOffsetHandle>,
         message_count: i16,
         completion: oneshot::Sender<SequencedBatchAppend>,
     },
@@ -515,11 +554,12 @@ impl CommitLogAppendProcessor {
                 mut message,
                 prepared,
                 assign_queue_offset,
+                queue_offset: mut offset_slot,
                 message_count,
                 completion,
             } => {
                 if assign_queue_offset {
-                    self.assign_offset(&mut message);
+                    self.assign_offset(&mut message, &mut offset_slot);
                 }
                 let mut queue_offset = message.queue_offset();
                 if matches!(
@@ -531,7 +571,7 @@ impl CommitLogAppendProcessor {
                 let (result, unlock_segment) =
                     self.append_message(&mut message, &prepared, queue_offset, i32::from(message_count));
                 if result.put_message_status() == PutMessageStatus::PutOk {
-                    self.increase_offset(&message, message_count);
+                    self.increase_offset(&message, &mut offset_slot, message_count);
                 }
                 CompletedAppend::Message {
                     message,
@@ -544,13 +584,14 @@ impl CommitLogAppendProcessor {
                 mut batch,
                 prepared,
                 mut context,
+                queue_offset: mut offset_slot,
                 message_count,
                 completion,
             } => {
-                self.assign_offset(&mut batch.message_ext_broker_inner);
+                self.assign_offset(&mut batch.message_ext_broker_inner, &mut offset_slot);
                 let (result, unlock_segment) = self.append_batch(&mut batch, &prepared, &mut context);
                 if result.put_message_status() == PutMessageStatus::PutOk {
-                    self.increase_offset(&batch.message_ext_broker_inner, message_count);
+                    self.increase_offset(&batch.message_ext_broker_inner, &mut offset_slot, message_count);
                 }
                 CompletedAppend::Batch {
                     batch,
@@ -586,7 +627,7 @@ impl CommitLogAppendProcessor {
                 )
             },
         );
-        self.resolve_append(outcome, message.topic(), message.born_host().to_string())
+        self.resolve_append(outcome, message.topic(), message.born_host())
     }
 
     fn append_batch(
@@ -614,7 +655,7 @@ impl CommitLogAppendProcessor {
         self.resolve_append(
             outcome,
             batch.message_ext_broker_inner.topic(),
-            batch.message_ext_broker_inner.born_host().to_string(),
+            batch.message_ext_broker_inner.born_host(),
         )
     }
 
@@ -625,7 +666,7 @@ impl CommitLogAppendProcessor {
             rocketmq_store_api::StoreError,
         >,
         topic: &str,
-        born_host: String,
+        born_host: SocketAddr,
     ) -> (PutMessageResult, Option<Arc<DefaultMappedFile>>) {
         // Capture the worker's finalized outcome before legacy status projection.
         // A later lease fence or flush/replication timeout cannot erase these facts.
@@ -677,16 +718,16 @@ impl CommitLogAppendProcessor {
                 match failure {
                     CommitLogAppendFailure::InitialSegmentUnavailable
                     | CommitLogAppendFailure::RolledSegmentUnavailable => {
-                        error!(topic, born_host, "Failed to create CommitLog mapped segment");
+                        error!(topic, %born_host, "Failed to create CommitLog mapped segment");
                     }
                     CommitLogAppendFailure::InitialActiveLockFailed { error }
                     | CommitLogAppendFailure::RolledActiveLockFailed { error } => {
-                        error!(%error, topic, born_host, "Failed to lock active CommitLog mapped segment");
+                        error!(%error, topic, %born_host, "Failed to lock active CommitLog mapped segment");
                     }
                     CommitLogAppendFailure::InitialMessageIllegal => {}
                     CommitLogAppendFailure::InitialUnknown => {
                         self.append.fence_writes();
-                        error!(topic, born_host, "CommitLog append failed; Store writes fenced");
+                        error!(topic, %born_host, "CommitLog append failed; Store writes fenced");
                     }
                 }
                 drop(abandoned_segment);
@@ -716,23 +757,32 @@ impl CommitLogAppendProcessor {
         )
     }
 
-    fn assign_offset(&self, message: &mut MessageExtBrokerInner) {
-        let transaction = MessageSysFlag::get_transaction_value(message.sys_flag());
-        if matches!(
-            transaction,
-            MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE
-        ) {
-            self.consume_queue_store.assign_queue_offset(message);
+    /// Assigns the queue offset from the slot resolved at submission, falling back to a lookup
+    /// under the lock only when the store was gone at submission.
+    fn assign_offset(&self, message: &mut MessageExtBrokerInner, offset_slot: &mut Option<QueueOffsetHandle>) {
+        if !takes_queue_offset(message.sys_flag()) {
+            return;
+        }
+        match offset_slot {
+            Some(handle) => self.consume_queue_store.assign_resolved_queue_offset(handle, message),
+            None => self.consume_queue_store.assign_queue_offset(message),
         }
     }
 
-    fn increase_offset(&self, message: &MessageExtBrokerInner, message_count: i16) {
-        let transaction = MessageSysFlag::get_transaction_value(message.sys_flag());
-        if matches!(
-            transaction,
-            MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE
-        ) {
-            self.consume_queue_store.increase_queue_offset(message, message_count);
+    fn increase_offset(
+        &self,
+        message: &MessageExtBrokerInner,
+        offset_slot: &mut Option<QueueOffsetHandle>,
+        message_count: i16,
+    ) {
+        if !takes_queue_offset(message.sys_flag()) {
+            return;
+        }
+        match offset_slot {
+            Some(handle) => self
+                .consume_queue_store
+                .increase_resolved_queue_offset(handle, message_count),
+            None => self.consume_queue_store.increase_queue_offset(message, message_count),
         }
     }
 

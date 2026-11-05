@@ -58,7 +58,9 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+use crate::queue::queue_offset_operator::QueueOffsetHandle;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
+use crate::queue::queue_offset_operator::QueueOffsetTable;
 use crate::queue::single_consume_queue::ConsumeQueue;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 use crate::queue::ArcConsumeQueue;
@@ -239,6 +241,21 @@ impl ConsumeQueueLookupHandle {
         Some(ConsumeQueueStoreTrait::find_or_create_consume_queue(
             &store, topic, queue_id,
         ))
+    }
+
+    /// Resolves the offset slot that appends to `topic`/`queue_id` draw from, creating the consume
+    /// queue as the first append to it would.
+    ///
+    /// Returns `None` once the store is gone.
+    pub(crate) fn resolve_queue_offset(&self, topic: &CheetahString, queue_id: i32) -> Option<QueueOffsetHandle> {
+        let inner = self.inner.upgrade()?;
+        let store = ConsumeQueueStore {
+            inner: ConsumeQueueStoreRoot::new(inner),
+        };
+        let consume_queue = ConsumeQueueStoreTrait::find_or_create_consume_queue(&store, topic, queue_id);
+        let table = QueueOffsetTable::of(consume_queue.read().get_cq_type());
+        let key = CheetahString::from_string(format!("{topic}-{queue_id}"));
+        Some(store.inner.queue_offset_operator.queue_offset_handle(table, key))
     }
 
     pub(crate) fn put_message_position_info_wrapper(&self, request: &DispatchRequest) -> bool {
@@ -536,6 +553,20 @@ impl ConsumeQueueStore {
         ConsumeQueueLookupHandle {
             inner: Arc::downgrade(self.inner.adapter()),
         }
+    }
+
+    /// Assigns `msg` the next offset of the queue that `handle` was resolved for.
+    #[inline]
+    pub(crate) fn assign_resolved_queue_offset(&self, handle: &mut QueueOffsetHandle, msg: &mut MessageExtBrokerInner) {
+        msg.message_ext_inner.queue_offset = handle.live_slot(&self.inner.queue_offset_operator).next_offset();
+    }
+
+    /// Moves the queue that `handle` was resolved for past `message_num` appended messages.
+    #[inline]
+    pub(crate) fn increase_resolved_queue_offset(&self, handle: &mut QueueOffsetHandle, message_num: i16) {
+        handle
+            .live_slot(&self.inner.queue_offset_operator)
+            .advance(i64::from(message_num));
     }
 
     async fn recover_one_consume_queue(

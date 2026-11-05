@@ -5155,6 +5155,46 @@ async fn disabled_lmq_quota_does_not_treat_zero_as_a_limit() {
 }
 
 #[tokio::test]
+async fn concurrent_puts_to_one_queue_receive_contiguous_queue_offsets() {
+    let temp_dir = tempdir().unwrap();
+    let store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("contiguous-offset-topic");
+
+    let results = futures_util::future::join_all((0..64).map(|index| {
+        store
+            .commit_log
+            .put_message(build_test_message(&topic, Bytes::from(format!("body-{index}"))))
+    }))
+    .await;
+
+    let mut offsets = results
+        .iter()
+        .map(|result| {
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+            result
+                .append_message_result()
+                .expect("put result should include append result")
+                .logics_offset
+        })
+        .collect::<Vec<_>>();
+    offsets.sort_unstable();
+    assert_eq!(offsets, (0..64).collect::<Vec<i64>>());
+    assert_eq!(
+        store
+            .consume_queue_store
+            .get_topic_queue_table()
+            .get(&CheetahString::from_static_str("contiguous-offset-topic-0")),
+        Some(&64)
+    );
+}
+
+#[tokio::test]
 async fn put_message_with_existing_multi_queue_offsets_still_updates_lmq_offsets() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_configured_test_store(
