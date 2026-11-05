@@ -74,19 +74,33 @@ pub(super) fn enrich_send_message_request_properties(
 
 pub(super) fn enrich_parsed_send_message_request_properties(
     request_header: &mut SendMessageRequestHeader,
-    mut properties: HashMap<CheetahString, CheetahString>,
+    properties: HashMap<CheetahString, CheetahString>,
     region_id: &str,
+    trace_on: bool,
+) -> HashMap<CheetahString, CheetahString> {
+    let properties = enrich_send_message_properties(properties, CheetahString::from_slice(region_id), trace_on);
+    request_header.properties = Some(message_properties_to_string(&properties));
+    properties
+}
+
+/// Adds the Broker-owned region and trace switch to parsed request properties.
+///
+/// The stored message reads these values from the returned map. Apart from send hooks, the
+/// request header's properties string is only scanned for the metrics message type, which these
+/// two keys do not affect, so callers without hooks skip re-encoding it.
+pub(super) fn enrich_send_message_properties(
+    mut properties: HashMap<CheetahString, CheetahString>,
+    region_id: CheetahString,
     trace_on: bool,
 ) -> HashMap<CheetahString, CheetahString> {
     properties.insert(
         CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
-        CheetahString::from_slice(region_id),
+        region_id,
     );
     properties.insert(
         CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
         CheetahString::from_static_str(if trace_on { "true" } else { "false" }),
     );
-    request_header.properties = Some(message_properties_to_string(&properties));
     properties
 }
 

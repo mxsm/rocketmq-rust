@@ -253,6 +253,59 @@ async fn send_policy_generation_survives_configuration_update_through_store_and_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn send_without_hooks_still_stores_broker_owned_properties() {
+    for code in [RequestCode::SendMessage, RequestCode::SendBatchMessage] {
+        let mut runtime = new_phase3_test_runtime(&format!("send-without-hooks-{}", code.to_i32())).await;
+        let mut config = runtime.composition.state.broker_config().as_ref().clone();
+        config.region_id = "hookless-region".into();
+        config.trace_on = true;
+        config.broker_identity.broker_cluster_name = "hookless-cluster".into();
+        config.async_topic_create_persist_enable = false;
+        runtime.composition.state.set_broker_config(config).unwrap();
+        let (processor, _) = runtime.init_processor_checked().unwrap();
+
+        let response = process_broker_request(&processor, &mut request(code, "HooklessTopic", false)).await;
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let ext_fields = response.ext_fields().unwrap();
+        assert_eq!(
+            ext_fields.get(MessageConst::PROPERTY_MSG_REGION).unwrap(),
+            "hookless-region"
+        );
+        assert_eq!(ext_fields.get(MessageConst::PROPERTY_TRACE_SWITCH).unwrap(), "true");
+
+        let header = response
+            .decode_command_custom_header::<SendMessageResponseHeader>()
+            .unwrap();
+        let id = MessageDecoder::decode_message_id(header.msg_id().as_str().split(',').next().unwrap()).unwrap();
+        let stored = runtime
+            .composition
+            .state
+            .message_store()
+            .unwrap()
+            .look_message_by_offset(id.offset)
+            .unwrap();
+        assert_eq!(
+            stored.property(&MessageConst::PROPERTY_MSG_REGION.into()).as_deref(),
+            Some("hookless-region")
+        );
+        assert_eq!(
+            stored.property(&MessageConst::PROPERTY_TRACE_SWITCH.into()).as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            stored.property(&MessageConst::PROPERTY_CLUSTER.into()).as_deref(),
+            Some("hookless-cluster")
+        );
+
+        let store_root = runtime.message_store_config().store_path_root_dir.clone();
+        drop(processor);
+        runtime.shutdown().await;
+        drop(runtime);
+        std::fs::remove_dir_all(store_root.as_str()).expect("remove hookless send test store");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_policy_snapshot_does_not_preserve_revoked_permission() {
     let mut runtime = new_phase3_test_runtime("send-policy-permission").await;
     let mut initial = runtime.composition.state.broker_config().as_ref().clone();
