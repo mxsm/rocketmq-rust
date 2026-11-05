@@ -125,6 +125,11 @@ impl PullAPIWrapper {
 
     #[inline]
     pub fn update_pull_from_which_node(&self, mq: &MessageQueue, broker_id: u64) {
+        // Every pull updates its queue's entry; a read lock and no key clone cover the usual case.
+        if let Some(node) = self.pull_from_which_node_table.get(mq) {
+            node.store(broker_id, std::sync::atomic::Ordering::Release);
+            return;
+        }
         self.pull_from_which_node_table
             .entry(mq.clone())
             .and_modify(|v| v.store(broker_id, std::sync::atomic::Ordering::Release))

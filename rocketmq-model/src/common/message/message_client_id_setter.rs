@@ -31,8 +31,6 @@ use rocketmq_error::Result;
 
 use crate::codec::bytes_to_string;
 use crate::codec::string_to_bytes;
-use crate::codec::write_int;
-use crate::codec::write_short;
 use crate::common::hasher::string_hasher::JavaStringHasher;
 use crate::common::message::MessageConst;
 use crate::common::message::MessageTrait;
@@ -50,7 +48,8 @@ static LEN: LazyLock<usize> = LazyLock::new(|| {
     let ip = get_ip().unwrap_or_else(create_fake_ip);
     ip.len() + 2 + 4 + 4 + 2
 });
-static FIX_STRING: LazyLock<Vec<char>> = LazyLock::new(|| {
+/// Hex prefix shared by every id of this process: IP, process id and class-loader hash.
+static FIX_STRING: LazyLock<String> = LazyLock::new(|| {
     let ip = get_ip().unwrap_or_else(create_fake_ip);
     let pid = std::process::id() as i16;
     let class_loader_hash = JavaStringHasher::hash_str("MessageClientIDSetter");
@@ -58,9 +57,18 @@ static FIX_STRING: LazyLock<Vec<char>> = LazyLock::new(|| {
     bytes.put(ip.as_slice());
     bytes.put_i16(pid);
     bytes.put_i32(class_loader_hash);
-    let data = bytes_to_string(bytes.freeze().as_ref()).chars().collect::<Vec<char>>();
-    data
+    bytes_to_string(bytes.freeze().as_ref())
 });
+
+const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+/// Appends the low `digits` hex digits of `value`, most significant first, in uppercase.
+#[inline]
+fn push_upper_hex(id: &mut String, value: u32, digits: u32) {
+    for shift in (0..digits).rev().map(|digit| digit * 4) {
+        id.push(char::from(UPPER_HEX[((value >> shift) & 0x0f) as usize]));
+    }
+}
 
 struct TimeWindow {
     start_time: AtomicI64,
@@ -136,8 +144,9 @@ impl MessageClientIDSetter {
     }
 
     pub fn create_uniq_id() -> String {
-        let mut sb = vec!['\0'; *LEN * 2];
-        sb[..FIX_STRING.len()].copy_from_slice(&FIX_STRING);
+        // Built straight into the returned string: one allocation per id.
+        let mut id = String::with_capacity(*LEN * 2);
+        id.push_str(&FIX_STRING);
 
         let current = current_millis() as i64;
         if current >= TIME_WINDOW.next_start_time.load(Ordering::Acquire) {
@@ -150,12 +159,11 @@ impl MessageClientIDSetter {
             diff = 0;
         }
 
-        let pos = FIX_STRING.len();
-        write_int(&mut sb, pos, diff);
+        push_upper_hex(&mut id, diff as u32, 8);
 
         let counter_val = COUNTER.fetch_add(1, Ordering::SeqCst) as i16;
-        write_short(&mut sb, pos + 8, counter_val);
-        sb.into_iter().collect()
+        push_upper_hex(&mut id, u32::from(counter_val as u16), 4);
+        id
     }
 
     pub fn get_nearly_time_from_id(msg_id: &str) -> Result<DateTime<Local>> {
@@ -243,6 +251,25 @@ mod tests {
         let _message = Message::default();
         let unique_id = MessageClientIDSetter::create_uniq_id();
         assert!(!unique_id.is_empty());
+    }
+
+    #[test]
+    fn unique_id_matches_the_char_buffer_layout() {
+        let id = MessageClientIDSetter::create_uniq_id();
+        assert_eq!(id.len(), *LEN * 2);
+        assert!(id.starts_with(FIX_STRING.as_str()));
+
+        let pos = FIX_STRING.len();
+        let diff = u32::from_str_radix(&id[pos..pos + 8], 16).expect("hex time diff") as i32;
+        let counter = u16::from_str_radix(&id[pos + 8..], 16).expect("hex counter") as i16;
+        let mut expected = vec!['\0'; *LEN * 2];
+        for (slot, digit) in expected.iter_mut().zip(FIX_STRING.chars()) {
+            *slot = digit;
+        }
+        crate::codec::write_int(&mut expected, pos, diff);
+        crate::codec::write_short(&mut expected, pos + 8, counter);
+
+        assert_eq!(id, expected.into_iter().collect::<String>());
     }
 
     #[test]
