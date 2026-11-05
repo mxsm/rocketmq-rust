@@ -973,6 +973,29 @@ fn commitlog_uses_allocate_mapped_file_service_for_file_creation() {
 }
 
 #[test]
+fn read_path_probes_page_cache_residency_only_for_cold_data_flow_control() {
+    let default_dir = tempdir().unwrap();
+    let default_store = new_configured_test_store(&default_dir, MessageStoreConfig::default());
+    assert_eq!(
+        default_store.read_path_residency_check(),
+        rocketmq_store_local::mapped_file::ResidencyCheck::AssumeResident
+    );
+
+    let cold_dir = tempdir().unwrap();
+    let cold_store = new_configured_test_store(
+        &cold_dir,
+        MessageStoreConfig {
+            cold_data_flow_control_enable: true,
+            ..MessageStoreConfig::default()
+        },
+    );
+    assert_eq!(
+        cold_store.read_path_residency_check(),
+        rocketmq_store_local::mapped_file::ResidencyCheck::Probe
+    );
+}
+
+#[test]
 fn unlock_mapped_file_is_safe_for_unlocked_and_repeated_calls() {
     let store_dir = tempdir().unwrap();
     let mapped_file_dir = tempdir().unwrap();

@@ -99,6 +99,7 @@ use crate::log_file::commit_log_path_set::CommitLogPathSet;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
 use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
+use rocketmq_store_local::mapped_file::ResidencyCheck;
 // Import the optimized loader module
 use crate::base::flush_manager::SyncFlushRuntimeInfo;
 use crate::log_file::commit_log_loader::CommitLogLoader;
@@ -1036,13 +1037,25 @@ impl CommitLog {
     }
 
     pub fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
+        self.get_message_with(offset, size, ResidencyCheck::Probe)
+    }
+
+    pub(crate) fn get_message_with(
+        &self,
+        offset: i64,
+        size: i32,
+        residency: ResidencyCheck,
+    ) -> Option<SelectMappedBufferResult> {
         let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
         let mapped_file = self.mapped_file_queue.find_mapped_file_by_offset(offset, offset == 0);
         match mapped_file {
             None => None,
             Some(mmap_file) => {
                 let pos = offset % mapped_file_size as i64;
-                let mut select_mapped_buffer_result = mmap_file.select_mapped_buffer(pos as i32, size);
+                let mut select_mapped_buffer_result = mmap_file
+                    .try_select_mapped_buffer_with(pos as i32, size, residency)
+                    .ok()
+                    .flatten();
                 if let Some(ref mut result) = select_mapped_buffer_result {
                     result.try_attach_mapped_file(mmap_file);
                 }
@@ -1053,6 +1066,16 @@ impl CommitLog {
 
     pub(crate) fn get_message_for_transfer(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
         self.read_handle().get_message_for_transfer(offset, size)
+    }
+
+    pub(crate) fn get_message_for_transfer_with(
+        &self,
+        offset: i64,
+        size: i32,
+        residency: ResidencyCheck,
+    ) -> Option<SelectMappedBufferResult> {
+        self.read_handle()
+            .get_message_for_transfer_with(offset, size, residency)
     }
 
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {

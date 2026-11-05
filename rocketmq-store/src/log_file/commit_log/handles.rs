@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_local::mapped_file::ResidencyCheck;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -112,6 +113,16 @@ impl CommitLogReadHandle {
 
     pub(crate) fn get_message_for_transfer(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
         self.mapped_file_queue.get_message_for_transfer(offset, size)
+    }
+
+    pub(crate) fn get_message_for_transfer_with(
+        &self,
+        offset: i64,
+        size: i32,
+        residency: ResidencyCheck,
+    ) -> Option<SelectMappedBufferResult> {
+        self.mapped_file_queue
+            .get_message_for_transfer_with(offset, size, residency)
     }
 
     pub(crate) fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
