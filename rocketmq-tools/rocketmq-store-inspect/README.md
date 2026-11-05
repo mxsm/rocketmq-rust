@@ -99,7 +99,8 @@ new directory under `backup`; keep it until the native engine has delivered the 
 
 Before starting the Broker, set `timerStoreMode = "native"` and `timerWheelEnable = true`, and
 remove `timerExtendedAdmissionEnable`, `timerExtendedActivationEpoch` and the other
-`timerExtended*` settings, which only the Extended mode accepts.
+`timerExtended*` settings, which only the Extended mode accepts. Keep any `[store.timerStoreConfig]`
+settings the Extended Timeline ran with: the command reads its message copies with them.
 
 ## Source and validation
 

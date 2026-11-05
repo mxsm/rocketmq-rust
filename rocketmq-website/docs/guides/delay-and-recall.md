@@ -165,6 +165,32 @@ The shadow matches each due timer with the active engine's delivery through the 
 
 The shadow reads its tokens back after a restart as the native engine does. A slave runs its own shadow and compares it with the deliveries it replicates. The flag does nothing under `timerStoreMode = "native"`.
 
+## Move Extended Timeline timers to the native engine
+
+`timerStoreMode = "extended_timeline"` is deprecated in favor of `native` and will be removed in a later major version, together with `timerExtendedShadowEnable`. A Broker started with either logs a warning. To compare the engines before a switch, use the native shadow described above.
+
+Once the Extended Timeline has run on a store, the store loads in no other `timerStoreMode`, so its timers cannot drain beside the native engine as the other engines' timers do. Move them while the Broker is stopped, with `rocketmq-cli-rust` from `rocketmq-tools/rocketmq-store-inspect`:
+
+```bash
+rocketmq-cli-rust migrate-extended-timers --config broker.toml --dry-run
+rocketmq-cli-rust migrate-extended-timers --config broker.toml
+```
+
+1. Stop the Broker. The command takes the store's lock, which a running Broker holds.
+2. Give `--config` the configuration the Broker will run with next: `timerStoreMode = "native"` and `timerWheelEnable = true` in `[store]`, without `timerExtendedAdmissionEnable`, `timerExtendedActivationEpoch` or the other `timerExtended*` keys, which only the Extended mode accepts. Keep any `[store.timerStoreConfig]` settings the Extended Timeline ran with: the command reads its message copies with them. It also reads the store root and `[store.timerNative]` from that section.
+3. Run it with `--dry-run`. It changes nothing and prints a JSON report:
+   - `migrated`: the pending, ready and delivering timers that move. Of those, `delivering` were being delivered and may be delivered a second time.
+   - `committed`, `finished` and `shadow`: timers left out because their message was already written, because they were delivered, cancelled or quarantined, or because they are shadow records.
+4. Run it without `--dry-run`. The native engine indexes every moving timer with a copy of its message, so none depends on the CommitLog. `timer-extended/` and `config/timer-store-owner.meta` are then renamed with a `.migrated` suffix, and `backup` in the report names the directory. Keep it until the native engine has delivered the migrated timers.
+5. Start the Broker in native mode.
+
+The command changes nothing and exits with code `2` while the report lists `blockers`:
+
+- `payloadHandoffPending`: timers whose message the Extended Timeline has not copied yet. Run the Broker in `extended_timeline` mode until it has, then stop it and try again.
+- `beyondNativeMaxDelay`: timers due later than `timerNative.maxDelayDays` admits. `requiredDays` is the value it needs.
+
+A run that stops partway can be run again, and starts over. Each Broker of a master/slave group keeps its own store, so run the command for every store the Extended Timeline owns; it refuses any other store.
+
 ## Example and validation scope
 
 From `rocketmq-example/`:

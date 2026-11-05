@@ -165,6 +165,32 @@ shadow 通过双方共有的投递令牌，把每条到期定时消息与活动�
 
 shadow 在重启后会像 native 引擎一样读回令牌。从节点运行自己的 shadow，并与其复制到的投递进行对比。在 `timerStoreMode = "native"` 下，该配置不起作用。
 
+## 将 Extended Timeline 定时消息迁移到 native 引擎
+
+`timerStoreMode = "extended_timeline"` 已弃用，由 `native` 取代，并将与 `timerExtendedShadowEnable` 一起在后续某个主版本中移除。使用其中任一配置启动的 Broker 会输出一条警告。如需在切换前对比两种引擎，请使用上文介绍的 native shadow。
+
+Extended Timeline 在某个存储上运行过之后，该存储便不能以其他任何 `timerStoreMode` 加载，因此它的定时消息无法像其他引擎的定时消息那样在 native 引擎旁边继续投递完毕。请在 Broker 停止时，使用 `rocketmq-tools/rocketmq-store-inspect` 中的 `rocketmq-cli-rust` 迁移这些定时消息：
+
+```bash
+rocketmq-cli-rust migrate-extended-timers --config broker.toml --dry-run
+rocketmq-cli-rust migrate-extended-timers --config broker.toml
+```
+
+1. 停止 Broker。该命令会获取存储锁，而运行中的 Broker 持有这把锁。
+2. 通过 `--config` 传入 Broker 下次运行要使用的配置：在 `[store]` 中设置 `timerStoreMode = "native"` 和 `timerWheelEnable = true`，并去掉 `timerExtendedAdmissionEnable`、`timerExtendedActivationEpoch` 以及其他 `timerExtended*` 配置项，这些配置项只有 Extended 模式接受。请保留 Extended Timeline 运行时使用的 `[store.timerStoreConfig]` 配置，命令会按这些配置读取它保存的消息副本。命令还会从该配置段读取存储根目录和 `[store.timerNative]`。
+3. 先加 `--dry-run` 运行。此时不做任何修改，只输出一份 JSON 报告：
+   - `migrated`：将被迁移的 pending、ready 和 delivering 定时消息。其中 `delivering` 是正在投递的定时消息，可能会被再投递一次。
+   - `committed`、`finished` 和 `shadow`：不迁移的定时消息，原因分别是消息已经写入、已经投递／取消／隔离，或者属于 shadow 记录。
+4. 不加 `--dry-run` 运行。native 引擎会为每条要迁移的定时消息建立索引并保存一份消息副本，因此它们都不依赖 CommitLog。随后 `timer-extended/` 和 `config/timer-store-owner.meta` 会被加上 `.migrated` 后缀重命名，报告中的 `backup` 给出该目录的名称。在 native 引擎投递完迁移过来的定时消息之前，请保留该目录。
+5. 以 native 模式启动 Broker。
+
+只要报告中列出了 `blockers`，命令就不做任何修改，并以退出码 `2` 结束：
+
+- `payloadHandoffPending`：Extended Timeline 尚未复制其消息的定时消息。请以 `extended_timeline` 模式运行 Broker，直到复制完成，然后停止 Broker 再重试。
+- `beyondNativeMaxDelay`：到期时间晚于 `timerNative.maxDelayDays` 允许范围的定时消息。`requiredDays` 给出该配置需要的值。
+
+中途停止的迁移可以再次运行，并会从头开始。主从组中的每个 Broker 都有自己的存储，因此需要对 Extended Timeline 拥有的每个存储分别运行该命令；对于其他存储，命令会拒绝执行。
+
 ## 示例与验证范围
 
 在 `rocketmq-example/` 中执行：

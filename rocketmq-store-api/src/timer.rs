@@ -75,7 +75,11 @@ pub enum TimerStoreMode {
     /// RocketMQ Java-compatible timer wheel and timer log.
     #[default]
     JavaCompat,
-    /// Native long-horizon timeline. This mode must fail closed until the capability is installed.
+    /// RocksDB-backed long-horizon timeline, which needs the `rocketmq-store/extended_timeline`
+    /// feature.
+    ///
+    /// Deprecated in favor of [`TimerStoreMode::Native`] and planned for removal. A stopped
+    /// Broker's timers move to the native engine with `rocketmq-cli-rust migrate-extended-timers`.
     ExtendedTimeline,
     /// Tiered time-bucket log for delays of up to `timerNative.maxDelayDays`. Timers the
     /// Java-compatible engine admitted before the switch are still delivered by it.
