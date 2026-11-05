@@ -23,10 +23,13 @@ use tracing::info;
 
 use crate::stats::call_snapshot::CallSnapshot;
 use crate::stats::stats_snapshot::StatsSnapshot;
+use crate::stats::striped_counter::StripedCounter;
 
 pub struct StatsItem {
-    value: AtomicU64,
-    times: AtomicU64,
+    /// Summed like Java's `LongAdder`, because hot items such as a Broker's total put count are
+    /// written by every core.
+    value: StripedCounter,
+    times: StripedCounter,
     cs_list_minute: Mutex<LinkedList<CallSnapshot>>,
     cs_list_hour: Mutex<LinkedList<CallSnapshot>>,
     cs_list_day: Mutex<LinkedList<CallSnapshot>>,
@@ -38,8 +41,8 @@ pub struct StatsItem {
 impl StatsItem {
     pub fn new(stats_name: &str, stats_key: &str) -> Self {
         StatsItem {
-            value: AtomicU64::new(0),
-            times: AtomicU64::new(0),
+            value: StripedCounter::default(),
+            times: StripedCounter::default(),
             cs_list_minute: Mutex::new(LinkedList::new()),
             cs_list_hour: Mutex::new(LinkedList::new()),
             cs_list_day: Mutex::new(LinkedList::new()),
@@ -62,9 +65,14 @@ impl StatsItem {
     /// [`StatsItemSet::clean_resource`](crate::stats::stats_item_set::StatsItemSet::clean_resource).
     #[inline]
     pub fn add(&self, value_delta: u64, times_delta: u64) {
-        self.value.fetch_add(value_delta, Ordering::Relaxed);
-        self.times.fetch_add(times_delta, Ordering::Relaxed);
-        self.last_update_timestamp.store(current_millis(), Ordering::Relaxed);
+        self.value.add(value_delta);
+        self.times.add(times_delta);
+        // Writing the shared word only when the millisecond changes keeps concurrent writers from
+        // invalidating each other's cache line on every addition.
+        let now = current_millis();
+        if self.last_update_timestamp.load(Ordering::Relaxed) != now {
+            self.last_update_timestamp.store(now, Ordering::Relaxed);
+        }
     }
 
     /// Returns the current accumulated value.
@@ -74,13 +82,13 @@ impl StatsItem {
     /// The returned value is a snapshot at the time of the call.
     #[inline]
     pub fn get_value(&self) -> u64 {
-        self.value.load(Ordering::Relaxed)
+        self.value.sum()
     }
 
     /// Returns the current accumulated times (call count).
     #[inline]
     pub fn get_times(&self) -> u64 {
-        self.times.load(Ordering::Relaxed)
+        self.times.sum()
     }
 
     /// Returns the wall-clock timestamp (milliseconds since UNIX epoch) of the last
@@ -131,22 +139,22 @@ impl StatsItem {
 
     /// Advances the second-level window; must be called every ~10 s.
     pub fn sampling_in_seconds(&self) {
-        let current_value = self.value.load(Ordering::Relaxed);
-        let current_times = self.times.load(Ordering::Relaxed);
+        let current_value = self.value.sum();
+        let current_times = self.times.sum();
         Self::sampling_in_seconds_internal(&self.cs_list_minute, current_value, current_times);
     }
 
     /// Advances the minute-level window; must be called every ~10 min.
     pub fn sampling_in_minutes_level(&self) {
-        let current_value = self.value.load(Ordering::Relaxed);
-        let current_times = self.times.load(Ordering::Relaxed);
+        let current_value = self.value.sum();
+        let current_times = self.times.sum();
         Self::sampling_in_minutes(&self.cs_list_hour, current_value, current_times);
     }
 
     /// Advances the hour-level window; must be called every ~1 h.
     pub fn sampling_in_hour_level(&self) {
-        let current_value = self.value.load(Ordering::Relaxed);
-        let current_times = self.times.load(Ordering::Relaxed);
+        let current_value = self.value.sum();
+        let current_times = self.times.sum();
         Self::sampling_in_hour(&self.cs_list_day, current_value, current_times);
     }
 
@@ -244,8 +252,8 @@ impl StatsItem {
 impl fmt::Debug for StatsItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StatsItem")
-            .field("value", &self.value.load(Ordering::Relaxed))
-            .field("times", &self.times.load(Ordering::Relaxed))
+            .field("value", &self.value.sum())
+            .field("times", &self.times.sum())
             .field("stats_name", &self.stats_name)
             .field("stats_key", &self.stats_key)
             .finish()
@@ -262,8 +270,8 @@ mod tests {
     #[test]
     fn stats_item_initializes_correctly() {
         let stats_item = StatsItem::new("TestName", "TestKey");
-        assert_eq!(stats_item.value.load(Ordering::Relaxed), 0);
-        assert_eq!(stats_item.times.load(Ordering::Relaxed), 0);
+        assert_eq!(stats_item.get_value(), 0);
+        assert_eq!(stats_item.get_times(), 0);
         assert_eq!(stats_item.stats_name, "TestName");
         assert_eq!(stats_item.stats_key, "TestKey");
         // last_update_timestamp is set to creation time, not zero
