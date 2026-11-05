@@ -23,6 +23,9 @@ use tokio::sync::Notify;
 use super::BlockingLane;
 use super::BlockingLanePolicies;
 
+/// Lane slots kept by every budget, indexed by [`BlockingLane::index`].
+const LANE_COUNT: usize = BlockingLane::ALL.len();
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LaneAdmissionSnapshot {
     pub global_capacity: usize,
@@ -51,16 +54,16 @@ impl WaiterSlot {
 
 #[derive(Debug)]
 struct AdmissionState {
-    running: [usize; 3],
-    waiters: [VecDeque<Arc<WaiterSlot>>; 3],
+    running: [usize; LANE_COUNT],
+    waiters: [VecDeque<Arc<WaiterSlot>>; LANE_COUNT],
     next_arrival: u64,
 }
 
 #[derive(Debug)]
 struct GlobalBlockingBudgetInner {
     capacity: usize,
-    lane_ceilings: [usize; 3],
-    lane_reservations: [usize; 3],
+    lane_ceilings: [usize; LANE_COUNT],
+    lane_reservations: [usize; LANE_COUNT],
     state: Mutex<AdmissionState>,
 }
 
@@ -83,27 +86,38 @@ impl GlobalBlockingBudget {
         debug_assert!(policies.validate_for_global_capacity(capacity).is_ok());
         Self::new(
             capacity,
+            // The consume listener lane never draws from this budget.
             [
                 policies.max_concurrency(BlockingLane::StorageIo),
                 policies.max_concurrency(BlockingLane::MetadataIo),
                 policies.max_concurrency(BlockingLane::CpuCrypto),
+                0,
             ],
-            [1; 3],
+            [1, 1, 1, 0],
         )
     }
 
     pub(crate) fn isolated(capacity: usize) -> Self {
-        Self::new(capacity, [capacity, 0, 0], [capacity, 0, 0])
+        Self::dedicated(BlockingLane::StorageIo, capacity)
     }
 
-    fn new(capacity: usize, lane_ceilings: [usize; 3], lane_reservations: [usize; 3]) -> Self {
+    /// A budget that admits only `lane`, up to `capacity` at a time.
+    pub(crate) fn dedicated(lane: BlockingLane, capacity: usize) -> Self {
+        let mut lane_ceilings = [0; LANE_COUNT];
+        let mut lane_reservations = [0; LANE_COUNT];
+        lane_ceilings[lane.index()] = capacity;
+        lane_reservations[lane.index()] = capacity;
+        Self::new(capacity, lane_ceilings, lane_reservations)
+    }
+
+    fn new(capacity: usize, lane_ceilings: [usize; LANE_COUNT], lane_reservations: [usize; LANE_COUNT]) -> Self {
         Self {
             inner: Arc::new(GlobalBlockingBudgetInner {
                 capacity,
                 lane_ceilings,
                 lane_reservations,
                 state: Mutex::new(AdmissionState {
-                    running: [0; 3],
+                    running: [0; LANE_COUNT],
                     waiters: Default::default(),
                     next_arrival: 0,
                 }),
@@ -297,7 +311,7 @@ mod tests {
     }
 
     fn budget(capacity: usize) -> GlobalBlockingBudget {
-        GlobalBlockingBudget::new(capacity, [capacity; 3], [1; 3])
+        GlobalBlockingBudget::new(capacity, [capacity; LANE_COUNT], [1; LANE_COUNT])
     }
 
     #[tokio::test]
@@ -315,15 +329,15 @@ mod tests {
 
         drop(first);
         let metadata_permit = metadata.await.unwrap();
-        assert_eq!(budget.lock().running, [2, 1, 0]);
+        assert_eq!(budget.lock().running, [2, 1, 0, 0]);
         assert!(futures::poll!(cpu.as_mut()).is_pending());
         assert!(futures::poll!(borrower.as_mut()).is_pending());
         drop(second);
         let cpu_permit = cpu.await.unwrap();
-        assert_eq!(budget.lock().running, [1, 1, 1]);
+        assert_eq!(budget.lock().running, [1, 1, 1, 0]);
         drop(third);
         let borrowed = borrower.await.unwrap();
-        assert_eq!(budget.lock().running, [1, 1, 1]);
+        assert_eq!(budget.lock().running, [1, 1, 1, 0]);
         drop((metadata_permit, cpu_permit, borrowed));
         assert_eq!(budget.snapshot(BlockingLane::StorageIo).global_running, 0);
     }
@@ -340,10 +354,10 @@ mod tests {
         assert!(futures::poll!(metadata.as_mut()).is_pending());
         assert!(futures::poll!(cpu.as_mut()).is_pending());
         drop(held.pop());
-        assert_eq!(budget.lock().running, [2, 1, 0]);
+        assert_eq!(budget.lock().running, [2, 1, 0, 0]);
         drop(metadata);
         let cpu_permit = cpu.await.unwrap();
-        assert_eq!(budget.lock().running, [2, 0, 1]);
+        assert_eq!(budget.lock().running, [2, 0, 1, 0]);
         drop((held, cpu_permit));
         assert_eq!(budget.snapshot(BlockingLane::CpuCrypto).global_running, 0);
     }

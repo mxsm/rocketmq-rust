@@ -167,6 +167,7 @@ pub(super) fn sanitize_blocking_lane(snapshot: BlockingExecutorAggregate) -> Run
         BlockingLane::StorageIo => RuntimeBlockingLaneV1::StorageIo,
         BlockingLane::MetadataIo => RuntimeBlockingLaneV1::MetadataIo,
         BlockingLane::CpuCrypto => RuntimeBlockingLaneV1::CpuCrypto,
+        BlockingLane::ConsumeListener => RuntimeBlockingLaneV1::ConsumeListener,
     };
 
     RuntimeBlockingLaneSummaryV1 {

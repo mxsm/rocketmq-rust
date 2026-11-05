@@ -608,6 +608,29 @@ where
     })
 }
 
+/// Runs a user consume listener on the runtime's consume listener lane.
+///
+/// Listeners may block for a whole `consume_timeout`, so they do not share the metadata I/O lane,
+/// which is sized for short work, rejects when its queue is full and stops waiting after 30 s. The
+/// listener lane has capacity outside the budget the other lanes share, queues a call until a
+/// thread is free, and keeps waiting on a running listener; a listener that overruns
+/// `consume_timeout` is handled by the consume services' expiry cleanup, as in the Java client.
+pub(crate) async fn spawn_consume_listener_with_context<F, R>(
+    context: &ChildServiceContext,
+    task_name: &'static str,
+    task: F,
+) -> io::Result<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    context
+        .consume_listener()
+        .spawn_io(task_name, task)
+        .await
+        .map_err(io::Error::other)
+}
+
 pub(crate) async fn spawn_client_blocking_io_with_context<F, R>(
     context: &ChildServiceContext,
     task_name: &'static str,

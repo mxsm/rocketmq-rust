@@ -146,6 +146,8 @@ pub enum RuntimeBlockingLaneV1 {
     MetadataIo,
     /// CPU-intensive cryptographic work.
     CpuCrypto,
+    /// User consume listeners.
+    ConsumeListener,
 }
 
 /// Identifies a bounded category of blocking work.
@@ -772,6 +774,7 @@ mod tests {
                 BlockingLane::MetadataIo,
             ],
             vec![BlockingLane::MetadataIo, BlockingLane::CpuCrypto],
+            vec![BlockingLane::ConsumeListener, BlockingLane::StorageIo],
             vec![],
         ] {
             let snapshots: Vec<_> = lanes.iter().copied().map(snapshot).collect();
@@ -789,6 +792,7 @@ mod tests {
                     BlockingLane::StorageIo => "storage_io",
                     BlockingLane::MetadataIo => "metadata_io",
                     BlockingLane::CpuCrypto => "cpu_crypto",
+                    BlockingLane::ConsumeListener => "consume_listener",
                 };
                 assert_eq!(serde_json::to_value(summary.lane).unwrap(), expected);
                 assert_eq!(summary.queued, lane.index() + 10);
