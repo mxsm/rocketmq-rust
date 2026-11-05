@@ -83,7 +83,7 @@ fn enqueue_raw_write(
     lanes: &WriterLanes,
     admission: &AdmissionScopeHandle,
     deadline: Option<RequestDeadline>,
-    target: &'static str,
+    _target: &'static str,
 ) -> tokio::sync::oneshot::Receiver<crate::write_result::WriterResult> {
     let permit = admission
         .try_acquire(AdmissionResource::Queued, 1, AdmissionClass::Data)
@@ -96,7 +96,6 @@ fn enqueue_raw_write(
             completion,
             permit,
             deadline,
-            target.to_string(),
             Arc::new(QueuedWriteProgress::waiting()),
             std::time::Instant::now(),
         ),
@@ -370,7 +369,6 @@ async fn typed_response_queue_saturation_is_not_started() {
             completion,
             permit,
             None,
-            "queued-blocker".to_string(),
             Arc::new(QueuedWriteProgress::waiting()),
             std::time::Instant::now(),
         ),
@@ -530,7 +528,7 @@ async fn actual_dropped_queued_completion_before_start_maps_to_typed_not_started
                 None,
                 RequestStopPolicy::All,
                 None,
-                "dropped-before-start-target".to_string(),
+                "dropped-before-start-target".into(),
             )
             .await;
         (connection, outcome)
@@ -595,7 +593,7 @@ async fn actual_dropped_active_completion_maps_to_typed_possibly_partial() {
                 None,
                 RequestStopPolicy::All,
                 None,
-                "dropped-active-target".to_string(),
+                "dropped-active-target".into(),
             )
             .await;
         (connection, outcome)
@@ -662,7 +660,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
             None,
             RequestStopPolicy::All,
             None,
-            "typed-sendfile-target".to_string(),
+            "typed-sendfile-target".into(),
         )
         .await
         .expect_err("TLS sendfile preflight must fail");
@@ -685,7 +683,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
             None,
             RequestStopPolicy::All,
             None,
-            "legacy-sendfile-target".to_string(),
+            "legacy-sendfile-target".into(),
         )
         .await
         .expect_err("TLS sendfile preflight must fail")
@@ -722,7 +720,7 @@ async fn direct_preflight_deadline_is_not_started_and_keeps_the_writer_healthy()
                 None,
                 RequestStopPolicy::All,
                 None,
-                "typed-direct-target".to_string(),
+                "typed-direct-target".into(),
             )
             .await;
         (connection, outcome)
@@ -847,7 +845,7 @@ async fn queued_preflight_deadline_matches_direct_not_started_classification_wit
                 None,
                 RequestStopPolicy::All,
                 None,
-                "typed-queued-target".to_string(),
+                "typed-queued-target".into(),
             )
             .await;
         (connection, outcome)
@@ -941,15 +939,11 @@ async fn micro_batch_preflight_deadline_only_rejects_the_member_that_caused_the_
 
     tokio::time::advance(std::time::Duration::from_millis(80)).await;
     assert_normal_rejection(
-        classify_writer_failure("short-member".to_string(), short_failure, Some(short_deadline)).into_response(),
+        classify_writer_failure(short_failure, Some(short_deadline)).into_response(),
         ResponseCompletionResult::DeadlineExpired,
     );
-    assert_not_started_prewrite_operational(
-        classify_writer_failure("late-member".to_string(), late_failure, Some(late_deadline)).into_response(),
-    );
-    assert_not_started_prewrite_operational(
-        classify_writer_failure("undeadlined-member".to_string(), no_deadline_failure, None).into_response(),
-    );
+    assert_not_started_prewrite_operational(classify_writer_failure(late_failure, Some(late_deadline)).into_response());
+    assert_not_started_prewrite_operational(classify_writer_failure(no_deadline_failure, None).into_response());
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
     assert_eq!(*state_rx.borrow(), ConnectionState::Healthy);
@@ -1011,9 +1005,7 @@ async fn prewrite_stall_without_an_owner_deadline_remains_a_typed_failure() {
         .expect("stalled member completion")
         .expect_err("writer stall must fail before socket I/O");
     tokio::time::advance(std::time::Duration::from_secs(1)).await;
-    assert_not_started_prewrite_operational(
-        classify_writer_failure("stalled-member".to_string(), failure, None).into_response(),
-    );
+    assert_not_started_prewrite_operational(classify_writer_failure(failure, None).into_response());
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
     assert_eq!(*state_rx.borrow(), ConnectionState::Healthy);
@@ -1098,7 +1090,7 @@ async fn queued_control_does_not_reclassify_a_completed_stall_after_its_later_de
         Some(&control),
         RequestStopPolicy::All,
         None,
-        "delayed-observer".to_string(),
+        "delayed-observer".into(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
 
@@ -1186,7 +1178,7 @@ async fn queued_control_does_not_reclassify_a_dropped_completion_after_its_later
         Some(&control),
         RequestStopPolicy::All,
         None,
-        "dropped-observer".to_string(),
+        "dropped-observer".into(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
 
@@ -1307,7 +1299,7 @@ async fn queued_typed_transport_failure_matches_direct_possibly_partial_classifi
             None,
             RequestStopPolicy::All,
             None,
-            "typed-queued-target".to_string(),
+            "typed-queued-target".into(),
         )
         .await
         .expect_err("partial queued write must fail")
