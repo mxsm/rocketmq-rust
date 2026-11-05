@@ -28,6 +28,7 @@ keywords             = ["rocketmq", "controller", "raft", "distributed", "messag
 categories           = ["network-programming", "asynchronous"]
 
 [dependencies]
+mimalloc = { workspace = true, optional = true }
 rocketmq-auth     = { workspace = true }
 rocketmq-error    = { workspace = true }
 rocketmq-model    = { workspace = true }
@@ -128,6 +129,8 @@ harness = false
 
 [features]
 default         = ["storage-rocksdb"]
+# Use mimalloc as the binary's global allocator (production images enable it).
+allocator-mimalloc = ["dep:mimalloc"]
 storage-rocksdb = ["rocksdb"]
 storage-file    = []
 dev-single      = ["storage-file"]

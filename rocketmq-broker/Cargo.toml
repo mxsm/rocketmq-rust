@@ -30,6 +30,8 @@ rust-version.workspace = true
 
 [features]
 default          = ["local_file_store"]
+# Use mimalloc as the binary's global allocator (production images enable it).
+allocator-mimalloc = ["dep:mimalloc"]
 tls              = ["rocketmq-transport/tls"]
 local_file_store = ["rocketmq-store/local_file_store"]
 rocksdb_store    = ["rocketmq-store/rocksdb_store", "dep:rocketmq-store-rocksdb"]
@@ -58,6 +60,7 @@ production      = ["local_file_store", "production-observability"]
 test-support    = []
 
 [dependencies]
+mimalloc = { workspace = true, optional = true }
 rocketmq-store       = { workspace = true }
 rocketmq-store-rocksdb = { workspace = true, optional = true }
 rocketmq-store-api   = { workspace = true }

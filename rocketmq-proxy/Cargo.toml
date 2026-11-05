@@ -29,6 +29,8 @@ rust-version.workspace = true
 
 [features]
 default = ["cluster-mode", "local-mode"]
+# Use mimalloc as the binary's global allocator (production images enable it).
+allocator-mimalloc = ["dep:mimalloc"]
 cluster-mode = ["dep:rocketmq-proxy-cluster"]
 local-mode = ["dep:rocketmq-proxy-local"]
 observability = [
@@ -46,6 +48,7 @@ tieredstore = ["local-mode", "rocketmq-proxy-local/tieredstore"]
 tls = ["dep:arc-swap", "dep:parking_lot", "dep:tokio-rustls", "rocketmq-transport/tls", "tonic/tls-aws-lc"]
 
 [dependencies]
+mimalloc = { workspace = true, optional = true }
 rocketmq-error       = { workspace = true }
 rocketmq-model       = { workspace = true }
 rocketmq-protocol    = { workspace = true }
