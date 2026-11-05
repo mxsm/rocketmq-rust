@@ -594,6 +594,15 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
     }
 }
 
+/// How often the reader rechecks CommitLog data it has but may not dispatch yet.
+///
+/// The reader also wakes as soon as a put returns, a replica append lands or a confirm offset is
+/// published, since each of those notifies it. A SYNC_FLUSH put returns only after its flush, so
+/// concurrently flushed messages are dispatched without waiting for this timer, whose effective
+/// resolution is about 15.6 ms on Windows. The timer remains for confirm-offset changes that send
+/// no notification, such as a shrinking sync-state set.
+const UNCONFIRMED_RECHECK_INTERVAL: Duration = Duration::from_millis(1);
+
 #[derive(Clone)]
 pub(super) struct ReputNotifyHandle {
     new_message_notify: Arc<Notify>,
@@ -786,7 +795,8 @@ impl ReputMessageService {
                                     dispatch_progress_notify.notify_waiters();
                                     tokio::select! {
                                         _ = shutdown_reader.cancelled() => return,
-                                        _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                        _ = new_message_notify.notified() => {}
+                                        _ = tokio::time::sleep(UNCONFIRMED_RECHECK_INTERVAL) => {}
                                     }
                                     continue;
                                 }
@@ -828,7 +838,8 @@ impl ReputMessageService {
                                     if inner.has_unconfirmed_commit_log() {
                                         tokio::select! {
                                             _ = shutdown_reader.cancelled() => return,
-                                            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                            _ = new_message_notify.notified() => {}
+                                            _ = tokio::time::sleep(UNCONFIRMED_RECHECK_INTERVAL) => {}
                                         }
                                         continue;
                                     }
