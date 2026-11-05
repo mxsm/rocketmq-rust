@@ -32,12 +32,22 @@ mod cut;
 mod delivery;
 mod engine;
 mod feed;
+#[cfg(feature = "extended_timeline")]
+mod migrate;
 mod near_wheel;
 mod service;
 mod shadow;
 
 pub(crate) use engine::NativeRecallVerdict;
 pub(crate) use feed::NativeDeliveryFeed;
+#[cfg(feature = "extended_timeline")]
+pub use migrate::migrate_extended_timers_to_native;
+#[cfg(feature = "extended_timeline")]
+pub use migrate::ExtendedTimerMigrationBlocker;
+#[cfg(feature = "extended_timeline")]
+pub use migrate::ExtendedTimerMigrationMode;
+#[cfg(feature = "extended_timeline")]
+pub use migrate::ExtendedTimerMigrationReport;
 pub(crate) use service::NativeServiceRole;
 pub(crate) use service::NativeTimerService;
 

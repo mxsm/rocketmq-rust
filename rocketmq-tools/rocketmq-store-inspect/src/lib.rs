@@ -23,4 +23,5 @@ pub mod command_line;
 pub mod content_show;
 pub mod downgrade_preflight;
 pub(crate) mod errors;
+pub mod extended_migration;
 pub mod multipath_consolidate;

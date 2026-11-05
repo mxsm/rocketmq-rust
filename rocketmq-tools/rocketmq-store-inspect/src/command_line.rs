@@ -91,6 +91,22 @@ pub enum Commands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    #[command(
+        name = "migrate-extended-timers",
+        arg_required_else_help = true,
+        about = "offline move of the Extended Timeline's timers to the native timer engine"
+    )]
+    MigrateExtendedTimers {
+        /// Broker configuration file whose `[store]` section names the store.
+        #[arg(long)]
+        config: PathBuf,
+        /// Report what would move, and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Write the report here instead of to stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[cfg(test)]
@@ -124,6 +140,19 @@ mod tests {
         ])
         .expect("parse consolidation");
         assert!(matches!(cli.command, Commands::ConsolidateMultipath { .. }));
+
+        let cli = RootCli::try_parse_from([
+            "rocketmq-cli-rust",
+            "migrate-extended-timers",
+            "--config",
+            "broker.toml",
+            "--dry-run",
+        ])
+        .expect("parse migration");
+        assert!(matches!(
+            cli.command,
+            Commands::MigrateExtendedTimers { dry_run: true, .. }
+        ));
     }
 
     #[test]
