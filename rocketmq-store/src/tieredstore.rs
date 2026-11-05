@@ -164,6 +164,11 @@ impl TieredStoreDecorator {
         self.store.dispatcher().health().is_ready()
     }
 
+    /// Returns whether read routing depends on whether local data is in the page cache.
+    pub fn reads_by_local_page_cache_residency(&self) -> bool {
+        self.store.config().storage_level == rocketmq_tieredstore::TieredStorageLevel::NotInMem
+    }
+
     pub fn should_try_get_message(&self, status: GetMessageStatus, local_residency: TieredLocalResidency) -> bool {
         let residency = if status == GetMessageStatus::Found {
             local_residency
