@@ -14,6 +14,12 @@
 
 #![recursion_limit = "512"]
 
+// Message decoding and property handling allocate many short-lived objects per message;
+// production images serve them from mimalloc instead of the system allocator.
+#[cfg(feature = "allocator-mimalloc")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;

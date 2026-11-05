@@ -188,8 +188,16 @@ opentelemetry-semantic-conventions = { version = "0.33" }
 tracing-opentelemetry              = { version = "0.34", default-features = false }
 prometheus                         = { version = "0.14", default-features = false }
 rocksdb                            = { version = "0.25", default-features = false, features = ["bindgen-runtime", "multi-threaded-cf", "lz4", "zstd"] }
+mimalloc                           = { version = "0.1.52", default-features = false }
 
 # Native RocksDB debug symbols exceed MSVC's PDB limits when linking this crate's
 # standalone test binaries. Keep the override scoped to the new backend owner.
 [profile.test.package.rocketmq-store-rocksdb]
 debug = 0
+
+# Server binaries spend their time in per-message code that crosses many workspace crates
+# (protocol, transport, broker, store). Whole-program LTO with one codegen unit lets that code
+# inline across crates; it only affects release builds.
+[profile.release]
+lto           = "fat"
+codegen-units = 1
