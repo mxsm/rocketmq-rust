@@ -39,7 +39,7 @@ use tokio::sync::broadcast;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
 use crate::base::connection_net_event::ConnectionNetEvent;
-use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
+use crate::base::pending_request_table::estimate_wire_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestRegistrationResult;
@@ -716,7 +716,7 @@ impl<PR> TransportSession<PR> {
 
         let (tx, rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
         let opaque = request.opaque();
-        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
+        let retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut request);
         let guard = match self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             opaque,
@@ -853,7 +853,7 @@ impl<PR> TransportSession<PR> {
         if self.prepare_transport_request(&mut request, deadline).is_err() {
             return;
         }
-        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
+        let retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut request);
         let guard = match self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             request.opaque(),
@@ -957,7 +957,7 @@ impl<PR> TransportSession<PR> {
         for mut request in requests {
             self.prepare_transport_request(&mut request, deadline)?;
             let (tx, rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
-            let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
+            let retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut request);
             let guard = match self.pending_requests.register_for_owner_with_bytes(
                 &self.pending_request_owner,
                 request.opaque(),
@@ -1399,7 +1399,7 @@ mod lifecycle_tests {
 
         let mut retained_client = client.clone();
         let mut retained_request = RemotingCommand::create_remoting_command(105).set_body(vec![7_u8; 4096]);
-        let expected_retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut retained_request);
+        let expected_retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut retained_request);
         let retained_invocation = tokio::spawn(async move {
             retained_client
                 .send_read(retained_request, RequestDeadline::from_timeout_millis(100))
