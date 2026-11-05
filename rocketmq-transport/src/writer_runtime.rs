@@ -41,7 +41,6 @@ use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteCancellation;
 use crate::write_strategy::ResponseQueueWaitObservation;
-use crate::write_strategy::WriterOperation;
 
 /// Hard bounds for one writer micro-batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -410,17 +409,20 @@ impl WriterReceivers {
     }
 
     fn collect_ready(&mut self, batch: &mut Vec<LaneEnvelope>) {
+        // Keep a running total: summing the whole batch per candidate made a full batch quadratic.
+        let mut batch_bytes = batch
+            .iter()
+            .fold(0usize, |total, item| total.saturating_add(item.encoded_len()));
         while batch.len() < self.config.batch.max_items.get() {
             let Some(next) = self.take_ready() else {
                 break;
             };
-            let batch_bytes = batch
-                .iter()
-                .fold(0usize, |total, item| total.saturating_add(item.encoded_len()));
-            if batch_bytes.saturating_add(next.encoded_len()) > self.config.batch.max_bytes.get() {
+            let next_bytes = next.encoded_len();
+            if batch_bytes.saturating_add(next_bytes) > self.config.batch.max_bytes.get() {
                 self.deferred = Some(next);
                 break;
             }
+            batch_bytes = batch_bytes.saturating_add(next_bytes);
             batch.push(next);
         }
     }
@@ -508,6 +510,7 @@ pub(crate) async fn run_session_writer(
     telemetry: TransportTelemetry,
 ) {
     let mut closing: Option<CloseRequest> = None;
+    let mut scratch = BatchScratch::with_capacity(receivers.config.batch.max_items.get());
     loop {
         if closing.is_some() && receivers.is_drained() {
             let result = frame_writer
@@ -526,16 +529,15 @@ pub(crate) async fn run_session_writer(
         };
         match event {
             WriterEvent::Write(first) => {
-                let mut batch = Vec::with_capacity(receivers.config.batch.max_items.get());
-                batch.push(first);
-                let mut close_during_batch = receivers.collect_batch(&mut batch).await;
+                scratch.envelopes.push(first);
+                let mut close_during_batch = receivers.collect_batch(&mut scratch.envelopes).await;
                 match write_batch(
                     &mut frame_writer,
                     &diagnostics,
                     &telemetry,
                     &reader_shutdown,
                     receivers.config,
-                    batch,
+                    &mut scratch,
                 )
                 .await
                 {
@@ -588,16 +590,38 @@ enum BatchWriteDisposition {
     Poisoned(WriterFailure),
 }
 
+/// Vectors one writer reuses for every batch, so a batch allocates none of them. Each is empty
+/// between batches.
+struct BatchScratch {
+    envelopes: Vec<LaneEnvelope>,
+    ready: Vec<QueuedWrite>,
+    started_at: Vec<Option<Instant>>,
+}
+
+impl BatchScratch {
+    fn with_capacity(max_items: usize) -> Self {
+        Self {
+            envelopes: Vec::with_capacity(max_items),
+            ready: Vec::with_capacity(max_items),
+            started_at: Vec::with_capacity(max_items),
+        }
+    }
+}
+
 async fn write_batch(
     frame_writer: &mut ConnectionFrameWriter,
     diagnostics: &SessionWriterDiagnostics,
     telemetry: &TransportTelemetry,
     reader_shutdown: &tokio_util::sync::CancellationToken,
     config: WriterQueueConfig,
-    batch: Vec<LaneEnvelope>,
+    scratch: &mut BatchScratch,
 ) -> BatchWriteDisposition {
-    let mut ready = Vec::with_capacity(batch.len());
-    for envelope in batch {
+    let BatchScratch {
+        envelopes,
+        ready,
+        started_at,
+    } = scratch;
+    for envelope in envelopes.drain(..) {
         let write = envelope.into_write();
         if !write.progress.claim_for_writer() {
             let cancellation = write
@@ -627,7 +651,7 @@ async fn write_batch(
     if ready.is_empty() {
         return BatchWriteDisposition::Continue;
     }
-    let mut active_batch = ActiveBatchDropGuard::new(reader_shutdown, &ready);
+    let mut active_batch = ActiveBatchDropGuard::new(reader_shutdown, ready);
     let stall_deadline = RequestDeadline::after(config.max_write_stall);
     let write_deadline = ready
         .iter()
@@ -639,22 +663,18 @@ async fn write_batch(
                 earliest
             }
         });
-    let payloads = ready
-        .iter()
-        .map(|write| match &write.operation {
-            WriterOperation::Send(payload) => payload,
-        })
-        .collect::<Vec<&OutboundPayload>>();
-    let start_data = ready
-        .iter()
-        .map(|write| ActiveWriteStart {
-            progress: &write.progress,
-            enqueued_at: write.enqueued_at,
-            encoded_len: write.encoded_len(),
-            response_queue_wait_observation: write.response_queue_wait_observation,
-        })
-        .collect::<Vec<_>>();
-    let mut started_at = vec![None; ready.len()];
+    // A single write, the common case at low concurrency, needs no payload list allocation.
+    let single_payload: [&OutboundPayload; 1];
+    let batch_payloads: Vec<&OutboundPayload>;
+    let payloads: &[&OutboundPayload] = if let [write] = ready.as_slice() {
+        single_payload = [write.payload()];
+        &single_payload
+    } else {
+        batch_payloads = ready.iter().map(QueuedWrite::payload).collect();
+        &batch_payloads
+    };
+    started_at.clear();
+    started_at.resize(ready.len(), None);
     let mut write_started = false;
     let result = {
         let mut mark_started = || {
@@ -662,19 +682,19 @@ async fn write_batch(
                 return;
             }
             write_started = true;
-            for (start, started_at) in start_data.iter().zip(started_at.iter_mut()) {
-                start.progress.start_write();
+            for (write, started_at) in ready.iter().zip(started_at.iter_mut()) {
+                write.progress.start_write();
                 if let (ResponseQueueWaitObservation::Response, Some(enqueued_at)) =
-                    (start.response_queue_wait_observation, start.enqueued_at)
+                    (write.response_queue_wait_observation, write.enqueued_at)
                 {
                     telemetry.record_response_queue_wait(Instant::now().saturating_duration_since(enqueued_at));
                 }
-                *started_at = Some(diagnostics.start_write(start.enqueued_at, start.encoded_len));
+                *started_at = Some(diagnostics.start_write(write.enqueued_at, write.encoded_len()));
             }
         };
         match write_deadline
             .timeout(frame_writer.write_transport_payloads_with_start(
-                &payloads,
+                payloads,
                 config.batch.max_iov.get(),
                 &mut mark_started,
             ))
@@ -699,7 +719,6 @@ async fn write_batch(
     };
     active_batch.disarm();
     drop(active_batch);
-    drop(start_data);
     let succeeded = result.is_ok();
     if succeeded {
         let written_bytes = ready
@@ -707,7 +726,7 @@ async fn write_batch(
             .fold(0usize, |total, write| total.saturating_add(write.encoded_len()));
         telemetry.record_outbound_written_plaintext_bytes(written_bytes);
     }
-    for (write, started_at) in ready.into_iter().zip(started_at) {
+    for (write, started_at) in ready.drain(..).zip(started_at.drain(..)) {
         let encoded_len = write.encoded_len();
         if let Some(started_at) = started_at {
             diagnostics.finish_write(started_at, succeeded, !succeeded && write_deadline.is_expired());
@@ -770,13 +789,6 @@ impl Drop for ActiveBatchDropGuard<'_> {
     }
 }
 
-struct ActiveWriteStart<'a> {
-    progress: &'a crate::write_strategy::QueuedWriteProgress,
-    enqueued_at: Option<Instant>,
-    encoded_len: usize,
-    response_queue_wait_observation: ResponseQueueWaitObservation,
-}
-
 #[cfg(test)]
 #[path = "../tests/unit/writer_runtime/queue_failure_semantics.rs"]
 mod queue_failure_semantics_tests;
@@ -821,15 +833,27 @@ mod queue_regression_tests {
             .try_acquire(AdmissionResource::Queued, bytes, AdmissionClass::Data)
             .expect("queue admission");
         let (completion, _result) = oneshot::channel();
+        let mut payload = vec![0; bytes];
+        payload[..target.len()].copy_from_slice(target.as_bytes());
         QueuedWrite::data(
-            OutboundPayload::Contiguous(Bytes::from(vec![0x5a; bytes])),
+            OutboundPayload::Contiguous(Bytes::from(payload)),
             completion,
             permit,
             None,
-            target.to_string(),
             Arc::new(QueuedWriteProgress::waiting()),
             Instant::now(),
         )
+    }
+
+    /// The label `queued_write` stored at the start of the payload.
+    fn label(write: &QueuedWrite) -> String {
+        match write.payload() {
+            OutboundPayload::Contiguous(bytes) => {
+                let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+                String::from_utf8(bytes[..end].to_vec()).expect("ASCII label")
+            }
+            _ => panic!("test writes use contiguous payloads"),
+        }
     }
 
     fn expect_enqueued(outcome: WriterEnqueueResult) {
@@ -970,7 +994,7 @@ mod queue_regression_tests {
         expect_enqueued(lanes.try_send(AdmissionClass::Data, queued_write("data", 16)));
 
         let targets = (0..3)
-            .map(|_| receivers.take_ready().expect("ready item").into_write().target)
+            .map(|_| label(&receivers.take_ready().expect("ready item").into_write()))
             .collect::<Vec<_>>();
         assert_eq!(targets, ["control-1", "control-2", "data"]);
     }
@@ -984,7 +1008,7 @@ mod queue_regression_tests {
         let WriterEvent::Write(envelope) = receivers.recv().await else {
             panic!("queued work must drain after all send handles are dropped");
         };
-        assert_eq!(envelope.into_write().target, "queued-data");
+        assert_eq!(label(&envelope.into_write()), "queued-data");
     }
 
     #[tokio::test]
@@ -1017,11 +1041,12 @@ mod queue_regression_tests {
         assert!(item_receivers.collect_batch(&mut item_batch).await.is_none());
         assert_eq!(item_batch.len(), 2);
         assert_eq!(
-            item_receivers
-                .take_ready()
-                .expect("third item remains queued")
-                .into_write()
-                .target,
+            label(
+                &item_receivers
+                    .take_ready()
+                    .expect("third item remains queued")
+                    .into_write()
+            ),
             "item-third"
         );
     }

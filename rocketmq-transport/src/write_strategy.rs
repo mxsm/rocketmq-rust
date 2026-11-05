@@ -174,8 +174,6 @@ pub(crate) struct QueuedWrite {
     pub(crate) completion: oneshot::Sender<crate::write_result::WriterResult>,
     pub(crate) permit: Option<AdmissionPermit>,
     pub(crate) deadline: Option<RequestDeadline>,
-    #[allow(dead_code, reason = "queue-policy tests retain this opaque fixture identifier")]
-    pub(crate) target: String,
     pub(crate) progress: Arc<QueuedWriteProgress>,
     pub(crate) enqueued_at: Option<Instant>,
     pub(crate) response_queue_wait_observation: ResponseQueueWaitObservation,
@@ -193,7 +191,6 @@ impl QueuedWrite {
         completion: oneshot::Sender<crate::write_result::WriterResult>,
         permit: AdmissionPermit,
         deadline: Option<RequestDeadline>,
-        target: String,
         progress: Arc<QueuedWriteProgress>,
         enqueued_at: Instant,
     ) -> Self {
@@ -202,7 +199,6 @@ impl QueuedWrite {
             completion,
             permit: Some(permit),
             deadline,
-            target,
             progress,
             enqueued_at: Some(enqueued_at),
             response_queue_wait_observation: ResponseQueueWaitObservation::Ineligible,
@@ -215,8 +211,12 @@ impl QueuedWrite {
     }
 
     pub(crate) fn encoded_len(&self) -> usize {
+        self.payload().encoded_len()
+    }
+
+    pub(crate) fn payload(&self) -> &OutboundPayload {
         match &self.operation {
-            WriterOperation::Send(payload) => payload.encoded_len(),
+            WriterOperation::Send(payload) => payload,
         }
     }
 }

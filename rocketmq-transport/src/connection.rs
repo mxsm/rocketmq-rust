@@ -157,6 +157,13 @@ enum ConnectionWriter {
     Queued(QueuedConnection),
 }
 
+/// Names the writer in a queue-saturation error. Internal writers use a static label, so the
+/// success path allocates nothing for it.
+type WriteTarget = std::borrow::Cow<'static, str>;
+
+const SESSION_WRITER_TARGET: WriteTarget = WriteTarget::Borrowed("transport-session-writer");
+const FILE_REGION_WRITER_TARGET: WriteTarget = WriteTarget::Borrowed("transport-file-region-writer");
+
 /// Private send mechanics shared by canonical result facades and the
 /// server's typed response completion path.
 enum SendFailure {
@@ -225,11 +232,7 @@ impl SendFailure {
     }
 }
 
-fn classify_writer_failure(
-    _target: String,
-    failure: WriterFailure,
-    owner_deadline: Option<RequestDeadline>,
-) -> SendFailure {
+fn classify_writer_failure(failure: WriterFailure, owner_deadline: Option<RequestDeadline>) -> SendFailure {
     if owner_deadline.is_some_and(|deadline| failure.was_caused_by(deadline)) {
         return SendFailure::DeadlineExceeded {
             timeout_ms: owner_deadline.map_or(0, RequestDeadline::budget_millis),
@@ -268,7 +271,7 @@ async fn wait_for_control_stop(control: &RequestControlView, policy: RequestStop
     }
 }
 
-fn stop_failure(reason: QueuedWriteCancellation, _target: String, deadline: Option<RequestDeadline>) -> SendFailure {
+fn stop_failure(reason: QueuedWriteCancellation, deadline: Option<RequestDeadline>) -> SendFailure {
     match reason {
         QueuedWriteCancellation::Deadline => SendFailure::DeadlineExceeded {
             timeout_ms: deadline.map_or(0, RequestDeadline::budget_millis),
@@ -948,7 +951,7 @@ impl Connection {
         class: AdmissionClass,
         reservation: Option<ResourcePermit>,
         deadline: Option<RequestDeadline>,
-        target: String,
+        target: WriteTarget,
     ) -> Result<(), rocketmq_error::SharedError> {
         self.send_payload_inner(
             payload,
@@ -973,7 +976,7 @@ impl Connection {
         control: Option<&RequestControlView>,
         stop_policy: RequestStopPolicy,
         deferred_drop: Option<DeferredTransportDropHandle>,
-        target: String,
+        target: WriteTarget,
     ) -> Result<(), SendFailure> {
         self.send_payload_inner_with_response_observation(
             payload,
@@ -999,13 +1002,13 @@ impl Connection {
         stop_policy: RequestStopPolicy,
         deferred_drop: Option<DeferredTransportDropHandle>,
         response_queue_wait_observation: ResponseQueueWaitObservation,
-        target: String,
+        target: WriteTarget,
     ) -> Result<(), SendFailure> {
         let response_drop = self.response_drop.clone();
         let encoded_len = payload.encoded_len();
         self.telemetry.record_outbound_attempted_plaintext_bytes(encoded_len);
         if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
-            return Err(stop_failure(reason, target, deadline));
+            return Err(stop_failure(reason, deadline));
         }
         if deadline.is_some_and(RequestDeadline::is_expired) {
             return Err(SendFailure::DeadlineExceeded {
@@ -1033,7 +1036,7 @@ impl Connection {
                         () = wait_for_control_stop(control, stop_policy) => {
                             let reason = current_request_stop(control, stop_policy)
                                 .unwrap_or(QueuedWriteCancellation::Request);
-                            return Err(stop_failure(reason, target, deadline));
+                            return Err(stop_failure(reason, deadline));
                         }
                         () = resume.notified() => {}
                     }
@@ -1056,10 +1059,12 @@ impl Connection {
             }
             .map_err(|_| {
                 queued.writer_diagnostics.record_rejected(None);
-                SendFailure::QueueSaturated { target: target.clone() }
+                SendFailure::QueueSaturated {
+                    target: target.to_string(),
+                }
             })?;
             if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
-                return Err(stop_failure(reason, target, deadline));
+                return Err(stop_failure(reason, deadline));
             }
             if deadline.is_some_and(RequestDeadline::is_expired) {
                 return Err(SendFailure::DeadlineExceeded {
@@ -1071,16 +1076,8 @@ impl Connection {
             let enqueued_at = queued.writer_diagnostics.prepare_enqueue(encoded_len);
             match queued.writer.try_send(
                 class,
-                QueuedWrite::data(
-                    payload,
-                    completion,
-                    permit,
-                    deadline,
-                    target.clone(),
-                    progress.clone(),
-                    enqueued_at,
-                )
-                .with_response_queue_wait_observation(response_queue_wait_observation),
+                QueuedWrite::data(payload, completion, permit, deadline, progress.clone(), enqueued_at)
+                    .with_response_queue_wait_observation(response_queue_wait_observation),
             ) {
                 crate::writer_runtime::WriterEnqueueResult::Enqueued => {
                     queued.writer_diagnostics.record_accepted();
@@ -1091,7 +1088,9 @@ impl Connection {
                     return Err(match rejection {
                         crate::writer_runtime::WriterEnqueueResult::Full(write) => {
                             drop(write);
-                            SendFailure::QueueSaturated { target: target.clone() }
+                            SendFailure::QueueSaturated {
+                                target: target.to_string(),
+                            }
                         }
                         crate::writer_runtime::WriterEnqueueResult::Closed(write) => {
                             drop(write);
@@ -1119,7 +1118,7 @@ impl Connection {
                             if let Some(drop_guard) = in_flight_drop.take() {
                                 drop_guard.complete();
                             }
-                            return Err(stop_failure(reason, target, deadline));
+                            return Err(stop_failure(reason, deadline));
                         }
                         result.await
                     }
@@ -1144,20 +1143,20 @@ impl Connection {
             };
             let outcome = outcome.map_err(|_| {
                 if let Some(reason) = progress.cancellation_reason() {
-                    return stop_failure(reason, target.clone(), deadline);
+                    return stop_failure(reason, deadline);
                 }
                 let progress = if progress.write_started() {
                     WriteProgress::PossiblyPartial
                 } else {
                     WriteProgress::NotStarted
                 };
-                classify_writer_failure(target.clone(), WriterFailure::completion_dropped(progress), deadline)
+                classify_writer_failure(WriterFailure::completion_dropped(progress), deadline)
             });
             if let Some(drop_guard) = in_flight_drop.take() {
                 drop_guard.complete();
             }
             let outcome = outcome?;
-            return outcome.map_err(|failure| classify_writer_failure(target, failure, deadline));
+            return outcome.map_err(|failure| classify_writer_failure(failure, deadline));
         }
         if self.state() == ConnectionState::Closed {
             return Err(SendFailure::SessionClosed);
@@ -1221,7 +1220,7 @@ impl Connection {
                     let _ = writer.shutdown().await;
                     let _ = self.state_tx.send(ConnectionState::Closed);
                 }
-                Err(classify_writer_failure(target, failure, deadline))
+                Err(classify_writer_failure(failure, deadline))
             }
         }
     }
@@ -1250,7 +1249,7 @@ impl Connection {
             RequestStopPolicy::All,
             None,
             ResponseQueueWaitObservation::Response,
-            "transport-session-writer".to_string(),
+            SESSION_WRITER_TARGET,
         )
         .await
         .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
@@ -1281,7 +1280,7 @@ impl Connection {
             RequestStopPolicy::All,
             Some(deferred_drop),
             ResponseQueueWaitObservation::Response,
-            "transport-session-writer".to_string(),
+            SESSION_WRITER_TARGET,
         )
         .await
         .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
@@ -1307,7 +1306,7 @@ impl Connection {
             RequestStopPolicy::All,
             None,
             ResponseQueueWaitObservation::Response,
-            "transport-session-writer".to_string(),
+            SESSION_WRITER_TARGET,
         )
         .await
         .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
@@ -1353,14 +1352,8 @@ impl Connection {
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = self.limits.encode_command(command)?;
-        self.send_payload(
-            OutboundPayload::Frame(frame),
-            class,
-            None,
-            None,
-            "transport-session-writer".to_string(),
-        )
-        .await
+        self.send_payload(OutboundPayload::Frame(frame), class, None, None, SESSION_WRITER_TARGET)
+            .await
     }
 
     /// Sends one command under a caller-owned immutable request deadline.
@@ -1378,7 +1371,7 @@ impl Connection {
         deadline: RequestDeadline,
         target: impl Into<String>,
     ) -> Result<(), rocketmq_error::SharedError> {
-        let target = target.into();
+        let target = WriteTarget::Owned(target.into());
         deadline.ensure_before_send()?;
         let class = self
             .response_class()
@@ -1396,7 +1389,7 @@ impl Connection {
         deadline: RequestDeadline,
         target: impl Into<String>,
     ) -> CommandWriteResult {
-        let target = target.into();
+        let target = WriteTarget::Owned(target.into());
         if deadline.is_expired() {
             return CommandWriteResult::DeadlineExpired;
         }
@@ -1472,7 +1465,7 @@ impl Connection {
         body: FileRegionSequence,
         deadline: Option<RequestDeadline>,
     ) -> Result<(), rocketmq_error::SharedError> {
-        let target = "transport-file-region-writer".to_string();
+        let target = FILE_REGION_WRITER_TARGET;
         if let Some(deadline) = deadline {
             deadline.ensure_before_send()?;
         }
@@ -1502,7 +1495,7 @@ impl Connection {
         target: impl Into<String>,
         permit: ResourcePermit,
     ) -> Result<(), rocketmq_error::SharedError> {
-        let target = target.into();
+        let target = WriteTarget::Owned(target.into());
         deadline.ensure_before_send()?;
         let class = self
             .response_class()
@@ -1546,14 +1539,8 @@ impl Connection {
         let owned = command.clone();
         let frame = self.limits.encode_command(owned)?;
         let _ = command.take_body();
-        self.send_payload(
-            OutboundPayload::Frame(frame),
-            class,
-            None,
-            None,
-            "transport-session-writer".to_string(),
-        )
-        .await
+        self.send_payload(OutboundPayload::Frame(frame), class, None, None, SESSION_WRITER_TARGET)
+            .await
     }
 
     /// Sends multiple `RemotingCommand`s under one ordered writer-queue admission.
@@ -1588,14 +1575,8 @@ impl Connection {
             .map(|command| limits.encode_command(command))
             .collect::<Result<Vec<_>, rocketmq_error::SharedError>>()?;
         let payload = OutboundPayload::batch(frames)?;
-        self.send_payload(
-            payload,
-            AdmissionClass::Data,
-            None,
-            None,
-            "transport-session-writer".to_string(),
-        )
-        .await
+        self.send_payload(payload, AdmissionClass::Data, None, None, SESSION_WRITER_TARGET)
+            .await
     }
 
     /// Sends one complete pre-encoded remoting frame directly to the peer (zero-copy).
@@ -1624,7 +1605,7 @@ impl Connection {
             AdmissionClass::Data,
             None,
             None,
-            "transport-session-writer".to_string(),
+            SESSION_WRITER_TARGET,
         )
         .await
     }
@@ -1658,7 +1639,7 @@ impl Connection {
             AdmissionClass::Control,
             None,
             None,
-            "transport-session-writer".to_string(),
+            SESSION_WRITER_TARGET,
         )
         .await
     }
@@ -1680,7 +1661,7 @@ impl Connection {
             AdmissionClass::Data,
             None,
             None,
-            "transport-session-writer".to_string(),
+            SESSION_WRITER_TARGET,
         )
         .await
     }
