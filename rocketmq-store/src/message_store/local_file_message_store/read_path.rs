@@ -284,12 +284,10 @@ impl LocalFileMessageStore {
                             let requires_payload = message_filter
                                 .as_ref()
                                 .is_some_and(|filter| filter.requires_commit_log_payload());
-                            let selected = if requires_payload {
-                                self.commit_log.get_message_with(offset_py, size_py, residency)
-                            } else {
-                                self.commit_log
-                                    .get_message_for_transfer_with(offset_py, size_py, residency)
-                            };
+                            // Both transfer modes select from the mapping: a read-only mapping yields
+                            // an owner-backed range and a writable one a copy of the message. Either
+                            // avoids the per-message positional read of a file-range selection.
+                            let selected = self.commit_log.get_message_with(offset_py, size_py, residency);
                             let Some(select_result) = selected else {
                                 if get_result_ref.buffer_total_size() == 0 {
                                     status = GetMessageStatus::MessageWasRemoving;

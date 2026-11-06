@@ -77,7 +77,6 @@ use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use rocketmq_store_local::mapped_file::ManagedRetirementReason;
 use rocketmq_store_local::mapped_file::MappedFileQueueGeneration;
 use rocketmq_store_local::mapped_file::MappedFileQueueSnapshot;
-use rocketmq_store_local::mapped_file::ResidencyCheck;
 use tracing::error;
 use tracing::warn;
 
@@ -349,27 +348,6 @@ impl MappedFileQueueReadHandle {
             result.try_attach_mapped_file(mapped_file);
         }
         result
-    }
-
-    pub(crate) fn get_message_for_transfer(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
-        self.get_message_for_transfer_with(offset, size, ResidencyCheck::Probe)
-    }
-
-    pub(crate) fn get_message_for_transfer_with(
-        &self,
-        offset: i64,
-        size: i32,
-        residency: ResidencyCheck,
-    ) -> Option<SelectMappedBufferResult> {
-        if offset < 0 || size <= 0 {
-            return None;
-        }
-        let mapped_file = self.find_mapped_file_by_offset(offset, offset == 0)?;
-        let position = usize::try_from(offset % self.mapped_file_size as i64).ok()?;
-        mapped_file
-            .try_file_range_selection_with(position, size as usize, residency)
-            .ok()
-            .flatten()
     }
 
     pub(crate) fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {

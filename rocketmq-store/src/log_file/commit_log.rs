@@ -1064,20 +1064,6 @@ impl CommitLog {
         }
     }
 
-    pub(crate) fn get_message_for_transfer(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
-        self.read_handle().get_message_for_transfer(offset, size)
-    }
-
-    pub(crate) fn get_message_for_transfer_with(
-        &self,
-        offset: i64,
-        size: i32,
-        residency: ResidencyCheck,
-    ) -> Option<SelectMappedBufferResult> {
-        self.read_handle()
-            .get_message_for_transfer_with(offset, size, residency)
-    }
-
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
         self.publish_confirm_offset(phy_offset);
     }
