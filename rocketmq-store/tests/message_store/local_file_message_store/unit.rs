@@ -4314,6 +4314,40 @@ async fn get_message_returns_dispatched_messages_after_reput() {
 }
 
 #[tokio::test]
+async fn get_message_selects_mapped_ranges_for_unfiltered_pulls() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_async_flush_test_store(&temp_dir);
+    let topic = CheetahString::from_static_str("get-message-mapped-range-topic");
+    let group = CheetahString::from_static_str("test-group");
+    let bodies = [
+        Bytes::from_static(b"mapped-first"),
+        Bytes::from_static(b"mapped-second"),
+    ];
+    for body in bodies.clone() {
+        let put_result = store.put_message(build_test_message(&topic, body)).await;
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+    }
+    store.reput_once().await;
+
+    let result = store
+        .get_message(&group, &topic, 0, 0, 32, None)
+        .await
+        .expect("get message result");
+
+    assert_eq!(result.status(), Some(GetMessageStatus::Found));
+    assert_eq!(result.message_mapped_list().len(), bodies.len());
+    for (selection, body) in result.message_mapped_list().iter().zip(&bodies) {
+        // Pulls read the mapping in both transfer modes; a file range would mean a positional read.
+        assert!(selection.file_range().is_none());
+        let stored = selection.get_buffer();
+        assert!(
+            stored.windows(body.len()).any(|window| window == body.as_ref()),
+            "selection must cover the stored message"
+        );
+    }
+}
+
+#[tokio::test]
 async fn store_stats_records_single_put_append_totals() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_async_flush_test_store(&temp_dir);
