@@ -1316,48 +1316,6 @@ impl SubscriptionGroupManager {
             .unwrap_or(false)
     }
 
-    /// Get all forbidden topics for a consumer group
-    ///
-    /// # Arguments
-    /// * `group` - Consumer group name
-    ///
-    /// # Returns
-    /// A vector of tuples (topic, forbidden_value) for all topics with forbidden flags set
-    pub fn get_forbidden_topics(&self, group: &str) -> Vec<(CheetahString, i32)> {
-        self.forbidden_table
-            .get(group)
-            .map(|topic_map| {
-                topic_map
-                    .iter()
-                    .map(|entry| (entry.key().clone(), *entry.value()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Remove all forbidden flags for a consumer group
-    ///
-    /// # Arguments
-    /// * `group` - Consumer group name
-    pub fn remove_forbidden_group(&self, group: &str) {
-        if self.forbidden_table.remove(group).is_some() {
-            info!("Removed all forbidden flags for group: {}", group);
-        }
-    }
-
-    /// Remove forbidden flags for a specific topic in a consumer group
-    ///
-    /// # Arguments
-    /// * `group` - Consumer group name
-    /// * `topic` - Topic name
-    pub fn remove_forbidden_topic(&self, group: &str, topic: &str) {
-        if let Some(topic_map) = self.forbidden_table.get(group) {
-            if topic_map.remove(topic).is_some() {
-                info!("Removed forbidden flags for group: {}, topic: {}", group, topic);
-            }
-        }
-    }
-
     /// Get the total count of subscription groups
     pub fn group_count(&self) -> usize {
         self.subscription_group_table.len()
