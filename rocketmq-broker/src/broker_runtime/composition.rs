@@ -739,105 +739,12 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     }
 
     #[inline]
-    pub fn set_topic_queue_mapping_manager(&mut self, topic_queue_mapping_manager: TopicQueueMappingManager) {
-        self.topic_queue_mapping_manager = Arc::new(topic_queue_mapping_manager);
-    }
-
-    #[inline]
-    pub fn set_subscription_group_manager(&mut self, subscription_group_manager: SubscriptionGroupManager) {
-        self.subscription_group_manager = Some(subscription_group_manager);
-    }
-
-    #[inline]
-    pub fn set_consumer_filter_manager(&mut self, consumer_filter_manager: ConsumerFilterManager) {
-        self.consumer_filter_manager = Some(consumer_filter_manager);
-    }
-
-    #[inline]
-    pub fn set_broker_stats(&mut self, broker_stats: BrokerStats<MS>) {
-        self.broker_stats = Some(Arc::new(broker_stats));
-    }
-
-    #[inline]
     pub fn set_timer_message_store(&mut self, timer_message_store: TimerMessageStore) {
         self.timer_message_store = Some(Arc::new(timer_message_store));
     }
 
-    #[inline]
-    pub fn set_broker_outer_api(&mut self, broker_outer_api: BrokerOuterAPI) {
-        self.broker_outer_api = broker_outer_api;
-    }
-
-    #[inline]
-    pub fn set_producer_manager(&mut self, producer_manager: ProducerManager) {
-        self.producer_manager = producer_manager;
-    }
-
-    #[inline]
-    pub fn set_consumer_manager(&mut self, consumer_manager: ConsumerManager) {
-        self.consumer_manager = consumer_manager;
-    }
-
-    #[inline]
-    pub fn set_broadcast_offset_manager(&mut self, broadcast_offset_manager: BroadcastOffsetManager) {
-        self.broadcast_offset_manager = broadcast_offset_manager;
-    }
-
-    #[inline]
-    pub fn set_broker_stats_manager(&mut self, broker_stats_manager: Arc<BrokerStatsManager>) {
-        self.broker_stats_manager = Some(broker_stats_manager);
-    }
-
-    #[inline]
-    pub fn set_topic_queue_mapping_clean_service(
-        &mut self,
-        topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
-    ) {
-        self.topic_queue_mapping_clean_service = Some(topic_queue_mapping_clean_service);
-    }
-
-    #[inline]
-    pub fn set_update_master_haserver_addr_periodically(&mut self, update_master_haserver_addr_periodically: bool) {
-        self.update_master_haserver_addr_periodically = update_master_haserver_addr_periodically;
-    }
-
-    #[inline]
-    pub fn set_should_start_time(&mut self, should_start_time: Arc<AtomicU64>) {
-        self.should_start_time = should_start_time;
-    }
-
-    #[inline]
-    pub fn set_rebalance_lock_manager(&mut self, rebalance_lock_manager: RebalanceLockManager) {
-        self.rebalance_lock_manager = rebalance_lock_manager;
-    }
-
-    #[inline]
-    pub fn set_broker_member_group(&mut self, broker_member_group: BrokerMemberGroup) {
-        self.broker_member_group.publish(broker_member_group);
-    }
-
     pub fn get_min_broker_id_in_group(&self) -> u64 {
         self.online_role_state.min_broker_id()
-    }
-
-    #[inline]
-    pub fn set_transactional_message_check_listener(
-        &mut self,
-        transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
-    ) {
-        self.transactional_message_check_listener = Some(transactional_message_check_listener);
-    }
-
-    #[inline]
-    pub fn set_transactional_message_check_service(
-        &mut self,
-        transactional_message_check_service: TransactionalMessageCheckService<MS>,
-    ) {
-        self.transactional_message_check_service = Some(Arc::new(transactional_message_check_service));
-    }
-
-    pub fn set_pop_inflight_message_counter(&mut self, pop_inflight_message_counter: PopInflightMessageCounter) {
-        self.pop_inflight_message_counter = pop_inflight_message_counter;
     }
 
     pub(super) async fn update_namesrv_addr_inner(&mut self) {
