@@ -62,26 +62,6 @@ pub(crate) fn get_delay_offset_store_path(root_dir: &str) -> String {
     )
 }
 
-#[inline]
-pub(crate) fn get_tran_state_table_store_path(root_dir: &str) -> String {
-    format!(
-        "{}{}transaction{}statetable",
-        root_dir,
-        std::path::MAIN_SEPARATOR,
-        std::path::MAIN_SEPARATOR,
-    )
-}
-
-#[inline]
-pub(crate) fn get_tran_redo_log_store_path(root_dir: &str) -> String {
-    format!(
-        "{}{}transaction{}redolog",
-        root_dir,
-        std::path::MAIN_SEPARATOR,
-        std::path::MAIN_SEPARATOR,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,27 +132,5 @@ mod tests {
             std::path::MAIN_SEPARATOR
         );
         assert_eq!(get_delay_offset_store_path(root_dir), expected_path);
-    }
-
-    #[test]
-    fn test_get_tran_state_table_store_path() {
-        let root_dir = "/path/to/root";
-        let expected_path = format!(
-            "/path/to/root{}transaction{}statetable",
-            std::path::MAIN_SEPARATOR,
-            std::path::MAIN_SEPARATOR,
-        );
-        assert_eq!(get_tran_state_table_store_path(root_dir), expected_path);
-    }
-
-    #[test]
-    fn test_get_tran_redo_log_store_path() {
-        let root_dir = "/path/to/root";
-        let expected_path = format!(
-            "/path/to/root{}transaction{}redolog",
-            std::path::MAIN_SEPARATOR,
-            std::path::MAIN_SEPARATOR
-        );
-        assert_eq!(get_tran_redo_log_store_path(root_dir), expected_path);
     }
 }
