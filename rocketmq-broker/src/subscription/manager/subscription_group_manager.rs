@@ -1358,52 +1358,6 @@ impl SubscriptionGroupManager {
         }
     }
 
-    /// Load only the data version from configuration file without loading full config
-    ///
-    /// # Returns
-    /// `true` if data version was successfully loaded, `false` otherwise
-    ///
-    /// # Use Case
-    /// Fast configuration change detection without the overhead of loading
-    /// all subscription group configurations. Useful for master-slave synchronization.
-    pub fn load_data_version(&mut self) -> bool {
-        let config_file_path = self.config_file_path();
-
-        if !std::path::Path::new(&config_file_path).exists() {
-            warn!("Config file does not exist: {}", config_file_path);
-            return false;
-        }
-
-        match std::fs::read_to_string(&config_file_path) {
-            Ok(json_string) => match serde_json::from_str::<serde_json::Value>(&json_string) {
-                Ok(json_obj) => {
-                    if let Some(data_version_obj) = json_obj.get("dataVersion") {
-                        match serde_json::from_value::<DataVersion>(data_version_obj.clone()) {
-                            Ok(loaded_version) => {
-                                *self.data_version.write() = loaded_version;
-                                info!("Successfully loaded data version from {}", config_file_path);
-                                return true;
-                            }
-                            Err(e) => {
-                                warn!("Failed to deserialize data version: {:?}", e);
-                            }
-                        }
-                    } else {
-                        warn!("No dataVersion field found in config file");
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to parse config file as JSON: {:?}", e);
-                }
-            },
-            Err(e) => {
-                warn!("Failed to read config file {}: {:?}", config_file_path, e);
-            }
-        }
-
-        false
-    }
-
     /// Get the total count of subscription groups
     pub fn group_count(&self) -> usize {
         self.subscription_group_table.len()
