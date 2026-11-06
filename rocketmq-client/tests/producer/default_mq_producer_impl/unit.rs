@@ -963,7 +963,44 @@ fn retry_attempt_count_saturates_without_preallocating_configured_maximum() {
     );
     let retry_state = RetryState::new(u32::MAX);
     assert_eq!(retry_state.times_total, u32::MAX);
-    assert_eq!(retry_state.brokers_sent.capacity(), 0);
+    // Nothing is reserved for the configured maximum: only the inline slots exist.
+    assert!(!retry_state.brokers_sent.spilled());
+    assert!(retry_state.brokers_sent.is_empty());
+}
+
+#[test]
+fn retry_state_records_each_attempted_broker_once() {
+    let mut retry_state = RetryState::new(3);
+    let broker_a = CheetahString::from_static_str("broker-a");
+    retry_state.record_broker(0, &broker_a);
+    retry_state.record_broker(0, &broker_a);
+    retry_state.record_broker(1, &CheetahString::from_static_str("broker-b"));
+
+    let brokers = retry_state
+        .brokers_sent
+        .iter()
+        .map(CheetahString::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(vec!["broker-a", "broker-b"], brokers);
+    assert!(!retry_state.brokers_sent.spilled());
+}
+
+#[test]
+fn hook_presence_follows_the_frozen_hook_lists() {
+    let producer = DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
+    producer.register_send_message_hook(Arc::new(CapturingSendHook {
+        exception: Arc::new(std::sync::Mutex::new(None)),
+    }));
+    assert!(
+        !producer.has_send_message_hook(),
+        "hooks count only once frozen at start"
+    );
+
+    producer.freeze_hook_lists();
+
+    assert!(producer.has_send_message_hook());
+    assert!(!producer.has_check_forbidden_hook());
+    assert!(!producer.has_end_transaction_hook());
 }
 
 #[test]
