@@ -138,6 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **client:** Remove the four no-op `MQClientInstance::on_channel_{connect,close,exception,idle}` methods, including their `test-support` surface; remove calls to these methods.
 - **refactor(client):** Remove the unused internal `ConsumeMessageService` wrapper trait; retain the active `ConsumeMessageServiceTrait` contract ([#11760](https://github.com/mxsm/rocketmq-rust/issues/11760)).
 - **refactor(store):** Remove the unregistered, fully commented-out mapped-file factory source ([#11851](https://github.com/mxsm/rocketmq-rust/issues/11851)).
+- **refactor(broker):** Remove unused internal EscapeBridge batch-write wrappers; batch sends continue through the shared Store append receipt path ([#12289](https://github.com/mxsm/rocketmq-rust/issues/12289)).
 - **refactor(store):** Remove the unused internal `MappedFileAppend` adapter and its dedicated tests ([#11857](https://github.com/mxsm/rocketmq-rust/issues/11857)).
 - **observability:** Remove the seven deprecated no-op functions in `metrics::mcp` (breaking); use the matching methods on `McpMetricsRecorder::from_handle(&handle)` to record metrics.
 - **refactor(transport):** Remove `FrameLimits::legacy_compatibility()` (breaking); use the identical `FrameLimits::java_compatibility()` profile ([#11654](https://github.com/mxsm/rocketmq-rust/issues/11654)).
