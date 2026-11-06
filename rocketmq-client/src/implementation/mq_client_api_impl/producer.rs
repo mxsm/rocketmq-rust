@@ -444,16 +444,9 @@ impl MQClientAPIImpl {
                     // Try to decode response header and build SendResult
                     match response.decode_command_custom_header_fast::<SendMessageResponseHeader>() {
                         Ok(response_header) => {
-                            let mut topic = msg_topic.to_string();
-                            if let Some(ns) = client_config.get_namespace_v2() {
-                                if !ns.is_empty() {
-                                    topic =
-                                        NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
-                                }
-                            }
                             let message_queue = MessageQueue::from_parts(
-                                topic.as_str(),
-                                &current_broker_name,
+                                super::producer_retry::send_result_topic(&msg_topic, client_config.get_namespace_v2()),
+                                current_broker_name.clone(),
                                 response_header.queue_id(),
                             );
                             let region_id = response

@@ -71,6 +71,7 @@ use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::RpcRequestHeader;
 use rocketmq_transport::api::TopicRequestHeader;
+use smallvec::SmallVec;
 use tokio::sync::watch;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Semaphore;
@@ -283,7 +284,9 @@ impl SendContext {
 /// Retry state tracker
 struct RetryState {
     times_total: u32,
-    brokers_sent: Vec<String>,
+    /// Brokers tried, for the final error message. Names are shared, and the default three
+    /// attempts fit inline, so recording a broker does not allocate.
+    brokers_sent: SmallVec<[CheetahString; 4]>,
     last_error: Option<crate::ClientError>,
     last_send_result: Option<SendResult>,
 }
@@ -292,15 +295,15 @@ impl RetryState {
     fn new(times_total: u32) -> Self {
         Self {
             times_total,
-            brokers_sent: Vec::new(),
+            brokers_sent: SmallVec::new(),
             last_error: None,
             last_send_result: None,
         }
     }
 
-    fn record_broker(&mut self, attempt: usize, broker_name: &str) {
+    fn record_broker(&mut self, attempt: usize, broker_name: &CheetahString) {
         if attempt == self.brokers_sent.len() {
-            self.brokers_sent.push(broker_name.to_string());
+            self.brokers_sent.push(broker_name.clone());
         }
     }
 
@@ -330,7 +333,11 @@ impl RetryState {
             self.times_total,
             elapsed_ms,
             topic,
-            self.brokers_sent.join(","),
+            self.brokers_sent
+                .iter()
+                .map(CheetahString::as_str)
+                .collect::<Vec<_>>()
+                .join(","),
             FAQUrl::suggest_todo(FAQUrl::SEND_MSG_FAILED)
         );
 
@@ -432,6 +439,11 @@ pub struct DefaultMQProducerImpl {
     send_message_hook_list: ParkingLotRwLock<Arc<[Arc<dyn SendMessageHook>]>>,
     end_transaction_hook_list: ParkingLotRwLock<Arc<[Arc<dyn EndTransactionHook>]>>,
     check_forbidden_hook_list: ParkingLotRwLock<Arc<[Arc<dyn CheckForbiddenHook>]>>,
+    // Whether each list above holds hooks, set after the list by `freeze_hook_lists`, so a send
+    // without hooks checks for them without taking the list lock.
+    has_send_message_hooks: AtomicBool,
+    has_end_transaction_hooks: AtomicBool,
+    has_check_forbidden_hooks: AtomicBool,
 
     // Temporary hook storage during initialization
     pending_send_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn SendMessageHook>>>>,

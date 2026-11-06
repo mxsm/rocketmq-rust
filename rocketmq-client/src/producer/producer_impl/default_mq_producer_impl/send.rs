@@ -950,7 +950,7 @@ impl DefaultMQProducerImpl {
 
     #[inline]
     pub fn has_send_message_hook(&self) -> bool {
-        !self.send_message_hook_list.read().is_empty()
+        self.has_send_message_hooks.load(Ordering::Acquire)
     }
 
     pub(super) fn context_error(message: String) -> Arc<ClientError> {
@@ -959,12 +959,12 @@ impl DefaultMQProducerImpl {
 
     #[inline]
     pub fn has_check_forbidden_hook(&self) -> bool {
-        !self.check_forbidden_hook_list.read().is_empty()
+        self.has_check_forbidden_hooks.load(Ordering::Acquire)
     }
 
     #[inline]
     pub fn has_end_transaction_hook(&self) -> bool {
-        !self.end_transaction_hook_list.read().is_empty()
+        self.has_end_transaction_hooks.load(Ordering::Acquire)
     }
 
     pub fn execute_check_forbidden_hook(&self, context: &CheckForbiddenContext) -> crate::ClientResult<()> {
@@ -1125,6 +1125,7 @@ impl DefaultMQProducerImpl {
                 let hooks: Arc<[Arc<dyn SendMessageHook>]> = send_hooks.into();
                 tracing::info!("Frozen {} send message hooks", hooks.len());
                 *self.send_message_hook_list.write() = hooks;
+                self.has_send_message_hooks.store(true, Ordering::Release);
             }
         }
 
@@ -1133,6 +1134,7 @@ impl DefaultMQProducerImpl {
                 let hooks: Arc<[Arc<dyn EndTransactionHook>]> = end_hooks.into();
                 tracing::info!("Frozen {} end transaction hooks", hooks.len());
                 *self.end_transaction_hook_list.write() = hooks;
+                self.has_end_transaction_hooks.store(true, Ordering::Release);
             }
         }
 
@@ -1141,6 +1143,7 @@ impl DefaultMQProducerImpl {
                 let hooks: Arc<[Arc<dyn CheckForbiddenHook>]> = forbidden_hooks.into();
                 tracing::info!("Frozen {} check forbidden hooks", hooks.len());
                 *self.check_forbidden_hook_list.write() = hooks;
+                self.has_check_forbidden_hooks.store(true, Ordering::Release);
             }
         }
     }

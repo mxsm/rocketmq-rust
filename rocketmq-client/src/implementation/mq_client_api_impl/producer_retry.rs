@@ -383,13 +383,11 @@ impl MQClientAPIImpl {
             }
         };
         let response_header = response.decode_command_custom_header_fast::<SendMessageResponseHeader>()?;
-        let mut topic = msg.topic().to_string();
-        if let Some(ns) = self.client_config.get_namespace_v2() {
-            if !ns.is_empty() {
-                topic = NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
-            }
-        }
-        let message_queue = MessageQueue::from_parts(topic.as_str(), broker_name, response_header.queue_id());
+        let message_queue = MessageQueue::from_parts(
+            send_result_topic(msg.topic(), self.client_config.get_namespace_v2()),
+            broker_name.clone(),
+            response_header.queue_id(),
+        );
         let mut uniq_msg_id = MessageClientIDSetter::get_uniq_id(msg);
         let msgs = msg.as_any().downcast_ref::<MessageBatch>();
 
@@ -431,5 +429,33 @@ impl MQClientAPIImpl {
             trace_on,
             ..Default::default()
         })
+    }
+}
+
+/// The topic a send result reports: the message's topic without the client namespace. Without a
+/// namespace the message's topic is shared instead of copied.
+pub(super) fn send_result_topic(topic: &CheetahString, namespace: Option<&CheetahString>) -> CheetahString {
+    match namespace.filter(|namespace| !namespace.is_empty()) {
+        Some(namespace) => CheetahString::from_string(NamespaceUtil::without_namespace_with_namespace(
+            topic.as_str(),
+            namespace.as_str(),
+        )),
+        None => topic.clone(),
+    }
+}
+
+#[cfg(test)]
+mod send_result_topic_tests {
+    use super::*;
+
+    #[test]
+    fn send_result_topic_strips_only_a_configured_namespace() {
+        let topic = CheetahString::from_static_str("ns%TopicTest");
+        let namespace = CheetahString::from_static_str("ns");
+        let empty = CheetahString::new();
+
+        assert_eq!("TopicTest", send_result_topic(&topic, Some(&namespace)).as_str());
+        assert_eq!("ns%TopicTest", send_result_topic(&topic, Some(&empty)).as_str());
+        assert_eq!("ns%TopicTest", send_result_topic(&topic, None).as_str());
     }
 }
