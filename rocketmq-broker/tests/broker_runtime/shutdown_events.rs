@@ -60,6 +60,8 @@ async fn initialized_broker_emits_business_drain_and_finalizes_telemetry() {
     let sources = rocketmq_observability::RuntimeDiagnosticsSources::default();
     runtime.set_runtime_diagnostics_sources(sources.clone());
     let events = DrainEvents::default();
+    // Keep this callsite enabled when other tests have no subscriber.
+    let _interest_guard = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let report = runtime
         .shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_secs(10)))
         .with_subscriber(events.clone())
@@ -86,6 +88,8 @@ async fn expired_broker_shutdown_emits_one_deadline_event_without_finalizing_ear
     );
     runtime.set_telemetry_runtime_guard(rocketmq_observability::TelemetryRuntimeGuard::noop());
     let events = DrainEvents::default();
+    // Keep this callsite enabled when other tests have no subscriber.
+    let _interest_guard = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let report = runtime
         .shutdown_basic_service_until(ShutdownDeadline::at(Instant::now()))
         .with_subscriber(events.clone())
