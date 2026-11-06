@@ -12,10 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::PoisonError;
+use std::sync::RwLock;
 
 use cheetah_string::CheetahString;
-use dashmap::DashSet;
 
 pub const TOPIC_MAX_LENGTH: usize = 127;
 
@@ -48,59 +54,96 @@ const VALID_CHAR_BIT_MAP: [bool; 128] = {
     map
 };
 
-static SYSTEM_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::new(|| {
-    let set = DashSet::new();
-    set.insert(CheetahString::from_static_str(
+static SYSTEM_TOPICS: LazyLock<SystemTopics> = LazyLock::new(|| {
+    SystemTopics::new([
         TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
-    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_BENCHMARK_TOPIC));
-    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC));
-    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRACE_TOPIC));
-    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
+        TopicValidator::RMQ_SYS_BENCHMARK_TOPIC,
+        TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC,
+        TopicValidator::RMQ_SYS_TRACE_TOPIC,
         TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC));
-    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_SELF_TEST_TOPIC,
         TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
-    ));
-    set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_ROCKSDB_OFFSET_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_ROCKSDB_TRANS_OP_HALF_TOPIC,
-    ));
-    set
+    ])
 });
 
-static NOT_ALLOWED_SEND_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::new(|| {
-    let set = DashSet::new();
-    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
-    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC));
-    set.insert(CheetahString::from_static_str(
+/// Fixed at startup, so lookups read a plain set without any lock.
+static NOT_ALLOWED_SEND_TOPIC_SET: LazyLock<HashSet<CheetahString>> = LazyLock::new(|| {
+    [
+        TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
+        TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC,
         TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC));
-    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_SELF_TEST_TOPIC,
         TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
-    ));
-    set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_ROCKSDB_TRANS_OP_HALF_TOPIC,
-    ));
-    set
+    ]
+    .into_iter()
+    .map(CheetahString::from_static_str)
+    .collect()
 });
+
+thread_local! {
+    /// This thread's copy of [`SYSTEM_TOPICS`] and the version it was taken at.
+    static SYSTEM_TOPICS_SNAPSHOT: RefCell<Option<(u64, Arc<HashSet<CheetahString>>)>> = const { RefCell::new(None) };
+}
+
+/// The system topics, copied on write. Every send asks whether its topic is one, so a lookup
+/// reads this thread's snapshot and only loads a version counter that changes when a topic is
+/// added: concurrent lookups write no shared cache line. A `DashSet` lookup read-locks the key's
+/// shard, and every core checking the same topic contends on that lock word.
+struct SystemTopics {
+    version: AtomicU64,
+    current: RwLock<Arc<HashSet<CheetahString>>>,
+}
+
+impl SystemTopics {
+    fn new<const N: usize>(topics: [&'static str; N]) -> Self {
+        Self {
+            version: AtomicU64::new(0),
+            current: RwLock::new(Arc::new(
+                topics.into_iter().map(CheetahString::from_static_str).collect(),
+            )),
+        }
+    }
+
+    fn snapshot(&self) -> Arc<HashSet<CheetahString>> {
+        Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn contains(&self, topic: &str) -> bool {
+        let version = self.version.load(Ordering::Acquire);
+        SYSTEM_TOPICS_SNAPSHOT.with(|cached| {
+            let mut cached = cached.borrow_mut();
+            if let Some((cached_version, topics)) = cached.as_ref() {
+                if *cached_version == version {
+                    return topics.contains(topic);
+                }
+            }
+            let topics = self.snapshot();
+            let found = topics.contains(topic);
+            *cached = Some((version, topics));
+            found
+        })
+    }
+
+    fn insert(&self, topic: CheetahString) {
+        let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        if current.contains(&topic) {
+            return;
+        }
+        let mut topics = HashSet::clone(&current);
+        topics.insert(topic);
+        *current = Arc::new(topics);
+        // Bumped after the new set is in place, so a reader that sees this version refreshes to it.
+        self.version.fetch_add(1, Ordering::Release);
+    }
+}
 
 pub struct TopicValidator;
 
@@ -172,11 +215,10 @@ impl TopicValidator {
         }
     }
 
-    /// Every send checks its topic here, so the sets are probed by hash: iterating a `DashSet`
-    /// read-locks each of its shards in turn.
+    /// Every send checks its topic here; see [`SystemTopics`] for why the lookup takes no lock.
     #[inline]
     pub fn is_system_topic(topic: &str) -> bool {
-        topic.starts_with(TopicValidator::SYSTEM_TOPIC_PREFIX) || SYSTEM_TOPIC_SET.contains(topic)
+        topic.starts_with(TopicValidator::SYSTEM_TOPIC_PREFIX) || SYSTEM_TOPICS.contains(topic)
     }
 
     #[inline]
@@ -185,15 +227,15 @@ impl TopicValidator {
     }
 
     pub fn add_system_topic(system_topic: impl Into<CheetahString>) {
-        SYSTEM_TOPIC_SET.insert(system_topic.into());
+        SYSTEM_TOPICS.insert(system_topic.into());
     }
 
     pub fn get_system_topic_set() -> Vec<CheetahString> {
-        SYSTEM_TOPIC_SET.iter().map(|entry| entry.clone()).collect()
+        SYSTEM_TOPICS.snapshot().iter().cloned().collect()
     }
 
     pub fn get_not_allowed_send_topic_set() -> Vec<CheetahString> {
-        NOT_ALLOWED_SEND_TOPIC_SET.iter().map(|entry| entry.clone()).collect()
+        NOT_ALLOWED_SEND_TOPIC_SET.iter().cloned().collect()
     }
 }
 
@@ -315,6 +357,30 @@ mod tests {
         let near_miss = format!("{}X", TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
         assert!(!TopicValidator::is_system_topic(&near_miss));
         assert!(!TopicValidator::is_not_allowed_send_topic(&near_miss));
+    }
+
+    #[test]
+    fn an_added_system_topic_is_seen_by_threads_with_an_older_snapshot() {
+        let topic = "snapshot_refresh_system_topic";
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (added_tx, added_rx) = std::sync::mpsc::channel::<()>();
+        let reader = std::thread::spawn(move || {
+            // Caches this thread's snapshot before the topic exists.
+            assert!(!TopicValidator::is_system_topic(topic));
+            ready_tx.send(()).expect("signal ready");
+            added_rx.recv().expect("wait for the addition");
+            TopicValidator::is_system_topic(topic)
+        });
+        ready_rx.recv().expect("reader took its snapshot");
+
+        TopicValidator::add_system_topic(topic);
+        added_tx.send(()).expect("signal the addition");
+
+        assert!(reader.join().expect("reader thread"));
+        assert!(TopicValidator::is_system_topic(topic));
+        assert!(TopicValidator::get_system_topic_set()
+            .iter()
+            .any(|entry| entry.as_str() == topic));
     }
 
     #[test]
