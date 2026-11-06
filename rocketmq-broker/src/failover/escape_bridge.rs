@@ -554,23 +554,6 @@ where
         }
     }
 
-    pub async fn put_messages(&self, batch: MessageExtBatch) -> PutMessageResult {
-        let policy = self.policy_state.snapshot();
-        if policy.broker_role != rocketmq_model::common::broker::broker_role::BrokerRole::Slave
-            && self.message_store.is_local_writeable()
-        {
-            return self
-                .message_store
-                .put_messages(batch)
-                .await
-                .unwrap_or_else(|_| PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
-        }
-        if policy.remote_escape_authority().is_some() {
-            return PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true);
-        }
-        PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
-    }
-
     async fn dispatch_remote_message(
         &self,
         message_ext: MessageExtBrokerInner,

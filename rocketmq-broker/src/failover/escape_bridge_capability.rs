@@ -591,13 +591,6 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         Ok(self.shared_append()?.put_message(message).await?.result)
     }
 
-    pub(crate) async fn put_messages(&self, batch: MessageExtBatch) -> Result<PutMessageResult, MessageStoreUnavailable>
-    where
-        MS: BrokerWriteStore,
-    {
-        Ok(self.shared_append()?.put_messages(batch).await?.result)
-    }
-
     pub(crate) fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: rocketmq_store::CommitLogReadMode,
