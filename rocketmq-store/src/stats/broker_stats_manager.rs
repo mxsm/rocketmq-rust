@@ -43,10 +43,20 @@ use tokio::time::Duration;
 use tracing::info;
 use tracing::warn;
 
+mod hot_path;
+
+use hot_path::add_kept;
+use hot_path::ClusterStatsItems;
+use hot_path::HotStatsSets;
+
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct BrokerStatsManager {
     stats_table: Arc<DashMap<String, StatsItemSet>>,
+    /// Sets of `stats_table` used per message, resolved by [`Self::init`].
+    hot_sets: HotStatsSets,
+    cluster_items: ClusterStatsItems,
+    manager_id: u64,
     cluster_name: String,
     enable_queue_stat: bool,
     moment_stats_item_set_fall_size: Option<Arc<MomentStatsItemSet>>,
@@ -232,6 +242,9 @@ impl BrokerStatsManager {
         let cluster_name = broker_config.broker_identity.broker_cluster_name.to_string();
         let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
+            hot_sets: HotStatsSets::default(),
+            cluster_items: ClusterStatsItems::default(),
+            manager_id: hot_path::next_manager_id(),
             cluster_name,
             enable_queue_stat,
             moment_stats_item_set_fall_size: None,
@@ -257,6 +270,9 @@ impl BrokerStatsManager {
         let stats_table = Arc::new(DashMap::new());
         let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
+            hot_sets: HotStatsSets::default(),
+            cluster_items: ClusterStatsItems::default(),
+            manager_id: hot_path::next_manager_id(),
             cluster_name,
             enable_queue_stat,
             moment_stats_item_set_fall_size: None,
@@ -429,6 +445,8 @@ impl BrokerStatsManager {
             Self::CHANNEL_ACTIVITY.to_string(),
             StatsItemSet::new(Self::CHANNEL_ACTIVITY.to_string()),
         );
+        self.hot_sets = HotStatsSets::resolve(&self.stats_table);
+        self.cluster_items = ClusterStatsItems::resolve(&self.hot_sets, &self.cluster_name);
 
         let formatter = StatisticsItemFormatter;
 
@@ -555,6 +573,10 @@ impl BrokerStatsManager {
         self.consumer_state_getter = Some(state_getter);
     }
 
+    /// Returns the table of item sets by statistics name.
+    ///
+    /// The sets are fixed by [`Self::init`]: the per-message updates write through sets resolved
+    /// then, so a set inserted into the table later is not updated by them.
     #[inline]
     pub fn get_stats_table(&self) -> Arc<DashMap<String, StatsItemSet>> {
         Arc::clone(&self.stats_table)
@@ -635,21 +657,21 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn inc_topic_put_nums(&self, topic: &str, num: i32, times: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::TOPIC_PUT_NUMS) {
+        if let Some(stats) = &self.hot_sets.topic_put_nums {
             stats.add_value(topic, num, times);
         }
     }
 
     #[inline]
     pub fn inc_topic_put_size(&self, topic: &str, size: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::TOPIC_PUT_SIZE) {
+        if let Some(stats) = &self.hot_sets.topic_put_size {
             stats.add_value(topic, size, 1);
         }
     }
 
     #[inline]
     pub fn inc_group_get_nums(&self, group: &str, topic: &str, inc_value: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_NUMS) {
+        if let Some(stats) = &self.hot_sets.group_get_nums {
             with_stats_key(
                 |key| push_topic_group_key(key, topic, group),
                 |key| stats.add_value(key, inc_value, 1),
@@ -659,7 +681,7 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn inc_group_get_size(&self, group: &str, topic: &str, inc_value: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_SIZE) {
+        if let Some(stats) = &self.hot_sets.group_get_size {
             with_stats_key(
                 |key| push_topic_group_key(key, topic, group),
                 |key| stats.add_value(key, inc_value, 1),
@@ -709,27 +731,37 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn inc_broker_get_nums(&self, topic: &str, inc_value: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::BROKER_GET_NUMS) {
-            stats.add_value(&self.cluster_name, inc_value, 1);
-        }
-
+        add_kept(
+            self.cluster_items.get_nums.as_ref(),
+            self.hot_sets.broker_get_nums.as_ref(),
+            &self.cluster_name,
+            inc_value,
+        );
         if !TopicValidator::is_system_topic(topic) {
-            if let Some(stats) = self.stats_table.get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC) {
-                stats.add_value(&self.cluster_name, inc_value, 1);
-            }
+            add_kept(
+                self.cluster_items.get_nums_without_system_topic.as_ref(),
+                self.hot_sets.broker_get_nums_without_system_topic.as_ref(),
+                &self.cluster_name,
+                inc_value,
+            );
         }
     }
 
     #[inline]
     pub fn inc_broker_put_nums(&self, topic: &str, inc_value: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::BROKER_PUT_NUMS) {
-            stats.add_value(&self.cluster_name, inc_value, 1);
-        }
-
+        add_kept(
+            self.cluster_items.put_nums.as_ref(),
+            self.hot_sets.broker_put_nums.as_ref(),
+            &self.cluster_name,
+            inc_value,
+        );
         if !TopicValidator::is_system_topic(topic) {
-            if let Some(stats) = self.stats_table.get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC) {
-                stats.add_value(&self.cluster_name, inc_value, 1);
-            }
+            add_kept(
+                self.cluster_items.put_nums_without_system_topic.as_ref(),
+                self.hot_sets.broker_put_nums_without_system_topic.as_ref(),
+                &self.cluster_name,
+                inc_value,
+            );
         }
     }
 
@@ -827,7 +859,7 @@ impl BrokerStatsManager {
     #[inline]
     pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {
         if self.enable_queue_stat {
-            if let Some(stats) = self.stats_table.get(Stats::QUEUE_PUT_NUMS) {
+            if let Some(stats) = &self.hot_sets.queue_put_nums {
                 with_stats_key(
                     |key| {
                         let _ = write!(key, "{topic}@{queue_id}");
@@ -841,7 +873,7 @@ impl BrokerStatsManager {
     #[inline]
     pub fn inc_queue_put_size(&self, topic: &str, queue_id: i32, size: i32) {
         if self.enable_queue_stat {
-            if let Some(stats) = self.stats_table.get(Stats::QUEUE_PUT_SIZE) {
+            if let Some(stats) = &self.hot_sets.queue_put_size {
                 with_stats_key(
                     |key| {
                         let _ = write!(key, "{topic}@{queue_id}");
@@ -855,7 +887,7 @@ impl BrokerStatsManager {
     #[inline]
     pub fn inc_queue_get_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {
         if self.enable_queue_stat {
-            if let Some(stats) = self.stats_table.get(Stats::QUEUE_GET_NUMS) {
+            if let Some(stats) = &self.hot_sets.queue_get_nums {
                 with_stats_key(
                     |key| {
                         let _ = write!(key, "{topic}@{queue_id}");
@@ -869,7 +901,7 @@ impl BrokerStatsManager {
     #[inline]
     pub fn inc_queue_get_size(&self, topic: &str, queue_id: i32, size: i32) {
         if self.enable_queue_stat {
-            if let Some(stats) = self.stats_table.get(Stats::QUEUE_GET_SIZE) {
+            if let Some(stats) = &self.hot_sets.queue_get_size {
                 with_stats_key(
                     |key| {
                         let _ = write!(key, "{topic}@{queue_id}");
@@ -882,7 +914,7 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn inc_topic_put_latency(&self, topic: &str, queue_id: i32, inc_value: i32) {
-        if let Some(stats) = self.stats_table.get(Self::TOPIC_PUT_LATENCY) {
+        if let Some(stats) = &self.hot_sets.topic_put_latency {
             with_stats_key(
                 |key| {
                     let _ = write!(key, "{queue_id}@{topic}");
@@ -894,7 +926,7 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn inc_group_get_latency(&self, group: &str, topic: &str, queue_id: i32, inc_value: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_LATENCY) {
+        if let Some(stats) = &self.hot_sets.group_get_latency {
             with_stats_key(
                 |key| {
                     let _ = write!(key, "{queue_id}@{topic}@{group}");

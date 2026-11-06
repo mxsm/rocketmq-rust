@@ -14,6 +14,7 @@
 
 use std::collections::LinkedList;
 use std::fmt;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -34,6 +35,8 @@ pub struct StatsItem {
     cs_list_hour: Mutex<LinkedList<CallSnapshot>>,
     cs_list_day: Mutex<LinkedList<CallSnapshot>>,
     last_update_timestamp: AtomicU64,
+    /// Set once the owning `StatsItemSet` removes the item.
+    retired: AtomicBool,
     stats_name: String,
     stats_key: String,
 }
@@ -47,9 +50,25 @@ impl StatsItem {
             cs_list_hour: Mutex::new(LinkedList::new()),
             cs_list_day: Mutex::new(LinkedList::new()),
             last_update_timestamp: AtomicU64::new(current_millis()),
+            retired: AtomicBool::new(false),
             stats_name: stats_name.to_string(),
             stats_key: stats_key.to_string(),
         }
+    }
+
+    /// Returns whether the owning [`StatsItemSet`](crate::stats::stats_item_set::StatsItemSet)
+    /// removed this item. Updates to a retired item are no longer reported, so a caller that keeps
+    /// the item resolves it from the set again.
+    ///
+    /// The flag is a hint: an update that races with the removal can still land in the retired
+    /// item, as it can for any `Arc` obtained from the set before the removal.
+    #[inline]
+    pub fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn retire(&self) {
+        self.retired.store(true, Ordering::Relaxed);
     }
 
     /// Atomically increments the value by `delta` and the times counter by 1.

@@ -1096,12 +1096,15 @@ where
             stats.inc_queue_put_size(topic, queue_id, append_result.wrote_bytes);
         }
 
-        stats.inc_topic_put_nums(topic, append_result.msg_num, 1);
-        stats.inc_topic_put_size(topic, append_result.wrote_bytes);
-        stats.inc_broker_put_nums(topic, append_result.msg_num);
         let latency_millis = begin_time_millis.elapsed().as_millis();
         let latency_ms_for_stats = latency_millis.min(i32::MAX as u128) as i32;
-        stats.inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
+        stats.record_put_success(
+            topic,
+            queue_id,
+            append_result.msg_num,
+            append_result.wrote_bytes,
+            latency_ms_for_stats,
+        );
 
         if let Some(metrics) = self.inner.context.broker_metrics_manager.as_ref() {
             let msg_num = u64::try_from(append_result.msg_num.max(0)).unwrap_or_default();
