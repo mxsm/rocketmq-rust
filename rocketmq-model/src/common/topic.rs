@@ -172,20 +172,16 @@ impl TopicValidator {
         }
     }
 
+    /// Every send checks its topic here, so the sets are probed by hash: iterating a `DashSet`
+    /// read-locks each of its shards in turn.
     #[inline]
     pub fn is_system_topic(topic: &str) -> bool {
-        // Fast path: check prefix first (no lock needed)
-        if topic.starts_with(TopicValidator::SYSTEM_TOPIC_PREFIX) {
-            return true;
-        }
-        // DashSet::contains is lock-free for reads
-        SYSTEM_TOPIC_SET.iter().any(|entry| entry.as_str() == topic)
+        topic.starts_with(TopicValidator::SYSTEM_TOPIC_PREFIX) || SYSTEM_TOPIC_SET.contains(topic)
     }
 
     #[inline]
     pub fn is_not_allowed_send_topic(topic: &str) -> bool {
-        // DashSet iteration is lock-free
-        NOT_ALLOWED_SEND_TOPIC_SET.iter().any(|entry| entry.as_str() == topic)
+        NOT_ALLOWED_SEND_TOPIC_SET.contains(topic)
     }
 
     pub fn add_system_topic(system_topic: impl Into<CheetahString>) {
@@ -306,6 +302,19 @@ mod tests {
     #[test]
     fn is_not_allowed_send_topic_with_allowed_topic() {
         assert!(!TopicValidator::is_not_allowed_send_topic("allowed_topic"));
+    }
+
+    #[test]
+    fn hashed_lookups_find_every_listed_topic_and_nothing_else() {
+        for topic in TopicValidator::get_system_topic_set() {
+            assert!(TopicValidator::is_system_topic(topic.as_str()), "{topic}");
+        }
+        for topic in TopicValidator::get_not_allowed_send_topic_set() {
+            assert!(TopicValidator::is_not_allowed_send_topic(topic.as_str()), "{topic}");
+        }
+        let near_miss = format!("{}X", TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
+        assert!(!TopicValidator::is_system_topic(&near_miss));
+        assert!(!TopicValidator::is_not_allowed_send_topic(&near_miss));
     }
 
     #[test]
