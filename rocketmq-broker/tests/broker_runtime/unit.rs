@@ -1876,6 +1876,13 @@ async fn new_phase3_test_runtime(label: &str) -> BrokerRuntime {
 async fn new_phase3_lifecycle_test_runtime(label: &str) -> BrokerRuntime {
     let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-{label}-{}", current_millis()));
     let listen_port = allocate_broker_runtime_test_port();
+    // Port probes release their listeners, so the next probe may reuse a remoting port.
+    let ha_listen_port = loop {
+        let port = allocate_broker_runtime_test_port();
+        if port != listen_port && port != listen_port - 2 {
+            break port;
+        }
+    };
     let broker_config = Arc::new(BrokerConfig {
         broker_server_config: ServerConfig {
             listen_port: listen_port as u32,
@@ -1891,7 +1898,7 @@ async fn new_phase3_lifecycle_test_runtime(label: &str) -> BrokerRuntime {
     let message_store_config = Arc::new(MessageStoreConfig {
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
         flush_disk_type: FlushDiskType::AsyncFlush,
-        ha_listen_port: allocate_broker_runtime_test_port() as usize,
+        ha_listen_port: ha_listen_port as usize,
         mapped_file_size_commit_log: TEST_COMMIT_LOG_FILE_SIZE,
         ..MessageStoreConfig::default()
     });
