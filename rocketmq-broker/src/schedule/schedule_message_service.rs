@@ -1759,49 +1759,9 @@ impl<MS: BrokerWriteStore> PutResultProcess<MS> {
         self
     }
 
-    /// Get the topic
-    pub fn get_topic(&self) -> &str {
-        &self.topic
-    }
-
-    /// Get the offset
-    pub fn get_offset(&self) -> i64 {
-        self.offset
-    }
-
     /// Get the next offset
     pub fn get_next_offset(&self) -> i64 {
         self.offset + 1
-    }
-
-    /// Get the physical offset
-    pub fn get_physic_offset(&self) -> i64 {
-        self.physic_offset
-    }
-
-    /// Get the physical size
-    pub fn get_physic_size(&self) -> i32 {
-        self.physic_size
-    }
-
-    /// Get the delay level
-    pub fn get_delay_level(&self) -> i32 {
-        self.delay_level
-    }
-
-    /// Get the message ID
-    pub fn get_msg_id(&self) -> &str {
-        &self.msg_id
-    }
-
-    /// Check if auto-resend is enabled
-    pub fn is_auto_resend(&self) -> bool {
-        self.auto_resend
-    }
-
-    /// Get the resend count
-    pub fn get_resend_count(&self) -> i32 {
-        self.resend_count.load(Ordering::Relaxed)
     }
 
     /// Handle the processing after completing the future

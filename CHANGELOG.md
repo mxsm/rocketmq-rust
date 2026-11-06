@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(broker):** Remove unused version-only file loaders from internal topic and subscription metadata managers ([#12273](https://github.com/mxsm/rocketmq-rust/issues/12273)).
+- **refactor(broker):** Remove eight unused internal delayed-message result accessors; offset advancement and resend processing are unchanged ([#12287](https://github.com/mxsm/rocketmq-rust/issues/12287)).
 - **refactor(broker):** Remove unused internal subscription consume toggle helpers; slow-consumer protection and configuration updates remain intact ([#12223](https://github.com/mxsm/rocketmq-rust/issues/12223)).
 - **refactor(broker):** Remove unused internal global Pull forced-scan plumbing while retaining per-queue offset replay ([#12185](https://github.com/mxsm/rocketmq-rust/issues/12185)).
 - **refactor(store):** Remove obsolete internal CommitLog append callbacks and retain rollover coverage on the prepared append path ([#12175](https://github.com/mxsm/rocketmq-rust/issues/12175)).
