@@ -1715,6 +1715,83 @@ async fn reput_shutdown_releases_the_runtime_context() {
 }
 
 #[tokio::test]
+async fn background_reput_keeps_queue_order_across_inline_and_channel_dispatch() {
+    let temp_dir = tempdir().expect("temporary Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            // No HA listener, so parallel tests do not contend for its port.
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("reput-inline-order");
+    let group = CheetahString::from_static_str("reput-inline-order-group");
+    let body = |index: usize| Bytes::from(format!("reput-inline-body-{index:04}"));
+    store.init().await.expect("initialize Store");
+    assert!(store.load().await, "load Store");
+    store.start().await.expect("start Store");
+
+    // One put at a time: each read finds one message and an idle dispatcher, so the reader
+    // dispatches it itself.
+    let sequential = 20;
+    for index in 0..sequential {
+        let put = store.put_message(build_test_message(&topic, body(index))).await;
+        assert_eq!(put.put_message_status(), PutMessageStatus::PutOk);
+        let expected = i64::try_from(index + 1).expect("small count");
+        assert_eq!(expected, wait_for_max_offset_in_queue(&store, &topic, expected).await);
+    }
+    // A burst appended before the reader is woken: it reads a large backlog, whose batches go
+    // through the dispatcher task.
+    let total = 300;
+    let burst = futures_util::future::join_all(
+        (sequential..total).map(|index| store.commit_log.put_message(build_test_message(&topic, body(index)))),
+    )
+    .await;
+    assert!(burst
+        .iter()
+        .all(|put| put.put_message_status() == PutMessageStatus::PutOk));
+    store.reput_message_service.notify_new_message();
+    let total_offset = i64::try_from(total).expect("small count");
+    assert_eq!(
+        total_offset,
+        wait_for_max_offset_in_queue(&store, &topic, total_offset).await
+    );
+
+    let mut queue_offsets = Vec::with_capacity(total);
+    while queue_offsets.len() < total {
+        let next = i64::try_from(queue_offsets.len()).expect("small count");
+        let result = store
+            .get_message(&group, &topic, 0, next, 32, None)
+            .await
+            .expect("get message result");
+        assert_eq!(result.status(), Some(GetMessageStatus::Found));
+        for (selection, queue_offset) in result.message_mapped_list().iter().zip(result.message_queue_offset()) {
+            let index = usize::try_from(*queue_offset).expect("queue offset");
+            if index < sequential {
+                let expected = body(index);
+                assert!(
+                    selection
+                        .get_buffer()
+                        .windows(expected.len())
+                        .any(|window| window == expected.as_ref()),
+                    "queue offset {index} must hold the {index}th sequential put"
+                );
+            }
+            queue_offsets.push(*queue_offset);
+        }
+    }
+    store.shutdown().await;
+
+    let expected = (0..u64::try_from(total).expect("small count")).collect::<Vec<_>>();
+    assert_eq!(expected, queue_offsets);
+}
+
+#[tokio::test]
 async fn reput_service_start_wakes_existing_commitlog_backlog() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_configured_test_store(
