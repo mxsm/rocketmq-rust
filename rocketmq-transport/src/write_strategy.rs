@@ -169,9 +169,38 @@ impl QueuedWriteProgress {
     }
 }
 
+/// Where the session writer reports what became of a queued write.
+pub(crate) enum WriteCompletion {
+    /// The enqueuing task waits for the result.
+    Caller(oneshot::Sender<crate::write_result::WriterResult>),
+    /// A request whose caller waits for its response instead: only a failure is reported, by
+    /// failing the pending request, so a successful write wakes nobody. The session's send lease
+    /// ends with the report.
+    PendingRequest {
+        sink: crate::base::pending_request_table::PendingRequestWriteSink,
+        send_lease: crate::connection::OwnedSessionSendLease,
+    },
+}
+
+impl WriteCompletion {
+    pub(crate) fn complete(self, result: crate::write_result::WriterResult) {
+        match self {
+            Self::Caller(sender) => {
+                let _ = sender.send(result);
+            }
+            Self::PendingRequest { sink, send_lease } => {
+                if let Err(failure) = result {
+                    sink.fail(failure);
+                }
+                drop(send_lease);
+            }
+        }
+    }
+}
+
 pub(crate) struct QueuedWrite {
     pub(crate) operation: WriterOperation,
-    pub(crate) completion: oneshot::Sender<crate::write_result::WriterResult>,
+    pub(crate) completion: WriteCompletion,
     pub(crate) permit: Option<AdmissionPermit>,
     pub(crate) deadline: Option<RequestDeadline>,
     pub(crate) progress: Arc<QueuedWriteProgress>,
@@ -188,7 +217,7 @@ pub(crate) enum ResponseQueueWaitObservation {
 impl QueuedWrite {
     pub(crate) fn data(
         payload: OutboundPayload,
-        completion: oneshot::Sender<crate::write_result::WriterResult>,
+        completion: WriteCompletion,
         permit: AdmissionPermit,
         deadline: Option<RequestDeadline>,
         progress: Arc<QueuedWriteProgress>,

@@ -38,6 +38,7 @@ use crate::deadline::RequestDeadline;
 use crate::error_helpers::configuration_invalid_caused_by;
 use crate::error_helpers::connection_failed_without_source;
 use crate::error_helpers::TransportStage;
+use crate::write_result::WriterFailure;
 
 static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -222,6 +223,34 @@ pub(crate) enum PendingRequestCompletion {
     Cancelled,
     SessionClosed,
     OperationalFailure(SharedError),
+    /// The session writer did not write the request; its caller classifies the failure as if it
+    /// had waited for the write.
+    WriteFailed(WriterFailure),
+}
+
+impl PendingRequestCompletion {
+    /// The error for callers that never hand a request to the writer through
+    /// [`PendingRequestWriteSink`] and so do not expect [`Self::WriteFailed`].
+    pub(crate) fn write_failure_error(failure: WriterFailure) -> SharedError {
+        failure
+            .into_shared_error()
+            .unwrap_or_else(|_| connection_failed_without_source(TransportStage::Closed))
+    }
+}
+
+/// Lets the session writer fail a pending request it could not write, so the request's caller
+/// waits only for the response: a successful write reports nothing and wakes nobody.
+pub(crate) struct PendingRequestWriteSink {
+    table: PendingRequestTable,
+    token: PendingRequestToken,
+}
+
+impl PendingRequestWriteSink {
+    /// Completes the request with `failure` unless it already completed.
+    pub(crate) fn fail(self, failure: WriterFailure) {
+        self.table
+            .complete_token(self.token, PendingRequestCompletion::WriteFailed(failure));
+    }
 }
 
 /// What became of a response that arrived for one pending-request owner.
@@ -672,6 +701,14 @@ impl PendingRequestGuard {
     #[doc(hidden)]
     pub fn token(&self) -> PendingRequestToken {
         self.token.expect("active pending request guard must have a token")
+    }
+
+    /// A sink through which the session writer fails this request if it cannot write it.
+    pub(crate) fn write_sink(&self) -> PendingRequestWriteSink {
+        PendingRequestWriteSink {
+            table: self.table.clone(),
+            token: self.token(),
+        }
     }
 
     #[cfg(test)]

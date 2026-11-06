@@ -408,6 +408,14 @@ impl WriterReceivers {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) async fn complete_next_write_for_test(&mut self, result: crate::write_result::WriterResult) {
+        match self.recv().await {
+            WriterEvent::Write(envelope) => envelope.into_write().completion.complete(result),
+            WriterEvent::Close(_) | WriterEvent::Closed => panic!("expected queued writer envelope"),
+        }
+    }
+
     fn collect_ready(&mut self, batch: &mut Vec<LaneEnvelope>) {
         // Keep a running total: summing the whole batch per candidate made a full batch quadratic.
         let mut batch_bytes = batch
@@ -497,7 +505,7 @@ impl WriterReceivers {
 fn fail_envelope(envelope: LaneEnvelope, diagnostics: &SessionWriterDiagnostics, failure: &WriterFailure) {
     let write = envelope.into_write();
     diagnostics.finish_not_started(write.enqueued_at, write.encoded_len(), false);
-    let _ = write.completion.send(Err(failure.for_queued_follower()));
+    write.completion.complete(Err(failure.for_queued_follower()));
 }
 
 /// Runs the sole socket writer owner until graceful close, cancellation, or a poisoned write.
@@ -638,12 +646,12 @@ async fn write_batch(
                 QueuedWriteCancellation::Request => WriterFailure::cancelled(),
                 QueuedWriteCancellation::SessionClosed => WriterFailure::session_closed(),
             };
-            let _ = write.completion.send(Err(failure));
+            write.completion.complete(Err(failure));
             continue;
         }
         if write.deadline.is_some_and(|deadline| deadline.is_expired()) {
             diagnostics.finish_not_started(write.enqueued_at, write.encoded_len(), true);
-            let _ = write.completion.send(Err(WriterFailure::deadline_expired()));
+            write.completion.complete(Err(WriterFailure::deadline_expired()));
             continue;
         }
         ready.push(write);
@@ -745,7 +753,7 @@ async fn write_batch(
             }
             Err(failure) => Err(failure.clone()),
         };
-        let _ = write.completion.send(completion);
+        write.completion.complete(completion);
     }
     match result {
         Err(failure)
@@ -837,7 +845,7 @@ mod queue_regression_tests {
         payload[..target.len()].copy_from_slice(target.as_bytes());
         QueuedWrite::data(
             OutboundPayload::Contiguous(Bytes::from(payload)),
-            completion,
+            crate::write_strategy::WriteCompletion::Caller(completion),
             permit,
             None,
             Arc::new(QueuedWriteProgress::waiting()),

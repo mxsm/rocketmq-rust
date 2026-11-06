@@ -911,6 +911,9 @@ impl ChannelInner {
                     Err(connection_failed_without_source(TransportStage::Closed))
                 }
                 Ok(PendingRequestCompletion::OperationalFailure(error)) => Err(error),
+                Ok(PendingRequestCompletion::WriteFailed(failure)) => {
+                    Err(PendingRequestCompletion::write_failure_error(failure))
+                }
                 Err(source) => Err(connection_failed(TransportStage::Closed, source)),
             },
             Err(source) => {

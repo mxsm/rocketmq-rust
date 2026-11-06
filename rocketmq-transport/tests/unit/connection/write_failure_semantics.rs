@@ -93,7 +93,7 @@ fn enqueue_raw_write(
         AdmissionClass::Data,
         QueuedWrite::data(
             OutboundPayload::Contiguous(Bytes::from_static(b"typed")),
-            completion,
+            crate::write_strategy::WriteCompletion::Caller(completion),
             permit,
             deadline,
             Arc::new(QueuedWriteProgress::waiting()),
@@ -366,7 +366,7 @@ async fn typed_response_queue_saturation_is_not_started() {
         AdmissionClass::Data,
         QueuedWrite::data(
             OutboundPayload::Contiguous(Bytes::from_static(b"x")),
-            completion,
+            crate::write_strategy::WriteCompletion::Caller(completion),
             permit,
             None,
             Arc::new(QueuedWriteProgress::waiting()),
@@ -1363,4 +1363,140 @@ async fn queued_facade_preserves_the_shared_canonical_writer_source() {
         .source()
         .and_then(|source| source.downcast_ref::<io::Error>())
         .is_some());
+}
+
+/// A queued connection whose writer the test drives, sharing `lifecycle` with the test.
+fn request_test_connection(
+    lifecycle: Arc<SessionLifecycle>,
+) -> (
+    AdmissionController,
+    Connection,
+    WriterLanes,
+    crate::writer_runtime::WriterReceivers,
+) {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let config = WriterQueueConfig::default();
+    let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
+    let (lanes, receivers) = writer_lanes(config);
+    let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let connection = Connection::new_queued(
+        lanes.clone(),
+        diagnostics,
+        admission,
+        state_tx,
+        state_rx,
+        CheetahString::from_static_str("queued-request-test"),
+        FrameLimits::default(),
+        None,
+        lifecycle,
+        TransportTelemetry::noop(),
+    );
+    (controller, connection, lanes, receivers)
+}
+
+/// Enqueues one request and returns its pending guard, response receiver and write progress.
+async fn enqueue_test_request(
+    connection: &mut Connection,
+    table: &crate::base::pending_request_table::PendingRequestTable,
+    owner: &crate::base::pending_request_table::PendingRequestOwner,
+    deadline: RequestDeadline,
+) -> (
+    crate::base::pending_request_table::PendingRequestGuard,
+    tokio::sync::oneshot::Receiver<crate::base::pending_request_table::PendingRequestCompletion>,
+    Arc<QueuedWriteProgress>,
+) {
+    use crate::base::pending_request_table::PendingRequestRegistrationResult;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let PendingRequestRegistrationResult::Registered(guard) =
+        table.register_for_owner_with_bytes(owner, 7, deadline, 64, tx)
+    else {
+        panic!("request registers");
+    };
+    let super::RequestEnqueueResult::Queued(progress) = connection
+        .enqueue_request_with_deadline(RemotingCommand::create_remoting_command(10), deadline, &guard)
+        .await
+    else {
+        panic!("request is queued");
+    };
+    (guard, rx, progress)
+}
+
+#[tokio::test]
+async fn queued_request_write_failure_fails_its_pending_request_and_holds_retirement() {
+    use crate::base::pending_request_table::PendingRequestCompletion;
+    use crate::base::pending_request_table::PendingRequestTable;
+
+    let lifecycle = Arc::new(SessionLifecycle::new());
+    let (controller, mut connection, lanes, mut receivers) = request_test_connection(Arc::clone(&lifecycle));
+    let table = PendingRequestTable::new();
+    let owner = table.new_owner();
+    let deadline = RequestDeadline::after(std::time::Duration::from_secs(30));
+    let (guard, mut rx, progress) = enqueue_test_request(&mut connection, &table, &owner, deadline).await;
+
+    assert!(rx.try_recv().is_err(), "a queued write reports nothing yet");
+    assert!(!progress.write_started());
+    let retirement = {
+        let lifecycle = Arc::clone(&lifecycle);
+        tokio::spawn(async move { lifecycle.begin_retirement().await })
+    };
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !retirement.is_finished(),
+        "retirement waits until the queued request write is reported"
+    );
+
+    receivers
+        .complete_next_write_for_test(Err(crate::write_result::WriterFailure::from_io(
+            WriteProgress::NotStarted,
+            io::Error::other("injected request write failure"),
+        )))
+        .await;
+
+    let Ok(PendingRequestCompletion::WriteFailed(failure)) = rx.await else {
+        panic!("the writer fails the pending request");
+    };
+    assert!(matches!(
+        super::request_write_failure(failure, deadline),
+        super::CommandWriteResult::OperationalFailure {
+            progress: WriteProgress::NotStarted,
+            ..
+        }
+    ));
+    retirement
+        .await
+        .expect("retirement finishes once the write is reported");
+    drop(guard);
+    drop(connection);
+    drop(lanes);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+}
+
+#[tokio::test]
+async fn queued_request_success_reports_nothing_and_ends_the_send_lease() {
+    use crate::base::pending_request_table::PendingRequestTable;
+
+    let lifecycle = Arc::new(SessionLifecycle::new());
+    let (controller, mut connection, lanes, mut receivers) = request_test_connection(Arc::clone(&lifecycle));
+    let table = PendingRequestTable::new();
+    let owner = table.new_owner();
+    let deadline = RequestDeadline::after(std::time::Duration::from_secs(30));
+    let (guard, mut rx, _progress) = enqueue_test_request(&mut connection, &table, &owner, deadline).await;
+
+    receivers.complete_next_write_for_test(Ok(())).await;
+
+    assert!(
+        matches!(rx.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
+        "a successful write leaves the request waiting for its response"
+    );
+    lifecycle.begin_retirement().await;
+    drop(guard);
+    drop(connection);
+    drop(lanes);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
 }

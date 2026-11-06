@@ -631,6 +631,13 @@ impl ServerRequestSender {
                     source,
                 ));
             }
+            Ok(Ok(PendingRequestCompletion::WriteFailed(failure))) => {
+                return Err(TransportError::request_failed(
+                    crate::error::RequestOperation::AwaitResponse,
+                    crate::request_outcome::OutboundRequestStage::AwaitingResponse,
+                    PendingRequestCompletion::write_failure_error(failure),
+                ));
+            }
             Ok(Err(_)) => {
                 return Err(TransportError::request_failed(
                     crate::error::RequestOperation::AwaitResponse,

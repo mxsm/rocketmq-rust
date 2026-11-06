@@ -109,7 +109,7 @@ fn queued_write_with_completion(
     (
         QueuedWrite::data(
             OutboundPayload::Contiguous(Bytes::from(vec![0x5a; bytes])),
-            completion,
+            crate::write_strategy::WriteCompletion::Caller(completion),
             permit,
             None,
             progress,
@@ -150,7 +150,7 @@ fn queued_file_write_with_completion(
     let (completion, result) = oneshot::channel();
     let write = QueuedWrite::data(
         payload,
-        completion,
+        crate::write_strategy::WriteCompletion::Caller(completion),
         permit,
         None,
         Arc::new(QueuedWriteProgress::waiting()),

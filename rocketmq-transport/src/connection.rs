@@ -35,6 +35,7 @@ use uuid::Uuid;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
+use crate::base::pending_request_table::PendingRequestGuard;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
@@ -67,6 +68,7 @@ use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteCancellation;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::write_strategy::ResponseQueueWaitObservation;
+use crate::write_strategy::WriteCompletion;
 use crate::writer_runtime::WriterLanes;
 use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -130,6 +132,44 @@ impl Drop for SessionSendLease<'_> {
     fn drop(&mut self) {
         self.lifecycle.finish_send();
     }
+}
+
+/// A send lease that travels with a queued request write and ends when the writer reports the
+/// write's outcome, so retirement waits for request writes as it does for awaited sends.
+pub(crate) struct OwnedSessionSendLease {
+    lifecycle: Arc<SessionLifecycle>,
+}
+
+impl SessionLifecycle {
+    fn begin_owned_send(self: &Arc<Self>) -> Option<OwnedSessionSendLease> {
+        let lease = self.begin_send()?;
+        // The owned lease takes over the count the borrowed one holds.
+        std::mem::forget(lease);
+        Some(OwnedSessionSendLease {
+            lifecycle: Arc::clone(self),
+        })
+    }
+}
+
+impl Drop for OwnedSessionSendLease {
+    fn drop(&mut self) {
+        self.lifecycle.finish_send();
+    }
+}
+
+/// What became of a request handed to the session writer by
+/// [`Connection::enqueue_request_with_deadline`].
+pub(crate) enum RequestEnqueueResult {
+    /// Queued. The writer fails the pending request if it cannot write it; the progress lets the
+    /// caller withdraw the write if its deadline passes before the writer starts it.
+    Queued(Arc<QueuedWriteProgress>),
+    /// Not queued, or already written by a connection without a queued writer.
+    Settled(CommandWriteResult),
+}
+
+/// Classifies a writer failure reported for a request the way an awaited send classifies it.
+pub(crate) fn request_write_failure(failure: WriterFailure, deadline: RequestDeadline) -> CommandWriteResult {
+    classify_writer_failure(failure, Some(deadline)).into_command_outcome()
 }
 
 struct QueuedConnection {
@@ -1076,8 +1116,15 @@ impl Connection {
             let enqueued_at = queued.writer_diagnostics.prepare_enqueue(encoded_len);
             match queued.writer.try_send(
                 class,
-                QueuedWrite::data(payload, completion, permit, deadline, progress.clone(), enqueued_at)
-                    .with_response_queue_wait_observation(response_queue_wait_observation),
+                QueuedWrite::data(
+                    payload,
+                    WriteCompletion::Caller(completion),
+                    permit,
+                    deadline,
+                    progress.clone(),
+                    enqueued_at,
+                )
+                .with_response_queue_wait_observation(response_queue_wait_observation),
             ) {
                 crate::writer_runtime::WriterEnqueueResult::Enqueued => {
                     queued.writer_diagnostics.record_accepted();
@@ -1383,13 +1430,94 @@ impl Connection {
             .await
     }
 
+    /// Hands a request to the session writer without waiting for the write, so its caller waits
+    /// only for the response. A queued writer fails the request through the pending entry of
+    /// `guard` if it cannot write it. A connection without a queued writer writes the request
+    /// before returning.
+    pub(crate) async fn enqueue_request_with_deadline(
+        &mut self,
+        command: RemotingCommand,
+        deadline: RequestDeadline,
+        guard: &PendingRequestGuard,
+    ) -> RequestEnqueueResult {
+        if self.queued_writer().is_none() {
+            return RequestEnqueueResult::Settled(
+                self.send_command_outcome_with_deadline(command, deadline, "request")
+                    .await,
+            );
+        }
+        let settled = RequestEnqueueResult::Settled;
+        if deadline.is_expired() {
+            return settled(CommandWriteResult::DeadlineExpired);
+        }
+        let class = self
+            .response_class()
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        let payload = match self.limits.encode_command(command) {
+            Ok(frame) => OutboundPayload::Frame(frame),
+            Err(source) => return settled(CommandWriteResult::EncodingFailed(source)),
+        };
+        let encoded_len = payload.encoded_len();
+        self.telemetry.record_outbound_attempted_plaintext_bytes(encoded_len);
+        if deadline.is_expired() {
+            return settled(CommandWriteResult::DeadlineExpired);
+        }
+        let Some(queued) = self.queued_writer() else {
+            return settled(CommandWriteResult::SessionClosed);
+        };
+        let Some(send_lease) = queued.lifecycle.begin_owned_send() else {
+            queued.writer_diagnostics.record_rejected(None);
+            return settled(CommandWriteResult::SessionClosed);
+        };
+        if self.state() == ConnectionState::Closed {
+            queued.writer_diagnostics.record_rejected(None);
+            return settled(CommandWriteResult::SessionClosed);
+        }
+        let Ok(permit) = queued
+            .admission
+            .try_acquire(AdmissionResource::Queued, encoded_len, class)
+        else {
+            queued.writer_diagnostics.record_rejected(None);
+            return settled(CommandWriteResult::QueueSaturated);
+        };
+        let progress = Arc::new(QueuedWriteProgress::waiting());
+        let enqueued_at = queued.writer_diagnostics.prepare_enqueue(encoded_len);
+        let completion = WriteCompletion::PendingRequest {
+            sink: guard.write_sink(),
+            send_lease,
+        };
+        let write = QueuedWrite::data(
+            payload,
+            completion,
+            permit,
+            Some(deadline),
+            Arc::clone(&progress),
+            enqueued_at,
+        );
+        match queued.writer.try_send(class, write) {
+            crate::writer_runtime::WriterEnqueueResult::Enqueued => {
+                queued.writer_diagnostics.record_accepted();
+                self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
+                RequestEnqueueResult::Queued(progress)
+            }
+            crate::writer_runtime::WriterEnqueueResult::Full(_) => {
+                queued.writer_diagnostics.record_rejected(Some(encoded_len));
+                settled(CommandWriteResult::QueueSaturated)
+            }
+            crate::writer_runtime::WriterEnqueueResult::Closed(_) => {
+                queued.writer_diagnostics.record_rejected(Some(encoded_len));
+                settled(CommandWriteResult::SessionClosed)
+            }
+        }
+    }
+
     pub(crate) async fn send_command_outcome_with_deadline(
         &mut self,
         command: RemotingCommand,
         deadline: RequestDeadline,
-        target: impl Into<String>,
+        target: impl Into<WriteTarget>,
     ) -> CommandWriteResult {
-        let target = WriteTarget::Owned(target.into());
+        let target = target.into();
         if deadline.is_expired() {
             return CommandWriteResult::DeadlineExpired;
         }
