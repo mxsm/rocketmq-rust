@@ -148,9 +148,9 @@ where
         let producer = Arc::new_cyclic(|weak_producer: &Weak<Self>| {
             let weak_lite = weak_producer.clone();
             let lite_observer: Arc<DeferredEventObserver> = Arc::new(move |client_id| {
-                weak_lite
-                    .upgrade()
-                    .is_some_and(|producer| producer.notify_pop_lite_event(client_id))
+                if let Some(producer) = weak_lite.upgrade() {
+                    producer.notify_pop_lite_event(client_id);
+                }
             });
             let weak_pop = weak_producer.clone();
             let pop_lag_refresh_callback: Arc<PopLagRefreshCallback> = Arc::new(move |topic, consumer_group| {
@@ -415,22 +415,21 @@ where
         None
     }
 
-    fn notify_pop_lite_event(&self, client_id: &CheetahString) -> bool {
+    fn notify_pop_lite_event(&self, client_id: &CheetahString) {
         let Ok(route) = self.handoff.acquire_pop_lite_candidate(client_id.clone()) else {
-            return true;
+            return;
         };
         match self.pop_lite.observe_pending_replay(client_id) {
-            PopLiteReplayObservation::NoEvent | PopLiteReplayObservation::AlreadyObserved => true,
+            PopLiteReplayObservation::NoEvent | PopLiteReplayObservation::AlreadyObserved => {}
             PopLiteReplayObservation::NewlyObserved => {
                 self.spawn_pop_lite_client(client_id.clone(), route);
-                true
             }
         }
     }
 
     fn produce_pending_pop_lite_events(&self) {
         for client_id in self.pop_lite.take_pending_replays(NonZeroUsize::MIN) {
-            let _ = self.notify_pop_lite_event(&client_id);
+            self.notify_pop_lite_event(&client_id);
         }
     }
 

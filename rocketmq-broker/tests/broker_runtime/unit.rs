@@ -4299,7 +4299,6 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
             let hits = Arc::clone(&rejected_lite_hits);
             Arc::new(move |_client_id: &CheetahString| {
                 hits.fetch_add(1, Ordering::Relaxed);
-                true
             }) as Arc<crate::lite::lite_event_dispatcher::DeferredEventObserver>
         };
         assert!(installed_lite_dispatcher
@@ -4366,7 +4365,6 @@ async fn broker_deferred_producer_install_is_exactly_once_and_transactional() {
             let hits = Arc::clone(&late_lite_hits);
             Arc::new(move |_client_id: &CheetahString| {
                 hits.fetch_add(1, Ordering::Relaxed);
-                true
             }) as Arc<crate::lite::lite_event_dispatcher::DeferredEventObserver>
         };
         assert!(late_lite_dispatcher
