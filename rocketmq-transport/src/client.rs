@@ -668,6 +668,7 @@ fn pending_completion_result(
             connection_failed_without_source_for_remote(address.to_string(), TransportStage::Closed),
         ),
         PendingRequestCompletion::OperationalFailure(error) => Err(error),
+        PendingRequestCompletion::WriteFailed(failure) => Err(PendingRequestCompletion::write_failure_error(failure)),
     }
 }
 
