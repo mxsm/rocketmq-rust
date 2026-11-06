@@ -41,7 +41,6 @@ use rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeW
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
 use rocketmq_store::MessageStoreConfig;
@@ -1077,29 +1076,6 @@ impl TopicConfigManager {
             return is_change;
         }
         false
-    }
-
-    pub fn load_data_version(&self) -> bool {
-        let file_path = self.config_file_path();
-        match file_utils::file_to_string(&file_path) {
-            Ok(json_string) => {
-                if let Ok(wrapper) = TopicConfigSerializeWrapper::decode_string(json_string) {
-                    if let Some(data_version) = wrapper.data_version() {
-                        self.assign_data_version(data_version);
-                        info!(
-                            "load topic metadata dataVersion success {}, {:?}",
-                            file_path, data_version
-                        );
-                        return true;
-                    }
-                }
-                false
-            }
-            Err(e) => {
-                error!("load topic metadata dataVersion failed {}: {:?}", file_path, e);
-                false
-            }
-        }
     }
 
     #[cfg(feature = "rocksdb_store")]
