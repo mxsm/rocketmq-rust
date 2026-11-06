@@ -697,6 +697,18 @@ pub(super) enum ReputDispatchEvent {
     },
 }
 
+/// Largest batch the reader dispatches itself when the dispatcher has nothing queued or running.
+/// Handing a small batch over costs a cross-task wake-up, which dominates put-to-consumable
+/// latency on a lightly loaded Broker. Larger batches still go through the channel, so reading the
+/// next chunk overlaps dispatching this one.
+const INLINE_DISPATCH_MAX_MESSAGES: usize = 16;
+
+impl ReputDispatchEvent {
+    fn dispatches_inline(&self) -> bool {
+        matches!(self, Self::Batch(batch) if batch.len() <= INLINE_DISPATCH_MAX_MESSAGES)
+    }
+}
+
 impl ReputMessageService {
     pub(super) fn notify_handle(&self) -> ReputNotifyHandle {
         ReputNotifyHandle {
@@ -810,7 +822,23 @@ impl ReputMessageService {
                             if !events.is_empty() {
                                 let mut channel_closed = false;
                                 for event in events {
-                                    inflight_dispatch_batches.fetch_add(1, Ordering::AcqRel);
+                                    // Only this reader adds work, and the dispatcher counts an event
+                                    // until it is done. So when the read slot is all that was in
+                                    // flight, nothing is queued or being dispatched, and dispatching
+                                    // here keeps the order.
+                                    let earlier_in_flight = inflight_dispatch_batches.fetch_add(1, Ordering::AcqRel);
+                                    if earlier_in_flight == 1 && event.dispatches_inline() {
+                                        dispatch_reput_event(
+                                            &inner.dispatch_pipeline,
+                                            &inner.runtime_context,
+                                            inner.notify_message_arrive_in_batch,
+                                            event,
+                                        )
+                                        .await;
+                                        inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
+                                        dispatch_progress_notify.notify_waiters();
+                                        continue;
+                                    }
                                     if dispatch_tx.send(event).await.is_err() {
                                         inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
                                         error!("Failed to send Reput dispatch event to channel, channel closed");
