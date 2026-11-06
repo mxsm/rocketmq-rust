@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(store):** Remove unused internal transaction state-table and redo-log path helpers together with their dedicated tests; active Store configuration and message paths are unchanged ([#12304](https://github.com/mxsm/rocketmq-rust/issues/12304)).
+- **refactor(broker):** Remove unused internal broker, LMQ offset, and timer path helpers together with their dedicated tests; active configuration and Store timer paths are unchanged ([#12296](https://github.com/mxsm/rocketmq-rust/issues/12296)).
 - **refactor(broker):** Remove unused version-only file loaders from internal topic and subscription metadata managers ([#12273](https://github.com/mxsm/rocketmq-rust/issues/12273)).
 - **refactor(broker):** Remove eight unused internal delayed-message result accessors; offset advancement and resend processing are unchanged ([#12287](https://github.com/mxsm/rocketmq-rust/issues/12287)).
 - **refactor(broker):** Remove unused internal subscription consume toggle helpers; slow-consumer protection and configuration updates remain intact ([#12223](https://github.com/mxsm/rocketmq-rust/issues/12223)).
