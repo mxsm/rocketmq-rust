@@ -115,9 +115,9 @@ fn peer_configuration_refresh_uses_ordered_invalidation_and_skips_journal_only_c
         let mut config = peer.load().await.unwrap();
         config.nameservers = vec!["peer:9876".into()];
         config.current_nameserver = Some("peer:9876".into());
-        let saved = peer.save_next(config).await.unwrap();
         let mut changes = services.configuration_changes().unwrap();
         changes.borrow_and_update();
+        let saved = peer.save_next(config).await.unwrap();
         store.load().await.unwrap();
         assert!(changes.has_changed().unwrap());
         changes.borrow_and_update();
