@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(ci):** Keep the HA port distinct from both remoting listener ports in Broker lifecycle test fixtures ([#12276](https://github.com/mxsm/rocketmq-rust/issues/12276)).
 - **fix(ci):** Register Store epoch and timer migration exports in Architecture Guards and release native Dashboard directory locks when their writer ownership ends ([#12222](https://github.com/mxsm/rocketmq-rust/issues/12222)).
 - **fix(ci):** Reconcile Architecture Guards inventories with merged Client, Store, and Transport exports and classify native Dashboard storage outside the core release scope ([#12173](https://github.com/mxsm/rocketmq-rust/issues/12173)).
 - **fix(protocol):** Support flexible JSON headers from non-Java remoting clients by accepting missing serializeTypeCurrentRPC, numeric and case-insensitive languageCode, serializeType aliases, and scalar extension fields while treating null fields as absent and preserving explicit empty strings ([#12090](https://github.com/mxsm/rocketmq-rust/issues/12090)).
