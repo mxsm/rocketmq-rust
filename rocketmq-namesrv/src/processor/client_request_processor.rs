@@ -81,10 +81,9 @@ impl ClientRequestProcessor {
             .name_server_runtime_handle
             .upgrade()
             .ok_or_else(|| crate::namesrv_error::not_initialized("namesrv-runtime"))?;
-        let request_code = RequestCode::from(request.code());
         debug!(
             "Name server ClientRequestProcessor Received request code: {:?}",
-            request_code
+            RequestCode::from(request.code())
         );
 
         self.get_route_info_by_topic(request)
