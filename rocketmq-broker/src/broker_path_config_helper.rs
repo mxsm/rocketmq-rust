@@ -14,15 +14,6 @@
 
 use std::path::PathBuf;
 
-// Default broker config path
-pub fn get_broker_config_path() -> String {
-    let mut path = dirs::home_dir().unwrap();
-    path.push("store");
-    path.push("config");
-    path.push("broker.properties");
-    path.to_string_lossy().into_owned()
-}
-
 // Topic config path
 pub fn get_topic_config_path(root_dir: &str) -> String {
     PathBuf::from(root_dir)
@@ -50,15 +41,6 @@ pub fn get_consumer_offset_path(root_dir: &str) -> String {
         .into_owned()
 }
 
-// Lmq consumer offset path
-pub fn get_lmq_consumer_offset_path(root_dir: &str) -> String {
-    PathBuf::from(root_dir)
-        .join("config")
-        .join("lmqConsumerOffset.json")
-        .to_string_lossy()
-        .into_owned()
-}
-
 // Consumer order info path
 pub fn get_consumer_order_info_path(root_dir: &str) -> String {
     PathBuf::from(root_dir)
@@ -73,24 +55,6 @@ pub fn get_subscription_group_path(root_dir: &str) -> String {
     PathBuf::from(root_dir)
         .join("config")
         .join("subscriptionGroup.json")
-        .to_string_lossy()
-        .into_owned()
-}
-
-// Timer check path
-pub fn get_timer_check_path(root_dir: &str) -> String {
-    PathBuf::from(root_dir)
-        .join("config")
-        .join("timercheck")
-        .to_string_lossy()
-        .into_owned()
-}
-
-// Timer metrics path
-pub fn get_timer_metrics_path(root_dir: &str) -> String {
-    PathBuf::from(root_dir)
-        .join("config")
-        .join("timermetrics")
         .to_string_lossy()
         .into_owned()
 }
@@ -140,17 +104,6 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_get_broker_config_path() {
-        let path = get_broker_config_path();
-        let home_dir = dirs::home_dir().unwrap();
-        let mut path_ = home_dir;
-        path_.push("store");
-        path_.push("config");
-        path_.push("broker.properties");
-        assert_eq!(path, path_.to_string_lossy().into_owned());
-    }
-
-    #[test]
     fn test_get_topic_config_path() {
         let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_topic_config_path(root_dir.as_str());
@@ -179,16 +132,6 @@ mod test {
     }
 
     #[test]
-    fn test_get_lmq_consumer_offset_path() {
-        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
-        let path = get_lmq_consumer_offset_path(root_dir.as_str());
-        let expected_path = PathBuf::from(root_dir.clone())
-            .join("config")
-            .join("lmqConsumerOffset.json");
-        assert_eq!(path, expected_path.to_string_lossy().into_owned());
-    }
-
-    #[test]
     fn test_get_consumer_order_info_path() {
         let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_consumer_order_info_path(root_dir.as_str());
@@ -205,22 +148,6 @@ mod test {
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")
             .join("subscriptionGroup.json");
-        assert_eq!(path, expected_path.to_string_lossy().into_owned());
-    }
-
-    #[test]
-    fn test_get_timer_check_path() {
-        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
-        let path = get_timer_check_path(root_dir.as_str());
-        let expected_path = PathBuf::from(root_dir.clone()).join("config").join("timercheck");
-        assert_eq!(path, expected_path.to_string_lossy().into_owned());
-    }
-
-    #[test]
-    fn test_get_timer_metrics_path() {
-        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
-        let path = get_timer_metrics_path(root_dir.as_str());
-        let expected_path = PathBuf::from(root_dir.clone()).join("config").join("timermetrics");
         assert_eq!(path, expected_path.to_string_lossy().into_owned());
     }
 
