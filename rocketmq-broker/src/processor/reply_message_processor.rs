@@ -763,26 +763,6 @@ fn parse_request_header(request: &RemotingCommand) -> crate::broker_error::Broke
     }
 }
 
-/// Extracts correlation ID from message properties with backward compatibility.
-///
-/// Supports both new (`PROPERTY_CORRELATION_ID`) and legacy (`REPLY_CORRELATION_ID`)
-/// property names for compatibility with older clients.
-///
-/// # Arguments
-///
-/// * `msg` - Message containing properties to extract from
-///
-/// # Returns
-///
-/// Correlation ID if found, `None` otherwise
-fn get_correlation_id_with_fallback<M: MessageTrait>(msg: &M) -> Option<CheetahString> {
-    msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-        .or_else(|| {
-            // Fallback to old property name for backward compatibility
-            msg.property(&CheetahString::from_static_str("REPLY_CORRELATION_ID"))
-        })
-}
-
 #[derive(Debug, Clone)]
 struct PushReplyResult {
     success: bool,
@@ -811,15 +791,12 @@ mod tests {
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
-    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_model::common::message::MessageConst;
-    use rocketmq_model::common::message::MessageTrait;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::MessageStore;
 
     use super::add_reply_response_metadata;
-    use super::get_correlation_id_with_fallback;
     use super::push_reply_call_failed_remark;
     use super::PushReplyResult;
     use super::PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS;
@@ -867,57 +844,6 @@ mod tests {
                 Some("false")
             );
         }
-    }
-
-    #[test]
-    fn test_get_correlation_id_with_fallback_new_property() {
-        let mut msg = MessageExtBrokerInner::default();
-        msg.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
-            CheetahString::from_static_str("test-correlation-123"),
-        );
-
-        let result = get_correlation_id_with_fallback(&msg);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().as_str(), "test-correlation-123");
-    }
-
-    #[test]
-    fn test_get_correlation_id_with_fallback_legacy_property() {
-        let mut msg = MessageExtBrokerInner::default();
-        msg.put_property(
-            CheetahString::from_static_str("REPLY_CORRELATION_ID"),
-            CheetahString::from_static_str("legacy-correlation-456"),
-        );
-
-        let result = get_correlation_id_with_fallback(&msg);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().as_str(), "legacy-correlation-456");
-    }
-
-    #[test]
-    fn test_get_correlation_id_prefers_new_over_legacy() {
-        let mut msg = MessageExtBrokerInner::default();
-        msg.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
-            CheetahString::from_static_str("new-id-123"),
-        );
-        msg.put_property(
-            CheetahString::from_static_str("REPLY_CORRELATION_ID"),
-            CheetahString::from_static_str("old-id-456"),
-        );
-
-        let result = get_correlation_id_with_fallback(&msg);
-        assert!(result.is_some());
-        // Should prefer new property name
-        assert_eq!(result.unwrap().as_str(), "new-id-123");
-    }
-
-    #[test]
-    fn test_get_correlation_id_returns_none_when_missing() {
-        let msg = MessageExtBrokerInner::default();
-        let result = get_correlation_id_with_fallback(&msg);
-        assert!(result.is_none());
     }
 
     #[test]
