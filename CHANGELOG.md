@@ -98,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(broker):** Remove unused internal subscription group pagination and its standalone simulation test ([#12114](https://github.com/mxsm/rocketmq-rust/issues/12114)).
 - **refactor(broker):** Remove the unused internal topic creation helper and its duplicate metadata update path ([#12113](https://github.com/mxsm/rocketmq-rust/issues/12113)).
 - **refactor(broker):** Remove the unused internal ordered-consumption timestamp helper and its dedicated test ([#12167](https://github.com/mxsm/rocketmq-rust/issues/12167)).
+- **refactor(broker):** Remove unused internal broker-to-client notification wrappers; active consumer membership and Lite notifications are unchanged ([#12297](https://github.com/mxsm/rocketmq-rust/issues/12297)).
 - **refactor(broker):** Remove unused internal NameServer heartbeat broadcasts and their dedicated result types ([#12112](https://github.com/mxsm/rocketmq-rust/issues/12112)).
 - **refactor(broker):** Remove the unused Notification candidate continuation spawner while preserving active pending replay workers and shutdown behavior ([#12080](https://github.com/mxsm/rocketmq-rust/issues/12080)).
 - **refactor(client):** Remove the unused crate-private delayed client action helper; tracked rebalance scheduling is unchanged ([#12079](https://github.com/mxsm/rocketmq-rust/issues/12079)).

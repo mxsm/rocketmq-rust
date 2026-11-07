@@ -26,8 +26,6 @@ use rocketmq_protocol::protocol::body::response::reset_offset_body::ResetOffsetB
 use rocketmq_protocol::protocol::body::response::reset_offset_body::ResetOffsetBodyForC;
 use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
-use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
-use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
@@ -107,68 +105,6 @@ impl Broker2Client {
             error!(
                 "Check transaction failed because invoke producer exception. group={}, msgId={}, error={:?}",
                 group, msg_id, e
-            );
-        }
-    }
-
-    /// Notify consumer that consumer IDs have changed in the group.
-    /// This triggers consumer rebalance.
-    ///
-    /// # Arguments
-    /// * `sender` - The consumer session's typed push capability
-    /// * `consumer_group` - The consumer group name
-    pub async fn notify_consumer_ids_changed(&self, sender: &ServerPushSender, consumer_group: &CheetahString) {
-        if consumer_group.is_empty() {
-            error!("notifyConsumerIdsChanged consumerGroup is null");
-            return;
-        }
-
-        let request_header = NotifyConsumerIdsChangedRequestHeader {
-            consumer_group: consumer_group.clone(),
-            rpc_request_header: None,
-        };
-        // Java uses timeout=10ms for oneway
-        if let Err(e) = sender
-            .send(
-                ServerPushCommand::NotifyConsumerIdsChanged {
-                    header: request_header,
-                    opaque: None,
-                },
-                Duration::from_millis(10),
-            )
-            .await
-        {
-            warn!(
-                "notifyConsumerIdsChanged exception. group={}, error={:?}",
-                consumer_group, e
-            );
-        }
-    }
-
-    /// Notify Lite clients that a Lite subscription has been removed.
-    ///
-    /// Java sends this as a one-way broker-to-client callback with a short timeout.
-    pub async fn notify_unsubscribe_lite(
-        &self,
-        sender: &ServerPushSender,
-        request_header: NotifyUnsubscribeLiteRequestHeader,
-    ) {
-        let lite_topic = request_header.lite_topic.clone();
-        let consumer_group = request_header.consumer_group.clone();
-        let client_id = request_header.client_id.clone();
-        if let Err(e) = sender
-            .send(
-                ServerPushCommand::NotifyUnsubscribeLite {
-                    header: request_header,
-                    opaque: None,
-                },
-                Duration::from_millis(100),
-            )
-            .await
-        {
-            error!(
-                "notifyUnsubscribeLite failed. liteTopic={}, group={}, clientId={}, error={:?}",
-                lite_topic, consumer_group, client_id, e
             );
         }
     }
