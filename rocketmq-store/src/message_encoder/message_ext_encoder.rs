@@ -37,7 +37,6 @@ pub struct MessageExtEncoder {
     max_message_body_size: i32,
     max_message_size: i32,
     crc32_reserved_length: i32,
-    message_store_config: Arc<MessageStoreConfig>,
 }
 
 impl MessageExtEncoder {
@@ -58,7 +57,6 @@ impl MessageExtEncoder {
             max_message_body_size,
             max_message_size,
             crc32_reserved_length,
-            message_store_config,
         }
     }
 
@@ -97,121 +95,6 @@ impl MessageExtEncoder {
              4 + (body_length.max(0)) + // BODY
              (message_version.get_topic_length_size() as i32) + topic_length + // TOPIC
              2 + (properties_length.max(0)) // propertiesLength
-    }
-
-    pub fn cal_msg_length_no_properties(
-        message_version: MessageVersion,
-        sys_flag: i32,
-        body_length: i32,
-        topic_length: i32,
-    ) -> i32 {
-        let bornhost_length = if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
-            8
-        } else {
-            20
-        };
-        let storehost_address_length = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0 {
-            8
-        } else {
-            20
-        };
-
-        4 + // TOTALSIZE
-             4 + // MAGICCODE
-             4 + // BODYCRC
-             4 + // QUEUEID
-             4 + // FLAG
-             8 + // QUEUEOFFSET
-             8 + // PHYSICALOFFSET
-             4 + // SYSFLAG
-             8 + // BORNTIMESTAMP
-             bornhost_length + // BORNHOST
-             8 + // STORETIMESTAMP
-             storehost_address_length + // STOREHOSTADDRESS
-             4 + // RECONSUMETIMES
-             8 + // Prepared Transaction Offset
-             4 + (body_length.max(0)) + // BODY
-             (message_version.get_topic_length_size() as i32) + topic_length // TOPIC
-    }
-
-    pub fn encode_without_properties(&mut self, msg_inner: &MessageExtBrokerInner) -> Option<PutMessageResult> {
-        let topic_data = msg_inner.topic().as_bytes();
-        let topic_length = topic_data.len();
-
-        let body_length = msg_inner.body().map_or(0, |body| body.len());
-
-        if body_length > self.max_message_body_size as usize {
-            warn!(
-                "message body size exceeded, msg body size: {}, maxMessageSize: {}",
-                body_length, self.max_message_body_size
-            );
-            return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
-        }
-
-        let msg_len_no_properties = Self::cal_msg_length_no_properties(
-            msg_inner.version(),
-            msg_inner.sys_flag(),
-            body_length as i32,
-            topic_length as i32,
-        );
-
-        // 1 TOTALSIZE
-        self.byte_buf.put_i32(msg_len_no_properties);
-
-        // 2 MAGICCODE
-        self.byte_buf.put_i32(msg_inner.version().get_magic_code());
-
-        // 3 BODYCRC
-        self.byte_buf.put_u32(msg_inner.body_crc());
-
-        // 4 QUEUEID
-        self.byte_buf.put_i32(msg_inner.queue_id());
-
-        // 5 FLAG
-        self.byte_buf.put_i32(msg_inner.flag());
-
-        // 6 QUEUEOFFSET, need update later
-        self.byte_buf.put_i64(0);
-
-        // 7 PHYSICALOFFSET, need update later
-        self.byte_buf.put_i64(0);
-
-        // 8 SYSFLAG
-        self.byte_buf.put_i32(msg_inner.sys_flag());
-
-        // 9 BORNTIMESTAMP
-        self.byte_buf.put_i64(msg_inner.born_timestamp());
-
-        // 10 BORNHOST
-        self.byte_buf.put(msg_inner.born_host_bytes());
-
-        // 11 STORETIMESTAMP
-        self.byte_buf.put_i64(msg_inner.store_timestamp());
-
-        // 12 STOREHOSTADDRESS
-        self.byte_buf.put(msg_inner.store_host_bytes());
-
-        // 13 RECONSUMETIMES
-        self.byte_buf.put_i32(msg_inner.reconsume_times());
-
-        // 14 Prepared Transaction Offset
-        self.byte_buf.put_i64(msg_inner.prepared_transaction_offset());
-
-        // 15 BODY
-        self.byte_buf.put_i32(body_length as i32);
-        if let Some(body) = msg_inner.body() {
-            self.byte_buf.put(body);
-        }
-
-        // 16 TOPIC
-        if MessageVersion::V2 == msg_inner.version() {
-            self.byte_buf.put_u16(topic_length as u16);
-        } else {
-            self.byte_buf.put_u8(topic_length as u8);
-        }
-        self.byte_buf.put_slice(topic_data);
-
-        None
     }
 
     pub fn encode(&mut self, msg_inner: &MessageExtBrokerInner) -> Option<PutMessageResult> {
@@ -535,7 +418,6 @@ mod tests {
         let encoder = MessageExtEncoder::new(Arc::clone(&config));
 
         assert_eq!(encoder.max_message_body_size, config.max_message_size);
-        assert_eq!(encoder.message_store_config, config);
     }
 
     #[test]
@@ -546,32 +428,6 @@ mod tests {
         assert_eq!(length, 133);
         let length = MessageExtEncoder::cal_msg_length(MessageVersion::V2, 0, 10, 5, 15);
         assert_eq!(length, 122);
-    }
-
-    #[test]
-    fn cal_msg_length_no_properties_calculates_correct_length() {
-        let length = MessageExtEncoder::cal_msg_length_no_properties(MessageVersion::V1, 0, 10, 5);
-        assert_eq!(length, 104);
-        let length = MessageExtEncoder::cal_msg_length_no_properties(
-            MessageVersion::V1,
-            MessageSysFlag::BORNHOST_V6_FLAG,
-            10,
-            5,
-        );
-        assert_eq!(length, 116);
-        let length = MessageExtEncoder::cal_msg_length_no_properties(MessageVersion::V2, 0, 10, 5);
-        assert_eq!(length, 105);
-    }
-
-    #[test]
-    fn encode_without_properties_encodes_message_correctly() {
-        let config = Arc::new(MessageStoreConfig::default());
-        let mut encoder = MessageExtEncoder::new(Arc::clone(&config));
-        let msg_inner = MessageExtBrokerInner::default();
-
-        let result = encoder.encode_without_properties(&msg_inner);
-
-        assert!(result.is_none());
     }
 
     #[test]
