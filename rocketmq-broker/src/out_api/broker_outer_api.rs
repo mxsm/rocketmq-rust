@@ -186,37 +186,6 @@ impl BrokerOuterAPI {
         telemetry: TransportTelemetry,
         command_factory: RemotingCommandFactory,
     ) -> Self {
-        Self::new_with_hook_and_remoting_command_factory(
-            tokio_client_config,
-            None,
-            service_context,
-            telemetry,
-            command_factory,
-        )
-    }
-
-    pub fn new_with_hook(
-        tokio_client_config: Arc<TransportClientConfig>,
-        rpc_hook: Option<Arc<dyn RPCHook>>,
-        service_context: ChildServiceContext,
-        telemetry: TransportTelemetry,
-    ) -> Self {
-        Self::new_with_hook_and_remoting_command_factory(
-            tokio_client_config,
-            rpc_hook,
-            service_context,
-            telemetry,
-            application_remoting_command_factory(),
-        )
-    }
-
-    pub fn new_with_hook_and_remoting_command_factory(
-        tokio_client_config: Arc<TransportClientConfig>,
-        rpc_hook: Option<Arc<dyn RPCHook>>,
-        service_context: ChildServiceContext,
-        telemetry: TransportTelemetry,
-        command_factory: RemotingCommandFactory,
-    ) -> Self {
         let client = Arc::new(
             RemotingClient::builder(tokio_client_config, DefaultRequestProcessor, service_context)
                 .telemetry(telemetry)
@@ -224,9 +193,6 @@ impl BrokerOuterAPI {
                 .expect("clamped broker remoting client budgets must be valid"),
         );
         let client_metadata = Arc::new(ClientMetadata::new());
-        if let Some(rpc_hook) = rpc_hook {
-            client.register_rpc_hook(rpc_hook);
-        }
         Self {
             remoting_client: client.clone(),
             name_server_address: None,

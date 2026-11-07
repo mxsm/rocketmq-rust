@@ -96,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(broker):** Remove the unused internal Producer change listener framework and notification-only session removal records ([#12166](https://github.com/mxsm/rocketmq-rust/issues/12166)).
 - **refactor(broker):** Remove unused internal attached plugin scaffolding and its unreachable runtime dispatch paths ([#12165](https://github.com/mxsm/rocketmq-rust/issues/12165)).
 - **refactor(broker):** Remove unused internal subscription group pagination and its standalone simulation test ([#12114](https://github.com/mxsm/rocketmq-rust/issues/12114)).
+- **refactor(broker):** Remove unused hook-taking BrokerOuterAPI constructors and construct the client directly with its command factory; runtime ACL hook registration is unchanged ([#12310](https://github.com/mxsm/rocketmq-rust/issues/12310)).
 - **refactor(broker):** Remove the unused internal topic creation helper and its duplicate metadata update path ([#12113](https://github.com/mxsm/rocketmq-rust/issues/12113)).
 - **refactor(broker):** Remove the unused internal ordered-consumption timestamp helper and its dedicated test ([#12167](https://github.com/mxsm/rocketmq-rust/issues/12167)).
 - **refactor(broker):** Remove unused internal broker-to-client notification wrappers; active consumer membership and Lite notifications are unchanged ([#12297](https://github.com/mxsm/rocketmq-rust/issues/12297)).
