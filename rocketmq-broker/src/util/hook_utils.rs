@@ -42,7 +42,6 @@ use rocketmq_store_api::TimerStoreMode;
 use tracing::error;
 use tracing::warn;
 
-use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::schedule::schedule_message_service::delay_level_to_queue_id;
 
 static PRINT_TIMES: AtomicI64 = AtomicI64::new(0);
@@ -387,22 +386,6 @@ impl HookUtils {
             .message
             .set_topic(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
         msg.message_ext_inner.queue_id = delay_level_to_queue_id(msg.message_ext_inner.message.delay_time_level());
-    }
-
-    pub fn send_message_back(
-        _outer_api: Arc<BrokerOuterAPI>,
-        msg_list: &mut Vec<MessageExt>,
-        _broker_name: &str,
-        _broker_addr: &str,
-    ) -> bool {
-        for msg in msg_list.iter_mut() {
-            msg.message.properties_mut().as_map_mut().insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
-                CheetahString::from_static_str("false"),
-            );
-        }
-        msg_list.clear();
-        true
     }
 }
 
