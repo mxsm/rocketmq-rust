@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Remove unused extended timer payload and timeline path helpers; active configuration and Store timer paths are unchanged ([#12320](https://github.com/mxsm/rocketmq-rust/issues/12320)).
 - **refactor(store):** Consolidate Store path helpers into canonical module and remove obsolete internal config store path helper module ([#12306](https://github.com/mxsm/rocketmq-rust/issues/12306)).
 - **refactor(store):** Remove unused internal transaction state-table and redo-log path helpers together with their dedicated tests; active Store configuration and message paths are unchanged ([#12304](https://github.com/mxsm/rocketmq-rust/issues/12304)).
 - **refactor(broker):** Remove unused internal broker, LMQ offset, and timer path helpers together with their dedicated tests; active configuration and Store timer paths are unchanged ([#12296](https://github.com/mxsm/rocketmq-rust/issues/12296)).
