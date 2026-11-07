@@ -140,8 +140,6 @@ use crate::capability::ConsumeQueueStatistics;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::MessageStoreConfig;
-use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
-use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
 use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
@@ -186,7 +184,9 @@ use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
 use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
+use crate::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::store_path_config_helper::get_store_path_consume_queue;
+use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 #[cfg(feature = "tieredstore")]
 use crate::tieredstore::resolve_tiered_dispatch_body_with_reader;
 #[cfg(feature = "tieredstore")]

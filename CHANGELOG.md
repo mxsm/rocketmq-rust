@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Consolidate Store path helpers into canonical module and remove obsolete internal config store path helper module ([#12306](https://github.com/mxsm/rocketmq-rust/issues/12306)).
 - **refactor(store):** Remove unused internal transaction state-table and redo-log path helpers together with their dedicated tests; active Store configuration and message paths are unchanged ([#12304](https://github.com/mxsm/rocketmq-rust/issues/12304)).
 - **refactor(broker):** Remove unused internal broker, LMQ offset, and timer path helpers together with their dedicated tests; active configuration and Store timer paths are unchanged ([#12296](https://github.com/mxsm/rocketmq-rust/issues/12296)).
 - **refactor(broker):** Remove unused version-only file loaders from internal topic and subscription metadata managers ([#12273](https://github.com/mxsm/rocketmq-rust/issues/12273)).
@@ -219,6 +220,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Consolidate Store path helpers into canonical module and remove obsolete internal config store path helper module ([#12306](https://github.com/mxsm/rocketmq-rust/issues/12306)).
 - **ci:** Retire automated Kubernetes fault and six-hour SLO workflows, and consolidate core container/chart checks into the static Kubernetes assets workflow. Keep local qualification scripts and evidence validation available ([#11010](https://github.com/mxsm/rocketmq-rust/issues/11010)).
 - **ci:** Remove the dedicated eight-lockfile Cargo security audit workflow and its PR, main-push, daily, and manual triggers ([#11008](https://github.com/mxsm/rocketmq-rust/issues/11008)).
 - **refactor(runtime):** Remove the executor services, `TaskScheduler` and the `schedule` module, `ScheduledTaskManager`, `ActorRuntime`, `compat`, `tokio_lock`, `Shutdown`, `common::util_all`, `common::thread`, `common::future`, `DetachedTaskPolicy` and the detached report fields, and the ambient-runtime `ServiceManager` constructors ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).
@@ -311,6 +313,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Consolidate Store path helpers into canonical module and remove obsolete internal config store path helper module ([#12306](https://github.com/mxsm/rocketmq-rust/issues/12306)).
 - **test(store):** Remove obsolete phase3_integration_tests.rs integration test file ([#6649](https://github.com/mxsm/rocketmq-rust/issues/6649))
 - **refactor(broker):** Update ProducerManager to use ProducerGroupName type alias for producer group mapping ([#6638](https://github.com/mxsm/rocketmq-rust/issues/6638))
 - **test(store):** Remove obsolete io_uring_integration_tests.rs integration test file ([#6620](https://github.com/mxsm/rocketmq-rust/issues/6620))
