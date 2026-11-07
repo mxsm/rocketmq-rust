@@ -19,6 +19,7 @@ separate wrappers to enumerate tests, collect prototype reports, or compare hist
 | Task | Entry point |
 | --- | --- |
 | Inspect which root CI checks a path selects | `python scripts/ci_scope.py --paths <changed-path> ...` |
+| Reconcile downloaded `nextest-pilot-logs` rounds | `python scripts/nextest_pilot_compare.py --logs <dir> --runs <count>` |
 | Check project instruction routing | [PowerShell](check-agents-routing.ps1) or [Bash](check-agents-routing.sh) |
 | Refresh the generated validation index | `python scripts/architecture_documentation_guard.py --write` |
 | Inspect request-header compatibility fixtures | [Protocol fixtures](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md) |
