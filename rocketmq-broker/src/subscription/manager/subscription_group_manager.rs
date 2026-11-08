@@ -28,7 +28,6 @@ use dashmap::DashMap;
 use rocketmq_model::common::attribute::attribute_util::AttributeUtil;
 use rocketmq_model::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
 use rocketmq_model::common::mix_all::is_sys_consumer_group;
-use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_configs;
@@ -56,7 +55,6 @@ use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 
 pub const CHARACTER_MAX_LENGTH: usize = SUBSCRIPTION_GROUP_NAME_MAX_LENGTH;
-pub const TOPIC_MAX_LENGTH: usize = 127;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SubscriptionGroupConfigUpdate {
@@ -345,37 +343,6 @@ impl SubscriptionGroupManager {
     /// Get the forbidden table
     pub fn forbidden_table(&self) -> &Arc<DashMap<CheetahString, DashMap<CheetahString, i32>>> {
         &self.forbidden_table
-    }
-
-    /// Validate topic name
-    ///
-    /// # Arguments
-    /// * `topic` - The topic name to validate
-    ///
-    /// # Returns
-    /// `true` if valid, `false` otherwise
-    fn validate_topic_name(topic: &str) -> bool {
-        if topic.is_empty() {
-            warn!("Topic name validation failed: empty name");
-            return false;
-        }
-
-        if topic.len() > TOPIC_MAX_LENGTH {
-            warn!(
-                "Topic name validation failed: name too long ({} > {}): {}",
-                topic.len(),
-                TOPIC_MAX_LENGTH,
-                topic
-            );
-            return false;
-        }
-
-        if TopicValidator::is_topic_or_group_illegal(topic) {
-            warn!("Topic name validation failed: contains illegal characters: {}", topic);
-            return false;
-        }
-
-        true
     }
 
     /// Validate forbidden index range
