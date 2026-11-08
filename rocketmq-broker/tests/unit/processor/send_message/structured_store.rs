@@ -453,7 +453,7 @@ async fn structured_send_store_error_is_one_visible_reply() {
         let built = built.as_ref().expect("store error response built");
         assert_eq!(plan.response_code(), built.code);
         assert_eq!(built.opaque, OPAQUE);
-        assert_eq!(built.remark.as_deref(), Some("Storage backend is unavailable"));
+        assert_eq!(built.remark.as_deref(), Some("Storage is unavailable"));
     }
     assert_eq!(
         state.events.lock().as_slice(),

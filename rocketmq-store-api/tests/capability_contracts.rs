@@ -150,8 +150,5 @@ fn store_error_uses_catalog_identity_and_closed_operation_vocabulary() {
 
     assert_eq!(&STORAGE_UNAVAILABLE, error.descriptor());
     assert_eq!(StoreOperation::Append, error.operation());
-    assert_eq!(
-        "storage.backend.unavailable: Storage backend is unavailable",
-        error.to_string()
-    );
+    assert_eq!("storage.unavailable: Storage is unavailable", error.to_string());
 }

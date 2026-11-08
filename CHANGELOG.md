@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(error)!:** Canonical error descriptor `STORAGE_UNAVAILABLE` changes code from `storage.backend.unavailable` to `storage.unavailable` and public message from `Storage backend is unavailable` to `Storage is unavailable`. Consumers matching the old code or text must update their comparisons or alert rules; numeric protocol codes, gRPC, and HTTP status mappings remain unchanged ([#12352](https://github.com/mxsm/rocketmq-rust/issues/12352)).
+
 - **refactor(controller)!:** Remove the `storageBackend` compatibility alias. Before upgrading, use `storageEngineType` in standalone/embedded startup files, runtime property updates, blacklist entries, and `services.controller` Helm overrides. Old-key startup files, updates, and Helm overrides are rejected; persisted data is unchanged ([#12333](https://github.com/mxsm/rocketmq-rust/issues/12333)).
 
 - **refactor(store):** Remove the unused property-free message encoder, its length helper, multi-dispatch predicate, retained configuration field, and dedicated tests ([#12314](https://github.com/mxsm/rocketmq-rust/issues/12314)).

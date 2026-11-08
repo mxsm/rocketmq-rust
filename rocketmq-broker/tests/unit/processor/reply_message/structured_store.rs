@@ -422,7 +422,7 @@ async fn structured_reply_store_leaf_preserves_push_hook_metadata_and_error_visi
         let built = built.as_ref().expect("Reply store error response built");
         assert_eq!(error_plan.response_code(), built.code);
         assert_eq!(built.opaque, OPAQUE);
-        assert_eq!(built.remark.as_deref(), Some("Storage backend is unavailable"));
+        assert_eq!(built.remark.as_deref(), Some("Storage is unavailable"));
     }
     assert_eq!(
         failed.events.lock().as_slice(),
