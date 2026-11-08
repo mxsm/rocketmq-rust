@@ -471,7 +471,7 @@ impl KeyValueStore for FileKeyValueStore {
         Ok(StorageStats {
             key_count: pointers.len(),
             total_size,
-            backend_info: format!("Development file storage at {:?}", self.path),
+            implementation_details: format!("Development file storage at {:?}", self.path),
         })
     }
 }

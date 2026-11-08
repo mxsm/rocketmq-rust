@@ -41,14 +41,17 @@ pub(in crate::openraft) struct LoadedStateRepository {
     pub(in crate::openraft) current_snapshot: Option<PersistedSnapshot>,
 }
 
+/// Typed access to replica state, applied position, membership, and snapshot records.
 #[derive(Clone)]
 pub(in crate::openraft) struct RaftStateRepository {
-    backend: SharedKeyValueStore,
+    /// Configured store shared with other repositories; clones share this handle.
+    key_value_store: SharedKeyValueStore,
 }
 
 impl RaftStateRepository {
-    pub(in crate::openraft) fn new(backend: SharedKeyValueStore) -> Self {
-        Self { backend }
+    /// Wraps `key_value_store` for state records without opening storage or loading records.
+    pub(in crate::openraft) fn new(key_value_store: SharedKeyValueStore) -> Self {
+        Self { key_value_store }
     }
 
     pub(in crate::openraft) async fn load(&self) -> Result<LoadedStateRepository, std::io::Error> {
@@ -197,7 +200,7 @@ impl RaftStateRepository {
     }
 
     async fn read_bytes(&self, key: RaftRecordKey) -> Result<Option<Vec<u8>>, std::io::Error> {
-        self.backend
+        self.key_value_store
             .get(key.as_v1_key().as_ref())
             .await
             .map_err(|error| map_key_value_store_error("read", key, error))
@@ -215,11 +218,11 @@ impl RaftStateRepository {
         puts: Vec<(String, Vec<u8>)>,
         key: RaftRecordKey,
     ) -> Result<(), std::io::Error> {
-        self.backend
+        self.key_value_store
             .write_batch(puts, Vec::new())
             .await
             .map_err(|error| map_key_value_store_error("write batch", key, error))?;
-        self.backend
+        self.key_value_store
             .sync()
             .await
             .map_err(|error| map_key_value_store_error("sync", key, error))
@@ -235,13 +238,13 @@ mod tests {
         use openraft::storage::RaftSnapshotBuilder;
 
         let runtime = rocketmq_runtime::RuntimeContext::from_current("snapshot-identity-test");
-        let backend = crate::storage::create_storage(
+        let key_value_store = crate::storage::create_storage(
             crate::storage::StorageConfig::Memory,
             runtime.service_context("storage").storage_io().clone(),
         )
         .await
-        .expect("memory backend");
-        let repository = RaftStateRepository::new(backend.clone());
+        .expect("memory key-value store");
+        let repository = RaftStateRepository::new(key_value_store.clone());
         let config = crate::ControllerConfigReader::new(crate::ControllerConfig::default());
         let mut state = crate::openraft::StateMachine::new(config);
         let snapshot = state.build_snapshot().await.expect("build snapshot");
@@ -252,10 +255,10 @@ mod tests {
         assert_eq!(loaded.meta, snapshot.meta);
 
         let key = RaftRecordKey::SnapshotMeta;
-        let bytes = backend.get(key.as_v1_key().as_ref()).await.unwrap().unwrap();
+        let bytes = key_value_store.get(key.as_v1_key().as_ref()).await.unwrap().unwrap();
         let mut meta: PersistedSnapshotMeta = decode_v1(key, &bytes).unwrap();
         meta.snapshot_id = "different-snapshot".to_string();
-        backend
+        key_value_store
             .write_batch(
                 vec![(key.as_v1_key().into_owned(), encode_v1(key, &meta).unwrap())],
                 vec![],

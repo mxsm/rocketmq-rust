@@ -105,8 +105,17 @@ impl LogStore {
         }
     }
 
-    pub async fn open(backend: SharedKeyValueStore) -> Result<Self, std::io::Error> {
-        let repository = RaftLogRepository::new(backend);
+    /// Restores log state from the already-created `key_value_store`.
+    ///
+    /// The supplied handle is shared with the repository. Recovery restores the vote,
+    /// committed position, purge boundary, and log entries without creating another store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage access or decoding fails, or the recovered log state
+    /// has invalid indices, discontinuities, or inconsistent committed positions.
+    pub async fn open(key_value_store: SharedKeyValueStore) -> Result<Self, std::io::Error> {
+        let repository = RaftLogRepository::new(key_value_store);
         let loaded = repository.load().await?;
         let store = Self {
             logs: Arc::new(DashMap::new()),

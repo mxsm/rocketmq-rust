@@ -52,20 +52,41 @@ impl Store {
         }
     }
 
+    /// Opens the combined OpenRaft store using the configured storage engine.
+    ///
+    /// The startup snapshot of `config` selects the storage implementation and path, while
+    /// `storage_io` provides a blocking I/O executor when required by the underlying storage engine.
+    /// The created key-value store instance is supplied to the helper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage engine creation fails or if recovering the log store
+    /// or state machine fails.
     pub async fn open(config: ControllerConfigReader, storage_io: BlockingExecutor) -> Result<Self> {
         let startup_config = config.snapshot();
-        let backend = create_storage(storage_config(&startup_config)?, storage_io).await?;
-        Self::open_with_backend(config, backend).await
+        let key_value_store = create_storage(storage_config(&startup_config)?, storage_io).await?;
+        Self::open_with_key_value_store(config, key_value_store).await
     }
 
-    async fn open_with_backend(
+    /// Opens the log store and state machine using an existing key-value store.
+    ///
+    /// The supplied `key_value_store` is shared between the recovered log store and state machine.
+    /// `config` is forwarded to the state machine; this helper does not create a different storage instance.
+    /// It restores log, vote, and position records for the log store, alongside state-machine, membership,
+    /// and snapshot records for the state machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error with controller context if reading, decoding, or validating either
+    /// component's persisted state fails during recovery.
+    async fn open_with_key_value_store(
         config: ControllerConfigReader,
-        backend: crate::storage::SharedKeyValueStore,
+        key_value_store: crate::storage::SharedKeyValueStore,
     ) -> Result<Self> {
-        let log_store = LogStore::open(backend.clone())
+        let log_store = LogStore::open(key_value_store.clone())
             .await
             .map_err(|error| controller_internal_by("open OpenRaft log store", error))?;
-        let state_machine = StateMachine::open(config, backend)
+        let state_machine = StateMachine::open(config, key_value_store)
             .await
             .map_err(|error| controller_internal_by("open OpenRaft state machine", error))?;
 
