@@ -319,7 +319,7 @@ impl KeyValueStore for RocksDBKeyValueStore {
                 }
             }
 
-            // Get RocksDB property
+            // Preserve the implementation-specific RocksDB statistics text.
             let implementation_details = db
                 .property_value("rocksdb.stats")
                 .unwrap_or(None)
