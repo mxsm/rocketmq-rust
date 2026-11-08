@@ -50,7 +50,7 @@ impl std::error::Error for PersistenceBackendError {
     }
 }
 
-fn backend_error(operation: &'static str, key: RaftRecordKey, error: Error) -> std::io::Error {
+fn map_key_value_store_error(operation: &'static str, key: RaftRecordKey, error: Error) -> std::io::Error {
     std::io::Error::other(PersistenceBackendError {
         operation,
         key_class: key.class(),

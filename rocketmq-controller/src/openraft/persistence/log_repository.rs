@@ -17,9 +17,9 @@ use crate::typ::LogEntry;
 use crate::typ::LogId;
 use crate::typ::Vote;
 
-use super::backend_error;
 use super::decode_v1;
 use super::encode_v1;
+use super::map_key_value_store_error;
 use super::RaftRecordKey;
 
 pub(in crate::openraft) struct LoadedLogRepository {
@@ -47,7 +47,7 @@ impl RaftLogRepository {
             .backend
             .list_keys(RaftRecordKey::log_prefix_v1())
             .await
-            .map_err(|error| backend_error("list", RaftRecordKey::LogEntry(0), error))?;
+            .map_err(|error| map_key_value_store_error("list", RaftRecordKey::LogEntry(0), error))?;
         keys.sort_unstable();
 
         let mut entries = Vec::with_capacity(keys.len());
@@ -58,7 +58,7 @@ impl RaftLogRepository {
                 .backend
                 .get(&key)
                 .await
-                .map_err(|error| backend_error("read", record_key, error))?
+                .map_err(|error| map_key_value_store_error("read", record_key, error))?
             else {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -130,7 +130,7 @@ impl RaftLogRepository {
             .backend
             .get(key.as_v1_key().as_ref())
             .await
-            .map_err(|error| backend_error("read", key, error))?
+            .map_err(|error| map_key_value_store_error("read", key, error))?
         else {
             return Ok(None);
         };
@@ -158,10 +158,10 @@ impl RaftLogRepository {
         self.backend
             .write_batch(puts, deletes)
             .await
-            .map_err(|error| backend_error("write batch", key, error))?;
+            .map_err(|error| map_key_value_store_error("write batch", key, error))?;
         self.backend
             .sync()
             .await
-            .map_err(|error| backend_error("sync", key, error))
+            .map_err(|error| map_key_value_store_error("sync", key, error))
     }
 }
