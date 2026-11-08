@@ -119,6 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(broker):** Remove unused subscription forbidden-table listing and removal helpers; active updates and persistence remain intact ([#12274](https://github.com/mxsm/rocketmq-rust/issues/12274)).
 - **refactor(broker):** Remove the unused internal subscription forbidden-table batch query and its duplicate simulation test ([#12186](https://github.com/mxsm/rocketmq-rust/issues/12186)).
 - **refactor(store):** Remove unused private CommitLog memory lock wrappers; active append and memory lock lifecycle paths are unchanged ([#12064](https://github.com/mxsm/rocketmq-rust/issues/12064)).
+- **refactor(store):** Remove the unused manual CompactionStore generation rollback entry; validated startup recovery and reader leases are unchanged ([#12357](https://github.com/mxsm/rocketmq-rust/issues/12357)).
 - **refactor(store):** Remove the unused internal Compaction CommitLog dispatch wrapper; production dispatch is unchanged ([#12176](https://github.com/mxsm/rocketmq-rust/issues/12176)).
 - **refactor(broker):** Remove the unused internal send-message-back stub that cleared messages and returned success without sending them ([#12298](https://github.com/mxsm/rocketmq-rust/issues/12298)).
 - **refactor(client):** Remove the obsolete internal admin error text parser; response codes continue to use structured errors ([#12063](https://github.com/mxsm/rocketmq-rust/issues/12063)).
