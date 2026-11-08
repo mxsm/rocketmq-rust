@@ -37,11 +37,6 @@ impl ControllerRequestProcessor {
             let trimmed = item.trim();
             if !trimmed.is_empty() {
                 blacklist.insert(trimmed.to_string());
-                if trimmed == "storageEngineType" {
-                    blacklist.insert("storageBackend".to_string());
-                } else if trimmed == "storageBackend" {
-                    blacklist.insert("storageEngineType".to_string());
-                }
             }
         }
 
@@ -122,13 +117,13 @@ mod tests {
         );
     }
     #[test]
-    fn config_blacklist_covers_both_storage_engine_selector_spellings() {
+    fn config_blacklist_does_not_translate_storage_selector_names() {
         let blacklist_canonical = ControllerRequestProcessor::build_config_blacklist("storageEngineType");
         assert!(blacklist_canonical.contains("storageEngineType"));
-        assert!(blacklist_canonical.contains("storageBackend"));
+        assert!(!blacklist_canonical.contains("storageBackend"));
 
         let blacklist_legacy = ControllerRequestProcessor::build_config_blacklist("storageBackend");
-        assert!(blacklist_legacy.contains("storageEngineType"));
+        assert!(!blacklist_legacy.contains("storageEngineType"));
         assert!(blacklist_legacy.contains("storageBackend"));
     }
 }

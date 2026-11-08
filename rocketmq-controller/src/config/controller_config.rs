@@ -241,8 +241,8 @@ pub struct ControllerConfig {
     /// Local storage path for controller artifacts
     pub storage_path: String,
 
-    /// Storage engine selected for local Controller artifacts.
-    #[serde(rename = "storageEngineType", alias = "storageBackend")]
+    /// Storage engine selected by `storageEngineType` for local Controller artifacts.
+    #[serde(rename = "storageEngineType")]
     pub storage_engine_type: StorageEngineType,
 
     /// Whether the controller may elect an unclean master on this node
@@ -611,12 +611,7 @@ impl ControllerConfig {
 
     /// Check if a configuration key is in the blacklist
     pub fn is_config_in_blacklist(&self, key: &str) -> bool {
-        self.config_black_list.split(';').any(|item| {
-            let trimmed = item.trim();
-            trimmed == key
-                || (trimmed == "storageEngineType" && key == "storageBackend")
-                || (trimmed == "storageBackend" && key == "storageEngineType")
-        })
+        self.config_black_list.split(';').any(|item| item.trim() == key)
     }
 
     /// Validate the configuration
@@ -786,9 +781,6 @@ impl ControllerConfig {
     }
     pub async fn update(&mut self, properties: HashMap<String, String>) -> ControllerResult<()> {
         let _lock = self.rw_lock.write().await;
-        if properties.contains_key("storageEngineType") && properties.contains_key("storageBackend") {
-            return Err(crate::error::configuration_invalid("storageEngineType"));
-        }
         for (key, value) in &properties {
             match key.as_str() {
                 "rocketmqHome" => {
@@ -927,15 +919,8 @@ impl ControllerConfig {
                     self.storage_path = value.clone();
                 }
 
-                "storageEngineType" | "storageBackend" => {
-                    self.storage_engine_type = parse_update_value::<StorageEngineType>(
-                        if key == "storageBackend" {
-                            "storageBackend"
-                        } else {
-                            "storageEngineType"
-                        },
-                        value,
-                    )?;
+                "storageEngineType" => {
+                    self.storage_engine_type = parse_update_value::<StorageEngineType>("storageEngineType", value)?;
                 }
 
                 "enableElectUncleanMasterLocal" => {
@@ -988,7 +973,7 @@ path = "/rocketmq"
     }
 
     #[test]
-    fn storage_engine_type_round_trips_through_canonical_and_legacy_keys() {
+    fn storage_engine_type_round_trips_without_a_legacy_alias() {
         let canonical = parse_controller_toml(
             r#"
 storageEngineType = "Memory"
@@ -1002,19 +987,16 @@ storageEngineType = "Memory"
 storageBackend = "Memory"
 "#,
         )
-        .expect("storageBackend legacy alias should select the Controller storage engine");
-        assert_eq!(legacy.storage_engine_type, StorageEngineType::Memory);
+        .expect("unrelated unknown fields remain ignored by raw deserialization");
+        assert_eq!(
+            legacy.storage_engine_type,
+            ControllerConfig::default().storage_engine_type
+        );
 
-        // When both spellings are present, deserialization must fail
-        assert!(parse_controller_toml(
-            r#"
-storageEngineType = "Memory"
-storageBackend = "Memory"
-"#,
-        )
-        .is_err());
+        let mixed = parse_controller_toml("storageEngineType = 'File'\nstorageBackend = 'Memory'")
+            .expect("only the canonical key selects the engine");
+        assert_eq!(mixed.storage_engine_type, StorageEngineType::File);
 
-        // Serialized output must contain canonical storageEngineType only
         let value = serde_json::to_value(&canonical).expect("Controller configuration should serialize");
         let object = value.as_object().expect("controller config is an object");
         assert_eq!(value["storageEngineType"], "Memory");
@@ -1193,6 +1175,13 @@ storageBackend = "Memory"
         assert!(config.is_config_in_blacklist("configStorePath"));
         assert!(config.is_config_in_blacklist("maintenanceCheckpointRoot"));
         assert!(!config.is_config_in_blacklist("controllerType"));
+
+        let canonical = config.clone().with_config_black_list("storageEngineType");
+        assert!(canonical.is_config_in_blacklist("storageEngineType"));
+        assert!(!canonical.is_config_in_blacklist("storageBackend"));
+        let legacy = config.with_config_black_list("storageBackend");
+        assert!(legacy.is_config_in_blacklist("storageBackend"));
+        assert!(!legacy.is_config_in_blacklist("storageEngineType"));
     }
 
     #[test]

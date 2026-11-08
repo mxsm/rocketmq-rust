@@ -79,10 +79,15 @@ struct ReplicaSeed {
 
 impl ProcessorHarness {
     async fn new() -> Self {
+        Self::with_config_black_list(ControllerConfig::default().config_black_list).await
+    }
+
+    async fn with_config_black_list(config_black_list: String) -> Self {
         let (remoting, raft) = reserve_controller_listeners().await;
         let remoting_addr = remoting.local_addr().expect("remoting address");
         let raft_addr = raft.local_addr().expect("raft address");
         let config = ControllerConfig::default()
+            .with_config_black_list(config_black_list)
             .with_node_info(1, remoting_addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr: raft_addr }])
             .with_storage_engine_type(StorageEngineType::Memory)
@@ -861,19 +866,39 @@ async fn controller_request_contract_update_controller_config() {
         StorageEngineType::File
     );
 
-    // Update using legacy storageBackend alias
+    for body in [
+        "storageBackend=Memory",
+        "storageEngineType=Memory\nstorageBackend=Memory\nnotifyBrokerRoleChanged=true",
+    ] {
+        let previous = harness.manager.controller_config();
+        let response = harness
+            .send(
+                RemotingCommand::create_remoting_command(RequestCode::UpdateControllerConfig)
+                    .set_body(body.as_bytes().to_vec()),
+            )
+            .await;
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::ControllerJraftInternalError
+        );
+        let current = harness.manager.controller_config();
+        assert!(Arc::ptr_eq(&previous, &current));
+        assert_eq!(current.storage_engine_type, StorageEngineType::File);
+        assert!(!current.notify_broker_role_changed);
+    }
+
+    harness.shutdown().await;
+
+    let mut harness = ProcessorHarness::with_config_black_list("storageEngineType".to_string()).await;
+    let previous = harness.manager.controller_config();
     let response = harness
         .send(
             RemotingCommand::create_remoting_command(RequestCode::UpdateControllerConfig)
-                .set_body(b"storageBackend=Memory".to_vec()),
+                .set_body(b"storageEngineType=File".to_vec()),
         )
         .await;
-    assert_eq!(response.code(), ResponseCode::Success as i32);
-    assert_eq!(
-        harness.manager.controller_config().storage_engine_type,
-        StorageEngineType::Memory
-    );
-
+    assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+    assert!(Arc::ptr_eq(&previous, &harness.manager.controller_config()));
     harness.shutdown().await;
 }
 
@@ -890,6 +915,7 @@ async fn controller_request_contract_get_controller_config() {
     let body = String::from_utf8(response.body().expect("get controller config response body").to_vec())
         .expect("decode controller config body as utf8");
     assert!(body.contains("storageEngineType=memory"));
+    assert!(!body.contains("storageBackend="));
     assert!(body.contains("notifyBrokerRoleChanged=true"));
     assert!(body.contains("scanNotActiveBrokerInterval=5000"));
 

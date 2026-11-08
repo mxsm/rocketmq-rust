@@ -709,7 +709,7 @@
         "replicas",
         "peerServiceClusterIPs",
         "autoInitializeCluster",
-        "storageBackend",
+        "storageEngineType",
         "snapshotLogsSinceLast",
         "snapshotMaxLogEntriesToKeep",
         "image",
@@ -735,7 +735,7 @@
         "autoInitializeCluster": {
           "type": "boolean"
         },
-        "storageBackend": {
+        "storageEngineType": {
           "type": "string",
           "enum": [
             "Memory",
@@ -978,7 +978,7 @@
                   "peerServiceClusterIPs": {
                     "minItems": 3
                   },
-                  "storageBackend": {
+                  "storageEngineType": {
                     "const": "RocksDB"
                   },
                   "persistence": {

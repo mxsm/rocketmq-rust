@@ -19,13 +19,13 @@ use rocketmq_admin_core::core::supervised_mutation as admin;
 use super::dry_status;
 use super::status_from_failures;
 use crate::error::ControlError;
-use crate::tool_runtime::admin_session::SupervisedMutationBackend;
+use crate::tool_runtime::admin_session::MutationAdmin;
 use crate::tool_runtime::map_failure;
 use crate::tool_runtime::plan_binding::PlanBinding;
 use crate::tool_runtime::MutationToolResponse;
 use crate::tools;
 
-pub(crate) async fn run_offset<B: SupervisedMutationBackend>(
+pub(crate) async fn run_offset<B: MutationAdmin>(
     backend: &mut B,
     args: tools::ResetConsumerOffsetArgs,
     binding: &PlanBinding,

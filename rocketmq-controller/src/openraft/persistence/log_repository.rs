@@ -17,9 +17,9 @@ use crate::typ::LogEntry;
 use crate::typ::LogId;
 use crate::typ::Vote;
 
-use super::backend_error;
 use super::decode_v1;
 use super::encode_v1;
+use super::map_key_value_store_error;
 use super::RaftRecordKey;
 
 pub(in crate::openraft) struct LoadedLogRepository {
@@ -29,14 +29,17 @@ pub(in crate::openraft) struct LoadedLogRepository {
     pub(in crate::openraft) entries: Vec<(u64, LogEntry)>,
 }
 
+/// Typed access to Controller vote, position, and log records in a shared store.
 #[derive(Clone)]
 pub(in crate::openraft) struct RaftLogRepository {
-    backend: SharedKeyValueStore,
+    /// Configured store shared with other repositories; clones share this handle.
+    key_value_store: SharedKeyValueStore,
 }
 
 impl RaftLogRepository {
-    pub(in crate::openraft) fn new(backend: SharedKeyValueStore) -> Self {
-        Self { backend }
+    /// Wraps `key_value_store` for log records without opening storage or loading records.
+    pub(in crate::openraft) fn new(key_value_store: SharedKeyValueStore) -> Self {
+        Self { key_value_store }
     }
 
     pub(in crate::openraft) async fn load(&self) -> Result<LoadedLogRepository, std::io::Error> {
@@ -44,10 +47,10 @@ impl RaftLogRepository {
         let committed = self.load_json(RaftRecordKey::Committed).await?;
         let last_purged = self.load_json(RaftRecordKey::LastPurgedLog).await?;
         let mut keys = self
-            .backend
+            .key_value_store
             .list_keys(RaftRecordKey::log_prefix_v1())
             .await
-            .map_err(|error| backend_error("list", RaftRecordKey::LogEntry(0), error))?;
+            .map_err(|error| map_key_value_store_error("list", RaftRecordKey::LogEntry(0), error))?;
         keys.sort_unstable();
 
         let mut entries = Vec::with_capacity(keys.len());
@@ -55,10 +58,10 @@ impl RaftLogRepository {
             let index = RaftRecordKey::parse_v1_log_key(&key)?;
             let record_key = RaftRecordKey::LogEntry(index);
             let Some(bytes) = self
-                .backend
+                .key_value_store
                 .get(&key)
                 .await
-                .map_err(|error| backend_error("read", record_key, error))?
+                .map_err(|error| map_key_value_store_error("read", record_key, error))?
             else {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -127,10 +130,10 @@ impl RaftLogRepository {
 
     async fn load_json<T: serde::de::DeserializeOwned>(&self, key: RaftRecordKey) -> Result<Option<T>, std::io::Error> {
         let Some(bytes) = self
-            .backend
+            .key_value_store
             .get(key.as_v1_key().as_ref())
             .await
-            .map_err(|error| backend_error("read", key, error))?
+            .map_err(|error| map_key_value_store_error("read", key, error))?
         else {
             return Ok(None);
         };
@@ -155,13 +158,13 @@ impl RaftLogRepository {
         if puts.is_empty() && deletes.is_empty() {
             return Ok(());
         }
-        self.backend
+        self.key_value_store
             .write_batch(puts, deletes)
             .await
-            .map_err(|error| backend_error("write batch", key, error))?;
-        self.backend
+            .map_err(|error| map_key_value_store_error("write batch", key, error))?;
+        self.key_value_store
             .sync()
             .await
-            .map_err(|error| backend_error("sync", key, error))
+            .map_err(|error| map_key_value_store_error("sync", key, error))
     }
 }

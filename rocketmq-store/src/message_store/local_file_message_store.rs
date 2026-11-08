@@ -146,7 +146,6 @@ use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
-use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::index::index_dispatch::CommitLogDispatcherBuildIndex;
 use crate::index::index_service::IndexService;
 use crate::kv::compaction_dispatch::CommitLogDispatcherCompaction;
@@ -792,7 +791,6 @@ pub struct LocalFileMessageStore {
     transient_store_pool: TransientStorePool,
     root_dependencies_wired: bool,
     master_store_in_process: StdRwLock<Option<Arc<dyn Any + Send + Sync>>>,
-    send_message_back_hook: StdRwLock<Option<Arc<dyn SendMessageBackHook>>>,
     pending_ha_service: Option<PendingHAService>,
     ha_service: Option<GeneralHAService>,
     flush_consume_queue_service: FlushConsumeQueueService,
@@ -2396,27 +2394,6 @@ impl MessageStoreEngine for LocalFileMessageStore {
             .into_iter()
             .map(|hook| hook as Arc<dyn PutMessageHook>)
             .collect()
-    }
-
-    fn set_send_message_back_hook(&self, send_message_back_hook: Arc<dyn SendMessageBackHook>) {
-        let mut guard = match self.send_message_back_hook.write() {
-            Ok(guard) => guard,
-            Err(error) => {
-                error!("send_message_back_hook lock poisoned: {error}");
-                return;
-            }
-        };
-        *guard = Some(send_message_back_hook);
-    }
-
-    fn get_send_message_back_hook(&self) -> Option<Arc<dyn SendMessageBackHook>> {
-        match self.send_message_back_hook.read() {
-            Ok(guard) => guard.clone(),
-            Err(error) => {
-                error!("send_message_back_hook lock poisoned: {error}");
-                None
-            }
-        }
     }
 
     fn get_last_file_from_offset(&self) -> i64 {

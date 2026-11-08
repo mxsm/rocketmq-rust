@@ -58,10 +58,12 @@ storage、snapshot，以及可选 metrics exporter。
 
 ## 环境要求
 
+升级前，请将独立或嵌入式 Controller 启动配置、运行时属性更新、配置黑名单及 `services.controller` Helm 覆盖项中的 `storageBackend` 改为 `storageEngineType`。启动文件和 Helm values 中出现旧键时会被拒绝，即使同时提供了新键也不例外。无需迁移持久化数据。
+
 - workspace 最低 Rust 版本和仓库构建工具链均为 stable Rust `1.95.0`。
 - 请使用仓库根目录的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 指定的固定 stable toolchain 构建。
 - 启动 Controller 二进制前，必须设置 `ROCKETMQ_HOME` 或在配置文件中设置 `rocketmqHome`。
-- 默认 feature 组合启用 RocksDB，默认配置使用 `storageEngineType = "RocksDB"`（`storageBackend` 作为兼容性输入别名受支持）。
+- 默认 feature 组合启用 RocksDB，默认配置使用 `storageEngineType = "RocksDB"`。
 - 仅在启用可选 `storage-file` feature 时使用 `storageEngineType = "File"`。
 
 ## 构建

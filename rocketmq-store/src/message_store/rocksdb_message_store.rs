@@ -72,7 +72,6 @@ use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
-use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
@@ -1048,14 +1047,6 @@ impl MessageStoreEngine for RocksDBMessageStore {
 
     fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>> {
         self.local_file_store.get_put_message_hook_list()
-    }
-
-    fn set_send_message_back_hook(&self, send_message_back_hook: Arc<dyn SendMessageBackHook>) {
-        self.local_file_store.set_send_message_back_hook(send_message_back_hook);
-    }
-
-    fn get_send_message_back_hook(&self) -> Option<Arc<dyn SendMessageBackHook>> {
-        self.local_file_store.get_send_message_back_hook()
     }
 
     fn get_last_file_from_offset(&self) -> i64 {
