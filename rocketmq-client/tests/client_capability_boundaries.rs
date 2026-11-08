@@ -185,7 +185,7 @@ fn protocol_and_retry_responsibilities_remain_in_their_own_modules() {
     assert!(CLIENT_CONSUMER.contains("RequestCode::PullMessage"));
     assert!(CLIENT_TRANSACTION.contains("RequestCode::EndTransaction"));
 
-    assert!(PRODUCER_SEND.contains("send_kernel_impl"));
+    assert!(PRODUCER_SEND.contains("send_kernel_impl_with_runtime"));
     assert!(PRODUCER_RETRY.contains("send_with_retry"));
     assert!(PRODUCER_RETRY.contains("RetryPolicy::decide"));
     assert!(PRODUCER_TRANSACTION.contains("send_message_in_transaction"));

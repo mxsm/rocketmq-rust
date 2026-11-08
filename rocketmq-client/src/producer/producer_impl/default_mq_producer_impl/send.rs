@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use super::*;
-#[cfg(feature = "observability")]
-use tracing::Instrument;
 #[allow(unused_must_use)]
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
@@ -611,53 +609,6 @@ impl DefaultMQProducerImpl {
 #[allow(unused_must_use)]
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
-    pub(super) async fn send_kernel_impl<T>(
-        &self,
-        msg: &mut T,
-        mq: &MessageQueue,
-        communication_mode: CommunicationMode,
-        send_callback: Option<ArcSendCallback>,
-        topic_publish_info: Option<&TopicPublishInfoSnapshot>,
-        timeout: u64,
-    ) -> crate::ClientResult<Option<SendResult>>
-    where
-        T: MessageTrait + Send + Sync,
-    {
-        let deadline = RequestDeadline::from_timeout_millis(timeout);
-        let runtime = self.runtime_snapshot();
-        #[cfg(feature = "observability")]
-        {
-            let client_instance = self.client_instance()?;
-            let span = rocketmq_observability::trace::client::producer_send_span(client_instance.telemetry_handle());
-            return self
-                .send_kernel_impl_with_runtime(
-                    msg,
-                    mq,
-                    communication_mode,
-                    send_callback,
-                    topic_publish_info,
-                    deadline,
-                    &runtime,
-                )
-                .instrument(span)
-                .await
-                .map_err(|input| producer_retry_input_error(input, None));
-        }
-
-        #[cfg(not(feature = "observability"))]
-        self.send_kernel_impl_with_runtime(
-            msg,
-            mq,
-            communication_mode,
-            send_callback,
-            topic_publish_info,
-            deadline,
-            &runtime,
-        )
-        .await
-        .map_err(|input| producer_retry_input_error(input, None))
-    }
-
     pub(super) async fn send_kernel_impl_with_runtime<T>(
         &self,
         msg: &mut T,
