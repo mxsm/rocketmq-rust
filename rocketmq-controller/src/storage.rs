@@ -54,7 +54,7 @@ pub enum StorageConfig {
         path: PathBuf,
     },
 
-    /// In-memory storage (for testing)
+    /// In-memory, non-durable key-value storage
     Memory,
 }
 
@@ -143,7 +143,7 @@ pub trait KeyValueStoreExt: KeyValueStore {
 #[cfg(test)]
 impl<T: KeyValueStore + ?Sized> KeyValueStoreExt for T {}
 
-/// Create a storage backend based on configuration
+/// Create a key-value store based on configuration
 pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor) -> Result<SharedKeyValueStore> {
     // The uniform factory contract carries the executor even when the selected feature profile
     // contains no backend that performs blocking I/O.
@@ -164,19 +164,22 @@ pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor)
         }
 
         StorageConfig::Memory => {
-            // For testing, use a simple in-memory implementation
             use std::collections::HashMap;
             use std::sync::Arc;
 
             use parking_lot::RwLock;
 
+            /// Independent in-memory key-value store.
+            ///
+            /// Cloned instances share the same underlying map. Data is not persisted across
+            /// restarts, and `sync()` performs no I/O.
             #[derive(Clone)]
-            struct MemoryBackend {
+            struct MemoryKeyValueStore {
                 data: Arc<RwLock<HashMap<String, Vec<u8>>>>,
             }
 
             #[async_trait]
-            impl KeyValueStore for MemoryBackend {
+            impl KeyValueStore for MemoryKeyValueStore {
                 async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
                     self.data.write().insert(key.to_string(), value.to_vec());
                     Ok(())
@@ -252,7 +255,7 @@ pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor)
                 }
             }
 
-            Ok(Arc::new(MemoryBackend {
+            Ok(Arc::new(MemoryKeyValueStore {
                 data: Arc::new(RwLock::new(HashMap::new())),
             }))
         }
@@ -264,9 +267,9 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_memory_backend() {
+    async fn test_memory_key_value_store() {
         let context = rocketmq_runtime::RuntimeContext::from_current("controller-memory-storage-test");
-        let backend = create_storage(
+        let key_value_store = create_storage(
             StorageConfig::Memory,
             context.service_context("memory-storage").storage_io().clone(),
         )
@@ -274,28 +277,28 @@ mod tests {
         .unwrap();
 
         // Test put and get
-        backend.put("test_key", b"test_value").await.unwrap();
-        let value = backend.get("test_key").await.unwrap();
+        key_value_store.put("test_key", b"test_value").await.unwrap();
+        let value = key_value_store.get("test_key").await.unwrap();
         assert_eq!(value, Some(b"test_value".to_vec()));
 
         // Test exists
-        assert!(backend.exists("test_key").await.unwrap());
-        assert!(!backend.exists("nonexistent").await.unwrap());
+        assert!(key_value_store.exists("test_key").await.unwrap());
+        assert!(!key_value_store.exists("nonexistent").await.unwrap());
 
         // Test delete
-        backend.delete("test_key").await.unwrap();
-        assert!(!backend.exists("test_key").await.unwrap());
+        key_value_store.delete("test_key").await.unwrap();
+        assert!(!key_value_store.exists("test_key").await.unwrap());
 
         // Test list_keys
-        backend.put("prefix_1", b"value1").await.unwrap();
-        backend.put("prefix_2", b"value2").await.unwrap();
-        backend.put("other_1", b"value3").await.unwrap();
+        key_value_store.put("prefix_1", b"value1").await.unwrap();
+        key_value_store.put("prefix_2", b"value2").await.unwrap();
+        key_value_store.put("other_1", b"value3").await.unwrap();
 
-        let keys = backend.list_keys("prefix_").await.unwrap();
+        let keys = key_value_store.list_keys("prefix_").await.unwrap();
         assert_eq!(keys.len(), 2);
 
         // Test stats
-        let stats = backend.stats().await.unwrap();
+        let stats = key_value_store.stats().await.unwrap();
         assert_eq!(stats.key_count, 3);
     }
 
