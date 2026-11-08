@@ -98,6 +98,10 @@ pub trait KeyValueStore: Send + Sync {
     async fn stats(&self) -> Result<StorageStats>;
 }
 
+/// Shared handle to a `KeyValueStore` implementation.
+///
+/// Cloning this `Arc` shares the same instance and stored data. Persistence depends
+/// on the selected implementation; the memory store is non-durable.
 pub type SharedKeyValueStore = Arc<dyn KeyValueStore>;
 
 /// Storage statistics
