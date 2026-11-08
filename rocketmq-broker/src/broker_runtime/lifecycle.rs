@@ -93,7 +93,8 @@ impl BrokerRuntime {
     ) -> BrokerBasicServiceShutdownReport {
         let started = Instant::now();
         let progress = BrokerShutdownProgress::new();
-        match await_shutdown_deadline(deadline, self.shutdown_basic_service_inner(deadline, progress.clone())).await {
+        let shutdown = heap_future(|| self.shutdown_basic_service_inner(deadline, progress.clone()));
+        match await_shutdown_deadline(deadline, shutdown).await {
             Ok(mut report) => {
                 // An inner deadline can resolve before the outer timer is polled. Preserve
                 // the component reports, but still account for the exhausted total budget.
@@ -1057,7 +1058,9 @@ impl BrokerRuntime {
     }
 
     pub async fn start(&mut self) -> Result<BrokerReadiness, BrokerStartupError> {
-        match self.start_inner().await {
+        // A failed start rolls back while this frame is still live, so keep the startup body
+        // out of it; the rollback below is small once the shutdown body is on the heap.
+        match heap_future(|| self.start_inner()).await {
             Ok(readiness) => Ok(readiness),
             Err(cause) => Err(self.rollback_startup(cause).await),
         }
@@ -1193,6 +1196,7 @@ impl BrokerRuntime {
             self.schedule_send_heartbeat();
             self.schedule_sync_controller_metadata();
             self.schedule_sync_controller_replica_info();
+            self.schedule_sync_state_set_reporter();
         }
 
         if broker_config.skip_pre_online && !broker_config.enable_controller_mode {
@@ -1201,6 +1205,16 @@ impl BrokerRuntime {
             self.lifecycle.startup_journal.complete(BrokerComponent::Registration);
         }
 
+        let registration = if registration_ready {
+            BrokerRegistration::Registered
+        } else if broker_config.enable_controller_mode && self.composition.state.online_role_state.is_isolated() {
+            // As Java's ReplicasManager does, keep trying rather than give up on the process: the
+            // heartbeat cycle bootstraps an isolated Broker against the Controllers again.
+            warn!("no Controller assigned this Broker a role yet; it stays isolated and keeps trying");
+            BrokerRegistration::AwaitingController
+        } else {
+            BrokerRegistration::Unregistered
+        };
         let live_broker_config = self.composition.state.broker_config();
         // Controller-mode brokers start fenced and acquire write authority only after the
         // Controller assigns a role and grants a lease. Process readiness therefore depends on
@@ -1225,7 +1239,7 @@ impl BrokerRuntime {
             fast_listener,
             processors_started,
             security_ready,
-            registration_ready,
+            registration,
         )
         .validate()?;
         info!(

@@ -189,13 +189,13 @@ shared one: without it, pseudonyms change when the server restarts and differ be
 
 A failed call returns `isError=true` and one text block holding a JSON object with
 `schema_version`, `request_id`, `correlation_id`, `tool`, `code`, `retryable`, `message`, and
-`suggestions`. It never carries addresses, credentials, or backend error text.
+`suggestions`. It never carries addresses, credentials, or raw source error text.
 
 | `code` | Retryable | Meaning |
 | --- | --- | --- |
 | `invalid_arguments` | no | The arguments violate the input schema or a validation rule. The additional `violations` field locates them when the server can tell which argument is wrong. |
 | `not_found` | no | The request was valid, but the selected entity does not exist. The additional `entity` field names its kind: `topic`, `consumer_group`, `broker`, `message`, `proxy`, `controller`, `client`, or `cluster`. |
-| `source_unavailable` | yes | A RocketMQ source could not be reached or answered with a failure. Identical requests get the same answer for up to one second without asking the source again. |
+| `source_unavailable` | yes | The operation could not obtain the required usable RocketMQ source result, including credential/session preparation failures and inconclusive reads from incomplete data. This does not establish that a node is down or that retrying without operator action will succeed. Identical requests get the same answer for up to one second without asking the source again. |
 | `backend_timeout` | yes | The request used up `server.request_timeout_ms` (25 seconds by default), the time it may spend on RocketMQ sources over every query the Tool runs. |
 | `rate_limited` | yes | The principal used up its per-minute budget for this Tool on this cluster. The additional `retry_after_ms` field is the wait after which one call is due. |
 | `concurrency_limited` | yes | The cluster already serves as many requests as `security.max_concurrent_requests_per_cluster` allows at once. Retry shortly; no wait is named, because a permit is free as soon as a request in flight ends. |

@@ -30,6 +30,10 @@ A handle cannot shut down providers. Closing the guard makes surviving handles s
 SDK providers are owned by the guard; initialization does not install global OpenTelemetry
 meter or tracer providers. The tracing subscriber and optional text-map propagator are process-level state.
 
+Internally, `TelemetryBinding::Noop` is permanently closed; `Shared` keeps clones bound to the same
+`SharedTelemetryState` even after closing. Its atomic `TelemetryState::{Active, Closing, Closed}`
+controls recording independently of the binding. The guard remains the sole provider and shutdown owner.
+
 Import configuration, bootstrap functions, handles and propagation helpers from the crate root.
 Modules such as `config`, `init`, `logging` and `propagation` are private implementation details.
 The public `metrics`, `trace`, `logs`, `semantic`, `statistics` and `stats` modules expose their

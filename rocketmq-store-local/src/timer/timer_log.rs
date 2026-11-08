@@ -49,6 +49,8 @@ pub struct TimerLog {
     dir_path: PathBuf,
     file_size: usize,
     metrics: Arc<TimerStorageMetrics>,
+    /// Whether a legacy V1 file is migrated into a new V2 log.
+    migrate_legacy: bool,
     inner: Mutex<Option<SegmentedTimerLog>>,
 }
 
@@ -62,8 +64,16 @@ impl TimerLog {
             dir_path: dir_path.as_ref().to_path_buf(),
             file_size,
             metrics,
+            migrate_legacy: true,
             inner: Mutex::new(None),
         }
+    }
+
+    /// Starts a new V2 log empty instead of migrating the legacy V1 file: the file at the legacy
+    /// name belongs to another format, such as the first file of an Apache RocketMQ 5.x log.
+    pub fn ignoring_legacy_file(mut self) -> Self {
+        self.migrate_legacy = false;
+        self
     }
 
     pub fn load(&self) -> std::io::Result<bool> {
@@ -222,7 +232,7 @@ impl TimerLog {
         migrated.load_checked().map_err(as_io_error)?;
 
         let legacy_path = self.active_file_path();
-        if legacy_path.exists() && legacy_path.metadata()?.len() > 0 {
+        if self.migrate_legacy && legacy_path.exists() && legacy_path.metadata()?.len() > 0 {
             let mut legacy = OpenOptions::new().read(true).open(&legacy_path)?;
             let length = legacy.metadata()?.len();
             if !length.is_multiple_of(TimerLogRecord::SIZE as u64) {
@@ -246,6 +256,9 @@ impl TimerLog {
             }
         }
         migrated.flush_checked().map_err(as_io_error)?;
+        // The log keeps its active segment open, and Windows refuses to rename a directory that
+        // holds an open file.
+        drop(migrated);
         write_marker(&migration_root.join(COMMITTED_MARKER))?;
         std::fs::rename(&migration_root, &v2_root)?;
         Ok(())

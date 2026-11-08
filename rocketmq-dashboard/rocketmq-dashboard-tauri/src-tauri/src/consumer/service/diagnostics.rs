@@ -290,7 +290,7 @@ mod tests {
             failed("g".into(), "c".into(), &error).status,
             DiagnosticStatus::Unsupported
         );
-        let error = AdminError::backend("diagnostic", "secret-debug-detail");
+        let error = AdminError::operation_failed("diagnostic", "secret-debug-detail");
         let result = failed("g".into(), "c".into(), &error);
         assert_eq!(result.status, DiagnosticStatus::Unavailable);
         assert!(!serde_json::to_string(&result).unwrap().contains("secret-debug-detail"));

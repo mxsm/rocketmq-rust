@@ -51,6 +51,41 @@ fn falls_back_to_the_previous_complete_generation() {
 }
 
 #[test]
+fn opens_the_empty_checkpoint_written_by_a_java_broker() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let checkpoint = directory.path().join("transactionMetrics");
+    fs::write(
+        &checkpoint,
+        br#"{"dataVersion":{"counter":0,"stateVersion":0,"timestamp":1793057488361},"transactionCount":{}}"#,
+    )
+    .expect("write Java checkpoint");
+
+    let recovered = TransactionMetricsProbe::open(&checkpoint).expect("open Java checkpoint");
+    assert!(recovered.snapshot().is_empty());
+    assert!(!recovered.recovered_from_backup());
+}
+
+#[test]
+fn recovers_java_topic_counts_and_persists_them_in_the_native_layout() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let checkpoint = directory.path().join("transactionMetrics");
+    fs::write(
+        &checkpoint,
+        br#"{"dataVersion":{"counter":3,"stateVersion":0,"timestamp":1793057488361},"transactionCount":{"orders":{"count":2,"timeStamp":1793057488361},"payments":{"count":0,"timeStamp":1793057487000}}}"#,
+    )
+    .expect("write Java checkpoint");
+
+    let recovered = TransactionMetricsProbe::open(&checkpoint).expect("open Java checkpoint");
+    assert_eq!(recovered.snapshot(), vec![("orders".into(), 2), ("payments".into(), 0)]);
+    assert_eq!(recovered.add_and_get("orders", 1), 3);
+    recovered.persist().expect("persist recovered metrics");
+
+    let reopened = TransactionMetricsProbe::open(&checkpoint).expect("reopen native checkpoint");
+    assert_eq!(reopened.snapshot(), vec![("orders".into(), 3), ("payments".into(), 0)]);
+    assert!(!reopened.recovered_from_backup());
+}
+
+#[test]
 fn rejects_an_unknown_checkpoint_version_without_mutating_it() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let checkpoint = directory.path().join("transactionMetrics");

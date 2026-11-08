@@ -1620,14 +1620,14 @@ fn unique_id() -> E2eResult<String> {
 }
 
 fn safe_admin_error(error: &AdminError) -> String {
-    let failure = match error.failure() {
+    let failure_label = match error.failure() {
         AdminFailure::InvalidArgument => "invalid_argument",
         AdminFailure::NotFound => "not_found",
-        AdminFailure::Backend => "backend",
+        AdminFailure::OperationFailed => "operation_failed",
         AdminFailure::SessionClosed => "session_closed",
     };
     format!(
-        "{failure}:code={}:http={}:retryable={}",
+        "{failure_label}:code={}:http={}:retryable={}",
         error.code(),
         error.http_status().as_u16(),
         error.is_retryable()

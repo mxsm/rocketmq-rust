@@ -965,7 +965,7 @@ mod tests {
     }
 
     fn unavailable<T>() -> Result<T, ToolFailure> {
-        Err(ToolFailure::Operational(ToolExecutionError::Backend(None)))
+        Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)))
     }
 
     #[test]

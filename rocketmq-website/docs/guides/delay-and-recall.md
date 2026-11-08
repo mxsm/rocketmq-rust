@@ -72,7 +72,9 @@ In the standard path, recall appends a timer deletion marker. Its response is ev
 
 In ExtendedTimeline mode, the current processor uses a typed cancellation operation. `Cancelled` and `AlreadyCancelled` map to success; `TooLate`/`NotFound` map to an illegal operation; `Retry` maps to service unavailable; `Quarantined`/`Unsupported` map to a system error. That explicit state result is different from the standard marker path.
 
-In either mode, recall does not undo a consumer's completed external side effect. Keep business cancellation state authoritative so a late reminder can be recognized and ignored or compensated according to the application's rules.
+With `timerStoreMode = "native"`, the Broker registers the recall with the native engine before it writes the deletion marker, so a delivery that starts in between still sees it. The answer is typed the same way: the recall succeeds only while the timer is not yet due, and a recall of a timer already due is refused as an illegal operation without writing a marker. If the marker cannot be written, the registration is withdrawn and the recall reports a system error.
+
+In any mode, recall does not undo a consumer's completed external side effect. Keep business cancellation state authoritative so a late reminder can be recognized and ignored or compensated according to the application's rules.
 
 ## Failure and recovery decisions
 
@@ -86,6 +88,108 @@ In either mode, recall does not undo a consumer's completed external side effect
 | Delivery is later than requested | Inspect timer dispatch, clock, storage and consumer backlog separately |
 
 Batch validation and the transaction producer reject delayed/timer combinations in their respective paths. A delayed send also does not impose ordering relative to ordinary messages sent later to the same business topic.
+
+## Timer files and undeliverable timers
+
+The standard timer keeps its index in the Apache RocketMQ 5.x `timerlog`, `timerwheel` and `config/timercheck` files by default (`timerFileFormat = "java"`). A Rust Broker and a Java 5.x Broker can therefore take over the same store directory without losing pending timers. `timerFileFormat = "rust_v2"` selects the segmented Rust files instead. After the setting changes, timers still held in the previous format are delivered from it.
+
+Two `[store]` keys decide what happens to a timer that cannot be delivered. They keep the names of their Apache RocketMQ counterparts, but the Rust defaults never drop a timer whose payload is still in the CommitLog:
+
+| Key | Rust default | Java default | Effect |
+| --- | --- | --- | --- |
+| `timerSkipUnknownError` | `false` | `false` | `true` quarantines and skips such a timer: one whose record cannot be read or routed, or whose write the Store rejects. With `false` it is quarantined and the timers behind it wait for an operator. |
+| `timerEnableRetryUntilSuccess` | `true` | `false` | `false` drops and logs a delivery whose write has failed three times for a transient reason, as Java does by default. With `true` the write is retried until it succeeds. |
+
+A timer or recall whose payload CommitLog cleanup has deleted, for example under disk pressure, is skipped with a warning whatever these keys say, as in Java: nothing can bring the payload back, and waiting for it would hold back every later timer. A skipped recall no longer cancels its timer.
+
+With `timerSkipUnknownError = false`, Java also drops a payload it cannot read and a rejected message; Rust keeps them. Quarantined timers are recorded in `timer-v2/quarantine.jsonl` under the store root.
+
+## Long delays with the native engine
+
+`timerStoreMode = "native"` admits timers of up to `timerNative.maxDelayDays` (400 days by default) to the native engine, a tiered log of time buckets under `timer-native/` in the store root. A timer due within the mid horizon points into the CommitLog; a later one is copied once, so CommitLog cleanup cannot remove it before it is due. Deadlines are rounded to `timerPrecisionMs` as in the standard engine, and the engine needs `timerWheelEnable = true`.
+
+```toml
+[store]
+timerWheelEnable = true
+timerStoreMode = "native"
+
+[store.timerNative]
+maxDelayDays = 400
+```
+
+| Key under `[store.timerNative]` | Default | Meaning |
+| --- | --- | --- |
+| `maxDelayDays` | `400` | Longest delay admitted |
+| `laneCount` | `16` | Delivery lanes; fixed once `timer-native/` exists |
+| `nearWindowSec` | `600` | Timers due within this many seconds are kept in memory |
+| `nearWheelMemoryBytes` | 256 MiB | Memory those timers may use |
+| `midHorizonHours` | `48` | Timers due later are copied; the engine uses at most `fileReservedTime` minus six hours |
+| `payloadSegmentBytes` | 256 MiB | Size of one segment of copied timers |
+| `checkpointIntervalMs` | `5000` | How often indexed timers and delivery progress are made durable |
+| `deliveryBatchMessages` | `512` | Due timers one lane delivers per batch |
+| `deliveryInflightWrites` | `32` | Writes one batch keeps in flight |
+| `shadowEnable` | `false` | Runs the native engine in shadow under another `timerStoreMode`, see below |
+| `shadowGraceMs` | `60000` | How long a shadow waits for the active engine's delivery of a due timer |
+
+Each timer is delivered by the engine that admitted it, so `timerStoreMode` can be switched in both directions:
+
+- After a switch to `native`, the standard engine keeps delivering the timers it admitted before.
+- After a switch away from `native`, the native engine keeps delivering its timers. Once a clean shutdown finds that it holds none, the store no longer runs it; switching back to `native` starts it again.
+- A recall reaches the engine that admitted its timer, whichever mode is active. Typed answers come only from the native mode.
+- A store that still holds native timers does not load in ExtendedTimeline mode.
+
+Broker runtime info describes the native engine in three entries: `timerNativeRole` (`active` or `draining`), `timerNativeMetrics` and `timerNativePipelineMetrics`. `timerNativeMetrics` holds what the engine keeps, such as `wheelTimers`, `hourBuckets`, `minuteRuns`, `payloadDays`, `recalls` and `sourceBehind`, and what it has done since the Broker started, such as `indexed`, `written`, `recalled`, `dropped` and `skipped`, plus `followed` on a slave. The OpenTelemetry timer enqueue and dequeue totals count native timers as well.
+
+In a master/slave group, a slave indexes native timers and follows its master's deliveries through the messages the master writes. A slave promoted to master therefore writes only the timers its old master had not written. A Broker that restarts reads up to 1 GiB of its recent deliveries back from the CommitLog, so a slave goes on following its master and a master does not write those messages again. As with the standard engine, a timer can still be delivered twice around a failover.
+
+Once a checkpoint makes their delivery durable, the files of delivered timers and their payload copies are deleted, and the CommitLog files they referred to are released for cleanup. A recall is dropped from memory once the timer it names is delivered, but the recall log on disk is not yet compacted.
+
+### Compare the native engine with the active one in shadow
+
+Before switching to `native`, set `shadowEnable = true` under `[store.timerNative]` and keep the current `timerStoreMode`.
+
+- **What the shadow does.** A second native engine indexes every timer the active engine admits and takes each one out of its wheel when it comes due, as the native engine would deliver it.
+- **What it does not do.** It writes no message, never takes the delivery lease, and does not hold back CommitLog cleanup.
+- **Where its files go.** Everything is kept under `timer-native-shadow/` in the store root, so a later switch to `native` starts empty.
+
+The shadow matches each due timer with the active engine's delivery through the delivery token both carry. Broker runtime info then reports two entries:
+
+- **`timerNativeShadowMetrics`** holds the native engine metrics plus these counters:
+  - `shadowMatched`: timers whose delivery was found.
+  - `shadowOnTime`, `shadowLateWithin1s`, `shadowLateWithin5s`, `shadowLateWithin30s` and `shadowLateOver30s`: how much later than the shadow's deadline the active engine stored those deliveries.
+  - `shadowMaxLatenessMs`: the latest of them.
+  - `shadowEarly`: deliveries earlier than the deadline by more than `timerPrecisionMs`.
+  - `shadowNotDelivered`: timers not delivered within `shadowGraceMs` of their deadline.
+  - `shadowUnindexed`: deliveries the shadow never found due. These are counted after twice the grace period, and only while the shadow keeps up with its own deadlines.
+- **`timerNativeShadowSamples`** lists the 64 newest differences with their delivery tokens.
+
+The shadow reads its tokens back after a restart as the native engine does. A slave runs its own shadow and compares it with the deliveries it replicates. The flag does nothing under `timerStoreMode = "native"`.
+
+## Move Extended Timeline timers to the native engine
+
+`timerStoreMode = "extended_timeline"` is deprecated in favor of `native` and will be removed in a later major version, together with `timerExtendedShadowEnable`. A Broker started with either logs a warning. To compare the engines before a switch, use the native shadow described above.
+
+Once the Extended Timeline has run on a store, the store loads in no other `timerStoreMode`, so its timers cannot drain beside the native engine as the other engines' timers do. Move them while the Broker is stopped, with `rocketmq-cli-rust` from `rocketmq-tools/rocketmq-store-inspect`:
+
+```bash
+rocketmq-cli-rust migrate-extended-timers --config broker.toml --dry-run
+rocketmq-cli-rust migrate-extended-timers --config broker.toml
+```
+
+1. Stop the Broker. The command takes the store's lock, which a running Broker holds.
+2. Give `--config` the configuration the Broker will run with next: `timerStoreMode = "native"` and `timerWheelEnable = true` in `[store]`, without `timerExtendedAdmissionEnable`, `timerExtendedActivationEpoch` or the other `timerExtended*` keys, which only the Extended mode accepts. Keep any `[store.timerStoreConfig]` settings the Extended Timeline ran with: the command reads its message copies with them. It also reads the store root and `[store.timerNative]` from that section.
+3. Run it with `--dry-run`. It changes nothing and prints a JSON report:
+   - `migrated`: the pending, ready and delivering timers that move. Of those, `delivering` were being delivered and may be delivered a second time.
+   - `committed`, `finished` and `shadow`: timers left out because their message was already written, because they were delivered, cancelled or quarantined, or because they are shadow records.
+4. Run it without `--dry-run`. The native engine indexes every moving timer with a copy of its message, so none depends on the CommitLog. `timer-extended/` and `config/timer-store-owner.meta` are then renamed with a `.migrated` suffix, and `backup` in the report names the directory. Keep it until the native engine has delivered the migrated timers.
+5. Start the Broker in native mode.
+
+The command changes nothing and exits with code `2` while the report lists `blockers`:
+
+- `payloadHandoffPending`: timers whose message the Extended Timeline has not copied yet. Run the Broker in `extended_timeline` mode until it has, then stop it and try again.
+- `beyondNativeMaxDelay`: timers due later than `timerNative.maxDelayDays` admits. `requiredDays` is the value it needs.
+
+A run that stops partway can be run again, and starts over. Each Broker of a master/slave group keeps its own store, so run the command for every store the Extended Timeline owns; it refuses any other store.
 
 ## Example and validation scope
 

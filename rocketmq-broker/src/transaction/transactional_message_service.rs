@@ -21,11 +21,11 @@ use crate::transaction::operation_result::OperationResult;
 use crate::transaction::transaction_metrics::TransactionMetrics;
 use crate::transaction::transactional_message_check_listener::TransactionalMessageCheckListener;
 
-/// Trait defining the local transactional message service.
+/// Trait defining the transactional message service.
 /// This trait provides methods for preparing, committing, rolling back, and checking transactional
 /// messages, as well as managing the state of the transactional message service.
-#[trait_variant::make(TransactionalMessageService: Send)]
-pub(crate) trait TransactionalMessageServiceLocal: Sync + 'static {
+#[trait_variant::make(Send)]
+pub(crate) trait TransactionalMessageService: Sync + 'static {
     /// Prepares a transactional message.
     ///
     /// # Arguments

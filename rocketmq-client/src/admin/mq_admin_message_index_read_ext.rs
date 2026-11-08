@@ -19,6 +19,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader;
+use rocketmq_protocol::trace::TraceRecord;
 use rocketmq_protocol::trace::TraceType;
 
 use super::default_mq_admin_ext::DefaultMQAdminExt;
@@ -66,6 +67,15 @@ pub struct MessageTraceRead {
     pub from_transaction_check: bool,
 }
 
+/// Bounded wire records from an exact trace Topic read. Optional wire fields have not been
+/// replaced with decoder defaults, so a presentation adapter can preserve unknown values.
+#[derive(Clone)]
+pub struct MessageTraceRecordsRead {
+    pub records: Vec<TraceRecord>,
+    /// The Broker message limit or the local record/byte preview limit was reached.
+    pub limit_reached: bool,
+}
+
 /// Additive capability for reading what one already resolved Broker indexes
 /// under a message key. Address resolution remains the responsibility of a
 /// trusted adapter.
@@ -96,6 +106,17 @@ pub trait MQAdminMessageIndexReadExt: Send {
         broker_addr: CheetahString,
         query: MessageIndexQuery,
     ) -> crate::ClientResult<Vec<MessageTraceRead>>;
+
+    /// Reads bounded trace wire records without interpreting absent fields as status or timing.
+    /// The caller must select records for its verified producer identifier before displaying them.
+    async fn message_trace_records_at(
+        &self,
+        _broker_addr: CheetahString,
+        _query: MessageIndexQuery,
+    ) -> crate::ClientResult<MessageTraceRecordsRead> {
+        // Preserve source compatibility for read-capability implementations predating wire records.
+        Err(crate::ClientError::component_unavailable("trace wire records"))
+    }
 }
 
 impl MQAdminMessageIndexReadExt for DefaultMQAdminExt {
@@ -129,6 +150,48 @@ impl MQAdminMessageIndexReadExt for DefaultMQAdminExt {
             .flat_map(|message| trace_records(message, message_id.as_str()))
             .collect())
     }
+
+    async fn message_trace_records_at(
+        &self,
+        broker_addr: CheetahString,
+        mut query: MessageIndexQuery,
+    ) -> crate::ClientResult<MessageTraceRecordsRead> {
+        query.max_messages = query.max_messages.clamp(1, 64);
+        let topic = query.topic.clone();
+        let limit = query.max_messages as usize;
+        let messages = indexed_messages(self, &broker_addr, query).await?;
+        Ok(bounded_trace_records(&messages, topic.as_str(), limit))
+    }
+}
+
+fn bounded_trace_records(messages: &[MessageExt], topic: &str, message_limit: usize) -> MessageTraceRecordsRead {
+    const MAX_BYTES: usize = 1024 * 1024;
+    const MAX_RECORDS: usize = 512;
+    let mut page = MessageTraceRecordsRead {
+        records: Vec::new(),
+        limit_reached: messages.len() >= message_limit,
+    };
+    let mut remaining = MAX_BYTES;
+    for message in messages.iter().take(message_limit) {
+        if message.topic().as_str() != topic {
+            continue;
+        }
+        let Some(body) = message.body() else { continue };
+        if body.len() > remaining {
+            page.limit_reached = true;
+            break;
+        }
+        remaining -= body.len();
+        let Ok(text) = std::str::from_utf8(&body) else { continue };
+        for record in rocketmq_protocol::trace::decode_records(text) {
+            if page.records.len() == MAX_RECORDS {
+                page.limit_reached = true;
+                return page;
+            }
+            page.records.push(record);
+        }
+    }
+    page
 }
 
 async fn indexed_messages(
@@ -252,6 +315,30 @@ mod tests {
     use crate::trace::trace_bean::TraceBean;
     use crate::trace::trace_context::TraceContext;
     use crate::trace::trace_transfer_bean::TraceTransferBean;
+
+    #[test]
+    fn trace_wire_preview_preserves_missing_fields_and_reports_real_preview_limits() {
+        let wire = "SubAfter\u{1}request\u{1}UNIQ-A\u{1}5\u{1}false\u{1}key\u{2}";
+        let mut message = MessageExt::default();
+        message.set_topic("trace".into());
+        message.set_body(Some(bytes::Bytes::copy_from_slice(wire.as_bytes())));
+        let page = bounded_trace_records(&[message.clone()], "trace", 64);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(
+            page.records[0].fields.len(),
+            5,
+            "no absent timestamp, group or status is synthesized"
+        );
+        assert!(!page.limit_reached);
+        assert!(bounded_trace_records(&[message.clone()], "trace", 1).limit_reached);
+        assert!(bounded_trace_records(&[message.clone()], "other", 64)
+            .records
+            .is_empty());
+        message.set_body(Some(bytes::Bytes::from(vec![b'x'; 1024 * 1024 + 1])));
+        let page = bounded_trace_records(&[message], "trace", 64);
+        assert!(page.limit_reached);
+        assert!(page.records.is_empty());
+    }
 
     fn encoded(context: &TraceContext) -> String {
         let transfer: TraceTransferBean =

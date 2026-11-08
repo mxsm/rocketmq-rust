@@ -53,7 +53,12 @@ impl std::error::Error for KeyValueStoreOperationError {
     }
 }
 
-fn backend_error(operation: &'static str, key: RaftRecordKey, error: Error) -> std::io::Error {
+/// Maps a key-value store error to an I/O error with operation and record context.
+///
+/// `operation` labels the failed operation, and only the record class of `key` is
+/// retained. The returned error has kind `std::io::ErrorKind::Other` and wraps a
+/// private contextual error that preserves `error` as its typed source.
+fn map_key_value_store_error(operation: &'static str, key: RaftRecordKey, error: Error) -> std::io::Error {
     std::io::Error::other(KeyValueStoreOperationError {
         operation,
         key_class: key.class(),

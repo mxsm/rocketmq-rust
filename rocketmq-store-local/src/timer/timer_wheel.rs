@@ -38,6 +38,8 @@ pub struct TimerWheel {
     precision_ms: u64,
     page_size: usize,
     metrics: Arc<TimerStorageMetrics>,
+    /// Whether a legacy `timerwheel` file is imported into the first V2 generation.
+    import_legacy: bool,
     inner: Mutex<Option<PagedTimerWheel>>,
 }
 
@@ -65,8 +67,16 @@ impl TimerWheel {
             precision_ms: precision_ms.max(1),
             page_size,
             metrics,
+            import_legacy: true,
             inner: Mutex::new(None),
         }
+    }
+
+    /// Leaves a `timerwheel` file at the legacy path alone instead of importing it: it belongs
+    /// to another format, such as an Apache RocketMQ 5.x wheel that shares the name.
+    pub fn ignoring_legacy_file(mut self) -> Self {
+        self.import_legacy = false;
+        self
     }
 
     pub fn load(&self) -> std::io::Result<()> {
@@ -164,6 +174,31 @@ impl TimerWheel {
         self.with_inner(|wheel| wheel.put_slot_checked(index, slot))
     }
 
+    /// Writes several slots at once, each at the wheel index of its `time_ms`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, with no slot written, when the wheel is not loaded or a slot falls
+    /// outside it.
+    pub fn put_slots(&self, slots: &[Slot]) -> std::io::Result<()> {
+        let updates: Vec<_> = slots
+            .iter()
+            .map(|slot| {
+                (
+                    self.get_slot_index(slot.time_ms),
+                    Slot::new_with_num_magic(
+                        self.format_time_ms(slot.time_ms),
+                        slot.first_pos,
+                        slot.last_pos,
+                        slot.num,
+                        slot.magic,
+                    ),
+                )
+            })
+            .collect();
+        self.with_inner(|wheel| wheel.put_slots_checked(&updates))
+    }
+
     pub fn get_num(&self, time_ms: i64) -> i64 {
         self.get_slot(time_ms).map(|slot| slot.num as i64).unwrap_or_default()
     }
@@ -178,21 +213,27 @@ impl TimerWheel {
         })
     }
 
+    /// Sums the records of the slots in the wheel window that starts at `time_start_ms`, like
+    /// Java's `TimerWheel#getAllNum`. Only occupied slots are read, and the wheel is not copied.
     pub fn get_all_num(&self, time_start_ms: i64) -> i64 {
-        let slots = self.slots_snapshot();
-        if slots.is_empty() {
-            return 0;
-        }
-        let mut all_num = 0i64;
+        let wheel_len = self.wheel_len();
         let start_index = self.get_slot_index(time_start_ms);
-        for offset in 0..self.wheel_len() {
-            let index = (start_index + offset) % self.wheel_len();
-            let slot = slots[index];
+        let mut all_num = 0i64;
+        self.visit_occupied_slots(|index, slot| {
+            let offset = (index + wheel_len - start_index) % wheel_len;
             if slot.time_ms == self.format_time_ms(time_start_ms + offset as i64 * self.precision_ms as i64) {
-                all_num += slot.num as i64;
+                all_num += i64::from(slot.num);
             }
-        }
+        });
         all_num
+    }
+
+    /// Calls `visit` with the wheel index and value of every slot that holds records, without
+    /// copying the wheel. Does nothing before the wheel is loaded.
+    pub fn visit_occupied_slots(&self, visit: impl FnMut(usize, Slot)) {
+        if let Some(wheel) = self.inner.lock().as_ref() {
+            wheel.visit_occupied_slots(visit);
+        }
     }
 
     pub fn slots_snapshot(&self) -> Vec<Slot> {
@@ -224,7 +265,10 @@ impl TimerWheel {
     }
 
     fn should_import_legacy(&self) -> std::io::Result<bool> {
-        Ok(self.file_name.exists() && self.file_name.metadata()?.len() > 0 && !self.migration_marker().exists())
+        Ok(self.import_legacy
+            && self.file_name.exists()
+            && self.file_name.metadata()?.len() > 0
+            && !self.migration_marker().exists())
     }
 
     fn read_legacy_slots(&self) -> std::io::Result<Vec<Slot>> {
@@ -329,6 +373,29 @@ mod tests {
             reloaded.get_slot(5_000),
             Some(Slot::new_with_num_magic(5_000, 10, 20, 1, 2))
         );
+    }
+
+    #[test]
+    fn get_all_num_counts_only_slots_inside_the_window() {
+        let temp_dir = tempdir().unwrap();
+        let wheel = TimerWheel::with_page_size_and_metrics(
+            temp_dir.path().join("timerwheel"),
+            16,
+            1_000,
+            288,
+            Arc::new(TimerStorageMetrics::default()),
+        );
+        assert_eq!(wheel.get_all_num(5_000), 0);
+        wheel.load().unwrap();
+        wheel.put_slot(5_000, 0, 40, 2, 1).unwrap();
+        wheel.put_slot(9_000, 80, 160, 3, 1).unwrap();
+        wheel.put_slot(30_000, 200, 200, 1, 1).unwrap();
+
+        assert_eq!(wheel.get_all_num(5_000), 6);
+        // The 32-slot window starting at 6 s ends at 37 s, so the slot at 5 s is behind it.
+        assert_eq!(wheel.get_all_num(6_000), 4);
+        // From 31 s, the slots at 5 s and 9 s would be 37 s and 41 s; they hold older records.
+        assert_eq!(wheel.get_all_num(31_000), 0);
     }
 
     #[test]

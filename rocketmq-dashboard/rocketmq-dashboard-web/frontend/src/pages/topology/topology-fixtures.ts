@@ -3,7 +3,7 @@ import type { DashboardConfigView, NameserverAvailabilityView } from '../../type
 import type { ConsumerGroupListItem } from '../../types/consumer';
 import type { ProducerInfo } from '../../types/producer';
 import type { TopicInfo } from '../../types/topic';
-import type { TopologySnapshot, TopologySourceId } from '../../types/topology';
+import type { TopologyBrokerGroup, TopologyLayerId, TopologySnapshot } from '../../types/topology';
 import { buildTopologySnapshot, TOPOLOGY_SOURCES, type TopologyLayers } from './topology-model';
 
 /** Test data shaped like the Topology artboard: two clusters, one broker without a slave. */
@@ -147,7 +147,7 @@ export function okSources(durationMs = 40) {
 /** A snapshot built from the fixture layers; `failed` layers are reported as failed and left empty. */
 export function fixtureSnapshot(
   overrides: Partial<TopologyLayers> = {},
-  failed: TopologySourceId[] = [],
+  failed: TopologyLayerId[] = [],
   generatedAt = 10_000
 ): TopologySnapshot {
   const layers: TopologyLayers = { ...fixtureLayers, ...overrides };
@@ -156,4 +156,47 @@ export function fixtureSnapshot(
     failed.includes(status.source) ? { ...status, status: 'failed' as const, message: 'The query failed.' } : status
   );
   return buildTopologySnapshot(layers, sources, generatedAt);
+}
+
+export const fixtureControllerAddresses = ['10.0.9.1:9878', '10.0.9.2:9878', '10.0.9.3:9878'];
+
+/**
+ * `snapshot` with the replication layer: broker-d in Controller mode with its replica out of the
+ * sync state set, broker-a's slave a little behind its master, broker-b's slave not connected, and
+ * three Controllers of which the one at `leader` leads (`-1`: no leader known).
+ */
+export function withReplication(snapshot: TopologySnapshot, leader = 0): TopologySnapshot {
+  const decorate = (group: TopologyBrokerGroup): TopologyBrokerGroup => {
+    switch (group.brokerName) {
+      case 'broker-d':
+        return {
+          ...group,
+          election: 'controller',
+          controllerAddresses: fixtureControllerAddresses,
+          replicas: [{ brokerId: 1, address: '10.0.5.123:10911', lagBytes: 0, inSync: false, transferBytesPerSecond: 2_048 }],
+          inSyncSlaveCount: 0,
+          controllerState: { masterEpoch: 3, syncStateSetEpoch: 5, inSyncBrokerIds: [0], outOfSyncBrokerIds: [1] }
+        };
+      case 'broker-a':
+        return { ...group, election: 'configured', replicas: [{ brokerId: 1, address: '10.0.4.121:10911', lagBytes: 10_433, inSync: false }], inSyncSlaveCount: 0 };
+      case 'broker-b':
+        return { ...group, election: 'configured', replicas: [{ brokerId: 1, address: '10.0.4.123:10911', inSync: false }], inSyncSlaveCount: 0 };
+      default:
+        return { ...group, election: 'configured' };
+    }
+  };
+  return {
+    ...snapshot,
+    sources: [...snapshot.sources, { source: 'replication', status: 'ok', durationMs: 40 }],
+    clusters: snapshot.clusters.map((cluster) => ({ ...cluster, brokers: cluster.brokers.map(decorate) })),
+    controllers: fixtureControllerAddresses.map((address, index) => ({
+      address,
+      status: 'available',
+      leader: leader < 0 ? undefined : index === leader,
+      leaderId: leader < 0 ? undefined : String(leader + 1),
+      peerCount: 3,
+      appliedLogIndex: 42,
+      committedLogIndex: 42
+    }))
+  };
 }

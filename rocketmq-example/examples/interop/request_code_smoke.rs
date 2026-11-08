@@ -76,7 +76,7 @@ impl SmokeConfig {
     }
 }
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

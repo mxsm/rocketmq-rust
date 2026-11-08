@@ -34,6 +34,7 @@ use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::BrokerWriteStore;
+use rocketmq_store::EpochLog;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::HAConnectionStateNotificationRequest;
 use rocketmq_store::HAService;
@@ -45,7 +46,6 @@ use rocketmq_store::QueryMessageRequest;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
-use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
@@ -56,6 +56,12 @@ use crate::controller::replicas_manager::BrokerReplicaRole;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 
 /// Immutable failover policy generation published by the broker composition root.
+/// What a new master reports of its CommitLog, for a replica that joins it.
+pub(crate) struct MasterLog {
+    pub(crate) epochs: EpochLog,
+    pub(crate) end_offset: i64,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct EscapeBridgePolicy {
     pub(crate) broker_name: CheetahString,
@@ -427,6 +433,32 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         self.with_store(|store| store.sync_controller_sync_state_set(local_broker_id, sync_state_set))
     }
 
+    /// Returns the sync state set the HA service proposes, or `None` outside controller mode.
+    pub(crate) fn sync_state_set_proposal(&self) -> Result<Option<HashSet<i64>>, MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(|store| {
+            store
+                .get_ha_service()
+                .and_then(|ha_service| ha_service.maybe_shrink_sync_state_set())
+        })
+    }
+
+    /// Subscribes to HA sync-state-set proposal changes, or `None` outside controller mode.
+    pub(crate) fn subscribe_sync_state_set_changes(&self) -> Option<tokio::sync::watch::Receiver<u64>>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(|store| {
+            store
+                .get_ha_service()
+                .and_then(|ha_service| ha_service.subscribe_sync_state_set_changes())
+        })
+        .ok()
+        .flatten()
+    }
+
     pub(crate) async fn apply_controller_role(
         &self,
         previous_store_role: BrokerRole,
@@ -434,6 +466,7 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         controller_broker_id: u64,
         master_address: Option<&CheetahString>,
         master_epoch: i32,
+        master_log: Option<&MasterLog>,
     ) -> Result<bool, StoreError>
     where
         MS: BrokerReplicationStore,
@@ -462,7 +495,16 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
                     return Ok(false);
                 };
                 let current_master_address = ha_service.get_runtime_info(0).ha_client_runtime_info.master_addr;
-                if previous_store_role == BrokerRole::Slave && current_master_address == master_address.as_str() {
+                // Also for the same master: one that came back may hold less than it did.
+                if let Some(master_log) = master_log {
+                    ha_service
+                        .join_master(&master_log.epochs, master_log.end_offset)
+                        .await?;
+                }
+                if master_log.is_none()
+                    && previous_store_role == BrokerRole::Slave
+                    && current_master_address == master_address.as_str()
+                {
                     ha_service
                         .change_to_slave_when_master_not_change(master_address.as_str(), master_epoch)
                         .await
@@ -549,23 +591,16 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         Ok(self.shared_append()?.put_message(message).await?.result)
     }
 
-    pub(crate) async fn put_messages(&self, batch: MessageExtBatch) -> Result<PutMessageResult, MessageStoreUnavailable>
-    where
-        MS: BrokerWriteStore,
-    {
-        Ok(self.shared_append()?.put_messages(batch).await?.result)
-    }
-
     pub(crate) fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: rocketmq_store::CommitLogReadMode,
-    ) -> Result<(), BackendStoreError>
+    ) -> Result<(), StoreError>
     where
         MS: BrokerAdminStore,
     {
-        let store = self.store().map_err(|_| {
-            BackendStoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin)
-        })?;
+        let store = self
+            .store()
+            .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin))?;
         store.set_commitlog_read_mode(read_ahead_mode)
     }
 
@@ -778,7 +813,7 @@ mod tests {
 
         assert!(matches!(
             store
-                .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 1)
+                .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 1, None)
                 .await,
             Ok(false)
         ));

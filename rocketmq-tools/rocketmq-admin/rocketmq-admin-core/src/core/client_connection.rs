@@ -195,7 +195,7 @@ pub trait ClientConnectionQueryAdmin: Send {
         _request: &'a QueryTopicProducerConnectionsRequest,
     ) -> AdminFuture<'a, QueryTopicProducerConnectionsResult> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "query_topic_producer_connections",
                 "Topic-scoped Producer connections are not implemented by this adapter",
             ))

@@ -20,7 +20,7 @@
 //! with the same key (e.g., order ID) are always sent to the same queue, maintaining
 //! ordering guarantees.
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 use rocketmq_client_rust::DefaultMQProducer;

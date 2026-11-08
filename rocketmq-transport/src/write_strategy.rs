@@ -29,7 +29,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
 use crate::admission::AdmissionPermit;
-use crate::backend::WriteBackend;
 use crate::deadline::RequestDeadline;
 use crate::error_helpers::serialization_failed;
 use crate::file_region::FileRegion;
@@ -43,6 +42,7 @@ use crate::file_region_writer::record_selection_failure;
 #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
 use crate::file_region_writer::record_sendfile_bytes;
 use crate::file_region_writer::write_portable_file_region;
+use crate::transport_halves::TransportWriteHalf;
 
 const QUEUED_WRITE_WAITING: u8 = 0;
 const QUEUED_WRITE_CLAIMED: u8 = 1;
@@ -169,13 +169,40 @@ impl QueuedWriteProgress {
     }
 }
 
+/// Where the session writer reports what became of a queued write.
+pub(crate) enum WriteCompletion {
+    /// The enqueuing task waits for the result.
+    Caller(oneshot::Sender<crate::write_result::WriterResult>),
+    /// A request whose caller waits for its response instead: only a failure is reported, by
+    /// failing the pending request, so a successful write wakes nobody. The session's send lease
+    /// ends with the report.
+    PendingRequest {
+        sink: crate::base::pending_request_table::PendingRequestWriteSink,
+        send_lease: crate::connection::OwnedSessionSendLease,
+    },
+}
+
+impl WriteCompletion {
+    pub(crate) fn complete(self, result: crate::write_result::WriterResult) {
+        match self {
+            Self::Caller(sender) => {
+                let _ = sender.send(result);
+            }
+            Self::PendingRequest { sink, send_lease } => {
+                if let Err(failure) = result {
+                    sink.fail(failure);
+                }
+                drop(send_lease);
+            }
+        }
+    }
+}
+
 pub(crate) struct QueuedWrite {
     pub(crate) operation: WriterOperation,
-    pub(crate) completion: oneshot::Sender<crate::write_result::WriterResult>,
+    pub(crate) completion: WriteCompletion,
     pub(crate) permit: Option<AdmissionPermit>,
     pub(crate) deadline: Option<RequestDeadline>,
-    #[allow(dead_code, reason = "queue-policy tests retain this opaque fixture identifier")]
-    pub(crate) target: String,
     pub(crate) progress: Arc<QueuedWriteProgress>,
     pub(crate) enqueued_at: Option<Instant>,
     pub(crate) response_queue_wait_observation: ResponseQueueWaitObservation,
@@ -190,10 +217,9 @@ pub(crate) enum ResponseQueueWaitObservation {
 impl QueuedWrite {
     pub(crate) fn data(
         payload: OutboundPayload,
-        completion: oneshot::Sender<crate::write_result::WriterResult>,
+        completion: WriteCompletion,
         permit: AdmissionPermit,
         deadline: Option<RequestDeadline>,
-        target: String,
         progress: Arc<QueuedWriteProgress>,
         enqueued_at: Instant,
     ) -> Self {
@@ -202,7 +228,6 @@ impl QueuedWrite {
             completion,
             permit: Some(permit),
             deadline,
-            target,
             progress,
             enqueued_at: Some(enqueued_at),
             response_queue_wait_observation: ResponseQueueWaitObservation::Ineligible,
@@ -215,8 +240,12 @@ impl QueuedWrite {
     }
 
     pub(crate) fn encoded_len(&self) -> usize {
+        self.payload().encoded_len()
+    }
+
+    pub(crate) fn payload(&self) -> &OutboundPayload {
         match &self.operation {
-            WriterOperation::Send(payload) => payload.encoded_len(),
+            WriterOperation::Send(payload) => payload,
         }
     }
 }
@@ -734,7 +763,7 @@ enum SelectedFileTransfer {
     Sendfile,
 }
 
-impl FrameWriter<WriteBackend> {
+impl FrameWriter<TransportWriteHalf> {
     /// Writes transport payloads and calls `on_start` immediately before the
     /// first potentially observable socket operation.
     pub(crate) async fn write_transport_payloads_with_start(
@@ -796,7 +825,7 @@ impl FrameWriter<WriteBackend> {
         let mut selections = Vec::with_capacity(body.regions().len());
         for region in body.regions() {
             let native_eligible = matches!(self.mode, FrameWriteMode::PlainVectored)
-                && matches!(&self.io, WriteBackend::Tcp(_))
+                && matches!(&self.io, TransportWriteHalf::Tcp(_))
                 && native_file_region_eligible(region);
             let auto_native_eligible = native_eligible && region.len() >= AUTO_SENDFILE_MIN_BYTES;
             match select_file_transfer(
@@ -837,14 +866,16 @@ impl FrameWriter<WriteBackend> {
                 }
                 #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
                 SelectedFileTransfer::Sendfile => match &mut self.io {
-                    WriteBackend::Tcp(writer) => {
-                        let written = crate::linux::sendfile::send_file_region(writer, region).await;
+                    TransportWriteHalf::Tcp(tcp_write_half) => {
+                        let written = crate::linux::sendfile::send_file_region(tcp_write_half, region).await;
                         if let Ok(written) = written {
                             record_sendfile_bytes(written);
                         }
                         written
                     }
-                    WriteBackend::Compat(_) => unreachable!("native selection requires a plaintext TCP backend"),
+                    TransportWriteHalf::Compat(_) => {
+                        unreachable!("native selection requires a plaintext TCP backend")
+                    }
                 },
             };
             if let Err(error) = body_result {

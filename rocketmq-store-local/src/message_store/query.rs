@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::backend::LocalQueryConfig;
+use crate::config::local_store::LocalQueryConfig;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IndexQuerySafety {

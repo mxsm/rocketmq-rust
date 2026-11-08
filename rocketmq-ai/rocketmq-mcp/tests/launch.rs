@@ -121,21 +121,83 @@ fn unavailable_stdio_refuses_before_query_startup() {
     assert!(!stderr.contains("startup initialized"));
 }
 
+#[cfg(all(feature = "query", not(feature = "stdio")))]
+#[test]
+fn default_query_requires_stdio_feature_without_configuration() {
+    let output = command().output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("MCP transport feature is disabled"), "{stderr}");
+    assert!(!stderr.contains("startup initialized"));
+}
+
+#[cfg(all(feature = "query", feature = "streamable-http"))]
+#[test]
+fn http_requires_explicit_configuration_before_startup() {
+    let output = command().arg("--transport").arg("streamable-http").output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("MCP configuration is invalid"), "{stderr}");
+    assert!(!stderr.contains("startup initialized"));
+}
+
 #[cfg(all(feature = "query", feature = "stdio"))]
 #[test]
 fn default_query_mode_preserves_stdio_and_excludes_control_tools() {
-    use std::io::Write;
-    use std::process::Stdio;
-
     let directory = tempfile::tempdir().unwrap();
     let path = query_configuration(directory.path());
     let _legacy_error: fn(rocketmq_mcp::query::McpError) -> rocketmq_mcp::McpError = |error| error;
     let _legacy_config: fn(rocketmq_mcp::query::config::McpConfig) -> rocketmq_mcp::config::McpConfig = |config| config;
-    let mut child = command()
+    let mut command = command();
+    command.arg("--config").arg(path).arg("--transport").arg("stdio");
+    assert_query_stdio(command, "local-dev");
+}
+
+#[cfg(all(feature = "query", feature = "stdio"))]
+#[test]
+fn default_query_starts_without_arguments_or_configuration_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = command();
+    command.current_dir(directory.path());
+    assert_query_stdio(command, "local-dev");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[cfg(all(feature = "query", feature = "stdio"))]
+#[test]
+fn query_configuration_environment_overrides_builtin_defaults() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = query_configuration(directory.path());
+    let config = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("name = \"local-dev\"", "name = \"from-env\"");
+    std::fs::write(&path, config).unwrap();
+    let mut command = command();
+    command.env("ROCKETMQ_MCP_CONFIG", path);
+    assert_query_stdio(command, "from-env");
+}
+
+#[cfg(all(feature = "query", feature = "stdio"))]
+#[test]
+fn query_configuration_argument_overrides_environment() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = query_configuration(directory.path());
+    let mut command = command();
+    command
+        .env("ROCKETMQ_MCP_CONFIG", directory.path().join("missing.toml"))
         .arg("--config")
-        .arg(path)
-        .arg("--transport")
-        .arg("stdio")
+        .arg(path);
+    assert_query_stdio(command, "local-dev");
+}
+
+#[cfg(all(feature = "query", feature = "stdio"))]
+fn assert_query_stdio(mut command: Command, cluster_name: &str) {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -145,6 +207,7 @@ fn default_query_mode_preserves_stdio_and_excludes_control_tools() {
         br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"entrypoint-test","version":"1"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rocketmq_list_clusters","arguments":{}}}
 "#,
     ).unwrap();
     drop(child.stdin.take());
@@ -167,4 +230,10 @@ fn default_query_mode_preserves_stdio_and_excludes_control_tools() {
     assert!(names.contains(&"rocketmq_list_clusters"));
     assert!(!names.contains(&"rocketmq_upsert_topic"));
     assert!(!names.contains(&"rocketmq_get_mutation_result"));
+    let clusters = frames.iter().find(|frame| frame["id"] == 3).unwrap();
+    assert_eq!(clusters["result"]["isError"], false, "{clusters}");
+    assert_eq!(
+        clusters["result"]["structuredContent"]["data"]["clusters"][0]["name"],
+        cluster_name
+    );
 }

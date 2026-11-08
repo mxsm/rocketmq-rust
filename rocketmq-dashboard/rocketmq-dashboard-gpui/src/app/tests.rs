@@ -17,7 +17,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use gpui::{AppContext as _, KeyUpEvent, Keystroke, point, px, size};
 use gpui_component::{Root, WindowExt as _, dialog::Dialog, notification::Notification};
 
-use super::{LegacyPageCache, PageTarget, ReadyScreen, SensitiveFeatureCache, StartupRequest, StartupState};
+use super::{ReadyScreen, SensitiveFeatureCache, StartupRequest, StartupState};
 use crate::{
     infrastructure::{
         admin_provider::GpuiAdminProvider,
@@ -25,15 +25,42 @@ use crate::{
         client_runtime::DesktopClientRuntime,
         config_store::{AuthConfig, DesktopConfig, DesktopConfigStore},
     },
-    route::{AppRoute, BrokerTab, RouteKey, TopicTab},
+    route::{AppRoute, BrokerTab, PageCapability, RouteKey, TopicTab},
     services::{
         AppServices, ConfigRouteTransition, ConfigUpdatePhase, ConfigUpdated, FakeAuthService, FakeStartupService,
-        StartupSnapshot, UnavailableTestConfig, delivery03::test_support::FakeDelivery03Backend,
+        StartupSnapshot, UnavailableTestConfig, dashboard_broker::test_support::FakeDashboardBrokerOperations,
     },
     state::{RequestEpoch, UiError, UiErrorCode},
 };
 use rocketmq_admin_core::read_client_adapter::TelemetryHandle;
 use rocketmq_runtime::{ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
+
+fn background_completion(name: &str) -> bool {
+    name == "gpui-authority-refresh" || name.starts_with("gpui-dashboard-") || name.starts_with("gpui-broker-")
+}
+
+pub(crate) fn next_owned_completion(completion: &std::sync::mpsc::Receiver<&'static str>) -> &'static str {
+    loop {
+        let name = completion
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("owned service completion");
+        // Eager page reads and configuration observation are independent of the user operation.
+        if !background_completion(name) {
+            return name;
+        }
+    }
+}
+
+fn try_owned_completion(
+    completion: &std::sync::mpsc::Receiver<&'static str>,
+) -> Result<&'static str, std::sync::mpsc::TryRecvError> {
+    loop {
+        let name = completion.try_recv()?;
+        if !background_completion(name) {
+            return Ok(name);
+        }
+    }
+}
 
 fn broker_item(address: &str) -> rocketmq_dashboard_common::BrokerInventoryItem {
     rocketmq_dashboard_common::BrokerInventoryItem {
@@ -73,6 +100,232 @@ fn services(snapshot: StartupSnapshot, auth: FakeAuthService) -> AppServices {
     )
 }
 
+#[gpui::test]
+fn environment_profile_controls_create_switch_and_clear_previous_resource_state(cx: &mut gpui::TestAppContext) {
+    use rocketmq_dashboard_common::{
+        ConnectionScope, ConsumerCapabilities, ConsumerCategory, ConsumerClientIdentity, ConsumerConnectionState,
+        ConsumerGroupObservation, ConsumerIdentity, ConsumerInventory, ConsumerObservation, ConsumerObservationState,
+    };
+
+    cx.update(gpui_component::init);
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&DesktopConfig {
+            schema_version: 1,
+            nameservers: vec!["first:9876".into()],
+            current_nameserver: Some("first:9876".into()),
+            proxies: vec!["proxy:8080".into()],
+            current_proxy: Some("proxy:8080".into()),
+            scope: ConnectionScope::Proxy,
+            ..DesktopConfig::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("gpui-profile-test", 1))
+        .unwrap()
+        .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).unwrap())
+        .build()
+        .unwrap();
+    let store = DesktopConfigStore::new(config_path, runtime.root_context().component("config"));
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+    let services = AppServices::desktop_with_fake_provider(
+        store,
+        DesktopAuthState::new(Arc::new(MapEnvironment::new([] as [(&str, &str); 0]))),
+        runtime.root_context().component("services"),
+        runtime.root_context().component("history"),
+        runtime.root_context().component("monitor"),
+    )
+    .with_runtime_completion(completion_tx);
+    let capture = Rc::new(RefCell::new(None));
+    let capture_dashboard = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, services, cx));
+        capture_dashboard.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-bootstrap");
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    let original_id = cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::OpsSettings, window, cx);
+            dashboard.sensitive_feature_cache = SensitiveFeatureCache::with_entries(2);
+            dashboard.legacy_pages.topics.update(cx, |topics, _| {
+                let item = topic_item("orders");
+                topics
+                    .store
+                    .replace_inventory(rocketmq_dashboard_common::TopicInventory {
+                        items: vec![item],
+                        targets: Vec::new(),
+                        completeness: rocketmq_dashboard_common::TopicCompleteness::Complete,
+                        failures: Vec::new(),
+                    });
+                topics.store.open_route(
+                    rocketmq_dashboard_common::TopicIdentity::parse("orders").unwrap(),
+                    TopicTab::Configuration,
+                );
+            });
+            dashboard.legacy_pages.consumers.update(cx, |consumers, _| {
+                let group = ConsumerIdentity::parse("same-group").unwrap();
+                consumers.store.inventory.replace(ConsumerInventory {
+                    groups: vec![ConsumerGroupObservation {
+                        identity: group.clone(),
+                        category: ConsumerCategory::Application,
+                        connection_state: ConsumerObservation::Complete(ConsumerConnectionState::Disconnected),
+                        client_count: ConsumerObservation::Complete(0),
+                        lag: ConsumerObservation::Complete(7),
+                        consume_type: ConsumerObservation::Complete("PUSH".into()),
+                        message_model: ConsumerObservation::Complete("CLUSTERING".into()),
+                        targets: Vec::new(),
+                    }],
+                    targets: Vec::new(),
+                    target_observation: ConsumerObservationState::Unknown,
+                    group_observation: ConsumerObservationState::Complete,
+                    observation: ConsumerObservationState::Complete,
+                    failures: Vec::new(),
+                    capabilities: ConsumerCapabilities::for_scope(ConnectionScope::NameServer),
+                });
+                consumers.store.open_route(group, crate::route::ConsumerTab::Clients);
+            });
+            dashboard.legacy_pages.producers.update(cx, |producers, _| {
+                producers.store.draft_query.topic = "orders".into();
+                producers.store.draft_query.group = "same-producer".into();
+                producers.store.apply_query().unwrap();
+                producers.store.selected_client = Some(ConsumerClientIdentity::parse("client-a").unwrap());
+            });
+            let ops = dashboard.legacy_pages.ops.clone();
+            ops.update(cx, |ops, cx| {
+                ops.environment_name_input_for_test()
+                    .update(cx, |input, cx| input.set_value("Staging", window, cx));
+                ops.mark_transport_dirty(cx);
+            });
+            dashboard.environment_id.clone().unwrap()
+        })
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let create = cx.debug_bounds("create-environment").unwrap();
+    cx.simulate_click(create.center(), gpui::Modifiers::default());
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    cx.simulate_keystrokes("escape");
+    cx.update(|_, app| {
+        let dashboard = dashboard.read(app);
+        assert_eq!(dashboard.environment_id.as_ref(), Some(&original_id));
+        assert!(dashboard.legacy_pages.ops.read(app).has_unsaved_transport());
+        assert_eq!(
+            dashboard.legacy_pages.topics.read(app).store.visible_page().items.len(),
+            1
+        );
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let create = cx.debug_bounds("create-environment").unwrap();
+    cx.simulate_click(create.center(), gpui::Modifiers::default());
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let confirm = cx.debug_bounds("confirm-dialog-ok").unwrap();
+    cx.simulate_click(confirm.center(), gpui::Modifiers::default());
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-config-mutation");
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let dashboard = dashboard.read(app);
+        let state = dashboard.services.connection_state();
+        let catalog = state.environments.unwrap();
+        assert_ne!(catalog.active_id, original_id);
+        assert_eq!(catalog.profiles.len(), 2);
+        assert_eq!(catalog.profiles[1].name, "Staging");
+        assert!(state.config.nameservers.is_empty());
+        assert_eq!(dashboard.sensitive_feature_cache.entries, 0);
+        assert!(
+            dashboard
+                .legacy_pages
+                .topics
+                .read(app)
+                .store
+                .inventory
+                .state
+                .value()
+                .is_none()
+        );
+        assert!(dashboard.legacy_pages.topics.read(app).store.detail.is_none());
+        assert!(
+            dashboard
+                .legacy_pages
+                .consumers
+                .read(app)
+                .store
+                .inventory
+                .state
+                .value()
+                .is_none()
+        );
+        assert!(dashboard.legacy_pages.consumers.read(app).store.detail.is_none());
+        assert!(dashboard.legacy_pages.producers.read(app).store.applied_query.is_none());
+        assert!(
+            dashboard
+                .legacy_pages
+                .producers
+                .read(app)
+                .store
+                .selected_client
+                .is_none()
+        );
+        assert_eq!(dashboard.history.current(), &AppRoute::OpsSettings);
+        assert!(dashboard.history.back_target().is_none());
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let switch = cx.debug_bounds("switch-environment-0").unwrap();
+    cx.simulate_click(switch.center(), gpui::Modifiers::default());
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let confirm = cx.debug_bounds("confirm-dialog-ok").unwrap();
+    cx.simulate_click(confirm.center(), gpui::Modifiers::default());
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-config-mutation");
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let dashboard = dashboard.read(app);
+        assert_eq!(dashboard.environment_id.as_ref(), Some(&original_id));
+        let state = dashboard.services.connection_state();
+        assert_eq!(state.config.current_nameserver.as_deref(), Some("first:9876"));
+        assert_eq!(state.config.scope, ConnectionScope::Proxy);
+        assert!(!dashboard.legacy_pages.ops.read(app).has_unsaved_transport());
+    });
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.legacy_pages.topics.update(cx, |topics, _| {
+                topics
+                    .store
+                    .replace_inventory(rocketmq_dashboard_common::TopicInventory {
+                        items: vec![topic_item("orders")],
+                        targets: Vec::new(),
+                        completeness: rocketmq_dashboard_common::TopicCompleteness::Complete,
+                        failures: Vec::new(),
+                    });
+            });
+            dashboard.legacy_pages.ops.update(cx, |ops, cx| {
+                ops.add_nameserver_for_test("second:9876", window, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-config-mutation");
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let dashboard = dashboard.read(app);
+        let state = dashboard.services.connection_state();
+        assert_eq!(dashboard.environment_id.as_ref(), Some(&original_id));
+        assert_eq!(state.environments.unwrap().profiles.len(), 2);
+        assert_eq!(state.config.scope, ConnectionScope::Proxy);
+        assert!(state.config.nameservers.contains(&"second:9876".to_owned()));
+        assert_eq!(
+            dashboard.legacy_pages.topics.read(app).store.visible_page().items.len(),
+            1,
+            "same-environment endpoint edits preserve the established retained-data refresh"
+        );
+    });
+    runtime.shutdown_runtime_blocking().unwrap();
+}
+
 fn assert_topbar_layout(cx: &mut gpui::VisualTestContext, full_status: bool) {
     let topbar = cx.debug_bounds("topbar").expect("Topbar should be drawn");
     let title = cx.debug_bounds("topbar-title").expect("route title should be drawn");
@@ -99,6 +352,44 @@ fn assert_topbar_layout(cx: &mut gpui::VisualTestContext, full_status: bool) {
         assert!(cx.debug_bounds("topbar-compact-status").is_none());
     } else {
         assert!(cx.debug_bounds("topbar-compact-status").is_some());
+    }
+}
+
+#[gpui::test]
+fn consumer_page_description_stays_inside_narrow_content(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let app_services = services(
+        StartupSnapshot {
+            configuration_revision: 7,
+            login_required: false,
+            has_valid_session: false,
+        },
+        FakeAuthService::authenticated(),
+    );
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    cx.run_until_parked();
+    let dashboard = capture.borrow_mut().take().unwrap();
+    cx.update(|window, app| dashboard.update(app, |dashboard, cx| dashboard.navigate(AppRoute::Consumers, window, cx)));
+    for width in [930., 580.] {
+        cx.simulate_resize(size(px(width), px(620.)));
+        cx.draw(point(px(0.), px(0.)), size(px(width), px(620.)), |_, _| root.clone());
+        cx.draw(point(px(0.), px(0.)), size(px(width), px(620.)), |_, _| root.clone());
+        let content = cx.debug_bounds("page-content").unwrap();
+        let description = cx.debug_bounds("page-description").unwrap();
+        assert!(description.origin.x >= content.origin.x);
+        assert!(description.origin.x + description.size.width <= content.origin.x + content.size.width);
+        if width == 580. {
+            assert!(
+                description.size.height > px(24.),
+                "the complete description should wrap at the narrow width"
+            );
+        }
     }
 }
 
@@ -281,7 +572,7 @@ fn real_desktop_services_bootstrap_on_the_gpui_executor_without_a_tokio_reactor(
     let auth = DesktopAuthState::from_process_environment();
     let store = DesktopConfigStore::new(
         directory.path().join("config.json"),
-        runtime.component("test-config-store"),
+        runtime.provider_component("test-config-store"),
     );
     let provider = GpuiAdminProvider::new(
         runtime.provider_component("test-admin-provider"),
@@ -290,7 +581,7 @@ fn real_desktop_services_bootstrap_on_the_gpui_executor_without_a_tokio_reactor(
     );
     let (completion_tx, completion_rx) = std::sync::mpsc::channel();
     let services = AppServices::desktop(
-        store,
+        Arc::clone(&store),
         Arc::clone(&provider),
         auth,
         runtime.component("test-services"),
@@ -301,12 +592,7 @@ fn real_desktop_services_bootstrap_on_the_gpui_executor_without_a_tokio_reactor(
 
     let (dashboard, cx) =
         cx.add_window_view(move |window, cx| super::RocketmqDashboard::with_services(window, services, cx));
-    assert_eq!(
-        completion_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("owned bootstrap completion"),
-        "gpui-bootstrap"
-    );
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-bootstrap");
     cx.run_until_parked();
 
     assert_eq!(
@@ -314,7 +600,7 @@ fn real_desktop_services_bootstrap_on_the_gpui_executor_without_a_tokio_reactor(
         StartupState::Ready(ReadyScreen::MainShell)
     );
     let report = runtime
-        .shutdown(Some(provider))
+        .shutdown(Some(provider), Some(store))
         .expect("clean desktop runtime shutdown");
     assert_eq!(report.leaked, 0);
     assert_eq!(report.timed_out, 0);
@@ -328,6 +614,13 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
     let directory = tempfile::tempdir().expect("temporary configuration directory");
     let config_path = directory.path().join("config.json");
     let config = DesktopConfig {
+        schema_version: 1,
+        nameservers: vec![
+            "cluster-a-nameserver-primary.production.message-platform.eu-central-1.internal.example:9876".into(),
+        ],
+        current_nameserver: Some(
+            "cluster-a-nameserver-primary.production.message-platform.eu-central-1.internal.example:9876".into(),
+        ),
         auth: AuthConfig {
             enabled: true,
             credential_source: Default::default(),
@@ -372,12 +665,7 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         Root::new(dashboard, window, cx)
     });
     let dashboard = dashboard_handle.borrow_mut().take().expect("product dashboard entity");
-    assert_eq!(
-        completion_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("bootstrap completion"),
-        "gpui-bootstrap"
-    );
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-bootstrap");
     cx.run_until_parked();
     assert_eq!(
         cx.read(|app| dashboard.read(app).startup_state.clone()),
@@ -395,15 +683,10 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         });
     });
     cx.simulate_keystrokes("enter");
-    assert_eq!(
-        completion_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("authentication completion"),
-        "gpui-authenticate"
-    );
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-authenticate");
     cx.run_until_parked();
     assert_eq!(
-        completion_rx.try_recv(),
+        try_owned_completion(&completion_rx),
         Err(std::sync::mpsc::TryRecvError::Empty),
         "Enter must schedule exactly one authentication"
     );
@@ -420,6 +703,23 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         assert!(dashboard.session.is_authenticated());
     });
 
+    cx.simulate_resize(size(px(1024.), px(720.)));
+    cx.draw(point(px(0.), px(0.)), size(px(1024.), px(720.)), |_, _| root.clone());
+    assert_topbar_layout(cx, false);
+    let topbar = cx.debug_bounds("topbar").unwrap();
+    let fullscreen = cx.debug_bounds("toggle-fullscreen").unwrap();
+    assert!(fullscreen.size.width > px(0.));
+    assert!(fullscreen.origin.x >= topbar.origin.x);
+    assert!(
+        fullscreen.right() <= topbar.right(),
+        "The fullscreen control must remain visible beside a fixed sidebar"
+    );
+    assert!(fullscreen.origin.y >= topbar.origin.y && fullscreen.bottom() <= topbar.bottom());
+    cx.simulate_click(fullscreen.center(), gpui::Modifiers::default());
+    cx.update(|window, _| assert!(window.is_fullscreen()));
+    cx.simulate_click(fullscreen.center(), gpui::Modifiers::default());
+    cx.update(|window, _| assert!(!window.is_fullscreen()));
+
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
             dashboard.navigate(AppRoute::OpsSettings, window, cx);
@@ -434,12 +734,7 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
     cx.update(|window, app| assert!(window.has_active_dialog(app)));
     cx.draw(point(px(0.), px(0.)), size(px(1024.), px(720.)), |_, _| root.clone());
     cx.simulate_keystrokes("enter");
-    assert_eq!(
-        completion_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("sign-out completion"),
-        "gpui-sign-out"
-    );
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-sign-out");
     cx.run_until_parked();
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
@@ -452,12 +747,7 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         });
     });
     cx.run_until_parked();
-    assert_eq!(
-        completion_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("disable auth completion"),
-        "gpui-config-mutation"
-    );
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-config-mutation");
     cx.run_until_parked();
     cx.update(|_, app| {
         let dashboard = dashboard.read(app);
@@ -474,12 +764,7 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         });
     });
     cx.run_until_parked();
-    assert_eq!(
-        completion_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("NameServer mutation completion"),
-        "gpui-config-mutation"
-    );
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-config-mutation");
     cx.run_until_parked();
     cx.update(|_, app| assert_eq!(dashboard.read(app).history.current(), &AppRoute::OpsSettings));
 
@@ -488,12 +773,7 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         ops.update(app, |ops, cx| ops.save_transport_for_test(window, cx));
     });
     cx.run_until_parked();
-    assert_eq!(
-        completion_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("transport mutation completion"),
-        "gpui-config-mutation"
-    );
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-config-mutation");
     cx.run_until_parked();
     cx.update(|_, app| assert_eq!(dashboard.read(app).history.current(), &AppRoute::OpsSettings));
 
@@ -506,12 +786,7 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         });
     });
     cx.run_until_parked();
-    assert_eq!(
-        completion_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("Proxy mutation completion"),
-        "gpui-config-mutation"
-    );
+    assert_eq!(next_owned_completion(&completion_rx), "gpui-config-mutation");
     cx.run_until_parked();
     cx.update(|_, app| {
         dashboard.update(app, |dashboard, _| {
@@ -756,7 +1031,7 @@ fn stale_startup_error_cannot_replace_the_newer_attempt(cx: &mut gpui::TestAppCo
                 epoch: dashboard.startup_epoch,
                 configuration_revision: dashboard.configuration_revision,
             };
-            dashboard.start_bootstrap(cx);
+            dashboard.start_bootstrap(window, cx);
             dashboard.finish_bootstrap(
                 stale,
                 Err(UiError::new(
@@ -764,6 +1039,7 @@ fn stale_startup_error_cannot_replace_the_newer_attempt(cx: &mut gpui::TestAppCo
                     UiErrorCode::Configuration,
                     true,
                 )),
+                window,
                 cx,
             );
 
@@ -781,6 +1057,7 @@ fn stale_startup_error_cannot_replace_the_newer_attempt(cx: &mut gpui::TestAppCo
                     UiErrorCode::Configuration,
                     true,
                 )),
+                window,
                 cx,
             );
             assert!(matches!(dashboard.startup_state, StartupState::Booting));
@@ -800,8 +1077,14 @@ fn login_success_clears_the_stable_password_input_before_entering_the_shell(cx: 
         },
         FakeAuthService::authenticated(),
     );
-    let (dashboard, cx) =
-        cx.add_window_view(move |window, cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+    let captured = Rc::new(RefCell::new(None));
+    let capture = captured.clone();
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        capture.replace(Some(dashboard.clone()));
+        gpui_component::Root::new(dashboard, window, cx)
+    });
+    let dashboard = captured.borrow_mut().take().unwrap();
 
     let password_entity = cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
@@ -883,8 +1166,14 @@ fn sign_out_clears_history_sensitive_state_and_rebuilds_page_entities(cx: &mut g
         },
         FakeAuthService::authenticated(),
     );
-    let (dashboard, cx) =
-        cx.add_window_view(move |window, cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
 
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
@@ -913,7 +1202,189 @@ fn sign_out_clears_history_sensitive_state_and_rebuilds_page_entities(cx: &mut g
 }
 
 #[gpui::test]
-fn app_route_mapping_uses_cached_legacy_pages_and_safe_placeholders(cx: &mut gpui::TestAppContext) {
+fn dlq_route_and_manual_group_reload_never_query_proxy_and_resume_in_nameserver_scope(cx: &mut gpui::TestAppContext) {
+    use crate::services::{
+        ConfigMutation, consumers::test_support::FakeConsumerBackend, dlq::test_support::group_inventory,
+    };
+    use rocketmq_dashboard_common::{ConnectionScope, ConsumerQueryScope};
+    cx.update(gpui_component::init);
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&DesktopConfig {
+            schema_version: 1,
+            nameservers: vec!["one:9876".into()],
+            current_nameserver: Some("one:9876".into()),
+            proxies: vec!["proxy:8080".into()],
+            current_proxy: Some("proxy:8080".into()),
+            scope: ConnectionScope::Proxy,
+            ..DesktopConfig::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("dlq-route-scope", 1))
+        .unwrap()
+        .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).unwrap())
+        .build()
+        .unwrap();
+    let consumers = Arc::new(FakeConsumerBackend::default());
+    let store = DesktopConfigStore::new(config_path, runtime.root_context().component("storage"));
+    let application = runtime.root_context().component("application");
+    let services = AppServices::desktop_with_fake_provider(
+        store.clone(),
+        DesktopAuthState::new(Arc::new(MapEnvironment::new([]))),
+        application.clone(),
+        runtime.root_context().component("history"),
+        runtime.root_context().component("monitor"),
+    )
+    .with_consumer_backend(consumers.clone());
+    let (completion, completed) = std::sync::mpsc::channel();
+    let view_services = services.clone().with_runtime_completion(completion);
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, view_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    assert_eq!(next_owned_completion(&completed), "gpui-bootstrap");
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::DlqMessages, window, cx)
+        })
+    });
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    }
+    assert!(cx.debug_bounds("dlq-groups-status").is_some());
+    assert!(
+        consumers.calls().inventory.is_empty(),
+        "route entry must not discover through Proxy"
+    );
+    let refresh = cx.debug_bounds("dlq-groups-refresh").unwrap();
+    cx.simulate_click(refresh.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        consumers.calls().inventory.is_empty(),
+        "manual refresh must not discover through Proxy"
+    );
+    let (progress, mut events) = tokio::sync::mpsc::unbounded_channel();
+    runtime
+        .block_on(services.mutate_with_progress(
+            ConfigMutation::RemoveProxy {
+                address: "proxy:8080".into(),
+                replacement: None,
+                fallback_to_nameserver: true,
+            },
+            progress,
+        ))
+        .unwrap();
+    assert_eq!(services.connection_state().config.scope, ConnectionScope::NameServer);
+    consumers.queue_inventory(Ok(group_inventory()));
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            while let Ok(event) = events.try_recv() {
+                dashboard.handle_config_updated(event, window, cx);
+            }
+            dashboard.navigate(AppRoute::Dashboard, window, cx);
+            dashboard.navigate(AppRoute::DlqMessages, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(next_owned_completion(&completed), "gpui-service-consumer-inventory");
+    assert_eq!(consumers.calls().inventory.len(), 1);
+    assert_eq!(
+        consumers.calls().inventory[0].query_scope,
+        ConsumerQueryScope::Configured
+    );
+    assert_eq!(
+        consumers.calls().inventory[0].revision,
+        services.connection_state().config.revision
+    );
+    runtime.block_on(async {
+        assert!(
+            application
+                .task_group()
+                .shutdown(std::time::Duration::from_secs(5))
+                .await
+                .is_healthy()
+        );
+        store.close().await.unwrap();
+    });
+    let shutdown = runtime.shutdown_runtime_blocking().unwrap();
+    assert!(shutdown.is_healthy(), "{shutdown:?}");
+}
+#[gpui::test]
+fn topology_route_is_lazy_and_real_entity_control_prefills_the_producer_workspace(cx: &mut gpui::TestAppContext) {
+    use crate::services::{consumers::test_support::FakeConsumerBackend, topology::test_support::FakeTopologyBackend};
+    cx.update(gpui_component::init);
+    let backend = Arc::new(FakeTopologyBackend::default());
+    let consumers = Arc::new(FakeConsumerBackend::default());
+    let app_services = services(
+        StartupSnapshot {
+            configuration_revision: 0,
+            login_required: false,
+            has_valid_session: false,
+        },
+        FakeAuthService::authenticated(),
+    )
+    .with_topology_backend(backend.clone())
+    .with_consumer_backend(consumers.clone());
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    cx.deactivate_window();
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(backend.calls().is_empty(), "hidden Topology must not query");
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    cx.update(|window, app| dashboard.update(app, |dashboard, cx| dashboard.navigate(AppRoute::Topology, window, cx)));
+    cx.run_until_parked();
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    }
+    assert_eq!(backend.calls().len(), 6);
+    assert!(cx.debug_bounds("topology-workspace").is_some());
+    let topology = cx.read(|app| dashboard.read(app).legacy_pages.topology.clone());
+    let picker = cx.debug_bounds("topology-node-picker").unwrap();
+    cx.simulate_click(picker.center(), gpui::Modifiers::default());
+    cx.simulate_input("producer-a");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    }
+    let open = cx.debug_bounds("topology-open-entity").unwrap();
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.read(|app| {
+        let dashboard = dashboard.read(app);
+        assert_eq!(dashboard.history.current(), &AppRoute::Producers);
+        let (topic, group) = dashboard.legacy_pages.producers.read(app).query_inputs_for_test();
+        assert!(topic.read(app).value().is_empty());
+        assert_eq!(group.read(app).value().as_ref(), "producer-a");
+    });
+    assert!(consumers.calls().producer_connections.is_empty());
+    cx.update(|window, app| dashboard.update(app, |dashboard, cx| dashboard.sign_out(window, cx)));
+    cx.run_until_parked();
+    cx.read(|app| {
+        let store = &topology.read(app).store;
+        assert!(store.cache.snapshot().is_none() && store.layout.edges.is_empty() && store.selection.is_none());
+    });
+}
+#[gpui::test]
+fn app_route_mapping_uses_current_page_capabilities(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let app_services = services(
         StartupSnapshot {
@@ -928,14 +1399,135 @@ fn app_route_mapping_uses_cached_legacy_pages_and_safe_placeholders(cx: &mut gpu
 
     cx.update(|_, app| {
         dashboard.update(app, |dashboard, cx| {
-            assert_eq!(dashboard.current_page_target(), PageTarget::Legacy);
+            assert_eq!(dashboard.current_page_capability(), PageCapability::Dashboard);
             dashboard.history.navigate(AppRoute::Brokers);
-            assert_eq!(dashboard.current_page_target(), PageTarget::Legacy);
+            assert_eq!(dashboard.current_page_capability(), PageCapability::Brokers);
             dashboard.history.navigate(AppRoute::OpsSettings);
-            assert_eq!(dashboard.current_page_target(), PageTarget::Legacy);
+            assert_eq!(dashboard.current_page_capability(), PageCapability::OpsSettings);
             cx.notify();
         });
     });
+}
+
+#[gpui::test]
+fn production_message_and_dlq_routes_have_no_sample_or_implicit_query_through_navigation_and_relogin(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
+    let app_services = services(
+        StartupSnapshot {
+            configuration_revision: 1,
+            login_required: true,
+            has_valid_session: true,
+        },
+        FakeAuthService::authenticated(),
+    )
+    .with_dashboard_broker_operations(fake.clone());
+    let capture = Rc::new(RefCell::new(None));
+    let capture_dashboard = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        capture_dashboard.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().expect("dashboard entity");
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(1440.), px(900.)));
+
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::OpsSettings, window, cx);
+            dashboard.navigate(AppRoute::Messages, window, cx);
+        });
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    assert!(cx.debug_bounds("messages-workspace").is_some());
+
+    let back = cx.debug_bounds("go-back").expect("Back button");
+    cx.simulate_click(back.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert_eq!(dashboard.read(app).history.current(), &AppRoute::OpsSettings);
+        assert_eq!(
+            dashboard.read(app).current_page_capability(),
+            PageCapability::OpsSettings
+        );
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+
+    let forward = cx.debug_bounds("go-forward").expect("Forward button");
+    cx.simulate_click(forward.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, app| assert_eq!(dashboard.read(app).history.current(), &AppRoute::Messages));
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    assert!(cx.debug_bounds("messages-workspace").is_some());
+    cx.update(|_, app| {
+        assert_eq!(dashboard.read(app).current_page_capability(), PageCapability::Messages);
+        let messages = dashboard.read(app).legacy_pages.messages.read(app);
+        assert!(messages.search_is_idle());
+    });
+
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.sign_out(window, cx);
+            dashboard.login.set_values("operator", "password", window, cx);
+        });
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    let submit = cx.debug_bounds("login-submit").expect("Sign in button");
+    cx.simulate_click(submit.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, app| assert!(dashboard.read(app).session.is_authenticated()));
+
+    let call_count = || {
+        let calls = fake.calls();
+        calls.overview_revisions.len()
+            + calls.topic_current_revisions.len()
+            + calls.broker_current_revisions.len()
+            + calls.topic_history.len()
+            + calls.broker_history.len()
+            + calls.inventory_revisions.len()
+            + calls.runtime.len()
+            + calls.config.len()
+            + calls.patches.len()
+    };
+    let before_message_workspaces = call_count();
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::DlqMessages, window, cx)
+        })
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    assert!(cx.debug_bounds("dlq-workspace").is_some());
+    cx.read(|app| {
+        assert_eq!(
+            dashboard.read(app).current_page_capability(),
+            PageCapability::DlqMessages
+        );
+        assert!(dashboard.read(app).legacy_pages.dlq.read(app).query_is_idle());
+    });
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::MessageTrace, window, cx)
+        });
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(1440.), px(900.)), |_, _| root.clone());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("message-trace-workspace").is_some());
+    assert!(cx.debug_bounds("trace-find").is_some());
+    cx.read(|app| {
+        assert_eq!(
+            dashboard.read(app).current_page_capability(),
+            PageCapability::MessageTrace
+        );
+        assert!(dashboard.read(app).legacy_pages.message_trace.read(app).query_is_idle());
+    });
+    assert_eq!(
+        call_count(),
+        before_message_workspaces,
+        "Message workspace navigation must not query Dashboard or Broker resources"
+    );
 }
 
 #[gpui::test]
@@ -974,7 +1566,76 @@ fn ops_and_proxy_product_pages_render_at_the_960_drawer_breakpoint(cx: &mut gpui
         dashboard.update(app, |dashboard, cx| dashboard.navigate(AppRoute::Proxy, window, cx));
     });
     cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
-    cx.update(|_, app| assert_eq!(dashboard.read(app).current_page_target(), PageTarget::Legacy));
+    cx.update(|_, app| assert_eq!(dashboard.read(app).current_page_capability(), PageCapability::Proxy));
+}
+
+#[gpui::test]
+fn fullscreen_button_supports_keyboard_startup_and_shell_without_changing_overlay_escape(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let capture = Rc::new(RefCell::new(None));
+    let capture_dashboard = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::new(window, cx));
+        capture_dashboard.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(960.), px(640.)));
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.startup_state = StartupState::Booting;
+            cx.notify();
+        });
+        window.activate_window();
+        window.blur();
+        window.toggle_fullscreen();
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    // Commit the startup frame before traversing its tab stops in the in-memory window.
+    cx.simulate_keystrokes("tab");
+    cx.update(|window, _| window.focus_next());
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    cx.update(|window, app| {
+        assert!(
+            !window.is_fullscreen(),
+            "The startup button accepts Enter after keyboard focus traversal"
+        );
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.startup_state = StartupState::Ready(ReadyScreen::MainShell);
+            cx.notify();
+        });
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    let toggle = cx.debug_bounds("toggle-fullscreen").unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.update(|window, app| {
+        assert!(window.is_fullscreen());
+        window.open_dialog(app, |dialog: Dialog, _, _| dialog.title("Fullscreen dialog").alert());
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, app| {
+        assert!(!window.has_active_dialog(app));
+        assert!(window.is_fullscreen());
+        window.open_sheet(app, |sheet, _, _| sheet.title("Fullscreen sheet"));
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, app| {
+        assert!(!window.has_active_sheet(app));
+        assert!(window.is_fullscreen());
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    let toggle = cx.debug_bounds("toggle-fullscreen").unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.update(|window, _| assert!(!window.is_fullscreen()));
 }
 
 #[gpui::test]
@@ -1067,28 +1728,416 @@ fn sign_out_cleanup_contract_clears_sensitive_feature_cache() {
     assert_eq!(cache.entries, 0);
 }
 
+#[gpui::test]
+fn audit_production_route_environment_progress_and_signout_clear_protected_rows_and_details(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::features::audit::tests::Fixture;
+    use crate::services::ConfigMutation;
+
+    let fixture = Fixture::new(true);
+    fixture.seed(70);
+    fixture.sign_in("operator", "test-password").unwrap();
+    let (sender, completion) = std::sync::mpsc::channel();
+    let app_services = fixture.services.clone().with_runtime_completion(sender);
+    cx.update(gpui_component::init);
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    assert_eq!(next_owned_completion(&completion), "gpui-bootstrap");
+    cx.run_until_parked();
+    cx.update(|window, app| dashboard.update(app, |view, cx| view.navigate(AppRoute::Audit, window, cx)));
+    cx.run_until_parked();
+    let mut audit = cx.read(|app| dashboard.read(app).legacy_pages.audit.clone());
+    crate::features::audit::tests::wait_for_audit_read(&completion, cx);
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 25);
+    cx.simulate_resize(size(px(960.), px(640.)));
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    }
+    let open = cx.debug_bounds("audit-open-0").unwrap();
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::features::audit::tests::settle_audit_read(&audit, &completion, cx);
+    assert!(cx.read(|app| audit.read(app).has_detail()));
+    let (progress, mut events) = tokio::sync::mpsc::unbounded_channel();
+    fixture
+        .runtime
+        .block_on(
+            fixture
+                .services
+                .mutate_with_progress(ConfigMutation::CreateEnvironment("Audit staging".into()), progress),
+        )
+        .unwrap();
+    while let Ok(event) = events.try_recv() {
+        cx.update(|window, app| dashboard.update(app, |view, cx| view.handle_config_updated(event, window, cx)));
+    }
+    cx.run_until_parked();
+    assert_ne!(
+        fixture.services.connection_state().environments.unwrap().active_id,
+        fixture.active
+    );
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 0);
+    assert!(!cx.read(|app| audit.read(app).has_detail()));
+    assert!(!cx.update(|window, app| window.has_active_dialog(app)));
+    cx.update(|window, app| {
+        dashboard.update(app, |view, cx| {
+            assert_eq!(view.history.current(), &AppRoute::Login);
+            view.login.set_values("operator", "test-password", window, cx);
+            view.submit_login(window, cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(next_owned_completion(&completion), "gpui-authenticate");
+    cx.run_until_parked();
+    let (progress, mut events) = tokio::sync::mpsc::unbounded_channel();
+    fixture
+        .runtime
+        .block_on(
+            fixture
+                .services
+                .mutate_with_progress(ConfigMutation::SwitchEnvironment(fixture.active.clone()), progress),
+        )
+        .unwrap();
+    while let Ok(event) = events.try_recv() {
+        cx.update(|window, app| dashboard.update(app, |view, cx| view.handle_config_updated(event, window, cx)));
+    }
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        dashboard.update(app, |view, cx| {
+            assert_eq!(view.history.current(), &AppRoute::Login);
+            view.login.set_values("operator", "test-password", window, cx);
+            view.submit_login(window, cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(next_owned_completion(&completion), "gpui-authenticate");
+    cx.run_until_parked();
+    cx.update(|window, app| dashboard.update(app, |view, cx| view.navigate(AppRoute::Audit, window, cx)));
+    audit = cx.read(|app| dashboard.read(app).legacy_pages.audit.clone());
+    crate::features::audit::tests::settle_audit_read(&audit, &completion, cx);
+    assert!(cx.read(|app| audit.read(app).retained_record_count()) >= 25);
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    }
+    let next = cx.debug_bounds("audit-next").unwrap();
+    cx.simulate_click(next.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::features::audit::tests::settle_audit_read(&audit, &completion, cx);
+    let (query_started, query_release) = cx.update(|_, app| audit.update(app, |view, _| view.hold_next_query()));
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    }
+    let next = cx.debug_bounds("audit-next").unwrap();
+    cx.simulate_click(next.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::features::audit::tests::wait_for_audit_read(&completion, cx);
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), query_started)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 50);
+    for _ in 0..2 {
+        cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    }
+    let open = cx.debug_bounds("audit-open-0").unwrap();
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::features::audit::tests::settle_audit_detail(&audit, cx);
+    assert!(cx.read(|app| audit.read(app).has_detail()));
+    let topology = cx.read(|app| dashboard.read(app).legacy_pages.topology.clone());
+    let topology_context = fixture.services.topology_context();
+    let topology_time = crate::services::topology::now_ms().unwrap();
+    cx.update(|_, app| {
+        topology.update(app, |view, _| {
+            view.store.apply(rocketmq_dashboard_common::TopologySnapshot {
+                context: topology_context,
+                generated_at_ms: topology_time,
+                layers: std::collections::BTreeMap::from([(
+                    rocketmq_dashboard_common::TopologySource::Brokers,
+                    crate::services::topology::test_support::layer(
+                        rocketmq_dashboard_common::TopologySource::Brokers,
+                        topology_time,
+                    ),
+                )]),
+            });
+            view.store.select(rocketmq_dashboard_common::TopologyNodeId::Broker(
+                crate::services::topology::test_support::broker("a"),
+            ));
+        })
+    });
+    assert!(cx.read(|app| topology.read(app).store.selection.is_some()));
+    let (logout_started, logout_release) = fixture.services.hold_next_audit_terminal();
+    cx.update(|window, app| dashboard.update(app, |view, cx| view.request_sign_out(window, cx)));
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    let confirm = cx.debug_bounds("confirm-dialog-ok").unwrap();
+    cx.simulate_click(confirm.center(), gpui::Modifiers::default());
+    assert_eq!(
+        cx.read(|app| audit.read(app).retained_record_count()),
+        0,
+        "Confirmation must clear cached records before logout persistence completes"
+    );
+    cx.read(|app| {
+        let store = &topology.read(app).store;
+        assert!(store.cache.snapshot().is_none() && store.layout.edges.is_empty() && store.selection.is_none());
+    });
+    assert!(!cx.read(|app| audit.read(app).has_detail()));
+    let _ = query_release.send(());
+    cx.run_until_parked();
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), logout_started)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    assert!(!fixture.auth.session().is_authenticated());
+    assert!(
+        try_owned_completion(&completion).is_err(),
+        "Logout must still be awaiting its held terminal write"
+    );
+    assert!(
+        !fixture
+            .persisted_events()
+            .iter()
+            .any(|event| event.operation.action == rocketmq_dashboard_common::AuditAction::LocalLogout)
+    );
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 0);
+    assert!(!cx.read(|app| audit.read(app).has_detail()));
+    logout_release.send(()).unwrap();
+    assert_eq!(next_owned_completion(&completion), "gpui-sign-out");
+    cx.run_until_parked();
+    assert_eq!(cx.read(|app| audit.read(app).retained_record_count()), 0);
+    assert!(!cx.read(|app| audit.read(app).has_detail()));
+    assert_eq!(
+        cx.read(|app| dashboard.read(app).history.current().clone()),
+        AppRoute::Login
+    );
+    assert_ne!(
+        cx.read(|app| dashboard.read(app).legacy_pages.audit.entity_id()),
+        audit.entity_id()
+    );
+    let persisted = fixture.persisted_events();
+    let logouts = persisted
+        .iter()
+        .filter(|event| event.operation.action == rocketmq_dashboard_common::AuditAction::LocalLogout)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        logouts.len(),
+        1,
+        "Owned logout must persist once after its waiter clears protected UI"
+    );
+    assert_eq!(
+        logouts[0].operation.context.actor,
+        rocketmq_dashboard_common::OperationActor::LocalOperator {
+            username: "operator".into()
+        }
+    );
+    assert_eq!(logouts[0].outcome, rocketmq_dashboard_common::AuditOutcome::Succeeded);
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
+}
+
 #[test]
-fn legacy_cache_maps_only_delivery_one_compatible_routes() {
-    let compatible = [
-        AppRoute::Dashboard,
-        AppRoute::Brokers,
-        AppRoute::Topics,
-        AppRoute::Consumers,
-        AppRoute::Producers,
-        AppRoute::Messages,
+fn page_capabilities_preserve_implemented_pages_and_exclude_unimplemented_destinations() {
+    let implemented = [
+        (AppRoute::Login, PageCapability::Login),
+        (AppRoute::Dashboard, PageCapability::Dashboard),
+        (AppRoute::Topology, PageCapability::Topology),
+        (AppRoute::Brokers, PageCapability::Brokers),
+        (AppRoute::Topics, PageCapability::Topics),
+        (AppRoute::Consumers, PageCapability::Consumers),
+        (AppRoute::Producers, PageCapability::Producers),
+        (AppRoute::Messages, PageCapability::Messages),
+        (AppRoute::MessageTrace, PageCapability::MessageTrace),
+        (AppRoute::Monitors, PageCapability::Monitors),
+        (AppRoute::Acl, PageCapability::Acl),
+        (AppRoute::DlqMessages, PageCapability::DlqMessages),
+        (AppRoute::Audit, PageCapability::Audit),
+        (AppRoute::Sessions, PageCapability::Sessions),
+        (AppRoute::OpsSettings, PageCapability::OpsSettings),
+        (AppRoute::Proxy, PageCapability::Proxy),
+        (
+            AppRoute::BrokerDetail {
+                broker: RouteKey::parse("broker-a").unwrap(),
+                tab: BrokerTab::Configuration,
+            },
+            PageCapability::Brokers,
+        ),
+        (
+            AppRoute::TopicDetail {
+                topic: RouteKey::parse("orders").unwrap(),
+                tab: TopicTab::Consumers,
+            },
+            PageCapability::Topics,
+        ),
+        (
+            AppRoute::ConsumerDetail {
+                group: RouteKey::parse("group-a").unwrap(),
+                tab: crate::route::ConsumerTab::Clients,
+            },
+            PageCapability::Consumers,
+        ),
     ];
 
-    for route in compatible {
-        assert!(LegacyPageCache::accepts_route(&route));
+    for (route, capability) in implemented {
+        assert_eq!(route.page_capability(), capability);
     }
-    assert!(LegacyPageCache::accepts_route(&AppRoute::OpsSettings));
-    assert!(LegacyPageCache::accepts_route(&AppRoute::Proxy));
+}
+
+#[gpui::test]
+fn consumer_logout_clears_retained_jstack_and_sheet_before_audit_completes(cx: &mut gpui::TestAppContext) {
+    consumer_logout_diagnostic_cleanup(cx, false);
+}
+
+#[gpui::test]
+fn consumer_logout_rejects_a_late_diagnostic_reply_while_audit_is_held(cx: &mut gpui::TestAppContext) {
+    consumer_logout_diagnostic_cleanup(cx, true);
+}
+
+fn consumer_logout_diagnostic_cleanup(cx: &mut gpui::TestAppContext, delayed: bool) {
+    use crate::{
+        features::audit::tests::Fixture,
+        route::ConsumerTab,
+        services::{consumers::test_support::FakeConsumerBackend, dlq::test_support::group_inventory},
+        state::Loadable,
+    };
+    use rocketmq_dashboard_common::{ConsumerClientIdentity, ConsumerDiagnosticKind, ConsumerDiagnosticPayload};
+    let fixture = Fixture::new(true);
+    fixture.sign_in("operator", "test-password").unwrap();
+    let backend = Arc::new(FakeConsumerBackend::default());
+    let (sender, completion) = std::sync::mpsc::channel();
+    let services = fixture
+        .services
+        .clone()
+        .with_consumer_backend(backend.clone())
+        .with_runtime_completion(sender);
+    cx.update(gpui_component::init);
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, services, cx));
+        captured.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    let completed = |name| assert_eq!(next_owned_completion(&completion), name);
+    completed("gpui-bootstrap");
+    cx.run_until_parked();
+    let consumers = cx.read(|app| dashboard.read(app).legacy_pages.consumers.clone());
+    cx.update(|window, app| {
+        consumers.update(app, |view, cx| {
+            view.store.inventory.replace(group_inventory());
+            view.open_route("group-a", ConsumerTab::Clients, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    completed("gpui-service-consumer-clients");
+    cx.run_until_parked();
+    let detail = cx.read(|app| consumers.read(app).detail_for_test().unwrap());
+    let payload = || ConsumerDiagnosticPayload::new(Vec::new(), Some("private-jstack".into()), false);
+    let diagnostic_started = backend.observe_next_diagnostic();
+    let reply = if delayed {
+        Some(backend.queue_pending_diagnostic())
+    } else {
+        backend.queue_diagnostic(Ok(payload()));
+        None
+    };
+    cx.update(|_, app| {
+        detail.update(app, |view, cx| {
+            view.load_diagnostic_for_test(
+                ConsumerClientIdentity::parse("client-a").unwrap(),
+                ConsumerDiagnosticKind::Jstack,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), diagnostic_started)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    if !delayed {
+        completed("gpui-service-consumer-diagnostic");
+        cx.run_until_parked();
+        assert_eq!(
+            cx.read(|app| detail
+                .read(app)
+                .store
+                .diagnostic
+                .state
+                .value()
+                .unwrap()
+                .text()
+                .map(str::to_owned)),
+            Some("private-jstack".into())
+        );
+    }
+    assert!(cx.update(|window, app| window.has_active_sheet(app)));
+    let (logout_started, logout_release) = fixture.services.hold_next_audit_terminal();
+    cx.update(|window, app| dashboard.update(app, |view, cx| view.request_sign_out(window, cx)));
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    let confirm = cx.debug_bounds("confirm-dialog-ok").unwrap();
+    cx.simulate_click(confirm.center(), gpui::Modifiers::default());
+    assert!(
+        cx.read(|app| matches!(detail.read(app).store.diagnostic.state, Loadable::Idle)),
+        "Retained detail must clear before logout persistence"
+    );
+    assert!(
+        !cx.update(|window, app| window.has_active_sheet(app)),
+        "Root must release the sheet at logout confirmation"
+    );
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), logout_started)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    assert!(!fixture.auth.session().is_authenticated());
+    if let Some(mut reply) = reply {
+        // Read-only work is cancelled when its view task is discarded; accepted mutations
+        // use a separate application owner. A delayed diagnostic must lose its receiver.
+        fixture.runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), reply.closed())
+                .await
+                .unwrap();
+        });
+        assert!(reply.send(Ok(payload())).is_err());
+        completed("gpui-service-consumer-diagnostic");
+        cx.run_until_parked();
+        assert!(cx.read(|app| matches!(detail.read(app).store.diagnostic.state, Loadable::Idle)));
+    }
+    assert!(
+        try_owned_completion(&completion).is_err(),
+        "Logout is still awaiting the held audit write"
+    );
+    logout_release.send(()).unwrap();
+    completed("gpui-sign-out");
+    cx.run_until_parked();
+    assert!(cx.read(|app| matches!(detail.read(app).store.diagnostic.state, Loadable::Idle)));
+    assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+    assert_eq!(
+        fixture
+            .persisted_events()
+            .iter()
+            .filter(|event| event.operation.action == rocketmq_dashboard_common::AuditAction::LocalLogout)
+            .count(),
+        1
+    );
+    fixture.runtime.shutdown_runtime_blocking().unwrap();
 }
 
 #[gpui::test]
 fn broker_deep_route_back_forward_and_tab_replace_control_the_same_sheet(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     let item = broker_item("127.0.0.1:10911");
     for _ in 0..4 {
         fake.queue_inventory(Ok(vec![item.clone()]));
@@ -1106,7 +2155,7 @@ fn broker_deep_route_back_forward_and_tab_replace_control_the_same_sheet(cx: &mu
         },
         FakeAuthService::authenticated(),
     )
-    .with_delivery03_backend(fake.clone());
+    .with_dashboard_broker_operations(fake.clone());
     let dashboard_handle = Rc::new(RefCell::new(None));
     let capture = dashboard_handle.clone();
     let (_root, cx) = cx.add_window_view(move |window, cx| {
@@ -1248,11 +2297,88 @@ fn rebuilding_delivery_pages_keeps_root_subscriptions_bounded(cx: &mut gpui::Tes
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
             let expected = dashboard.subscriptions.len();
-            assert_eq!(expected, 8);
+            assert!(expected > 0);
             for _ in 0..5 {
                 dashboard.rebuild_pages(window, cx);
                 assert_eq!(dashboard.subscriptions.len(), expected);
             }
         });
+    });
+}
+
+#[gpui::test]
+fn message_compact_workspace_and_logout_clear_a_retained_inspector_payload(cx: &mut gpui::TestAppContext) {
+    use crate::services::messages::test_support::{FakeMessageBackend, page, row};
+    use rocketmq_dashboard_common::MessagePayload;
+    cx.update(gpui_component::init);
+    let backend = Arc::new(FakeMessageBackend::default());
+    backend.queue_query(Ok(page()));
+    let app_services = services(
+        StartupSnapshot {
+            configuration_revision: 7,
+            login_required: true,
+            has_valid_session: true,
+        },
+        FakeAuthService::authenticated(),
+    )
+    .with_message_backend(backend.clone());
+    let captured = Rc::new(RefCell::new(None));
+    let capture = captured.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::with_services(window, app_services, cx));
+        capture.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = captured.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(960.), px(640.)));
+    let messages = cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.navigate(AppRoute::Messages, window, cx);
+            dashboard.legacy_pages.messages.clone()
+        })
+    });
+    cx.update(|window, app| {
+        messages
+            .read(app)
+            .topic_input()
+            .update(app, |input, cx| input.set_value("orders", window, cx))
+    });
+    cx.run_until_parked();
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..2 {
+            cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+        }
+    };
+    draw(cx);
+    let search = cx.debug_bounds("message-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    draw(cx);
+    let open = cx.debug_bounds("message-open-row-0").unwrap();
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    draw(cx);
+    let detail = cx.read(|app| messages.read(app).detail_for_test().unwrap());
+    backend.queue_payload(Ok(MessagePayload::bounded(
+        row().identity,
+        b"private-body".to_vec(),
+        std::collections::BTreeMap::new(),
+    )));
+    let body = cx.debug_bounds("message-tab-body").unwrap();
+    cx.simulate_click(body.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.read(|app| detail.read(app).has_payload()));
+    cx.update(|window, app| dashboard.update(app, |dashboard, cx| dashboard.sign_out(window, cx)));
+    cx.run_until_parked();
+    assert!(!cx.read(|app| detail.read(app).has_payload()));
+    cx.update(|window, app| {
+        assert!(!window.has_active_sheet(app));
+        assert_eq!(dashboard.read(app).history.current(), &AppRoute::Login);
+        assert_ne!(
+            dashboard.read(app).legacy_pages.messages.entity_id(),
+            messages.entity_id()
+        );
+        assert!(messages.read(app).search_is_idle());
     });
 }

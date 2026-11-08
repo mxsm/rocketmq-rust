@@ -31,6 +31,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::TaskKind;
+use rocketmq_transport::api::release_request_ordering;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::RequestOrdering;
@@ -494,6 +495,8 @@ async fn processor_limit_rejects_excess_data_without_closing_the_session() {
 struct OrderingHandler {
     entered: mpsc::UnboundedSender<i32>,
     release_first: Arc<Semaphore>,
+    /// The first ordered request ends its ordered part before it blocks.
+    release_ordering_early: bool,
 }
 
 impl ConnectionHandler for OrderingHandler {
@@ -515,9 +518,13 @@ impl ConnectionHandler for OrderingHandler {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         let entered = self.entered.clone();
         let release_first = self.release_first.clone();
+        let release_ordering_early = self.release_ordering_early;
         Box::pin(async move {
             entered.send(request.code()).expect("test observer remains open");
             if request.code() == ORDERED_FIRST {
+                if release_ordering_early {
+                    release_request_ordering();
+                }
                 release_first
                     .acquire()
                     .await
@@ -536,6 +543,7 @@ async fn explicit_ordering_serializes_one_key_without_blocking_unrelated_work() 
     let handler = Arc::new(OrderingHandler {
         entered: entered_tx,
         release_first: release_first.clone(),
+        release_ordering_early: false,
     });
     let (runtime, service, mut peer, runner) =
         start_session("session-request-ordering", AdmissionLimits::default(), handler).await;
@@ -583,6 +591,50 @@ async fn explicit_ordering_serializes_one_key_without_blocking_unrelated_work() 
         .expect("session should remain open")
         .expect("second ordered response should decode");
     assert_eq!((first.opaque(), second.opaque()), (1, 2));
+
+    finish_session(runtime, service, peer, runner).await;
+}
+
+#[tokio::test]
+async fn released_ordering_admits_the_next_same_key_request_before_its_predecessor_finishes() {
+    let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
+    let release_first = Arc::new(Semaphore::new(0));
+    let handler = Arc::new(OrderingHandler {
+        entered: entered_tx,
+        release_first: release_first.clone(),
+        release_ordering_early: true,
+    });
+    let (runtime, service, mut peer, runner) =
+        start_session("session-request-ordering-release", AdmissionLimits::default(), handler).await;
+
+    peer.send_command(RemotingCommand::create_remoting_command(ORDERED_FIRST).set_opaque(1))
+        .await
+        .expect("send first ordered request");
+    assert_eq!(entered_rx.recv().await, Some(ORDERED_FIRST));
+    peer.send_command(RemotingCommand::create_remoting_command(ORDERED_SECOND).set_opaque(2))
+        .await
+        .expect("send second ordered request");
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), entered_rx.recv())
+            .await
+            .expect("second ordered request should enter while its predecessor runs"),
+        Some(ORDERED_SECOND)
+    );
+    let second = peer
+        .receive_command()
+        .await
+        .expect("session should remain open")
+        .expect("second ordered response should decode");
+    assert_eq!(second.opaque(), 2);
+
+    release_first.add_permits(1);
+    let first = peer
+        .receive_command()
+        .await
+        .expect("session should remain open")
+        .expect("first ordered response should decode");
+    assert_eq!(first.opaque(), 1);
 
     finish_session(runtime, service, peer, runner).await;
 }

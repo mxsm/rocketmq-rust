@@ -99,6 +99,7 @@ use crate::log_file::commit_log_path_set::CommitLogPathSet;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
 use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
+use rocketmq_store_local::mapped_file::ResidencyCheck;
 // Import the optimized loader module
 use crate::base::flush_manager::SyncFlushRuntimeInfo;
 use crate::log_file::commit_log_loader::CommitLogLoader;
@@ -509,10 +510,7 @@ impl CommitLog {
             message_store_config.linux_memory_lock_warn_only,
             memory_lock_budget_bytes,
         ));
-        let append_message_callback = Arc::new(DefaultAppendMessageCallback::new(
-            message_store_config.clone(),
-            topic_config_table.clone(),
-        ));
+        let append_message_callback = Arc::new(DefaultAppendMessageCallback::new(topic_config_table.clone()));
         let put_message_lock = Arc::new(tokio::sync::Mutex::new(()));
         let flush_manager = DefaultFlushManager::new(
             runtime_scope.clone(),
@@ -676,19 +674,6 @@ impl CommitLog {
         )
     }
 
-    fn ensure_active_mapped_file_locked(&self, mapped_file: &DefaultMappedFile) -> StoreResult<()> {
-        let target = self.active_memory_lock_target(mapped_file);
-        let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
-        Self::ensure_active_mapped_file_locked_parts(
-            active_memory_lock,
-            active_memory_lock_present,
-            target,
-            mapped_file.get_file_from_offset(),
-            |manager, target| mapped_file.lock_region(manager, target.category, target.offset, target.len),
-            MemoryLockManager::unlock_region,
-        )
-    }
-
     fn ensure_active_mapped_file_locked_with<F, G>(
         &self,
         mapped_file: &DefaultMappedFile,
@@ -758,10 +743,6 @@ impl CommitLog {
             active_memory_lock_present,
             |manager, handle| manager.unlock_owned_region_with(handle, &mut unlocker),
         )
-    }
-
-    fn release_active_memory_lock(&self) -> StoreResult<()> {
-        self.release_active_memory_lock_with(MemoryLockManager::unlock_region)
     }
 
     fn release_active_memory_lock_with<U>(&self, unlock_region: U) -> StoreResult<()>
@@ -1056,23 +1037,31 @@ impl CommitLog {
     }
 
     pub fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
+        self.get_message_with(offset, size, ResidencyCheck::Probe)
+    }
+
+    pub(crate) fn get_message_with(
+        &self,
+        offset: i64,
+        size: i32,
+        residency: ResidencyCheck,
+    ) -> Option<SelectMappedBufferResult> {
         let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
         let mapped_file = self.mapped_file_queue.find_mapped_file_by_offset(offset, offset == 0);
         match mapped_file {
             None => None,
             Some(mmap_file) => {
                 let pos = offset % mapped_file_size as i64;
-                let mut select_mapped_buffer_result = mmap_file.select_mapped_buffer(pos as i32, size);
+                let mut select_mapped_buffer_result = mmap_file
+                    .try_select_mapped_buffer_with(pos as i32, size, residency)
+                    .ok()
+                    .flatten();
                 if let Some(ref mut result) = select_mapped_buffer_result {
                     result.try_attach_mapped_file(mmap_file);
                 }
                 select_mapped_buffer_result
             }
         }
-    }
-
-    pub(crate) fn get_message_for_transfer(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
-        self.read_handle().get_message_for_transfer(offset, size)
     }
 
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
@@ -1340,6 +1329,8 @@ impl CommitLog {
         need_handle_ha: bool,
         requested_lease: Option<WriteLeaseToken>,
     ) -> PutMessageResult {
+        // The message is in the CommitLog; what remains is waiting for flush and replicas.
+        crate::base::append_hold::release_held_until_appended();
         #[cfg(test)]
         {
             let after_append = self.after_append.lock().take();
@@ -1389,7 +1380,9 @@ impl CommitLog {
     }
 
     async fn handle_ha(&self, put_message_result: &AppendMessageResult, need_ack_nums: i32) -> PutMessageStatus {
-        if need_ack_nums <= 1 {
+        // As in Java, only 0 and 1 skip the wait: `ALL_ACK_IN_SYNC_STATE_SET` (-1) waits for every
+        // member of the sync state set.
+        if (0..=1).contains(&need_ack_nums) {
             return PutMessageStatus::PutOk;
         }
         let next_offset = put_message_result.wrote_offset + put_message_result.wrote_bytes as i64;
@@ -1427,7 +1420,7 @@ impl CommitLog {
 
         let status = self
             .flush_manager
-            .handle_disk_flush_shared(put_message_result, msg)
+            .handle_disk_flush(put_message_result, msg)
             .instrument(rocketmq_observability::trace::store::flush_span(&self.telemetry_handle))
             .await;
 
@@ -1476,13 +1469,6 @@ impl CommitLog {
             self.store_metrics
                 .record_dispatch_latency(start_time.elapsed().as_millis() as u64);
         }
-    }
-
-    pub fn is_multi_dispatch_msg(msg_inner: &MessageExtBrokerInner) -> bool {
-        msg_inner
-            .property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH)
-            .is_some_and(|s| !s.is_empty())
-            && msg_inner.topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
     }
 
     /// Optimized normal recovery with batched I/O
@@ -2701,6 +2687,31 @@ pub(crate) struct CommitLogRecordWindow<'a> {
     pub segment_remaining: usize,
 }
 
+/// Whether `bytes` starts with a whole record, or at least with one the parser can reject.
+pub(crate) fn reput_record_is_complete(bytes: &Bytes) -> bool {
+    let Some(total_size) = bytes
+        .get(..4)
+        .and_then(|value| <[u8; 4]>::try_from(value).ok())
+        .map(i32::from_be_bytes)
+    else {
+        return false;
+    };
+    if total_size < 8 {
+        return true;
+    }
+    let Some(magic_code) = bytes
+        .get(4..8)
+        .and_then(|value| <[u8; 4]>::try_from(value).ok())
+        .map(i32::from_be_bytes)
+    else {
+        return false;
+    };
+    if magic_code == BLANK_MAGIC_CODE {
+        return true;
+    }
+    usize::try_from(total_size).map_or(true, |total_size| total_size <= bytes.len())
+}
+
 pub fn check_message_and_return_size(
     bytes: &mut Bytes,
     check_crc: bool,
@@ -3041,7 +3052,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::base::backend_ops::BackendOps;
+    use crate::base::backend_ops::MessageStoreEngine;
     use crate::base::memory_lock_manager::MemoryLockCategory;
     use crate::base::message_store_reader::MessageStoreReader;
     use crate::config::message_store_config::LinuxMemoryLockMode;
@@ -3284,6 +3295,166 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn all_ack_write_waits_for_every_sync_state_set_member() {
+        use std::collections::HashSet;
+
+        use crate::ha::general_ha_service::GeneralHAService;
+
+        let root = tempfile::tempdir().unwrap();
+        let message_store_config = MessageStoreConfig {
+            slave_timeout: 50,
+            ..MessageStoreConfig::default()
+        };
+        let mut store =
+            new_test_message_store_with_config(root.path(), message_store_config, BrokerRole::SyncMaster, true);
+        store.init().await.expect("init message store");
+        let auto_switch = store
+            .get_ha_service()
+            .and_then(GeneralHAService::auto_switch_service)
+            .expect("controller mode uses the auto-switch HA service");
+        // Broker 1 is in the sync state set but never acknowledges.
+        auto_switch.sync_controller_sync_state_set(0, &HashSet::from([0, 1]));
+        assert!(auto_switch.change_to_master(1).await.expect("change to master"));
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+        assert!(store
+            .get_commit_log()
+            .install_controller_write_lease(token, Duration::from_secs(5)));
+
+        let mut message = append_test_message("all-ack-topic", b"all-ack");
+        message.set_wait_store_msg_ok(true);
+        let result = store.get_commit_log().put_message(message).await;
+
+        assert_eq!(result.put_message_status(), PutMessageStatus::FlushSlaveTimeout);
+    }
+
+    #[tokio::test]
+    async fn appended_write_releases_its_hold_before_waiting_for_durability() {
+        for batch in [false, true] {
+            let directory = tempfile::TempDir::new().unwrap();
+            let mut store = new_test_message_store_with_config(
+                directory.path(),
+                MessageStoreConfig {
+                    mapped_file_size_commit_log: 4096,
+                    ha_listen_port: 0,
+                    ..Default::default()
+                },
+                BrokerRole::AsyncMaster,
+                false,
+            );
+            store.init().await.unwrap();
+            let log = store.get_commit_log();
+            let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+            let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+            assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
+
+            let held = Arc::new(());
+            let held_probe = Arc::downgrade(&held);
+            let released_after_append = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let released = Arc::clone(&released_after_append);
+            *log.after_append.lock() = Some(Box::new(move || {
+                released.store(held_probe.strong_count() == 0, std::sync::atomic::Ordering::SeqCst);
+            }));
+            let write = async {
+                if batch {
+                    let mut item = rocketmq_model::common::message::message_single::Message::default();
+                    item.set_body(Some(Bytes::from_static(b"held")));
+                    let mut message = append_test_message("hold-topic", b"unused");
+                    message.set_body(rocketmq_protocol::common::message::message_decoder::encode_messages(&[
+                        item,
+                    ]));
+                    log.put_messages(MessageExtBatch {
+                        message_ext_broker_inner: message,
+                        ..Default::default()
+                    })
+                    .await
+                } else {
+                    log.put_message(append_test_message("hold-topic", b"held")).await
+                }
+            };
+            let result = crate::hold_until_appended(held, write).await;
+
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+            assert!(released_after_append.load(std::sync::atomic::Ordering::SeqCst));
+        }
+    }
+
+    #[tokio::test]
+    async fn walking_records_crosses_the_end_of_a_file() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let mut store = new_test_message_store_with_config(
+            directory.path(),
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                ha_listen_port: 0,
+                ..Default::default()
+            },
+            BrokerRole::AsyncMaster,
+            false,
+        );
+        store.init().await.unwrap();
+        let log = store.get_commit_log();
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        assert!(log
+            .install_controller_write_lease(WriteLeaseToken::try_new(authority, 1).unwrap(), Duration::from_secs(60)));
+        for _ in 0..40 {
+            let result = log.put_message(append_test_message("walk-topic", b"walked")).await;
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+        }
+        let end = log.get_max_offset();
+        assert!(end > 4096);
+
+        let mut seen = 0;
+        let stopped = log.read_handle().walk_records(0, end, 4096, |_| seen += 1);
+
+        assert_eq!((seen, stopped), (40, end));
+        store.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_lease_renewed_during_an_append_leaves_it_accepted() {
+        for batch in [false, true] {
+            let directory = tempfile::TempDir::new().unwrap();
+            let mut store = new_test_message_store_with_config(
+                directory.path(),
+                MessageStoreConfig {
+                    mapped_file_size_commit_log: 4096,
+                    ha_listen_port: 0,
+                    ..Default::default()
+                },
+                BrokerRole::AsyncMaster,
+                false,
+            );
+            store.init().await.unwrap();
+            let log = store.get_commit_log();
+            let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+            let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+            let renewed = WriteLeaseToken::try_new(authority, 2).unwrap();
+            assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
+            let lease = log.controller_write_lease_state();
+            *log.after_append.lock() = Some(Box::new(move || {
+                assert!(lease.install(renewed, Duration::from_secs(60)));
+            }));
+            let result = if batch {
+                let mut item = rocketmq_model::common::message::message_single::Message::default();
+                item.set_body(Some(Bytes::from_static(b"renewed")));
+                let mut message = append_test_message("renewal-topic", b"unused");
+                message.set_body(rocketmq_protocol::common::message::message_decoder::encode_messages(&[
+                    item,
+                ]));
+                log.put_messages(MessageExtBatch {
+                    message_ext_broker_inner: message,
+                    ..Default::default()
+                })
+                .await
+            } else {
+                log.put_message(append_test_message("renewal-topic", b"renewed")).await
+            };
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+        }
+    }
+
+    #[tokio::test]
     async fn append_execution_evidence_survives_post_append_lease_fence_and_renewal() {
         for batch in [false, true] {
             for replace_lease in [false, true] {
@@ -3311,8 +3482,9 @@ mod tests {
                 assert!(!denied.canonical().unwrap().is_accepted());
 
                 let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+                let next_authority = WriteAuthority::try_new(0, MasterEpoch::try_from(2).unwrap()).unwrap();
                 let token = WriteLeaseToken::try_new(authority, 1).unwrap();
-                let next_token = WriteLeaseToken::try_new(authority, 2).unwrap();
+                let next_token = WriteLeaseToken::try_new(next_authority, 2).unwrap();
                 assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
                 let lease = log.controller_write_lease_state();
                 *log.after_append.lock() = Some(Box::new(move || {

@@ -1,0 +1,174 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+#
+# Optional LOCAL governance fixture. Combine with compose.yaml and choose one
+# governance-* profile. All Backends reuse the existing Web image/build; the
+# native desktop does not acquire SQL drivers or a required Backend dependency.
+
+x-governance: &governance
+  image: ${GPUI_GOVERNANCE_IMAGE:-rocketmq-rust/gpui-governance:local}
+  build:
+    context: ../../../..
+    dockerfile: rocketmq-dashboard/rocketmq-dashboard-web/deploy/backend.Dockerfile
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 60s
+  network_mode: service:namesrv
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  healthcheck:
+    test: [CMD-SHELL, 'wget --quiet --timeout=3 --output-document=- "http://127.0.0.1:$${DASHBOARD_WEB_PORT}/api/health/ready" > /dev/null']
+    interval: 5s
+    timeout: 4s
+    start_period: 20s
+    retries: 24
+
+x-governance-environment: &governance-environment
+  DASHBOARD_WEB_HOST: 0.0.0.0
+  DASHBOARD_WEB_PORT: "8082"
+  NAMESRV_ADDR: 127.0.0.1:39876
+  DASHBOARD_WEB_LOGIN_REQUIRED: "true"
+  DASHBOARD_WEB_USERNAME: ${GPUI_GOVERNANCE_USERNAME:-gpui-governance-admin}
+  DASHBOARD_WEB_PASSWORD: ${GPUI_GOVERNANCE_PASSWORD:?Set a local governance login password}
+  # HTTP is confined to host loopback in this local fixture.
+  DASHBOARD_WEB_SESSION_COOKIE_SECURE: "false"
+  # E02 exercises governance persistence, not a second history collector.
+  DASHBOARD_WEB_HISTORY_INTERVAL_SECS: "0"
+  DASHBOARD_WEB_DB_MIN_CONNECTIONS: "1"
+  DASHBOARD_WEB_DB_MAX_CONNECTIONS: "4"
+  RUST_LOG: info
+
+x-mysql-environment: &mysql-environment
+  <<: *governance-environment
+  DASHBOARD_WEB_STORAGE_BACKEND: mysql
+  DASHBOARD_WEB_DATABASE_URL: mysql://gpui_governance:${GPUI_GOVERNANCE_DB_PASSWORD:?Set a hexadecimal local database password}@governance-mysql-db:3306/gpui_governance?ssl-mode=disabled
+
+x-postgres-environment: &postgres-environment
+  <<: *governance-environment
+  DASHBOARD_WEB_STORAGE_BACKEND: postgres
+  DASHBOARD_WEB_DATABASE_URL: postgres://gpui_governance:${GPUI_GOVERNANCE_DB_PASSWORD:?Set a hexadecimal local database password}@governance-postgres-db:5432/gpui_governance?sslmode=disable
+
+services:
+  namesrv:
+    # Publication belongs to the owner of the shared network namespace.
+    ports:
+      - "127.0.0.1:${GPUI_GOVERNANCE_PORT:-38085}:8082"
+      - "127.0.0.1:${GPUI_GOVERNANCE_PEER_PORT:-38086}:8083"
+
+  governance-file:
+    <<: *governance
+    profiles: [governance-file]
+    depends_on:
+      namesrv:
+        condition: service_healthy
+    environment:
+      <<: *governance-environment
+      DASHBOARD_WEB_STORAGE_BACKEND: file
+      DASHBOARD_WEB_STORAGE_PATH: /var/lib/rocketmq-dashboard/file
+    volumes:
+      - governance-file-data:/var/lib/rocketmq-dashboard
+
+  governance-sqlite:
+    <<: *governance
+    profiles: [governance-sqlite]
+    depends_on:
+      namesrv:
+        condition: service_healthy
+    environment:
+      <<: *governance-environment
+      DASHBOARD_WEB_STORAGE_BACKEND: sqlite
+      DASHBOARD_WEB_STORAGE_PATH: /var/lib/rocketmq-dashboard/dashboard.db
+    volumes:
+      - governance-sqlite-data:/var/lib/rocketmq-dashboard
+
+  governance-mysql:
+    <<: *governance
+    profiles: [governance-mysql]
+    depends_on:
+      namesrv:
+        condition: service_healthy
+      governance-mysql-db:
+        condition: service_healthy
+    environment: *mysql-environment
+
+  governance-mysql-peer:
+    <<: *governance
+    profiles: [governance-mysql]
+    depends_on:
+      namesrv:
+        condition: service_healthy
+      governance-mysql-db:
+        condition: service_healthy
+    environment:
+      <<: *mysql-environment
+      DASHBOARD_WEB_PORT: "8083"
+
+  governance-mysql-db:
+    image: mysql:8.4
+    profiles: [governance-mysql]
+    environment:
+      MYSQL_DATABASE: gpui_governance
+      MYSQL_USER: gpui_governance
+      MYSQL_PASSWORD: ${GPUI_GOVERNANCE_DB_PASSWORD:?Set a hexadecimal local database password}
+      MYSQL_ROOT_PASSWORD: ${GPUI_GOVERNANCE_DB_PASSWORD:?Set a hexadecimal local database password}
+    healthcheck:
+      test: [CMD-SHELL, 'MYSQL_PWD="$${MYSQL_PASSWORD}" mysqladmin ping --host=127.0.0.1 --user=gpui_governance --silent']
+      interval: 5s
+      timeout: 5s
+      start_period: 15s
+      retries: 24
+    networks: [parity]
+    volumes:
+      - governance-mysql-data:/var/lib/mysql
+
+  governance-postgres:
+    <<: *governance
+    profiles: [governance-postgres]
+    depends_on:
+      namesrv:
+        condition: service_healthy
+      governance-postgres-db:
+        condition: service_healthy
+    environment: *postgres-environment
+
+  governance-postgres-peer:
+    <<: *governance
+    profiles: [governance-postgres]
+    depends_on:
+      namesrv:
+        condition: service_healthy
+      governance-postgres-db:
+        condition: service_healthy
+    environment:
+      <<: *postgres-environment
+      DASHBOARD_WEB_PORT: "8083"
+
+  governance-postgres-db:
+    image: postgres:15-alpine
+    profiles: [governance-postgres]
+    environment:
+      POSTGRES_DB: gpui_governance
+      POSTGRES_USER: gpui_governance
+      POSTGRES_PASSWORD: ${GPUI_GOVERNANCE_DB_PASSWORD:?Set a hexadecimal local database password}
+    healthcheck:
+      test: [CMD, pg_isready, --host=127.0.0.1, --username=gpui_governance, --dbname=gpui_governance]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 24
+    networks: [parity]
+    volumes:
+      - governance-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  governance-file-data:
+  governance-sqlite-data:
+  governance-mysql-data:
+  governance-postgres-data:

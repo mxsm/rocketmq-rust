@@ -62,7 +62,7 @@ async fn canonical_client_connect_builds_the_framed_transport() {
     let connected = connect_with_config(
         &address.to_string(),
         &TlsConfig::default(),
-        FrameLimits::legacy_compatibility(),
+        FrameLimits::java_compatibility(),
         RequestDeadline::after(Duration::from_secs(1)),
     )
     .await

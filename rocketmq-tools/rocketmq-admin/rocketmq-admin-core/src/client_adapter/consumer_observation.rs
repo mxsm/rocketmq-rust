@@ -363,11 +363,11 @@ async fn resolve_consumer_targets<S: ConsumerObservationSource>(
     let cluster_info = source
         .cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let route = source
         .consumer_route(consumer_group)
         .await
-        .map_err(|error| backend_error("examine_consumer_route_info", error))?
+        .map_err(|source| promote_to_admin_error("examine_consumer_route_info", source))?
         .ok_or_else(|| AdminError::consumer_group_not_found(consumer_group))?;
     selected_cluster_route_masters(&cluster_info, &route, cluster, failure_source)
 }
@@ -747,8 +747,11 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &Canonical
     AdminSourceFailure::new(source, code, crate::canonical_is_retryable(error), broker_name)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 #[cfg(test)]

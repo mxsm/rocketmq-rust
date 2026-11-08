@@ -805,7 +805,7 @@ async fn zero_retry_producer_prepares_route_then_executes_one_primary_send() {
         .send_with_retry(
             &mut message,
             &CheetahString::from_static_str("new-topic"),
-            &TopicPublishInfo::new(),
+            &Arc::new(TopicPublishInfo::new()),
             None,
             SendContext::new(RequestDeadline::from_timeout_millis(2_000), CommunicationMode::Sync),
             &runtime,
@@ -824,12 +824,14 @@ async fn zero_retry_producer_prepares_route_then_executes_one_primary_send() {
     );
 
     let strategy = producer.fault_strategy_snapshot();
-    let mut same_broker = TopicPublishInfo::new();
-    same_broker.message_queue_list = vec![MessageQueue::from_parts("new-topic", "broker-a", 0)];
+    let same_broker = Arc::new(TopicPublishInfo {
+        message_queue_list: vec![MessageQueue::from_parts("new-topic", "broker-a", 0)],
+        ..TopicPublishInfo::new()
+    });
     let (selected_addr, selected_broker) =
         crate::implementation::mq_client_api_impl::MQClientAPIImpl::select_async_retry_target(
             &strategy,
-            Some(&same_broker),
+            Some(same_broker.as_ref()),
             Some(&instance),
             &CheetahString::from_static_str("broker-a"),
         )
@@ -961,7 +963,44 @@ fn retry_attempt_count_saturates_without_preallocating_configured_maximum() {
     );
     let retry_state = RetryState::new(u32::MAX);
     assert_eq!(retry_state.times_total, u32::MAX);
-    assert_eq!(retry_state.brokers_sent.capacity(), 0);
+    // Nothing is reserved for the configured maximum: only the inline slots exist.
+    assert!(!retry_state.brokers_sent.spilled());
+    assert!(retry_state.brokers_sent.is_empty());
+}
+
+#[test]
+fn retry_state_records_each_attempted_broker_once() {
+    let mut retry_state = RetryState::new(3);
+    let broker_a = CheetahString::from_static_str("broker-a");
+    retry_state.record_broker(0, &broker_a);
+    retry_state.record_broker(0, &broker_a);
+    retry_state.record_broker(1, &CheetahString::from_static_str("broker-b"));
+
+    let brokers = retry_state
+        .brokers_sent
+        .iter()
+        .map(CheetahString::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(vec!["broker-a", "broker-b"], brokers);
+    assert!(!retry_state.brokers_sent.spilled());
+}
+
+#[test]
+fn hook_presence_follows_the_frozen_hook_lists() {
+    let producer = DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
+    producer.register_send_message_hook(Arc::new(CapturingSendHook {
+        exception: Arc::new(std::sync::Mutex::new(None)),
+    }));
+    assert!(
+        !producer.has_send_message_hook(),
+        "hooks count only once frozen at start"
+    );
+
+    producer.freeze_hook_lists();
+
+    assert!(producer.has_send_message_hook());
+    assert!(!producer.has_check_forbidden_hook());
+    assert!(!producer.has_end_transaction_hook());
 }
 
 #[test]
@@ -1054,10 +1093,10 @@ async fn sync_retry_actions_preserve_the_target_unless_switch_broker_is_requeste
     let ctx = SendContext::new(RequestDeadline::from_timeout_millis(3_000), CommunicationMode::Sync);
     let broker_a = MessageQueue::from_parts("TopicTest", "broker-a", 0);
     let broker_b = MessageQueue::from_parts("TopicTest", "broker-b", 0);
-    let mut publish_info = TopicPublishInfo {
+    let mut publish_info = Arc::new(TopicPublishInfo {
         message_queue_list: vec![broker_a.clone(), broker_b.clone()],
         ..Default::default()
-    };
+    });
     let producer_config = ProducerConfig::default();
 
     for action in [RetryAction::Stop, RetryAction::RefreshLeader] {

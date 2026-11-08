@@ -243,7 +243,14 @@ async fn diagnostics_snapshot_reports_runtime_state() {
     assert_eq!(service_snapshot.lifecycle_state, TaskGroupLifecycleState::Open);
     assert_eq!(service_snapshot.task_count, 1);
     assert_eq!(service_snapshot.child_count, 1);
-    assert_eq!(context_snapshot.blocking_lanes.len(), 3);
+    assert_eq!(context_snapshot.blocking_lanes.len(), 4);
+    assert!(
+        context_snapshot
+            .blocking_lanes
+            .iter()
+            .any(|snapshot| snapshot.name.ends_with("consume-listener")),
+        "the consume listener lane is reported with the managed lanes"
+    );
     let storage_lane = context_snapshot
         .blocking_lanes
         .iter()

@@ -38,6 +38,12 @@ const PROPERTY_ORIGIN_MESSAGE_ID: &str = "ORIGIN_MESSAGE_ID";
 const PROPERTY_DLQ_ORIGIN_MESSAGE_ID: &str = "DLQ_ORIGIN_MESSAGE_ID";
 const PROPERTY_WAIT_STORE_MSG_OK: &str = "WAIT";
 
+impl MessageLookupReadAdmin for AdminSession {
+    fn lookup_message<'a>(&'a self, request: &'a MessageLookupRequest) -> AdminFuture<'a, MessageRecord> {
+        Box::pin(lookup::lookup_scoped_message(self, request))
+    }
+}
+
 macro_rules! map_message_record {
     ($message:expr) => {{
         let properties = $message
@@ -72,6 +78,8 @@ macro_rules! map_message_record {
     }};
 }
 
+mod lookup;
+
 impl MessageAdmin for AdminSession {
     fn query_messages_by_key<'a>(
         &'a mut self,
@@ -94,7 +102,7 @@ impl MessageAdmin for AdminSession {
                     None,
                 )
                 .await
-                .map_err(|error| backend_error("query_message_by_key", error))?;
+                .map_err(|source| promote_to_admin_error("query_message_by_key", source))?;
             let mut messages = result
                 .message_list()
                 .iter()
@@ -151,7 +159,7 @@ impl MessageAdmin for AdminSession {
                 .inner
                 .examine_topic_route_info(topic.into())
                 .await
-                .map_err(|error| backend_error("examine_topic_route_info", error))?
+                .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
             else {
                 return Ok(MessageQueuePlan {
                     topic_exists: false,
@@ -177,7 +185,7 @@ impl MessageAdmin for AdminSession {
                 };
                 for queue_id in 0..queue_data.read_queue_nums() {
                     let queue_id = i32::try_from(queue_id)
-                        .map_err(|_| AdminError::backend("message_queue_plan", "queue id exceeds i32"))?;
+                        .map_err(|_| AdminError::operation_failed("message_queue_plan", "queue id exceeds i32"))?;
                     let start = self
                         .inner
                         .search_offset(
@@ -188,7 +196,8 @@ impl MessageAdmin for AdminSession {
                             PULL_TIMEOUT_MILLIS,
                         )
                         .await
-                        .map_err(|error| backend_error("search_offset", error))? as i64;
+                        .map_err(|source| promote_to_admin_error("search_offset", source))?
+                        as i64;
                     let end = self
                         .inner
                         .search_offset(
@@ -199,7 +208,8 @@ impl MessageAdmin for AdminSession {
                             PULL_TIMEOUT_MILLIS,
                         )
                         .await
-                        .map_err(|error| backend_error("search_offset", error))? as i64;
+                        .map_err(|source| promote_to_admin_error("search_offset", source))?
+                        as i64;
                     queues.push(MessageQueueRange {
                         broker_addr: broker_addr.clone(),
                         queue: QueueRef {
@@ -238,7 +248,7 @@ impl MessageAdmin for AdminSession {
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| backend_error("pull_message_from_queue", error))?;
+                .map_err(|source| promote_to_admin_error("pull_message_from_queue", source))?;
             let status = match *result.pull_status() {
                 PullStatus::Found => MessagePullStatus::Found,
                 PullStatus::NoMatchedMsg => MessagePullStatus::NoMatchedMsg,
@@ -433,7 +443,7 @@ pub(super) async fn find_raw_message(
                     .inner
                     .query_message(CheetahString::default(), topic.into(), message_id.into())
                     .await
-                    .map_err(|error| backend_error("query_message", error));
+                    .map_err(|source| promote_to_admin_error("query_message", source));
             }
             messages.sort_by(|left, right| {
                 right
@@ -444,7 +454,7 @@ pub(super) async fn find_raw_message(
             return messages
                 .into_iter()
                 .next()
-                .ok_or_else(|| AdminError::backend("query_message_by_unique_key", "message was not found"));
+                .ok_or_else(|| AdminError::operation_failed("query_message_by_unique_key", "message was not found"));
         }
         Ok(_) | Err(_) => {}
     }
@@ -452,7 +462,7 @@ pub(super) async fn find_raw_message(
         .inner
         .query_message(CheetahString::default(), topic.into(), message_id.into())
         .await
-        .map_err(|error| backend_error("query_message", error))
+        .map_err(|source| promote_to_admin_error("query_message", source))
 }
 
 async fn consume_directly(
@@ -475,7 +485,7 @@ async fn consume_directly(
             message.msg_id().clone(),
         )
         .await
-        .map_err(|error| backend_error("consume_message_directly", error))?;
+        .map_err(|source| promote_to_admin_error("consume_message_directly", source))?;
     Ok(DirectConsumeResult {
         success: matches!(result.consume_result(), Some(value) if *value == CMResult::CRSuccess),
         consume_result: result.consume_result().map(ToString::to_string),
@@ -522,8 +532,11 @@ fn sort_messages(messages: &mut [MessageRecord]) {
     });
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 #[cfg(test)]

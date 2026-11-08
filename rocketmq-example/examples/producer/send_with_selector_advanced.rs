@@ -45,7 +45,7 @@ pub const PRODUCER_GROUP: &str = "producer_advanced_selector";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "AdvancedSelectorTestTopic";
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

@@ -216,6 +216,7 @@ mod tests {
     use crate::protocol::command_custom_header::CommandCustomHeader;
     use crate::protocol::command_custom_header::HeaderEncodeCapability;
     use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use crate::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
     use crate::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
     use crate::protocol::remoting_command::RemotingCommand;
     use crate::protocol::SerializeType;
@@ -246,6 +247,80 @@ mod tests {
             bytes.put(body);
         }
         bytes.freeze()
+    }
+
+    fn send_header() -> SendMessageRequestHeader {
+        SendMessageRequestHeader {
+            producer_group: CheetahString::from_static_str("direct-group"),
+            topic: CheetahString::from_static_str("direct-topic"),
+            default_topic: CheetahString::from_static_str("TBW102"),
+            default_topic_queue_nums: 4,
+            queue_id: 3,
+            sys_flag: 4,
+            born_timestamp: 1_762_243_200_123,
+            flag: 7,
+            properties: Some(CheetahString::from_static_str(
+                "KEYS\u{1}order-1\u{2}TAGS\u{1}\"quoted\"\u{2}",
+            )),
+            reconsume_times: Some(2),
+            unit_mode: Some(false),
+            batch: Some(true),
+            max_reconsume_times: Some(16),
+            ..Default::default()
+        }
+    }
+
+    fn decode_wire(command: RemotingCommand) -> RemotingCommand {
+        let wire = EncodedFrame::from_command(command)
+            .expect("command should encode")
+            .into_bytes();
+        RemotingCommand::decode(&mut BytesMut::from(wire.as_ref()))
+            .expect("encoded command should decode")
+            .expect("encoded command should be one complete frame")
+    }
+
+    fn assert_same_send_header(decoded: &SendMessageRequestHeader, expected: &SendMessageRequestHeader) {
+        assert_eq!(decoded.producer_group, expected.producer_group);
+        assert_eq!(decoded.topic, expected.topic);
+        assert_eq!(decoded.default_topic, expected.default_topic);
+        assert_eq!(decoded.default_topic_queue_nums, expected.default_topic_queue_nums);
+        assert_eq!(decoded.queue_id, expected.queue_id);
+        assert_eq!(decoded.sys_flag, expected.sys_flag);
+        assert_eq!(decoded.born_timestamp, expected.born_timestamp);
+        assert_eq!(decoded.flag, expected.flag);
+        assert_eq!(decoded.properties, expected.properties);
+        assert_eq!(decoded.reconsume_times, expected.reconsume_times);
+        assert_eq!(decoded.unit_mode, expected.unit_mode);
+        assert_eq!(decoded.batch, expected.batch);
+        assert_eq!(decoded.max_reconsume_times, expected.max_reconsume_times);
+    }
+
+    #[test]
+    fn unmaterialized_send_headers_round_trip_through_direct_json() {
+        let expected = send_header();
+
+        let v1 = RemotingCommand::create_request_command(10, expected.clone())
+            .set_serialize_type(SerializeType::JSON)
+            .set_body(Bytes::from_static(b"body"));
+        let decoded = decode_wire(v1);
+        assert_eq!(decoded.body().map(Bytes::as_ref), Some(b"body".as_slice()));
+        let header = decoded
+            .decode_command_custom_header_fast::<SendMessageRequestHeader>()
+            .expect("direct JSON V1 header should decode");
+        assert_same_send_header(&header, &expected);
+
+        let v2 = RemotingCommand::create_request_command(
+            310,
+            SendMessageRequestHeaderV2::create_send_message_request_header_v2(&expected),
+        )
+        .set_serialize_type(SerializeType::JSON);
+        let header = decode_wire(v2)
+            .decode_command_custom_header_fast::<SendMessageRequestHeaderV2>()
+            .expect("direct JSON V2 header should decode");
+        assert_same_send_header(
+            &SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header),
+            &expected,
+        );
     }
 
     #[test]

@@ -61,6 +61,14 @@ struct Queues {
 pub(crate) struct FakeConsumerBackend {
     queues: Mutex<Queues>,
     calls: Mutex<ConsumerCalls>,
+    next_create_completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    next_inventory_completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    next_inventory_started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    next_producer_completion: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    next_patch_result: Mutex<Option<tokio::sync::oneshot::Receiver<Result<ConsumerConfigPatchOutcome, UiError>>>>,
+    next_patch_started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    next_diagnostic_result: Mutex<Option<tokio::sync::oneshot::Receiver<Result<ConsumerDiagnosticPayload, UiError>>>>,
+    next_diagnostic_started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 macro_rules! queue_method {
@@ -76,6 +84,50 @@ macro_rules! queue_method {
 }
 
 impl FakeConsumerBackend {
+    pub fn observe_next_diagnostic(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_diagnostic_started.lock().expect("diagnostic started") = Some(sender);
+        receiver
+    }
+
+    pub fn queue_pending_diagnostic(&self) -> tokio::sync::oneshot::Sender<Result<ConsumerDiagnosticPayload, UiError>> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_diagnostic_result.lock().expect("diagnostic result") = Some(receiver);
+        sender
+    }
+
+    pub fn observe_next_patch(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_patch_started.lock().expect("patch started") = Some(sender);
+        receiver
+    }
+    pub fn queue_pending_patch(&self) -> tokio::sync::oneshot::Sender<Result<ConsumerConfigPatchOutcome, UiError>> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_patch_result.lock().expect("patch result") = Some(receiver);
+        sender
+    }
+    pub fn hold_next_inventory(&self) -> tokio::sync::oneshot::Sender<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_inventory_completion.lock().expect("inventory completion") = Some(receiver);
+        sender
+    }
+    pub fn observe_next_inventory(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_inventory_started.lock().expect("inventory started") = Some(sender);
+        receiver
+    }
+    pub fn hold_next_producer_connections(&self) -> tokio::sync::oneshot::Sender<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_producer_completion.lock().expect("Producer completion") = Some(receiver);
+        sender
+    }
+
+    pub fn hold_next_create(&self) -> tokio::sync::oneshot::Sender<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.next_create_completion.lock().expect("Consumer create completion") = Some(receiver);
+        sender
+    }
+
     queue_method!(queue_inventory, inventory, ConsumerInventory);
     queue_method!(queue_clients, clients, ConsumerObservation<ConsumerClients>);
     queue_method!(queue_progress, progress, ConsumerObservation<ConsumerProgress>);
@@ -111,7 +163,21 @@ macro_rules! pop_result {
 impl ConsumerBackend for FakeConsumerBackend {
     fn inventory(&self, scope: ConsumerRequestScope) -> ServiceFuture<'_, Result<ConsumerInventory, UiError>> {
         self.calls.lock().expect("Consumer fake calls").inventory.push(scope);
-        Box::pin(std::future::ready(pop_result!(self, inventory, "inventory")))
+        if let Some(started) = self.next_inventory_started.lock().expect("inventory started").take() {
+            let _ = started.send(());
+        }
+        let result = pop_result!(self, inventory, "inventory");
+        let completion = self
+            .next_inventory_completion
+            .lock()
+            .expect("inventory completion")
+            .take();
+        Box::pin(async move {
+            if let Some(completion) = completion {
+                let _ = completion.await;
+            }
+            result
+        })
     }
 
     fn clients(
@@ -163,6 +229,12 @@ impl ConsumerBackend for FakeConsumerBackend {
             .expect("Consumer fake calls")
             .diagnostic
             .push((scope, request));
+        if let Some(started) = self.next_diagnostic_started.lock().expect("diagnostic started").take() {
+            let _ = started.send(());
+        }
+        if let Some(receiver) = self.next_diagnostic_result.lock().expect("diagnostic result").take() {
+            return Box::pin(async move { receiver.await.expect("release diagnostic result") });
+        }
         Box::pin(std::future::ready(pop_result!(self, diagnostic, "diagnostic")))
     }
 
@@ -189,11 +261,18 @@ impl ConsumerBackend for FakeConsumerBackend {
             .expect("Consumer fake calls")
             .producer_connections
             .push((scope, query));
-        Box::pin(std::future::ready(pop_result!(
-            self,
-            producer_connections,
-            "Producer connections"
-        )))
+        let result = pop_result!(self, producer_connections, "Producer connections");
+        let completion = self
+            .next_producer_completion
+            .lock()
+            .expect("Producer completion")
+            .take();
+        Box::pin(async move {
+            if let Some(completion) = completion {
+                let _ = completion.await;
+            }
+            result
+        })
     }
 
     fn create(
@@ -206,7 +285,20 @@ impl ConsumerBackend for FakeConsumerBackend {
             .expect("Consumer fake calls")
             .create
             .push((scope, command));
-        Box::pin(std::future::ready(pop_result!(self, create, "create")))
+        let completion = self
+            .next_create_completion
+            .lock()
+            .expect("Consumer create completion")
+            .take();
+        let result = pop_result!(self, create, "create");
+        Box::pin(async move {
+            if let Some(completion) = completion {
+                completion
+                    .await
+                    .map_err(|_| unexpected_call("cancelled create completion"))?;
+            }
+            result
+        })
     }
 
     fn patch_configuration(
@@ -219,7 +311,21 @@ impl ConsumerBackend for FakeConsumerBackend {
             .expect("Consumer fake calls")
             .patch
             .push((scope, command));
-        Box::pin(std::future::ready(pop_result!(self, patch, "configuration patch")))
+        if let Some(started) = self.next_patch_started.lock().expect("patch started").take() {
+            let _ = started.send(());
+        }
+        let pending = self.next_patch_result.lock().expect("patch result").take();
+        let ready = if pending.is_none() {
+            Some(pop_result!(self, patch, "configuration patch"))
+        } else {
+            None
+        };
+        Box::pin(async move {
+            match pending {
+                Some(pending) => pending.await.map_err(|_| unexpected_call("cancelled patch"))?,
+                None => ready.unwrap_or_else(|| Err(unexpected_call("missing patch"))),
+            }
+        })
     }
 
     fn delete(

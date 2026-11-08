@@ -19,7 +19,7 @@
 //! This example shows how to use random queue selection to distribute messages
 //! evenly across available queues without ordering guarantees.
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 use rocketmq_client_rust::DefaultMQProducer;

@@ -60,7 +60,7 @@ When `security-admin` is compiled, `rocketmq_list_acl_users` is still refused to
 
 The server targets MCP protocol version `2025-11-25` and answers no other. A client that requests another version is rejected during initialization. Over Streamable HTTP, a request whose `MCP-Protocol-Version` header names another version gets HTTP 400 with the body `unsupported_protocol_version`, with or without an earlier `initialize`, and a request that names a version for itself in its metadata is held to the same one. `server/discover` advertises `2025-11-25` alone. A request without the header is still answered.
 
-Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. The envelope is sanitized and held to the row and byte bounds once, and the text block that mirrors it is written from that processed value, so the two always agree. The list Tools take `response_format`: `detailed` (default) returns every field of each item, `concise` only the fields that name it. Correctable input and backend failures return Tool execution errors with a stable code, retryability, suggestions, and the request identifier.
+Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. The envelope is sanitized and held to the row and byte bounds once, and the text block that mirrors it is written from that processed value, so the two always agree. The list Tools take `response_format`: `detailed` (default) returns every field of each item, `concise` only the fields that name it. Correctable input and source unavailability return [Tool execution errors](docs/tool-reference.md#error-responses) with a stable code, retryability, suggestions, and the request identifier.
 
 Resource-backed Tool calls return a ResourceLink only when the selected target has one canonical, safely representable Resource URI. A target accepted by the existing Tool contract but not representable as a Resource keeps the Tool's normal success/error and data semantics; only the ResourceLink is omitted, while genuinely sensitive target values remain sanitized. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh. Each verified request selects one of two closed query visibility classes: read-only HTTP principals and local read-only stdio profiles use `standard`, while principals or local profiles with diagnosis or planning access use `sensitive`. Requests share query state within a class, but ordinary cache entries, snapshots, singleflight work, and continuation cursors never cross classes.
 Both surfaces pass through the same authorization, audit, redaction, row-bound, byte-bound, and stable-error pipeline. Arrays are bounded to 1,000 rows, structured output to 1 MiB, and truncation is reported with `partial = true` and the stable `output_rows_truncated` warning.
@@ -219,7 +219,13 @@ rocketmq-mcp --config conf/mcp.example.toml --transport stdio
 rocketmq-mcp --config conf/mcp.example.toml --transport streamable-http --bind 127.0.0.1:8089 --endpoint /mcp
 ```
 
-The configuration path is mandatory through `--config` or `ROCKETMQ_MCP_CONFIG`. Relative permission, TLS, JWKS CA, and audit paths are resolved from the configuration file's directory, so startup does not depend on the caller's current working directory.
+The configuration path is optional for local stdio startup. With neither `--config` nor `ROCKETMQ_MCP_CONFIG`,
+the server uses embedded configuration and permissions: the `local-dev` cluster at `127.0.0.1:9876`, the
+`diagnose` profile, output sanitization, and enabled audit records through stderr logging. No configuration
+or audit files are required or created. RocketMQ queries still need a running local NameServer and Broker.
+HTTP requires explicit configuration. `--config` takes precedence over `ROCKETMQ_MCP_CONFIG`, and an invalid
+explicit configuration fails startup. Relative permission, TLS, JWKS CA, and audit paths are resolved from
+the configuration file's directory, so startup does not depend on the caller's current working directory.
 RocketMQ request-signing credentials are resolved from the configured reference at startup and again for each new
 read session, enabling mounted-secret rotation without placing a secret in the TOML, command line, logs, or debug
 output. The associated Broker user should remain a normal user with only Topic/Group/Cluster `GET`; MCP rejects
@@ -230,18 +236,17 @@ mutation capability at both its compile-time dependency boundary and Broker auth
 Use stdio for local desktop clients. Logs are written to stderr so stdout remains valid MCP JSON-RPC traffic.
 
 ```bash
-cargo run -- \
-  --config conf/mcp.example.toml \
-  --transport stdio
+cargo run --locked
 ```
 
 For a release binary:
 
 ```bash
-target/release/rocketmq-mcp \
-  --config conf/mcp.example.toml \
-  --transport stdio
+target/release/rocketmq-mcp-query
 ```
+
+The process waits for MCP JSON-RPC requests on stdin. Add `--config <path>` to use custom cluster,
+permissions, or audit settings.
 
 ## Streamable HTTPS Usage
 

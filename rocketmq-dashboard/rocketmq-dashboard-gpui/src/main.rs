@@ -28,7 +28,6 @@ mod route;
 mod services;
 mod state;
 mod theme;
-mod ui;
 
 use std::{error::Error as StdError, fmt, process::ExitCode, sync::Arc};
 
@@ -44,6 +43,7 @@ use tracing::{error, info};
 
 const SMOKE_EXIT_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_SMOKE_EXIT";
 const SMOKE_WIDTH_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_SMOKE_WIDTH";
+const SMOKE_HEIGHT_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_SMOKE_HEIGHT";
 
 #[derive(Clone, Copy, Debug)]
 enum AppErrorCode {
@@ -132,6 +132,14 @@ fn initial_window_width() -> f32 {
         .unwrap_or(1440.0)
 }
 
+fn initial_window_height() -> f32 {
+    std::env::var(SMOKE_HEIGHT_ENV)
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|height| height.is_finite() && *height >= 480.0)
+        .unwrap_or(900.0)
+}
+
 /// Main entry point for the RocketMQ Dashboard application.
 fn main() -> ExitCode {
     terminate(run())
@@ -185,14 +193,15 @@ fn run() -> Result<(), AppError> {
         }
     };
     let auth = DesktopAuthState::from_process_environment();
-    let config_store = match DesktopConfigStore::from_environment(runtime.component("config-store")) {
+    // Storage stays available while application mutation jobs drain during shutdown.
+    let config_store = match DesktopConfigStore::from_environment(runtime.provider_component("config-store")) {
         Ok(store) => store,
         Err(failure) => {
             let mut error = match failure.into_operational() {
                 Some(source) => AppError::caused_by(AppErrorCode::Configuration, source),
                 None => AppError::new(AppErrorCode::Configuration),
             };
-            if let Err(source) = runtime.shutdown(None) {
+            if let Err(source) = runtime.shutdown(None, None) {
                 error.push_source(source);
             }
             if let Err(source) = telemetry_guard.shutdown().into_result() {
@@ -207,7 +216,7 @@ fn run() -> Result<(), AppError> {
         Arc::clone(&auth),
     );
     let services = AppServices::desktop(
-        config_store,
+        Arc::clone(&config_store),
         Arc::clone(&provider),
         auth,
         runtime.component("services"),
@@ -217,6 +226,7 @@ fn run() -> Result<(), AppError> {
 
     let app = Application::new().with_assets(assets::component_assets());
     let initial_width = initial_window_width();
+    let initial_height = initial_window_height();
     let window_error = Arc::new(parking_lot::Mutex::new(None));
     let window_error_for_run = Arc::clone(&window_error);
 
@@ -228,14 +238,14 @@ fn run() -> Result<(), AppError> {
 
         if let Err(error) = cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                window_bounds: Some(WindowBounds::Fullscreen(Bounds {
                     origin: Point {
                         x: px(100.0),
                         y: px(100.0),
                     },
                     size: gpui::Size {
                         width: px(initial_width),
-                        height: px(900.0),
+                        height: px(initial_height),
                     },
                 })),
                 titlebar: Some(TitlebarOptions {
@@ -262,7 +272,7 @@ fn run() -> Result<(), AppError> {
             cx.quit();
         }
     });
-    let runtime_shutdown = runtime.shutdown(Some(provider));
+    let runtime_shutdown = runtime.shutdown(Some(provider), Some(config_store));
     match &runtime_shutdown {
         Ok(report) => info!(
             leaked = report.leaked,

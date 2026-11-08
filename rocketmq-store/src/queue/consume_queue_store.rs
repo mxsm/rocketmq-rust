@@ -27,8 +27,8 @@ use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueTable;
 use crate::queue::CqUnit;
 
-#[trait_variant::make(ConsumeQueueStoreTrait: Send)]
-pub trait ConsumeQueueStoreInterface: Sync + Any {
+#[trait_variant::make(Send)]
+pub trait ConsumeQueueStoreTrait: Sync + Any {
     /// Start the consume queue store
     fn start(&self);
 
@@ -232,6 +232,10 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     async fn get(&self, topic: &CheetahString, queue_id: i32, start_index: i64) -> Bytes;
 
     /// Get the consume queue table
+    ///
+    /// The table is for reading and iteration. Queues are added and removed only through the
+    /// store, which keeps its lookup index in step with the table; a queue inserted directly into
+    /// the returned table is not found by the store's lookups.
     ///
     /// # Returns
     /// The consume queue table mapping topics to queues

@@ -20,9 +20,8 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum EscapeTargetPreference<'a> {
+pub(crate) enum EscapeTargetPreference {
     Any,
-    Broker(&'a CheetahString),
     Stable(u64),
 }
 
@@ -32,10 +31,6 @@ pub(crate) enum EscapeTargetError {
     RouteUnavailable,
     #[error("topic route contains only the local broker")]
     SelfOnlyRoute,
-    #[error("the requested escape broker is the local broker")]
-    SelfTarget,
-    #[error("the requested escape broker is unavailable")]
-    RequestedBrokerUnavailable,
 }
 
 #[derive(Debug, Default)]
@@ -48,15 +43,11 @@ impl EscapeTargetResolver {
         &self,
         queues: &[MessageQueue],
         local_broker: &CheetahString,
-        preference: EscapeTargetPreference<'_>,
+        preference: EscapeTargetPreference,
     ) -> Result<MessageQueue, EscapeTargetError> {
         if queues.is_empty() {
             return Err(EscapeTargetError::RouteUnavailable);
         }
-        if matches!(preference, EscapeTargetPreference::Broker(broker) if broker == local_broker) {
-            return Err(EscapeTargetError::SelfTarget);
-        }
-
         let remote_queues = queues
             .iter()
             .filter(|queue| queue.broker_name() != local_broker)
@@ -70,10 +61,6 @@ impl EscapeTargetResolver {
                 let index = self.next_queue.fetch_add(1, Ordering::Relaxed) % remote_queues.len();
                 remote_queues[index]
             }
-            EscapeTargetPreference::Broker(broker) => remote_queues
-                .into_iter()
-                .find(|queue| queue.broker_name() == broker)
-                .ok_or(EscapeTargetError::RequestedBrokerUnavailable)?,
             EscapeTargetPreference::Stable(key) => remote_queues[(key % remote_queues.len() as u64) as usize],
         };
         Ok(selected.clone())

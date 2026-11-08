@@ -149,7 +149,7 @@ pub(crate) enum ToolRejection {
 #[derive(Clone, Debug, thiserror::Error)]
 pub(crate) enum ToolExecutionError {
     #[error("RocketMQ source is unavailable")]
-    Backend(#[source] Option<std::sync::Arc<crate::McpError>>),
+    SourceUnavailable(#[source] Option<std::sync::Arc<crate::McpError>>),
     #[error("MCP request failed internally")]
     Internal(#[source] Option<std::sync::Arc<crate::McpError>>),
 }
@@ -172,8 +172,8 @@ impl ToolFailure {
             _source: Some(std::sync::Arc::new(crate::McpError::from_source(error))),
         })
     }
-    pub(crate) fn backend(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::Operational(ToolExecutionError::Backend(Some(std::sync::Arc::new(
+    pub(crate) fn source_unavailable(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Operational(ToolExecutionError::SourceUnavailable(Some(std::sync::Arc::new(
             crate::McpError::from_source(error),
         ))))
     }
@@ -200,7 +200,7 @@ impl ToolFailure {
         match self {
             Self::Rejected(ToolRejection::InvalidArguments { .. }) => "invalid_arguments",
             Self::Rejected(ToolRejection::NotFound { .. }) => "not_found",
-            Self::Operational(ToolExecutionError::Backend(_)) => "source_unavailable",
+            Self::Operational(ToolExecutionError::SourceUnavailable(_)) => "source_unavailable",
             Self::Rejected(ToolRejection::PermissionDenied) => "permission_denied",
             Self::Rejected(ToolRejection::UnauthorizedScope) => "unauthorized_scope",
             Self::Rejected(ToolRejection::TenantMismatch) => "tenant_mismatch",
@@ -222,7 +222,7 @@ impl ToolFailure {
     fn retryable(&self) -> bool {
         matches!(
             self,
-            Self::Operational(ToolExecutionError::Backend(_))
+            Self::Operational(ToolExecutionError::SourceUnavailable(_))
                 | Self::Rejected(ToolRejection::RateLimited { .. })
                 | Self::Rejected(ToolRejection::ConcurrencyLimited)
                 | Self::Rejected(ToolRejection::TimedOut { .. })
@@ -243,7 +243,7 @@ impl ToolFailure {
                 vec!["Correct the arguments using the Tool input schema and retry."]
             }
             Self::Rejected(ToolRejection::NotFound { entity }) => vec![entity.suggestion()],
-            Self::Operational(ToolExecutionError::Backend(_)) => {
+            Self::Operational(ToolExecutionError::SourceUnavailable(_)) => {
                 vec!["Retry after verifying the selected cluster and RocketMQ availability."]
             }
             Self::Rejected(ToolRejection::PermissionDenied) => {
@@ -309,9 +309,8 @@ impl ToolFailure {
             Self::Rejected(ToolRejection::RateLimited { .. }) | Self::Rejected(ToolRejection::ConcurrencyLimited) => {
                 McpFailureClass::RateLimited
             }
-            Self::Operational(ToolExecutionError::Backend(_)) | Self::Rejected(ToolRejection::TimedOut { .. }) => {
-                McpFailureClass::SourceUnavailable
-            }
+            Self::Operational(ToolExecutionError::SourceUnavailable(_))
+            | Self::Rejected(ToolRejection::TimedOut { .. }) => McpFailureClass::SourceUnavailable,
             Self::Rejected(ToolRejection::OutputTooLarge { .. }) | Self::Rejected(ToolRejection::ResultTooLarge) => {
                 McpFailureClass::OutputTooLarge
             }
@@ -325,7 +324,7 @@ impl ToolFailure {
         match self {
             Self::Rejected(ToolRejection::InvalidArguments { .. }) => "invalid arguments".to_string(),
             Self::Rejected(ToolRejection::NotFound { entity }) => format!("{} was not found", entity.label()),
-            Self::Operational(ToolExecutionError::Backend(_)) => "RocketMQ source is unavailable".to_string(),
+            Self::Operational(ToolExecutionError::SourceUnavailable(_)) => "RocketMQ source is unavailable".to_string(),
             Self::Rejected(ToolRejection::PermissionDenied) => "permission denied for this Tool".to_string(),
             Self::Rejected(ToolRejection::UnauthorizedScope) => {
                 "permission denied: required OAuth scope is unavailable".to_string()
@@ -358,7 +357,8 @@ impl ToolFailure {
     fn has_private_detail(&self) -> bool {
         matches!(
             self,
-            Self::Operational(ToolExecutionError::Backend(_)) | Self::Operational(ToolExecutionError::Internal(_))
+            Self::Operational(ToolExecutionError::SourceUnavailable(_))
+                | Self::Operational(ToolExecutionError::Internal(_))
         )
     }
 }
@@ -2022,9 +2022,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_and_argument_sources_remain_typed_while_all_projections_are_fixed() {
+    fn source_unavailable_and_argument_sources_remain_typed_while_all_projections_are_fixed() {
         for error in [
-            ToolFailure::backend(std::io::Error::other("raw-backend-token /private/path tenant-cluster")),
+            ToolFailure::source_unavailable(std::io::Error::other("raw-backend-token /private/path tenant-cluster")),
             ToolFailure::invalid_arguments(std::io::Error::other("raw-tool-argument")),
         ] {
             let source = match &error {
@@ -2060,7 +2060,7 @@ mod tests {
         ) -> Result<QueryResult<cluster_tools::ClusterOverviewOutput>, ToolFailure> {
             if self.fail {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let mut result = QueryResult::bypass(cluster_tools::ClusterOverviewOutput {
@@ -2143,7 +2143,7 @@ mod tests {
         ) -> Result<QueryResult<broker_tools::ListBrokersOutput>, ToolFailure> {
             if self.fail {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let mut result = QueryResult::bypass(broker_tools::ListBrokersOutput {
@@ -2170,7 +2170,7 @@ mod tests {
         ) -> Result<QueryResult<broker_tools::BrokerDiagnosticsOutput>, ToolFailure> {
             if self.fail {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             Ok(QueryResult::bypass(broker_tools::BrokerDiagnosticsOutput {
@@ -2212,7 +2212,7 @@ mod tests {
         ) -> Result<QueryResult<proxy_tools::ProxyDrainStateOutput>, ToolFailure> {
             if self.fail {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             Ok(QueryResult::bypass(proxy_tools::ProxyDrainStateOutput {
@@ -2606,7 +2606,7 @@ mod tests {
             args: diagnosis_tools::DiagnoseConsumerGroupArgs,
         ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
             if self.fail {
-                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+                return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
             }
             Ok(diagnosis_report("consumer_group", &args.cluster, self.partial))
         }
@@ -2616,7 +2616,7 @@ mod tests {
             args: diagnosis_tools::DiagnoseBrokerHealthArgs,
         ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
             if self.fail {
-                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+                return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
             }
             Ok(diagnosis_report("broker_health", &args.cluster, self.partial))
         }
@@ -2626,7 +2626,7 @@ mod tests {
             args: diagnosis_tools::GetClusterHealthArgs,
         ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
             if self.fail {
-                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+                return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
             }
             Ok(diagnosis_report("cluster_health", &args.cluster, self.partial))
         }
@@ -2636,7 +2636,7 @@ mod tests {
             args: diagnosis_tools::DiagnoseMessageDeliveryArgs,
         ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
             if self.fail {
-                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+                return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
             }
             Ok(diagnosis_report("message_delivery", &args.cluster, self.partial))
         }
@@ -2744,7 +2744,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backend_error_is_returned_as_source_unavailable() {
+    async fn source_unavailable_failure_preserves_the_tool_error_contract() {
         let guard = test_guard("diagnose");
         let result = ToolExecutor::new(
             FakeAdapter {
@@ -2901,7 +2901,7 @@ mod tests {
             "rocketmq_get_topic_route",
             "rocketmq_get_topic_route",
             "request-1",
-            ToolFailure::Operational(ToolExecutionError::Backend(None)),
+            ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)),
         );
         let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
         assert_eq!(error["code"], "source_unavailable");
@@ -2932,7 +2932,7 @@ mod tests {
                 McpFailureClass::Internal,
             ),
             (
-                ToolFailure::Operational(ToolExecutionError::Backend(None)),
+                ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)),
                 McpFailureClass::SourceUnavailable,
             ),
             (
@@ -3687,7 +3687,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn proxy_backend_failure_never_exposes_internal_endpoint() {
+    async fn proxy_source_unavailable_failure_never_exposes_internal_endpoint() {
         let result = ToolExecutor::new(
             FakeAdapter {
                 fail: true,

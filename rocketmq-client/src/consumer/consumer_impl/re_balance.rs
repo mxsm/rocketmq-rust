@@ -54,8 +54,8 @@ pub(crate) fn parse_consume_timestamp_millis(
     })
 }
 
-#[trait_variant::make(Rebalance: Send)]
-pub trait RebalanceLocal {
+#[trait_variant::make(Send)]
+pub(crate) trait Rebalance {
     /// Handles changes in the message queue.
     ///
     /// # Arguments

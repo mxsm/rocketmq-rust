@@ -13,16 +13,23 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_protocol::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::WriteAuthority;
+use tokio::sync::watch;
 use tokio::sync::Notify;
 
+use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
@@ -35,23 +42,82 @@ use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::ha::HAError;
 use crate::log_file::group_commit_request::GroupCommitRequest;
+use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
+use rocketmq_store_local::ha::epoch::EpochFile;
+use rocketmq_store_local::ha::epoch::EpochLog;
 use rocketmq_store_local::ha::replication::EpochTransition;
 use rocketmq_store_local::ha::replication::HAReplicaRuntimeSnapshot;
 use rocketmq_store_local::ha::replication::ReplicationStateRoot;
+use tracing::warn;
+
+/// Wakes the Broker when the sync-state-set proposal changes and must be reported to the
+/// Controller, like the listener of Java `AutoSwitchHAService#notifySyncStateSetChanged`.
+///
+/// Receivers observe a generation counter, so changes published while the Broker is busy
+/// coalesce into one wake-up.
+#[derive(Clone)]
+pub(crate) struct SyncStateSetChangePublisher {
+    generation: Arc<watch::Sender<u64>>,
+}
+
+impl SyncStateSetChangePublisher {
+    fn new() -> Self {
+        Self {
+            generation: Arc::new(watch::Sender::new(0)),
+        }
+    }
+
+    pub(crate) fn publish(&self) {
+        self.generation
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    fn subscribe(&self) -> watch::Receiver<u64> {
+        self.generation.subscribe()
+    }
+}
+
+/// Replica state and change publisher that an auto-switch service shares with its connections.
+#[derive(Clone)]
+pub(crate) struct AutoSwitchReplication {
+    pub(crate) state: Arc<ReplicationStateRoot>,
+    pub(crate) changes: SyncStateSetChangePublisher,
+}
+
+/// Offset a replica must reach before it may join the sync state set: the confirm offset and
+/// the start of the current master epoch (Java `AutoSwitchHAService#maybeExpandInSyncStateSet`).
+pub(crate) fn sync_state_set_admission_offset(replica_store: &HAReplicaStoreHandle) -> i64 {
+    replica_store
+        .get_confirm_offset_directly()
+        .max(replica_store.get_controller_epoch_start_offset())
+}
 
 pub struct AutoSwitchHAService {
     delegate: Box<DefaultHAService>,
     replication: Arc<ReplicationStateRoot>,
+    sync_state_set_changes: SyncStateSetChangePublisher,
+    /// A master is being joined, or joining one failed. This log may hold what that master
+    /// does not, so nothing but a finished join attaches the client to it.
+    joining: AtomicBool,
+    /// The master terms of this store's CommitLog, kept in `epoch_file`.
+    epochs: parking_lot::Mutex<EpochLog>,
+    epoch_file: EpochFile,
 }
 
 impl AutoSwitchHAService {
     pub fn new(delegate: DefaultHAService) -> Self {
         let is_master = delegate.replica_store().message_store_config_ref().broker_role
             != rocketmq_model::common::broker::broker_role::BrokerRole::Slave;
+        let epoch_file = EpochFile::new(epoch_file_path(delegate.replica_store().message_store_config_ref()));
         Self {
             delegate: Box::new(delegate),
             replication: Arc::new(ReplicationStateRoot::new(is_master)),
+            sync_state_set_changes: SyncStateSetChangePublisher::new(),
+            joining: AtomicBool::new(false),
+            epochs: parking_lot::Mutex::new(EpochLog::default()),
+            epoch_file,
         }
     }
 
@@ -64,7 +130,14 @@ impl AutoSwitchHAService {
     }
 
     pub(crate) fn init(&mut self, service_reference: GeneralHAServiceReference) -> Result<(), HAError> {
-        let replication = self.replication_state();
+        *self.epochs.get_mut() = self
+            .epoch_file
+            .read()
+            .map_err(|source| HAError::operation("load the master terms", source))?;
+        let replication = AutoSwitchReplication {
+            state: self.replication_state(),
+            changes: self.sync_state_set_changes.clone(),
+        };
         self.delegate.init(service_reference, Some(replication))?;
         let client = self
             .delegate
@@ -133,11 +206,18 @@ impl AutoSwitchHAService {
         self.replication.is_synchronizing_sync_state_set()
     }
 
+    /// Subscribes to sync-state-set proposals that the Broker must report to the Controller.
+    pub fn subscribe_sync_state_set_changes(&self) -> watch::Receiver<u64> {
+        self.sync_state_set_changes.subscribe()
+    }
+
     pub fn update_connection_last_caught_up_time(&self, slave_broker_id: i64, last_caught_up_time_ms: u64) {
         self.replication
             .record_caught_up(slave_broker_id, last_caught_up_time_ms);
     }
 
+    /// Returns the membership to propose to the Controller: committed members and pending
+    /// additions that caught up within `haMaxTimeSlaveNotCatchup`, plus the local broker.
     pub fn maybe_shrink_sync_state_set(&self) -> HashSet<i64> {
         let now = current_millis();
         let timeout_millis = self
@@ -149,9 +229,12 @@ impl AutoSwitchHAService {
     }
 
     pub fn maybe_expand_in_sync_state_set(&self, slave_broker_id: i64, slave_max_offset: i64) -> Option<HashSet<i64>> {
-        let confirm_offset = self.delegate.replica_store().get_confirm_offset_directly();
-        self.replication
-            .maybe_expand_sync_state_set(slave_broker_id, slave_max_offset, confirm_offset)
+        let admission_offset = sync_state_set_admission_offset(self.delegate.replica_store());
+        let proposal =
+            self.replication
+                .maybe_expand_sync_state_set(slave_broker_id, slave_max_offset, admission_offset)?;
+        self.sync_state_set_changes.publish();
+        Some(proposal)
     }
 
     pub fn update_confirm_offset_when_slave_ack(&self, slave_broker_id: i64) {
@@ -237,6 +320,32 @@ impl AutoSwitchHAService {
         true
     }
 
+    /// Records that `epoch` starts at `start_offset`, before anything is written in it.
+    fn begin_epoch(&self, epoch: i32, start_offset: i64) -> Result<(), StoreError> {
+        let mut epochs = self.epochs.lock();
+        if epochs.begin(epoch, start_offset) {
+            self.epoch_file.write(&epochs).map_err(epoch_write_error)?;
+        }
+        Ok(())
+    }
+
+    /// Takes the role and stops replicating from the old master.
+    async fn enter_master_role(&self, master_epoch: i32) -> bool {
+        if !self.apply_epoch_transition(master_epoch) {
+            return false;
+        }
+        self.replication.set_master(true);
+        self.clear_pending_sync_state_tracking();
+        self.replication.ensure_local_member();
+        self.clear_master_target().await;
+        true
+    }
+
+    fn release_replicated_data(&self) {
+        self.refresh_confirm_offset_after_role_change();
+        self.delegate.notify_transfer_progress();
+    }
+
     fn refresh_confirm_offset_after_role_change(&self) {
         let replica_store = self.delegate.replica_store();
         let min_phy_offset = replica_store.get_min_phy_offset();
@@ -261,6 +370,26 @@ impl AutoSwitchHAService {
     }
 }
 
+/// Where the master terms of a store are kept, by default beside its CommitLog.
+fn epoch_file_path(config: &MessageStoreConfig) -> PathBuf {
+    match config.store_path_epoch_file.as_ref() {
+        Some(path) if !path.is_empty() => PathBuf::from(path.as_str()),
+        _ => Path::new(config.store_path_root_dir.as_str()).join(EPOCH_FILE_NAME),
+    }
+}
+
+fn epoch_write_error(source: std::io::Error) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
+        .with_detail("failed to persist the master terms")
+        .with_source(source)
+}
+
+/// File of the master terms, the name the Java Broker gives it.
+const EPOCH_FILE_NAME: &str = "epochFileCheckpoint";
+
+/// How long a role change waits for Reput to dispatch what it may dispatch.
+const ROLE_CHANGE_DISPATCH_TIMEOUT: Duration = Duration::from_secs(30);
+
 impl HAService for AutoSwitchHAService {
     async fn start(&self) -> Result<(), StoreError> {
         self.delegate.start().await
@@ -270,21 +399,76 @@ impl HAService for AutoSwitchHAService {
         self.delegate.shutdown().await;
     }
 
+    fn epoch_log(&self) -> EpochLog {
+        self.epochs.lock().clone()
+    }
+
+    async fn join_master(&self, master: &EpochLog, master_end: i64) -> Result<(), StoreError> {
+        self.joining.store(true, Ordering::Release);
+        self.clear_master_target().await;
+        self.delegate.destroy_connections().await;
+        let replica_store = self.delegate.replica_store().clone();
+        let end = replica_store.get_max_phy_offset();
+        let epochs = self.epochs.lock().clone();
+        let Some(join_point) = epochs.join_point(end, master, master_end) else {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin).with_detail(
+                    "this replica and its new master share no point in their logs; the replica must be rebuilt",
+                ),
+            );
+        };
+        if join_point < end {
+            warn!(end, join_point, "cut off what the new master does not hold");
+            replica_store
+                .cut_back_to(join_point, ROLE_CHANGE_DISPATCH_TIMEOUT)
+                .await?;
+        }
+        let mut epochs = self.epochs.lock();
+        *epochs = master.clone();
+        self.epoch_file.write(&epochs).map_err(epoch_write_error)?;
+        drop(epochs);
+        self.joining.store(false, Ordering::Release);
+        Ok(())
+    }
+
     async fn change_to_master(&self, master_epoch: i32) -> Result<bool, StoreError> {
-        if !self.apply_epoch_transition(master_epoch) {
+        if !self.enter_master_role(master_epoch).await {
             return Ok(false);
         }
-        self.replication.set_master(true);
-        self.clear_pending_sync_state_tracking();
-        self.replication.ensure_local_member();
-        self.clear_master_target().await;
-        self.refresh_confirm_offset_after_role_change();
-        self.delegate.notify_transfer_progress();
+        let replica_store = self.delegate.replica_store().clone();
+        // Before this store confirms and appends anything past the record that was cut short.
+        if let Some(end) = replica_store.cut_unfinished_record().await? {
+            warn!(end, "cut a record the old master did not finish sending");
+            replica_store.publish_controller_epoch_start_offset(end);
+        }
+        self.begin_epoch(master_epoch, replica_store.get_max_phy_offset())?;
+        self.release_replicated_data();
+        // Reput stopped at the old confirm offset. Queue offsets and the delivery tokens a native
+        // timer engine takes as a master both come from what it dispatches.
+        if !replica_store.wait_until_dispatched(ROLE_CHANGE_DISPATCH_TIMEOUT).await {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Admin)
+                    .with_detail("the replicated CommitLog was not dispatched in time for the promotion"),
+            );
+        }
+        // A replica never assigns queue offsets. Rebuild them before the Broker grants write access.
+        self.delegate
+            .runtime_scope()
+            .spawn_io("ha-recover-topic-queue-table", move || {
+                replica_store.recover_topic_queue_table()
+            })
+            .await?;
         Ok(true)
     }
 
     async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> Result<bool, StoreError> {
-        self.change_to_master(master_epoch).await
+        // A Store that stayed master kept assigning queue offsets, so its table is current.
+        if !self.enter_master_role(master_epoch).await {
+            return Ok(false);
+        }
+        self.begin_epoch(master_epoch, self.delegate.replica_store().get_max_phy_offset())?;
+        self.release_replicated_data();
+        Ok(true)
     }
 
     async fn change_to_slave(
@@ -325,6 +509,9 @@ impl HAService for AutoSwitchHAService {
     }
 
     async fn update_ha_master_address(&self, new_addr: &str) {
+        if self.joining.load(Ordering::Acquire) {
+            return;
+        }
         self.delegate.update_ha_master_address(new_addr).await;
     }
 
@@ -402,6 +589,7 @@ impl HAService for AutoSwitchHAService {
 
 #[cfg(test)]
 mod tests {
+    use cheetah_string::CheetahString;
     use std::collections::HashSet;
     use std::time::Duration;
 
@@ -410,10 +598,15 @@ mod tests {
     use rocketmq_runtime::common::time_utils::current_millis;
 
     use super::*;
-    use crate::base::backend_ops::BackendOps;
+    use crate::base::backend_ops::MessageStoreEngine;
+    use crate::base::message_store_reader::MessageStoreReader;
     use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::ha_client::HAClient;
+    use crate::ha::test_support::append_replicated_messages;
     use crate::ha::test_support::new_test_message_store;
+    use crate::ha::test_support::next_queue_offset;
+    use crate::ha::test_support::replicated_message_record;
+    use rocketmq_store_local::ha::epoch::EpochStart;
 
     fn new_default_ha_service(
         store: &crate::message_store::local_file_message_store::LocalFileMessageStore,
@@ -715,11 +908,8 @@ mod tests {
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-change-master-{}", current_millis()));
         let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
-        store
-            .get_commit_log_mut()
-            .append_data(0, &[1, 2, 3, 4], 0, 4)
-            .await
-            .expect("append data");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 0)]).await;
+        let end = store.get_max_phy_offset();
         store.set_confirm_offset(0);
 
         let general_service = new_initialized_auto_switch_service(&store);
@@ -730,10 +920,253 @@ mod tests {
         assert!(switched);
         assert_eq!(service.current_master_epoch().map(MasterEpoch::get), Some(5));
         assert_eq!(store.get_state_machine_version(), 5);
-        assert_eq!(store.get_controller_epoch_start_offset(), 4);
-        assert_eq!(store.get_confirm_offset(), 4);
+        assert_eq!(store.get_controller_epoch_start_offset(), end);
+        assert_eq!(store.get_confirm_offset(), end);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn restart_recovery_continues_queues_after_undispatched_messages() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 7), ("TopicA", 0, 8), ("TopicB", 1, 3)]).await;
+
+        store.recover_topic_queue_table();
+
+        assert_eq!(next_queue_offset(&store, "TopicA", 0), Some(9));
+        assert_eq!(next_queue_offset(&store, "TopicB", 1), Some(4));
+    }
+
+    #[tokio::test]
+    async fn change_to_master_rebuilds_queue_offsets_left_stale_by_replication() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 7), ("TopicA", 0, 8)]).await;
+        let general_service = new_initialized_auto_switch_service(&store);
+        let service = general_service.auto_switch_service().expect("auto switch service");
+        assert_eq!(next_queue_offset(&store, "TopicA", 0), None);
+
+        assert!(service.change_to_master(1).await.expect("change to master"));
+
+        assert_eq!(next_queue_offset(&store, "TopicA", 0), Some(9));
+    }
+
+    #[tokio::test]
+    async fn change_to_master_cuts_a_record_its_master_did_not_finish_sending() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 0), ("TopicA", 0, 1)]).await;
+        let whole_end = store.get_max_phy_offset();
+        let record = replicated_message_record("TopicA", 0, 2, whole_end);
+        store
+            .get_commit_log_mut()
+            .append_data(whole_end, &record, 0, (record.len() / 2) as i32)
+            .await
+            .expect("append half a record");
+        let general_service = new_initialized_auto_switch_service(&store);
+        let service = general_service.auto_switch_service().expect("auto switch service");
+
+        assert!(service.change_to_master(1).await.expect("change to master"));
+
+        assert_eq!(store.get_max_phy_offset(), whole_end);
+        assert_eq!(store.get_confirm_offset(), whole_end);
+        assert_eq!(store.get_controller_epoch_start_offset(), whole_end);
+
+        append_replicated_messages(&mut store, &[("TopicA", 0, 2)]).await;
+        let appended = store.look_message_by_offset(whole_end).expect("read the next record");
+        assert_eq!(appended.queue_offset(), 2);
+    }
+
+    #[tokio::test]
+    async fn change_to_master_refuses_to_cut_a_log_that_does_not_parse() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 0)]).await;
+        let whole_end = store.get_max_phy_offset();
+        let garbage = vec![0xAB_u8; 8 * 1024 * 1024];
+        store
+            .get_commit_log_mut()
+            .append_data(whole_end, &garbage, 0, garbage.len() as i32)
+            .await
+            .expect("append what does not parse");
+        let end = store.get_max_phy_offset();
+        let general_service = new_initialized_auto_switch_service(&store);
+        let service = general_service.auto_switch_service().expect("auto switch service");
+
+        assert!(service.change_to_master(1).await.is_err());
+
+        assert_eq!(store.get_max_phy_offset(), end);
+    }
+
+    fn replica_at(store: &crate::message_store::local_file_message_store::LocalFileMessageStore) -> GeneralHAService {
+        new_initialized_auto_switch_service(store)
+    }
+
+    #[tokio::test]
+    async fn a_new_master_records_where_its_term_starts_and_keeps_it_across_a_restart() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 0)]).await;
+        let end = store.get_max_phy_offset();
+        let general_service = replica_at(&store);
+        let service = general_service.auto_switch_service().expect("auto switch service");
+
+        assert!(service.change_to_master(3).await.expect("change to master"));
+
+        let expected = EpochLog::new(vec![EpochStart {
+            epoch: 3,
+            start_offset: end,
+        }]);
+        assert_eq!(service.epoch_log(), expected);
+        let restarted = replica_at(&store);
+        let service = restarted.auto_switch_service().expect("auto switch service");
+        assert_eq!(service.epoch_log(), expected);
+    }
+
+    /// A store whose term 1 starts behind two records the rest of the group never received, and
+    /// the log of the master that took over at `split`, after the first of those records' term.
+    async fn replica_ahead_of_its_master(
+        store: &mut crate::message_store::local_file_message_store::LocalFileMessageStore,
+    ) -> (GeneralHAService, EpochLog, i64) {
+        append_replicated_messages(store, &[("TopicA", 0, 0)]).await;
+        let term_start = store.get_max_phy_offset();
+        let general_service = replica_at(store);
+        let service = general_service.auto_switch_service().expect("auto switch service");
+        assert!(service.change_to_master(1).await.expect("change to master"));
+        append_replicated_messages(store, &[("TopicA", 0, 1)]).await;
+        let split = store.get_max_phy_offset();
+        append_replicated_messages(store, &[("TopicA", 0, 2), ("TopicA", 0, 3)]).await;
+        let master = EpochLog::new(vec![
+            EpochStart {
+                epoch: 1,
+                start_offset: term_start,
+            },
+            EpochStart {
+                epoch: 2,
+                start_offset: split,
+            },
+        ]);
+        (general_service, master, split)
+    }
+
+    #[tokio::test]
+    async fn a_replica_ahead_of_its_new_master_is_cut_back_to_the_new_term() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        let (general_service, master, split) = replica_ahead_of_its_master(&mut store).await;
+        let service = general_service.auto_switch_service().expect("auto switch service");
+
+        service
+            .join_master(&master, split + 1000)
+            .await
+            .expect("join the new master");
+
+        assert_eq!(store.get_max_phy_offset(), split);
+        assert_eq!(service.epoch_log(), master);
+        let restarted = replica_at(&store);
+        let service = restarted.auto_switch_service().expect("auto switch service");
+        assert_eq!(service.epoch_log(), master);
+    }
+
+    #[tokio::test]
+    async fn a_replica_takes_back_what_it_dispatched_from_the_part_it_cuts() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        let (general_service, master, split) = replica_ahead_of_its_master(&mut store).await;
+        let service = general_service.auto_switch_service().expect("auto switch service");
+        let topic = CheetahString::from_static_str("TopicA");
+        store.set_confirm_offset(store.get_max_phy_offset());
+        store.reput_once().await;
+        assert_eq!(store.get_max_offset_in_queue(&topic, 0), 4);
+
+        service
+            .join_master(&master, split + 1000)
+            .await
+            .expect("join the new master");
+
+        assert_eq!(store.get_max_phy_offset(), split);
+        assert_eq!(store.get_max_offset_in_queue(&topic, 0), 2);
+
+        // What the new master sends takes the place of what went, and is dispatched from there.
+        append_replicated_messages(&mut store, &[("TopicA", 0, 2)]).await;
+        store.set_confirm_offset(store.get_max_phy_offset());
+        store.reput_once().await;
+        assert_eq!(store.get_max_offset_in_queue(&topic, 0), 3);
+    }
+
+    #[tokio::test]
+    async fn joining_a_master_that_is_ahead_cuts_nothing() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        let (general_service, _, _) = replica_ahead_of_its_master(&mut store).await;
+        let service = general_service.auto_switch_service().expect("auto switch service");
+        let end = store.get_max_phy_offset();
+        let master = service.epoch_log();
+
+        service.join_master(&master, end + 1000).await.expect("join the master");
+
+        assert_eq!(store.get_max_phy_offset(), end);
+    }
+
+    #[tokio::test]
+    async fn only_a_finished_join_lets_the_client_attach() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        let (general_service, _, _) = replica_ahead_of_its_master(&mut store).await;
+        let service = general_service.auto_switch_service().expect("auto switch service");
+        assert!(service.change_to_master(5).await.is_ok());
+        let end = store.get_max_phy_offset();
+        let unrelated = EpochLog::new(vec![EpochStart {
+            epoch: 3,
+            start_offset: 16,
+        }]);
+
+        assert!(service.join_master(&unrelated, end).await.is_err());
+
+        assert!(service.joining.load(Ordering::Acquire));
+        let log = service.epoch_log();
+        service
+            .join_master(&log, end)
+            .await
+            .expect("join a master it agrees with");
+        assert!(!service.joining.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn a_replica_refuses_a_master_that_shares_nothing_with_it() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 0)]).await;
+        let general_service = replica_at(&store);
+        let service = general_service.auto_switch_service().expect("auto switch service");
+        assert!(service.change_to_master(5).await.is_ok());
+        let end = store.get_max_phy_offset();
+        let master = EpochLog::new(vec![
+            EpochStart {
+                epoch: 3,
+                start_offset: 10,
+            },
+            EpochStart {
+                epoch: 4,
+                start_offset: 20,
+            },
+        ]);
+
+        assert!(service.join_master(&master, 30).await.is_err());
+
+        assert_eq!(store.get_max_phy_offset(), end);
+        assert_eq!(service.epoch_log().last_epoch(), Some(5));
     }
 
     #[tokio::test]

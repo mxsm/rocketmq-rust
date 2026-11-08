@@ -112,7 +112,7 @@ impl AdminSession for Session {
     async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolFailure> {
         self.counters.topic_inventory.fetch_add(1, Ordering::SeqCst);
         if self.counters.fail_topics.load(Ordering::SeqCst) {
-            return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
         }
         Ok(self.topics.as_ref().clone())
     }

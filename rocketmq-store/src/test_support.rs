@@ -50,7 +50,7 @@ use rocketmq_runtime::ShutdownReport;
 use serde::Serialize;
 use tokio::io::AsyncWrite;
 
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::transfer_engine::bytes::BytesTransferEngine;

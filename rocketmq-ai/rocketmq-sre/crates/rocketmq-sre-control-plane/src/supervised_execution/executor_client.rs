@@ -44,7 +44,7 @@ pub(super) struct ExecutorDispatchReceipt {
 #[derive(Clone, Debug)]
 pub(super) enum ExecutorDispatchFailure {
     Rejected(ControlPlaneRequestFailure),
-    Other(ControlPlaneRequestFailure),
+    Unconfirmed(ControlPlaneRequestFailure),
 }
 
 impl ExecutorDispatchFailure {
@@ -54,14 +54,14 @@ impl ExecutorDispatchFailure {
 
     pub(super) fn into_request_failure(self) -> ControlPlaneRequestFailure {
         match self {
-            Self::Rejected(failure) | Self::Other(failure) => failure,
+            Self::Rejected(failure) | Self::Unconfirmed(failure) => failure,
         }
     }
 }
 
 impl From<ControlPlaneRequestFailure> for ExecutorDispatchFailure {
     fn from(failure: ControlPlaneRequestFailure) -> Self {
-        Self::Other(failure)
+        Self::Unconfirmed(failure)
     }
 }
 

@@ -20,6 +20,8 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::Output;
@@ -37,8 +39,9 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Windows gives the process main thread 1 MiB of stack. A debug Broker used
-/// 832 KiB of it for a full start and drain in September 2026; failing at
-/// 900 KiB flags a regression while there is still headroom to find it.
+/// 464 KiB of it for a full start and drain, and 468 KiB to roll back a failed
+/// start, in October 2026; failing at 900 KiB flags a regression while there is
+/// still headroom to find it.
 const MAIN_STACK_LIMIT: usize = 900 * 1024;
 const MAIN_STACK_REPORT_PREFIX: &str = "main_thread_stack_committed_bytes=";
 
@@ -137,6 +140,16 @@ fn main_stack_committed_bytes(output: &Output) -> usize {
         })
 }
 
+fn assert_main_stack_within_limit(output: &Output) {
+    let main_stack = main_stack_committed_bytes(output);
+    println!("Broker main-thread stack peak: {} KiB", main_stack / 1024);
+    assert!(
+        main_stack < MAIN_STACK_LIMIT,
+        "Broker main thread committed {main_stack} bytes of stack; the limit is {MAIN_STACK_LIMIT} bytes of the 1 \
+         MiB Windows main stack"
+    );
+}
+
 fn process_output(output: &Output) -> String {
     format!(
         "status: {}\nstdout:\n{}\nstderr:\n{}",
@@ -144,6 +157,53 @@ fn process_output(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+fn write_broker_config(root: &Path, broker_port: u16, ha_port: u16, namesrv_port: u16) -> PathBuf {
+    let store_root_config = root.join("store").to_string_lossy().replace('\\', "/");
+    let config = format!(
+        r#"[broker]
+brokerIp1 = "127.0.0.1"
+listenPort = {broker_port}
+namesrvAddr = "127.0.0.1:{namesrv_port}"
+storePathRootDir = "{store_root_config}"
+
+[broker.brokerServerConfig]
+bindAddress = "127.0.0.1"
+
+[broker.brokerIdentity]
+brokerName = "broker-process-stack-test"
+brokerClusterName = "DefaultCluster"
+brokerId = 0
+
+[store]
+brokerRole = "ASYNC_MASTER"
+flushDiskType = "ASYNC_FLUSH"
+haListenAddress = "127.0.0.1"
+haListenPort = {ha_port}
+storePathRootDir = "{store_root_config}"
+"#
+    );
+    let config_path = root.join("broker.toml");
+    std::fs::write(&config_path, config).expect("write broker process config");
+    config_path
+}
+
+fn spawn_broker(root: &Path, config_path: &Path, health_addr: SocketAddr) -> BrokerProcess {
+    let child = Command::new(env!("CARGO_BIN_EXE_rocketmq-broker-rust"))
+        .arg("-c")
+        .arg(config_path)
+        .env("ROCKETMQ_HOME", root)
+        .env("ROCKETMQ_HEALTH_BIND_ADDR", health_addr.to_string())
+        .env("ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS", "5")
+        .env("ROCKETMQ_REPORT_MAIN_STACK", "1")
+        .env("RUST_LOG", "warn")
+        .env_remove("NAMESRV_ADDR")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start broker process");
+    BrokerProcess::new(child)
 }
 
 async fn start_namesrv(root: &std::path::Path, port: u16) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
@@ -185,51 +245,11 @@ async fn start_namesrv(root: &std::path::Path, port: u16) -> (oneshot::Sender<()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_broker_reaches_readiness_without_main_stack_overflow() {
     let root = tempfile::tempdir().expect("create broker process root");
-    let store_root = root.path().join("store");
-    let config_path = root.path().join("broker.toml");
-    let store_root_config = store_root.to_string_lossy().replace('\\', "/");
     let (broker_port, ha_port, health_port, namesrv_port) = available_ports();
     let health_addr = SocketAddr::from(([127, 0, 0, 1], health_port));
     let (namesrv_shutdown, namesrv_handle) = start_namesrv(root.path(), namesrv_port).await;
-    let config = format!(
-        r#"[broker]
-brokerIp1 = "127.0.0.1"
-listenPort = {broker_port}
-namesrvAddr = "127.0.0.1:{namesrv_port}"
-storePathRootDir = "{store_root_config}"
-
-[broker.brokerServerConfig]
-bindAddress = "127.0.0.1"
-
-[broker.brokerIdentity]
-brokerName = "broker-process-stack-test"
-brokerClusterName = "DefaultCluster"
-brokerId = 0
-
-[store]
-brokerRole = "ASYNC_MASTER"
-flushDiskType = "ASYNC_FLUSH"
-haListenAddress = "127.0.0.1"
-haListenPort = {ha_port}
-storePathRootDir = "{store_root_config}"
-"#
-    );
-    std::fs::write(&config_path, config).expect("write broker process config");
-
-    let child = Command::new(env!("CARGO_BIN_EXE_rocketmq-broker-rust"))
-        .arg("-c")
-        .arg(&config_path)
-        .env("ROCKETMQ_HOME", root.path())
-        .env("ROCKETMQ_HEALTH_BIND_ADDR", health_addr.to_string())
-        .env("ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS", "5")
-        .env("ROCKETMQ_REPORT_MAIN_STACK", "1")
-        .env("RUST_LOG", "warn")
-        .env_remove("NAMESRV_ADDR")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start broker process");
-    let mut broker = BrokerProcess::new(child);
+    let config_path = write_broker_config(root.path(), broker_port, ha_port, namesrv_port);
+    let mut broker = spawn_broker(root.path(), &config_path, health_addr);
 
     let startup_deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
@@ -269,13 +289,7 @@ storePathRootDir = "{store_root_config}"
                 "Broker shutdown failed:\n{}",
                 process_output(&output)
             );
-            let main_stack = main_stack_committed_bytes(&output);
-            println!("Broker main-thread stack peak: {} KiB", main_stack / 1024);
-            assert!(
-                main_stack < MAIN_STACK_LIMIT,
-                "Broker main thread committed {main_stack} bytes of stack; the limit is {MAIN_STACK_LIMIT} bytes of the \
-                 1 MiB Windows main stack"
-            );
+            assert_main_stack_within_limit(&output);
             break;
         }
         if Instant::now() >= shutdown_deadline {
@@ -290,4 +304,48 @@ storePathRootDir = "{store_root_config}"
         .await
         .expect("NameServer shutdown should be bounded")
         .expect("NameServer task should not panic");
+}
+
+/// A failed start shuts the Broker down from inside its startup call, so the
+/// rollback runs deeper in the main thread's poll stack than a drain does.
+#[test]
+fn windows_broker_rolls_back_failed_startup_without_main_stack_overflow() {
+    let root = tempfile::tempdir().expect("create broker process root");
+    let (broker_port, ha_port, health_port, namesrv_port) = available_ports();
+    let health_addr = SocketAddr::from(([127, 0, 0, 1], health_port));
+    // Nothing listens on the reserved NameServer port, so the first registration fails.
+    let config_path = write_broker_config(root.path(), broker_port, ha_port, namesrv_port);
+    let mut broker = spawn_broker(root.path(), &config_path, health_addr);
+
+    let exit_deadline = Instant::now() + STARTUP_TIMEOUT + SHUTDOWN_TIMEOUT;
+    let output = loop {
+        if broker
+            .child_mut()
+            .try_wait()
+            .expect("inspect broker rollback status")
+            .is_some()
+        {
+            break broker.wait_with_output();
+        }
+        if Instant::now() >= exit_deadline {
+            let output = broker.terminate_with_output();
+            panic!(
+                "Broker did not exit after a failed startup:\n{}",
+                process_output(&output)
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    assert!(
+        !output.status.success(),
+        "Broker should report the failed startup:\n{}",
+        process_output(&output)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Rolling back broker startup"),
+        "Broker should fail after startup began, not before:\n{}",
+        process_output(&output)
+    );
+    assert_main_stack_within_limit(&output);
 }

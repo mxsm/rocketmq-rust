@@ -617,7 +617,7 @@ impl DefaultMQProducerImpl {
         mq: &MessageQueue,
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
-        topic_publish_info: Option<&TopicPublishInfo>,
+        topic_publish_info: Option<&TopicPublishInfoSnapshot>,
         timeout: u64,
     ) -> crate::ClientResult<Option<SendResult>>
     where
@@ -664,7 +664,7 @@ impl DefaultMQProducerImpl {
         mq: &MessageQueue,
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
-        topic_publish_info: Option<&TopicPublishInfo>,
+        topic_publish_info: Option<&TopicPublishInfoSnapshot>,
         deadline: RequestDeadline,
         runtime: &ProducerRuntimeSnapshot,
     ) -> Result<Option<SendResult>, RetryInput>
@@ -950,7 +950,7 @@ impl DefaultMQProducerImpl {
 
     #[inline]
     pub fn has_send_message_hook(&self) -> bool {
-        !self.send_message_hook_list.read().is_empty()
+        self.has_send_message_hooks.load(Ordering::Acquire)
     }
 
     pub(super) fn context_error(message: String) -> Arc<ClientError> {
@@ -959,12 +959,12 @@ impl DefaultMQProducerImpl {
 
     #[inline]
     pub fn has_check_forbidden_hook(&self) -> bool {
-        !self.check_forbidden_hook_list.read().is_empty()
+        self.has_check_forbidden_hooks.load(Ordering::Acquire)
     }
 
     #[inline]
     pub fn has_end_transaction_hook(&self) -> bool {
-        !self.end_transaction_hook_list.read().is_empty()
+        self.has_end_transaction_hooks.load(Ordering::Acquire)
     }
 
     pub fn execute_check_forbidden_hook(&self, context: &CheckForbiddenContext) -> crate::ClientResult<()> {
@@ -1125,6 +1125,7 @@ impl DefaultMQProducerImpl {
                 let hooks: Arc<[Arc<dyn SendMessageHook>]> = send_hooks.into();
                 tracing::info!("Frozen {} send message hooks", hooks.len());
                 *self.send_message_hook_list.write() = hooks;
+                self.has_send_message_hooks.store(true, Ordering::Release);
             }
         }
 
@@ -1133,6 +1134,7 @@ impl DefaultMQProducerImpl {
                 let hooks: Arc<[Arc<dyn EndTransactionHook>]> = end_hooks.into();
                 tracing::info!("Frozen {} end transaction hooks", hooks.len());
                 *self.end_transaction_hook_list.write() = hooks;
+                self.has_end_transaction_hooks.store(true, Ordering::Release);
             }
         }
 
@@ -1141,6 +1143,7 @@ impl DefaultMQProducerImpl {
                 let hooks: Arc<[Arc<dyn CheckForbiddenHook>]> = forbidden_hooks.into();
                 tracing::info!("Frozen {} check forbidden hooks", hooks.len());
                 *self.check_forbidden_hook_list.write() = hooks;
+                self.has_check_forbidden_hooks.store(true, Ordering::Release);
             }
         }
     }
@@ -1862,7 +1865,13 @@ where
     };
 
     // Build command
-    let mut request = command_factory.create_request_command(RequestCode::SendMessage, request_header);
+    let mut request = if crate::implementation::mq_client_api_impl::send_smart_msg() {
+        let request_header =
+            rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2::create_send_message_request_header_v2_with_move(request_header);
+        command_factory.create_request_command(RequestCode::SendMessageV2, request_header)
+    } else {
+        command_factory.create_request_command(RequestCode::SendMessage, request_header)
+    };
 
     // Set body (zero-copy: Bytes is reference-counted)
     if let Some(body) = msg.get_body() {

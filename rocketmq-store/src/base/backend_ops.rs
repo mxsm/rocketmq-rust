@@ -37,6 +37,7 @@ use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::FlushBacklog;
 use rocketmq_store_api::StoreHealthSnapshot;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
@@ -271,12 +272,13 @@ pub struct MessageStoreShutdownReport {
     pub mapped_file_retirement_recovery_required: bool,
 }
 
-/// Internal implementation adapter for concrete Store backends.
+/// Internal implementation contract for concrete message-store engines.
 ///
-/// Broker consumers must use the narrow capability ports. This adapter is
-/// crate-private and exists only to share concrete backend implementation.
+/// Combines [`MessageStoreReader`] with message writes, lifecycle, administration,
+/// and replication operations. This trait remains crate-internal; Broker consumers
+/// must use the narrow capability ports instead of depending on this contract.
 #[trait_variant::make(Send)]
-pub trait BackendOps: MessageStoreReader + Send + Sync + 'static {
+pub trait MessageStoreEngine: MessageStoreReader + Send + Sync + 'static {
     /// Load previously stored messages.
     ///
     /// Returns true if successful, false otherwise.
@@ -362,6 +364,19 @@ pub trait BackendOps: MessageStoreReader + Send + Sync + 'static {
     fn recall_extended_timer(&self, _request: &TimerRecallRequest) -> Result<TimerRecallStatus, StoreError> {
         Ok(TimerRecallStatus::Unsupported)
     }
+
+    /// Registers a recall of a native timer before its tombstone is written. `Cancelled` means
+    /// the timer can still be stopped and the caller writes the tombstone; `TooLate` and
+    /// `NotFound` mean it cannot, and nothing was registered.
+    fn register_native_timer_recall(
+        &self,
+        _registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, StoreError> {
+        Ok(TimerRecallStatus::Unsupported)
+    }
+
+    /// Withdraws a registration whose tombstone could not be written.
+    fn withdraw_native_timer_recall(&self, _registration: &TimerRecallRegistration) {}
 
     /*    /// Asynchronous get message
     async fn get_message_async(
@@ -632,10 +647,13 @@ pub trait BackendOps: MessageStoreReader + Send + Sync + 'static {
     fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16);
 
     /// Get master broker message store in process in broker container
-    fn get_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self) -> Option<Arc<M>>;
+    fn get_master_store_in_process<M: MessageStoreEngine + Send + Sync + 'static>(&self) -> Option<Arc<M>>;
 
     /// Set master broker message store in process
-    fn set_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>);
+    fn set_master_store_in_process<M: MessageStoreEngine + Send + Sync + 'static>(
+        &self,
+        master_store_in_process: Arc<M>,
+    );
 
     /// Use FileChannel to get data
     fn get_data(&self, offset: i64, size: i32, byte_buffer: &mut BytesMut) -> bool;
@@ -723,7 +741,7 @@ pub trait BackendOps: MessageStoreReader + Send + Sync + 'static {
     /// Returns a read-only state-machine version capability.
     ///
     /// Stores whose version can change after initialization should override this method with a
-    /// live view backed by the same state as [`BackendOps::get_state_machine_version`].
+    /// live view backed by the same state as [`MessageStoreEngine::get_state_machine_version`].
     fn state_machine_version_view(&self) -> StateMachineVersionView {
         StateMachineVersionView::snapshot(self.get_state_machine_version())
     }

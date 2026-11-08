@@ -15,6 +15,7 @@
 //! Topic capability contracts.
 
 mod deletion;
+mod fields;
 #[cfg(feature = "client-adapter")]
 pub(crate) use deletion::execute_deletion;
 pub use deletion::DeleteTopicRequest;
@@ -22,6 +23,9 @@ pub use deletion::DeleteTopicResult;
 #[cfg(feature = "client-adapter")]
 pub(crate) use deletion::TopicDeletionBackend;
 pub use deletion::TopicOperationFailure;
+pub use fields::*;
+#[cfg(feature = "mutation-client-adapter")]
+pub(crate) use fields::{execute_fields_patch, TopicFieldsBackend, TopicFieldsWriteResult};
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -944,7 +948,7 @@ pub trait TopicQueryAdmin: Send {
         _request: &'a QueryTopicConfigCasRequest,
     ) -> AdminFuture<'a, TopicConfigCasState> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_topic_config_cas_state",
                 "Topic config CAS state is not implemented by this adapter",
             ))
@@ -1043,7 +1047,7 @@ pub trait TopicMutationAdmin: Send {
         _request: &'a PatchTopicConfigRequest,
     ) -> AdminFuture<'a, TopicConfigPatchResult> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "patch_topic_config_if_version",
                 "Topic config CAS is not implemented by this adapter",
             ))

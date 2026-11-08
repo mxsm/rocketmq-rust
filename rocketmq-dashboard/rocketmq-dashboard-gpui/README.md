@@ -21,12 +21,170 @@ MSVC C++ toolchain and Windows SDK on Windows, or the Linux GUI development
 libraries described in [AGENTS.md](AGENTS.md). Build timings and memory usage
 depend on the platform and workload.
 
+The application starts in native fullscreen. Use the **Exit fullscreen** / **Enter fullscreen**
+button to switch between fullscreen and the normal window. The button is keyboard accessible;
+**Escape** continues to close dialogs and navigation drawers.
+
+For development smoke checks, set the per-process `ROCKETMQ_DASHBOARD_GPUI_SMOKE_WIDTH`
+and `ROCKETMQ_DASHBOARD_GPUI_SMOKE_HEIGHT` to choose the restored window size, for example
+`960` and `640`. Defaults are 1440 × 900; invalid, non-finite, or below-minimum values
+fall back to the defaults (minimum width 640, height 480). Startup remains fullscreen.
+
+The Windows executable embeds its application icon from [assets/app-icon.ico](assets/app-icon.ico).
+The original artwork and generation prompts are kept in [assets/](assets/app-icon.md).
+
 Logging uses `RUST_LOG`. For example, in PowerShell from this directory:
 
 ```powershell
 $env:RUST_LOG = "info,rocketmq_dashboard_gpui=debug"
 cargo run
 ```
+
+## Native persistence adapters
+
+The default build keeps the existing file layouts and one writer per data directory.
+Configuration, environments, Monitor rules and Audit share one canonical document;
+History uses the same opened storage authority. SQL builds enable optional
+`storage-sqlite`, `storage-mysql` or `storage-postgres` features, independently or together:
+
+```text
+cargo build --no-default-features --features storage-sqlite
+```
+
+OPS Storage offers File and the compiled SQL engines. Save choice for next launch writes
+only the engine to `<configured config path>.storage-selection.json`; for the default path
+this is `config.json.storage-selection.json`. Quit and reopen Dashboard to apply it.
+The active authority stays fixed for the entire process, including connection retries.
+`ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE` explicitly selects `file`, `sqlite`, `mysql` or
+`postgres` ahead of the saved choice; when it is present, change or remove it externally
+before changing engines. With neither input, the default remains File. SQL connection input comes
+from external `ROCKETMQ_DASHBOARD_GPUI_DATABASE_URL`; it is never persisted in a native
+configuration or Audit event. `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` retains its existing
+file/import location. A SQL connection failure or unavailable driver is an explicit
+error and cannot switch authority. Database URL values are never shown in the UI or choice file.
+
+When startup fails, Storage setup provides current engine status and recovery. A connected
+SQL authority with no native workspace offers Initialize workspace or Import legacy workspace,
+both with confirmation. PostgreSQL and MySQL databases must already exist at the external URL;
+initializing creates native Dashboard records, not a database. Import defaults to the configured
+legacy file path and also supports a native configuration-file chooser. It imports environments,
+configuration, Monitor, Audit, History and Sessions together, preserving the source files and
+rejecting an occupied target atomically. Close any file-mode instance owning the source directory
+before import. No automatic initialization or import occurs. If the result is not confirmed,
+refresh status before another attempt; an initialized target offers Continue startup instead.
+Successful setup returns through normal bootstrap and authentication. Persistent native Sessions
+are described below; automated controls do not substitute for platform manual checks.
+
+SQL reads refresh authoritative documents. Storage revisions advance independently
+of configuration revisions, so a peer Audit/Monitor write cannot be overwritten by a
+stale configuration candidate. Configuration identity changes feed the existing ordered
+provider/view invalidation pipeline. History acquires collection ownership before
+starting sampler work and checks the captured fence when persisting. Legacy unassigned
+observations retain their original attribution and stay outside current-environment charts.
+
+## Topic fields and mutation support
+
+Topic forms resolve cluster shortcuts to exact Brokers before submission. Editing
+starts with one Broker and can select other Brokers from the same authoritative
+configuration snapshot. Every selected Broker retains its reviewed version; only
+changed fields are applied, preserving each Broker's other settings and attributes.
+
+| Field | Create | Read | Update / restriction |
+| --- | --- | --- | --- |
+| Topic name | Yes | Yes | Immutable; editing cannot rename or create a missing Topic |
+| Broker placement | Exact inventory targets | Per Broker | Select existing configuration targets; cluster shortcuts select their exact Brokers |
+| Read / write queues | 1–128 each | Yes | Version-checked changed fields |
+| Permission | Read, write, inheritance bits | Yes | Version-checked; at least read or write is required |
+| Ordering | Ordered / unordered | Yes | Broker state uses CAS; NameServer order entries use a preflight comparison and can fail separately |
+| Message type | Normal, FIFO, Delay, Transaction | Yes | The same types and Unspecified use supervised state CAS; unknown and internal contracts are unavailable |
+| Producer Trace | Defaults to off | Active Send form | Enables the SDK-owned producer Trace dispatcher; Consumer tracing is independent |
+
+Full-field editing requires Brokers implementing the supervised Topic state
+protocol. Older Brokers reject it; the desktop does not fall back to an unchecked
+upsert. Broker and NameServer outcomes remain visible individually after partial
+success. A version conflict preserves changed draft fields and requires an explicit
+choice to keep or adopt authoritative values. Only conflicted Brokers remain
+selected after rebasing, so an already applied or unknown write is not replayed.
+Message bodies are omitted from summaries and cleared when the Send dialog closes.
+
+## Monitor rule configuration
+
+The Monitor rules page lists and searches consumer-group threshold configurations
+for the selected environment. Min Count is a nonnegative consumer count (up to
+2,147,483,647); Max Diff Total is a nonnegative backlog message count (up to
+9,223,372,036,854,775,807). This page configures rules only: it does not evaluate
+metrics, produce alerts, or send notifications.
+
+Rule identity is Environment ID plus Consumer Group. Creating requires revision
+zero; editing and deleting require the observed positive rule revision. Conflicts
+show the authoritative state, preserve the open draft, and require an explicit
+revision reconfirmation followed by another submission. A deleted rule cannot be
+silently removed again, and recreated rules receive fresh revisions. Rule write
+times are displayed in UTC.
+
+Legacy entries retain their original ID, Group, and enabled setting. They remain
+marked as needing thresholds, or environment assignment and thresholds, until
+the user explicitly completes them. Empty legacy thresholds and unknown write
+times are never replaced by valid-looking defaults. An unassigned entry can be
+assigned explicitly to the selected environment from its completion dialog.
+
+Accepted changes remain application-owned when a dialog closes. Rule state,
+its local operation record, and its terminal P11 audit event share one canonical
+atomic authority transaction (file replacement or SQL CAS); configuration revision checks also prevent writes after
+the connection or environment changes.
+
+## Consumer and Producer workspaces
+
+Consumer creation uses an editable form and explicit Broker checkboxes. Cluster
+shortcuts select their displayed members; the confirmed subset is the write target.
+The form requires complete NameServer Broker target discovery, independently of
+unrelated Groups' Clients and Progress read quality. Every selected target still
+requires an exact Group absence preflight; unknown Group values remain unknown.
+Group membership discovery is tracked before per-Group diagnostic reads. Applied
+mutations can therefore reload an authoritative Group catalog while retaining
+Partial diagnostic quality and unknown client or lag values. Deletion still checks
+the exact current membership and live connections; only the Broker's exact
+ConsumerNotOnline response establishes an empty active-client set.
+Mutation summaries count Broker/group targets separately from internal-topic cleanup
+steps. Cleanup failures and uncertainty still make the workflow Partial. New audit
+events store cleanup step counts separately; historical terminal facts are retained.
+The five numeric controls cover retry queues, maximum retries, consume timeout,
+Broker ID and slow-consumer Broker ID. Four flags control enabled, minimum-offset,
+broadcast and orderly consumption. Maximum retries accepts -1 or greater, retry
+queues accepts zero, and timeout must be positive.
+
+Consumer editing starts from one Broker's versioned snapshot and submits only
+changed fields under the existing state CAS. It preserves the Broker's notifications,
+system flag, retry policy, subscriptions and additional attributes. Brokers without
+that CAS capability return unavailable. A conflict retains the reviewed draft.
+Persistence problems retain confirmed
+in-memory effects and never count as durable success. An applied write with a
+persistence problem is Partial; a rejected write with failed persistence is Failed.
+Uncertainty without confirmed application is Unknown. The same form cannot replay
+these outcomes. Local audit records retain field names and typed
+outcome facts without configuration values or diagnostic text.
+
+Configuration details show consumption, routing, retry policy, subscription Topics,
+redacted attributes and cross-Broker differences. Failed targets stay separate from
+observed configurations. Clients include addresses and subscriptions; progress keeps
+signed lag and queue timestamps. Running Info limits each structured section to 256
+rows and 64 KiB combined metadata. JStack stays only in the active detail and is
+cleared on tab, scope, environment, session or detail changes.
+Long Group and Client identities have full-value copy controls. Client fields and
+subscriptions wrap within the sheet; raw diagnostic lines have a bounded scroll
+area, and the inventory table scrolls horizontally at narrow window widths.
+
+The Consumer query-scope control affects inventory, clients and progress reads.
+Configuration and diagnostics use real Broker Direct targets discovered through the
+selected NameServer, including when Consumer reads are configured for Proxy.
+This Direct read evidence does not enable unsupported Proxy mutations, and a
+missing selected Proxy never falls back to a default endpoint.
+
+Producer inspection discovers real Topic candidates, accepts group row selection,
+and freezes Topic and Group together when Apply is pressed. Discovery failures keep
+a validated manual query available. Client details provide copy controls for client
+ID, address, language and version. Late results from a previous query or environment
+cannot replace the current applied pair.
 
 ## Architecture and configuration
 
@@ -36,28 +194,97 @@ root, installs logging, and composes the desktop services. The layers are:
 ```text
 GPUI views
   -> application services
-  -> GpuiAdminProvider / configuration, history and monitor stores
-  -> rocketmq-admin-core client adapter
-  -> application-owned ClientRuntime
+    -> GpuiAdminProvider -> rocketmq-admin-core -> application-owned ClientRuntime
+    -> DashboardStore (file / SQLite / MySQL / PostgreSQL)
 ```
 
 The shared dashboard models and admin facade come from
 [rocketmq-dashboard-common](../rocketmq-dashboard-common). The desktop provider
-implements live cluster queries and administration; configuration, history and
-monitor persistence remain local to this application. See
+implements live cluster queries and administration; the shared
+[native storage crate](../rocketmq-dashboard-storage) owns persistence. See
 [src/services](src/services) and [src/infrastructure](src/infrastructure) for
 the implemented operations and their lifecycle owners.
 
-Configuration defaults to `rocketmq-dashboard/gpui/config.json` beneath the OS
+The private [DashboardBrokerOperations](src/services/dashboard_broker.rs) boundary forwards
+Dashboard overview/current/history and Broker inventory/runtime/config reads, plus guarded
+Broker config patches. Its [Admin provider](src/infrastructure/admin_provider/dashboard_broker.rs)
+keeps raw Admin responses inside infrastructure and returns allowlisted DTOs to the services.
+
+File configuration defaults to `rocketmq-dashboard/gpui/config.json` beneath the OS
 user configuration directory. Set `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` to
 override the complete file path. NameServer selection and connection settings
 are stored in this document.
 
+OPS → Connection manages named environment profiles. Creating or selecting a
+profile explicitly changes the environment; editing its NameServer, Proxy,
+TLS, or VIP settings preserves its persistent identity. History and Monitor
+rules belong to that identity, while the configuration revision identifies a
+particular connection generation.
+
+In file mode, the version 4 configuration document holds profiles, global settings, Monitor
+rules, local operation records, and the desktop audit journal in one atomic replacement. Metric samples
+remain in the separately versioned `history.json`. Version 1 configuration and
+history files, version 2/3 profile documents, and legacy Monitor arrays are migrated on startup. The nested
+Monitor document is version 2. Migration uses the same atomic candidate replacement;
+newer unsupported versions and failed replacements preserve their source. Legacy points
+and rules without environment evidence remain unassigned and are excluded from
+the selected environment. Legacy rules also require thresholds before they can
+be evaluated; the Monitor lifecycle still performs no evaluation. The original
+`monitors.json` is preserved after its rules are imported into the configuration
+document. Unsupported schemas or failed migration writes preserve their source
+files and report a recoverable startup error.
+
+In file mode, one application instance owns the local data directory for its lifetime through
+an OS file lock. A second instance using that directory must wait until the first
+closes. An interrupted write leaves either the previous complete document or the
+new complete document; unfinished candidate files are not treated as committed
+state. Configuration and Monitor changes carry their operation record in the
+same commit as their terminal audit event.
+
+Accepted Broker, Topic, Consumer, Monitor, and configuration changes belong to the application,
+so closing a Sheet or signing out only drops the old view's result receiver. External
+changes first save an accepted-operation record and then save one terminal outcome;
+these two writes do not provide a transaction with RocketMQ. Shutdown drains owned
+work for the existing five-second budget while the selected storage and provider remain
+available. Interrupted requests stay pending for authoritative verification after restart,
+and are never automatically replayed. Local login and logout also record safe outcomes.
+
+Audit events contain trusted local actor and environment metadata, controlled resource
+identities, and bounded result facts. They exclude message bodies, diagnostics,
+credentials, and configuration values. Topic field edits retain only the requested
+field names with their accepted operation, including pending and failed requests.
+Partial effects, unconfirmed writes, and authoritative refresh failures remain
+separate result facts. A failed terminal audit write preserves the
+business result and displays an application warning; **Retry audit write** only retries
+persistence. The journal retains at most 10,000 terminal events within 31 days and
+128 pending requests. **Local Audit** filters UTC time, actor, action, outcome and
+environment. The recent 24-hour preset and explicit start/end fields support windows
+up to 31 days; the end is exclusive. Apply starts a new query window, while Previous
+and Next retain its cursor snapshot. Restart applied query recovers an expired page
+without replacing draft inputs. Queries and detail views append no events.
+Records belong to the selected native storage authority. File mode covers its directory
+writer; shared SQL includes native clients writing to that database. Other databases and
+Web backend events remain separate, and retention follows the native journal policy.
+
+Audit access follows the configured local authentication mode. Sign-out and environment
+changes clear cached rows and details. Details show trusted request/actor/resource
+identities and bounded facts, with Broker target counts separate from Consumer internal
+Topic cleanup steps and requested field names. Unfinished accepted requests have no
+inferred terminal outcome and must be checked against authoritative state; the query
+page cannot replay them. Copy request ID is available in the bounded detail dialog.
+
+Login events preserve their initiating actor and include the verified operator as a
+separate terminal fact after successful authentication. Failed form usernames are not
+retained. Exhausting the terminal-write recovery queue still permits local sign out;
+one reserved logout fact remains visible and retryable without retaining a command.
+Cursor continuation expires after journal retention evicts rows, including partial
+eviction of unread results.
+
 Authentication has two separate settings in the configuration:
 
 - When local login is enabled, `ROCKETMQ_DASHBOARD_USERNAME` and
-  `ROCKETMQ_DASHBOARD_PASSWORD` must be present. Only the local session marker
-  is retained after authentication.
+  `ROCKETMQ_DASHBOARD_PASSWORD` must be present. The auth owner retains only the
+  current native session capability and its display metadata after authentication.
 - When the Admin credential source is `environment`,
   `ROCKETMQ_ADMIN_ACCESS_KEY` and `ROCKETMQ_ADMIN_SECRET_KEY` are required;
   `ROCKETMQ_ADMIN_SECURITY_TOKEN` is optional. These credentials authenticate
@@ -68,7 +295,94 @@ use; the configuration file stores the credential-source choice. Background
 admin and persistence work uses injected child scopes from the desktop runtime.
 The application closes this runtime when the GPUI event loop exits.
 
+## Persistent native sessions
+
+Sessions uses the same selected native storage authority as configuration and Audit.
+It preserves the existing environment-backed operator source; it does not introduce a
+second account or role system. Enable local login and sign in to manage sessions.
+There is no separate Web backend, HTTP login or browser-cookie dependency.
+
+Each successful login creates a persistent record with an absolute eight-hour expiry.
+Protected operations validate the current record against the selected authority;
+last access advances without extending expiry. The application also validates on
+window activation and through an owned five-second poll. A revoked or expired session,
+or storage that cannot be verified, ends local access and clears protected views,
+query results, dialogs, message payloads, diagnostics and credential editor history.
+Connection/profile replacement drops the old capability too. Accepted mutations keep
+their captured actor, environment and application owner until terminal Audit finishes.
+
+The page shows username, creation, expiry, last access, observed status and the current
+session marker, with UTC timestamps and a 25-record cursor page. Username filtering
+uses an exact match. Revoke all requires typing the selected username, includes every
+active session for that username in the selected authority, and can end this desktop's
+own session. It records the target username and count through P11 Audit; audit-only
+repair never runs the revocation command again. Capabilities are absent from the UI,
+Debug output, logs, configuration and Audit facts. A delayed logout revokes its captured
+old session and cannot end a replacement login.
+
+Records survive restart; this desktop signs in again on each launch. File mode keeps
+`sessions.json` under the existing directory writer. SQL clients using the same database
+share session revocation and native Audit visibility; other databases and Web backend
+sessions/events are separate. Native storage drivers remain optional.
+
+The canonical document remains schema four and session metadata uses its own schema
+one. `session_revoke_all` and the `session_user` resource add typed Audit variants without
+rewriting old events. Older readers reject those unknown variants and preserve the source;
+they must be upgraded before opening a store containing these events.
+
 ## Development
+
+### Dashboard metrics and local history
+
+Topic Current keeps fractional rates and distinguishes observed zeroes from unavailable
+offsets or rates. It excludes system, retry and DLQ Topics. Each refresh reads rates for
+up to 200 application Topics in name order, with a 2,000 RPC budget; it selects at most
+20 by 24-hour production, then current production rate, then name. Those selected
+Topics receive offset-statistics queries and are ranked by stored message count.
+Incomplete or omitted coverage is shown as a partial ranking; this bounded window
+does not claim to find the busiest Topic outside its coverage. One Topic failure keeps
+the other observations available.
+
+Backlog requires complete Consumer-group discovery and a successful consumption
+observation from every discovered master target. Missing targets remain unknown;
+negative lag keeps its observed meaning.
+
+History uses an explicitly selected UTC calendar day. All topics shows registered
+Topic count, while a specific Topic shows its stored messages. Broker history offers
+registered Broker count and per-Broker production or consumption rates. Each query
+returns at most the latest 1,440 real observations, with UTC time labels, units and
+paged exact values. Refresh errors retain the previous successful page and its time.
+
+The collector is disabled by default. OPS → Storage saves History enablement, interval and
+bounded retention through the existing revision-checked configuration flow. An interval of zero
+disables the owned collector even when the enablement checkbox is selected. Retention takes effect
+when a subsequent real sample is persisted. Manual `settings.foundations` edits in `config.json`
+remain supported through Reload configuration.
+The page shows disabled, warming, normal, partial or stale collection and the latest
+successful collection time for the active environment in this process. A sample is
+stale after three collection intervals. Existing retention limits and environment
+attribution apply to both count and resource series; missing samples are not filled.
+
+In file mode, OPS Storage reports the local file backend and actual directory-writer ownership. Refresh status
+reads and validates current files without migrating data or probing writes. Read failure or unknown
+state remains visible independently of the last persistence attempt. File successful-write timestamps
+describe observations in the current process; schema and filesystem dates do not prove write health.
+The configuration file holds settings, Monitor rules and Audit; metric history uses its own file.
+Collector state separates unavailable sampling, failed persistence, no observations and successfully
+stored samples for the active environment. Samples rejected by validation or fully removed by
+retention do not advance the latest stored sample time; successful empty-file writes still count as
+storage writes. Scope labels retain the configured Direct/Proxy boundary.
+Open config directory continues to use the native desktop action.
+
+For SQL, OPS shows fresh engine and workspace state, storage/document schema, actual pool and
+idle connection counts, and the authority's recorded last write, which may come from another
+desktop sharing that database. File-only writer and filesystem health are omitted for SQL.
+A status failure replaces previously displayed authority health. History worker ownership and
+collection health are separate; Standby means waiting for the shared collection lease.
+
+Unsaved History inputs survive failed operations and revision conflicts. A stale draft shows current
+saved settings and requires an explicit choice to keep it against the current revision or discard it.
+Reloading and revisiting Storage refresh authoritative status without silently replacing a dirty draft.
 
 From this directory, select the checks relevant to a change:
 
@@ -79,6 +393,186 @@ cargo test --locked <test_name>
 ```
 
 See [AGENTS.md](AGENTS.md) for platform setup and graphical smoke checks.
+
+## Message workspace
+
+Messages supports Topic/time-range, Topic + Key and Topic + Message ID searches in
+NameServer Direct scope. UTC input uses `YYYY-MM-DD HH:MM:SS`. Search applies the
+current draft; Refresh replays the applied query. Changing filters, page or connection
+clears selection and cancels obsolete reads. Range pages scan Broker queues and sort
+only the returned page by stored time. The SDK does not provide an exact grand total;
+a full page permits trying the next page, which may be empty. Key searches return at
+most 64 matches.
+
+A searchable Topic picker loads real inventory and preserves validated manual entry
+when discovery fails or is partial. Lists retain bounded Tags, Keys and host metadata only;
+Overview includes readable UTC times and a Copy Message ID control. Properties and
+Body load when their inspector tab opens;
+one inspector retains at most 256 KiB of body and 128 properties / 64 KiB. JSON and
+plain-text previews show truncation. Closing the inspector, navigating away, changing
+connection or signing out clears its payload. Trace loads independently when its tab opens.
+Physical offsets are read through the selected Topic's advertised Broker addresses,
+including hostname aliases. Returned Topic and physical ID are verified before details
+or direct consumption; the embedded address never supplies a transport target.
+
+Direct consume requires confirmation of the exact Message ID, Topic, environment,
+Consumer group and optional Client ID. An admitted attempt stays owned by the
+application and writes its terminal P11 audit fact even if the inspector closes.
+The verified Broker validates the selected client and forwards consumption over its
+registered Consumer channel; the Consumer's reported socket is never an RPC target.
+Only `CR_SUCCESS` confirms success; other results and unconfirmed calls remain
+distinct. Consumer remarks are represented by presence, without displaying arbitrary
+private content. No new Message ID is promised.
+
+## ACL workspace
+
+ACL starts with real Broker inventory. Select a Cluster and optionally one Broker,
+then choose **Confirm scope** before any ACL user or policy reads. Scope changes
+discard previous records, requests, forms, and password display. Users and Policies
+have independent search, pagination, and request epochs. Proxy scope does not expose
+ACL administration; access denial and unavailable Broker capabilities remain explicit.
+
+User creation submits username, password, type, and status together. Editing leaves
+the password unchanged unless **Change password** is selected and a value is entered.
+Passwords are masked by default. Display can reveal only a password actually returned
+by the Broker; no one-time secret is generated. Opening or closing a form, changing
+tabs or scope, leaving the page, and signing out clear retained secret displays. Secret
+Input states and entities are recreated so Undo cannot restore a previous draft.
+
+Policy forms select Subject, Policy Type, Resource, Actions, Source IPs (including CIDRs,
+wildcards, and ranges), and Decision. Subjects require `User:name` and resources require
+`Topic:name`, `Group:name`, `Cluster:name`, or `*`, matching the Broker's canonical identity
+before preflight. The response-only `Any` action is not writable. Editing fixes the
+subject/type/resource identity and merges only the selected
+entry; deleting removes only that resource in that policy type. Other entries are not
+round-tripped through a generic JSON editor. Unknown fields, enum values, and unsupported
+response shapes are read-only so their Broker data is preserved.
+
+Confirmation lists the exact target identities. The provider revalidates the frozen
+selection against inventory and performs each target once. ACL RPCs do not provide CAS
+or a multi-Broker transaction: per-target applied, rejected, and unknown outcomes remain
+distinct, and an attempted form cannot replay the command. Bulk target notices scroll
+within a bounded area so records and pagination remain reachable. Admitted writes stay owned
+by the application after the form closes. P11 records the trusted actor, environment,
+subject, action, and bounded outcome counts without passwords or policy payloads.
+
+## Dead-letter recovery
+
+DLQ Messages discovers real Consumer Groups in NameServer Direct scope and applies a Group, inclusive UTC range,
+optional physical/producer Message ID, and page size. Range pages retain the Broker
+scan contract; a full page can lead to an empty next page, and no exact total is
+invented. Changing a draft, page, connection, or environment clears selection and the
+bounded shared Message inspector.
+
+Recovery requires a verified Group DLQ, `RETRY_TOPIC`, and `ORIGIN_MESSAGE_ID` or
+`DLQ_ORIGIN_MESSAGE_ID`. Older Rust records without either origin ID can use their
+preserved producer `UNIQ_KEY`, resolved strictly within the original Topic. Missing
+or conflicting identity metadata disables selection.
+Confirmation freezes and deduplicates the original Topic/Group/ID tuples. The whole
+sequential batch remains application-owned after closing its dialog or signing out;
+each entry retains its initiating audit context and actual outcome. Successful and
+unknown entries are excluded from the explicit failed-entry retry action. Recovery
+uses the original message and the verified Broker's Consumer channel; it does not
+promise a newly produced Message ID.
+
+CSV export opens a native Save File chooser and uses the applied current page only.
+It rechecks that page's identities before writing, without fetching other pages.
+Full Body/Keys/Tags values are exported independently of inspector previews. Output
+larger than 8 MiB fails with reduce-page guidance; a non-UTF-8 Body fails explicitly.
+CSV quotes commas, quotes and line breaks, preserves Unicode, and prefixes cells
+starting with `=`, `+`, `-`, `@`, tab, CR or LF with an apostrophe, following the Web
+policy. Cancelling the chooser performs no query or write. Accepted export work and
+its blocking file write belong to the application; write failures retain the query.
+
+## Message Trace
+
+The Message Trace workspace finds candidates by Topic + Message ID (at most one)
+or Topic + Key (at most 64). Topic discovery has a searchable picker and validated
+manual entry. A full Key result reports that more matches may exist. Selecting a
+candidate starts a separate, cancellable Trace query; editing the Topic, mode,
+identifier or Trace Topic clears obsolete nodes. The Trace Topic is explicit and
+defaults to `RMQ_SYS_TRACE_TOPIC`.
+The Broker must provide that Topic, for example with `traceTopicEnable=true`;
+the isolated [development fixture](deploy/dev/README.md) enables it explicitly.
+Enabling the producer alone does not create the reserved system Topic through the
+ordinary Topic form.
+Disabling producer tracing does not promise that no Trace records exist: Consumers
+can independently emit their own records for the same message.
+
+Trace reads verify the selected physical message within its Topic before using its
+producer-assigned ID as the trace index key. A missing producer ID is reported,
+without querying a physical offset as if it were a producer ID. Reused producer IDs
+can cover several real sends; the timeline retains their returned records and does
+not invent a causal graph or end-to-end latency. The Inspector Trace tab uses the
+same service and timeline and does not load message bodies or trigger consumption.
+
+Only real client-written records are shown, in stable timestamp order. Missing
+timestamps, statuses, groups and durations remain Unknown. Reported duration is the
+client's value for one record. Trace reads are bounded to 32 Brokers, 64 trace
+messages per Broker and 128 displayed nodes; reached preview limits and unanswered
+Brokers are visible. An empty successful read, an absent trace Topic and an RPC
+failure have distinct feedback. These are NameServer Direct reads; the desktop does
+not claim Proxy forwarding support. Trace results remain in memory and are cleared
+at page, connection, environment and session boundaries.
+
+## Native topology
+
+Topology reads configuration, NameServer health, Brokers, Topic routes, Producer
+registrations, Consumer groups, and replication independently in the captured
+environment, configuration revision, and NameServer Direct scope. Proxy does not
+silently fall back to Direct reads. Failures have source-specific public codes;
+unavailable rates, backlog, roles, and replication values remain Unknown.
+
+Each refresh bounds application-level Admin reads: 16 NameServer health probes;
+one Broker catalog plus 32 runtime reads; one Topic catalog plus 128 route reads;
+one Producer catalog plus 16 Broker registration reads; and one Consumer catalog,
+16 Group-table reads, and 64 exact-Broker connection/progress pairs shared across
+all Groups. Catalog aggregation retains at most 4,096 distinct Groups, draws at
+most 50 Producers and 50 Consumers, and reports pre-display totals as lower bounds
+when target or catalog coverage is incomplete. These budgets count the Admin
+requests issued by this collection, including nested enrichment; SDK lifecycle
+traffic and transport retries are separate.
+
+Replication uses the same captured Broker catalog for at most 16 registered
+master groups and 8 Controllers. Its upper bound is one catalog, 16 config reads,
+16 HA reads, 16 Controller metadata and sync-state pairs, and 8 metadata reads.
+Configured, Controller, and Unknown election modes require explicit evidence.
+HA lag bytes, in-sync flags, transfer bytes/s, and Controller sync sets/epochs are
+displayed only when observed. A missing HA connection is Unknown, rather than a
+fabricated failure. Other independently observed layers remain available when a
+source fails.
+
+The native 2D map supports a scrollable viewport, zoom, Cluster filtering, node
+selection, entity navigation, and an equivalent searchable keyboard list. Layout,
+traffic panels, and changes are prepared before rendering, using structural node
+identities. Rendering is bounded to 320 nodes and 640 edges. Partial/failed reads
+retain previous observations for up to 120 seconds with their original UTC times;
+expiry is unconfirmed absence, while only complete current inventory can confirm
+a removal. Returning to a paused page expires old data before the next read.
+Controller metadata and each replication observation expire by their own times;
+a fresh peer cannot extend an unanswered peer's lifetime. Retained enrichment is
+also bounded to 320 records per source.
+
+Manual and 5/10/30-second refresh modes share one page-owned receiver and an
+application TaskGroup loop. Each automatic interval begins after the previous
+snapshot completes. Leaving the page or deactivating the window cancels current
+reads; resuming refreshes once. Application shutdown cancels and awaits this work.
+Environment/configuration changes and logout clear the snapshot, edges, and
+selection.
+
+The Sphere presentation uses this same bounded, Cluster-filtered snapshot and
+selection. Native canvas painting consumes an orthographic projection prepared
+outside Render: deterministic Cluster sectors share the Broker globe, with small
+NameServer and Controller globes only when those actual nodes exist. It keeps
+unknown and cached observation semantics and introduces no additional query.
+Rotation, zoom, focus-selected and reset are explicit, keyboard-accessible buttons;
+Alt+arrows rotate, Alt+PageUp/PageDown zoom, Alt+F focuses selection and Alt+R resets
+while the topology workspace has keyboard focus. There is no animation clock.
+At most 32 non-overlapping labels are drawn, with the
+selected observation first. The searchable picker and keyboard list expose every
+displayed node, including nodes on the far side. Actual canvas bounds trigger a
+new projection on resize. An invalid canvas or a viewport smaller than 480×260
+pixels falls back to the same 2D map while preserving the filter and selection.
 
 ## License
 

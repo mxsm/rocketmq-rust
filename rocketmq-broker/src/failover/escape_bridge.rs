@@ -42,9 +42,9 @@ use rocketmq_store::PutMessageStatus;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
-use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use tracing::error;
@@ -73,8 +73,6 @@ pub(crate) enum EscapeDispatchError {
     Target(#[from] EscapeTargetError),
     #[error("the selected escape broker has no publish address")]
     BrokerAddressUnavailable,
-    #[error("remote escape is not authorized for the current broker role")]
-    RemoteEscapeUnauthorized,
     #[error("the controller role epoch changed before remote dispatch")]
     StaleRoleEpoch,
     #[error(transparent)]
@@ -285,10 +283,33 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
             .map_err(|_| MessageStoreUnavailable)
     }
 
+    pub(crate) fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, MessageStoreUnavailable>
+    where
+        MS: BrokerWriteStore,
+    {
+        self.message_store
+            .with_store(|store| store.register_native_timer_recall(registration))?
+            .map_err(|_| MessageStoreUnavailable)
+    }
+
+    pub(crate) fn withdraw_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerWriteStore,
+    {
+        self.message_store
+            .with_store(|store| store.withdraw_native_timer_recall(registration))
+    }
+
     pub(crate) fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: rocketmq_store::CommitLogReadMode,
-    ) -> Result<(), BackendStoreError>
+    ) -> Result<(), StoreError>
     where
         MS: rocketmq_store::BrokerAdminStore,
     {
@@ -464,21 +485,6 @@ where
         }
     }
 
-    pub(crate) async fn put_message_to_remote_broker(
-        &self,
-        message_ext: MessageExtBrokerInner,
-        broker_name_to_send: Option<CheetahString>,
-    ) -> Result<SendResult, EscapeDispatchError> {
-        let policy = self.policy_state.snapshot();
-        let authority = policy
-            .remote_escape_authority()
-            .ok_or(EscapeDispatchError::RemoteEscapeUnauthorized)?;
-        let preference = broker_name_to_send
-            .as_ref()
-            .map_or(EscapeTargetPreference::Any, EscapeTargetPreference::Broker);
-        self.dispatch_remote_message(message_ext, preference, authority).await
-    }
-
     fn get_producer_group(&self, message_ext: &MessageExtBrokerInner) -> CheetahString {
         let producer_group =
             message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
@@ -548,27 +554,10 @@ where
         }
     }
 
-    pub async fn put_messages(&self, batch: MessageExtBatch) -> PutMessageResult {
-        let policy = self.policy_state.snapshot();
-        if policy.broker_role != rocketmq_model::common::broker::broker_role::BrokerRole::Slave
-            && self.message_store.is_local_writeable()
-        {
-            return self
-                .message_store
-                .put_messages(batch)
-                .await
-                .unwrap_or_else(|_| PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
-        }
-        if policy.remote_escape_authority().is_some() {
-            return PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true);
-        }
-        PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
-    }
-
     async fn dispatch_remote_message(
         &self,
         message_ext: MessageExtBrokerInner,
-        preference: EscapeTargetPreference<'_>,
+        preference: EscapeTargetPreference,
         authority: EscapeRemoteAuthority,
     ) -> Result<SendResult, EscapeDispatchError> {
         let is_trans_half_message = TransactionalMessageUtil::build_half_topic() == message_ext.get_topic();

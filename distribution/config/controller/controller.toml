@@ -9,7 +9,7 @@ listenAddr = "127.0.0.1:9878"
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
 storagePath = "./work/controller/storage"
-storageBackend = "RocksDB"
+storageEngineType = "RocksDB"
 
 [observability.metrics]
 exporter = "disable"

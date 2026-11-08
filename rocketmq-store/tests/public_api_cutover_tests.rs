@@ -33,6 +33,10 @@ fn public_store_surface_exposes_capabilities_without_the_wide_facade() {
         "the internal BackendOps adapter must not remain in the intentional public API"
     );
     assert!(
+        !public_api.contains("MessageStoreEngine"),
+        "the internal MessageStoreEngine contract must not appear in the intentional public API"
+    );
+    assert!(
         !root.join("src/base/message_store.rs").exists(),
         "the legacy broad backend trait file must be deleted"
     );
@@ -132,6 +136,11 @@ fn broker_subsystems_declare_use_case_capability_bounds() {
                 assert!(
                     !source.contains("MS: BackendOps"),
                     "{} still binds a Broker subsystem directly to the backend implementation trait",
+                    entry_path.display()
+                );
+                assert!(
+                    !source.contains("MS: MessageStoreEngine"),
+                    "{} binds a Broker subsystem directly to the internal message-store engine contract",
                     entry_path.display()
                 );
             }

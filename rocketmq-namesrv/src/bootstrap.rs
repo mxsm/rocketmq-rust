@@ -93,8 +93,8 @@ use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
 use crate::NamesrvConfig;
 
-use self::config_apply::ConfigApplyOutcome;
 use self::config_apply::ConfigGenerationState;
+use self::config_apply::RuntimeConfigUpdateReport;
 
 pub(crate) mod config_apply;
 mod lifecycle;
@@ -599,7 +599,7 @@ impl NameServerRuntime {
             .map_err(|error| namesrv_startup_failed("start broker session observer", error))?;
 
         let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
-        let name_server_runtime_inner = NameServerRuntimeHandle::new(&self.inner);
+        let name_server_runtime_handle = NameServerRuntimeHandle::new(&self.inner);
         let task_group = self.inner.component_task_group("namesrv.scheduled");
         let scheduled_tasks = ScheduledTaskGroup::new(task_group);
         let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
@@ -610,10 +610,10 @@ impl NameServerRuntime {
 
         scheduled_tasks
             .schedule(config, ScheduledExecutionPolicy::default(), move || {
-                let name_server_runtime_inner = name_server_runtime_inner.clone();
+                let name_server_runtime_handle = name_server_runtime_handle.clone();
                 async move {
                     debug!("Running scheduled broker health check");
-                    if let Some(runtime) = name_server_runtime_inner.upgrade() {
+                    if let Some(runtime) = name_server_runtime_handle.upgrade() {
                         let route_info_manager = runtime.route_info_manager();
                         route_info_manager.scan_not_active_broker();
                     }
@@ -673,7 +673,7 @@ impl NameServerRuntime {
             .expect("Server not initialized - call initialize() first");
 
         // Start route info manager service
-        self.inner.route_info_manager().start();
+        self.inner.route_info_manager().try_start()?;
 
         // Spawn server task and retain handle for graceful shutdown
         let mut server_shutdown_rx = self
@@ -861,14 +861,7 @@ impl NameServerRuntime {
         }
 
         info!("NameServer shutdown: stopping the route information manager...");
-        shutdown_report.route_unregistration =
-            match tokio::time::timeout(deadline.remaining(), self.inner.route_info_manager().shutdown()).await {
-                Ok(report) => report,
-                Err(_) => {
-                    warn!("NameServer route unregistration exhausted the shutdown deadline");
-                    None
-                }
-            };
+        shutdown_report.route_unregistration = self.inner.route_info_manager().shutdown_until(deadline).await;
 
         if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
             shutdown_report.cluster_test_route_lookup_healthy = Some(
@@ -1420,10 +1413,6 @@ impl NameServerRuntimeHandle {
         self.runtime().task_group()
     }
 
-    pub(crate) fn component_task_group(&self, scope: &'static str) -> TaskGroup {
-        self.runtime().component_task_group(scope)
-    }
-
     pub(crate) fn namesrv_metrics(&self) -> NameServerMetrics {
         self.runtime().namesrv_metrics()
     }
@@ -1439,7 +1428,7 @@ impl NameServerRuntimeHandle {
     pub(crate) async fn update_runtime_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> NameServerResult<ConfigApplyOutcome> {
+    ) -> NameServerResult<RuntimeConfigUpdateReport> {
         self.runtime().update_runtime_config(updates).await
     }
 
@@ -1792,7 +1781,7 @@ impl NameServerRuntimeInner {
     pub async fn update_runtime_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> NameServerResult<ConfigApplyOutcome> {
+    ) -> NameServerResult<RuntimeConfigUpdateReport> {
         config_apply::apply_runtime_updates(self, updates).await
     }
 
@@ -1998,7 +1987,7 @@ mod tests {
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
     use crate::processor::ClusterTestTopicRouteResolution;
-    use crate::route::route_info_manager::TopicRouteLookupOutcome;
+    use crate::route::route_info_manager::TopicRouteLookupStatus;
     use crate::route::types::BrokerSession;
 
     fn test_broker_session(remote_addr: SocketAddr) -> (BrokerSession, SessionId) {
@@ -2354,7 +2343,7 @@ mod tests {
         let runtime = bootstrap.runtime_inner();
         let original_port = runtime.server_config().listen_port;
 
-        let outcome = runtime
+        let update_report = runtime
             .update_runtime_config(HashMap::from([
                 (
                     CheetahString::from_static_str("enableTopicList"),
@@ -2370,9 +2359,9 @@ mod tests {
 
         assert!(!runtime.name_server_config().enable_topic_list);
         assert_eq!(runtime.server_config().listen_port, original_port);
-        assert_eq!(outcome.restart_required_keys, vec!["listenPort"]);
-        assert_eq!(outcome.desired_generation, outcome.durable_generation);
-        assert_eq!(outcome.effective_generation, 1);
+        assert_eq!(update_report.restart_required_keys, vec!["listenPort"]);
+        assert_eq!(update_report.desired_generation, update_report.durable_generation);
+        assert_eq!(update_report.effective_generation, 1);
         let persisted = std::fs::read_to_string(config_path).expect("desired snapshot should be durable");
         assert!(persisted.contains("listenPort=19876"));
         drop(root);
@@ -2408,11 +2397,11 @@ mod tests {
             CheetahString::from_static_str("true"),
         )]);
 
-        let outcome = runtime
+        let update_report = runtime
             .update_runtime_config(update.clone())
             .await
             .expect("restart-required update should be persisted as desired state");
-        assert_eq!(outcome.restart_required_keys, vec!["enableControllerInNamesrv"]);
+        assert_eq!(update_report.restart_required_keys, vec!["enableControllerInNamesrv"]);
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
 
         let namesrv_error = runtime
@@ -3400,7 +3389,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&registered_topic),
-                Ok(TopicRouteLookupOutcome::Found(_))
+                Ok(TopicRouteLookupStatus::Found(_))
             ),
             "registered topic should be visible through route manager"
         );
@@ -3420,7 +3409,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&registered_topic),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             ),
             "deleted topic should no longer have route data"
         );
@@ -3547,7 +3536,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::Found(_))
+                Ok(TopicRouteLookupStatus::Found(_))
             ),
             "registered topic route should exist before unregister"
         );
@@ -3575,7 +3564,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             )
         })
         .await;
@@ -3803,7 +3792,7 @@ mod tests {
         )
         .await;
 
-        let TopicRouteLookupOutcome::Found(topic_route_data) = bootstrap
+        let TopicRouteLookupStatus::Found(topic_route_data) = bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
@@ -3871,7 +3860,7 @@ mod tests {
 
             matches!(
                 route_manager.pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             ) && route_manager
                 .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                 .is_none()
@@ -3977,7 +3966,7 @@ mod tests {
 
             matches!(
                 route_manager.pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             ) && route_manager
                 .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                 .is_none()
@@ -4064,7 +4053,7 @@ mod tests {
         wait_until("duplicate unregister cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4163,7 +4152,7 @@ mod tests {
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4264,7 +4253,7 @@ mod tests {
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4666,7 +4655,7 @@ mod tests {
             .expect("first broker session should publish connect");
         assert!(matches!(
             runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-            Ok(TopicRouteLookupOutcome::Found(_))
+            Ok(TopicRouteLookupStatus::Found(_))
         ));
 
         let mut replacement = connect(&addr).await;
@@ -4694,7 +4683,7 @@ mod tests {
         assert!(
             matches!(
                 runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::Found(_))
+                Ok(TopicRouteLookupStatus::Found(_))
             ),
             "an old session disconnect must not remove its replacement registration"
         );
@@ -4713,7 +4702,7 @@ mod tests {
         wait_until("replacement disconnect route cleanup", || {
             matches!(
                 runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             )
         })
         .await;
@@ -5081,7 +5070,7 @@ mod tests {
         );
         let ext = response
             .ext_fields()
-            .expect("config outcome should include extension fields");
+            .expect("config update report should include extension fields");
         assert_eq!(ext.get("desiredGeneration").map(|value| value.as_str()), Some("1"));
         assert_eq!(ext.get("durableGeneration").map(|value| value.as_str()), Some("1"));
         assert_eq!(ext.get("effectiveGeneration").map(|value| value.as_str()), Some("1"));
@@ -5364,7 +5353,7 @@ mod tests {
             TopicRouteData::decode(before.body().expect("route response should include a body")).unwrap();
         assert!(before_route.order_topic_conf.is_none());
 
-        let outcome = bootstrap
+        let update_report = bootstrap
             .runtime_inner()
             .update_runtime_config(HashMap::from([(
                 CheetahString::from_static_str("orderMessageEnable"),
@@ -5372,8 +5361,8 @@ mod tests {
             )]))
             .await
             .expect("live route configuration should update durably");
-        assert_eq!(outcome.effective_generation, 1);
-        assert_eq!(outcome.applied_keys, vec!["orderMessageEnable"]);
+        assert_eq!(update_report.effective_generation, 1);
+        assert_eq!(update_report.applied_keys, vec!["orderMessageEnable"]);
 
         let mut after_request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,

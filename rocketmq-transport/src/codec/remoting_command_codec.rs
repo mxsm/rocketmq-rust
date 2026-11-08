@@ -210,11 +210,6 @@ impl FrameLimits {
         }
     }
 
-    /// Compatibility alias for endpoints that have not adopted the semantic profile name yet.
-    pub const fn legacy_compatibility() -> Self {
-        Self::java_compatibility()
-    }
-
     pub(crate) fn encode_command(self, command: RemotingCommand) -> Result<EncodedFrame, rocketmq_error::SharedError> {
         self.validate()?;
         self.validate_command_lower_bounds(&command)?;

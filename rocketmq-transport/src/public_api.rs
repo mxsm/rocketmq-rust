@@ -62,8 +62,11 @@ pub use crate::config::TlsServerConfig;
 pub use crate::config_support::network_util::NetworkUtil;
 pub use crate::connection::ConnectionState;
 pub use crate::deadline::RequestDeadline;
+#[cfg(feature = "http-discovery")]
 pub use crate::discovery::default_top_addressing::DefaultTopAddressing;
+#[cfg(feature = "http-discovery")]
 pub use crate::discovery::http_tiny_client::HttpResult;
+#[cfg(feature = "http-discovery")]
 pub use crate::discovery::http_tiny_client::HttpTinyClient;
 pub use crate::discovery::name_server_update_callback::NameServerUpdateCallback;
 pub use crate::discovery::top_addressing::TopAddressing;
@@ -131,6 +134,7 @@ pub use crate::file_region_writer::file_transfer_snapshot;
 pub use crate::file_region_writer::FileTransferSnapshot;
 pub use crate::proxy_protocol::ProxyProtocolConfig;
 pub use crate::remoting_server::rocketmq_tokio_server::TransportServer;
+pub use crate::request_ordering::release_request_ordering;
 pub use crate::request_ordering::RequestOrdering;
 pub use crate::request_ordering::RequestOrderingKey;
 pub use crate::request_outcome::OutboundRequestContract;
@@ -142,7 +146,6 @@ pub use crate::request_outcome::OutboundRequestStage;
 pub use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 pub use crate::rpc::client_metadata::ClientMetadata;
 pub use crate::rpc::rpc_client::RpcClient;
-pub use crate::rpc::rpc_client::RpcClientLocal;
 pub use crate::rpc::rpc_client_hook::RpcClientHookFn;
 pub use crate::rpc::rpc_client_impl::RpcClientImpl;
 pub use crate::rpc::rpc_client_utils::RpcClientUtils;

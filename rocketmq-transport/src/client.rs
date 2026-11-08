@@ -25,7 +25,7 @@ use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
-use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
+use crate::base::pending_request_table::estimate_wire_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestRegistrationResult;
@@ -556,7 +556,7 @@ impl OneShotTransportClient {
             .sign(&mut request, Some(&peer))
             .map_err(|source| connection_failed_for_remote(address.to_string(), TransportStage::Connect, source))?;
         deadline.ensure_before_send()?;
-        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
+        let retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut request);
         let _connection_permit = self
             .admission
             .try_acquire(
@@ -668,6 +668,7 @@ fn pending_completion_result(
             connection_failed_without_source_for_remote(address.to_string(), TransportStage::Closed),
         ),
         PendingRequestCompletion::OperationalFailure(error) => Err(error),
+        PendingRequestCompletion::WriteFailed(failure) => Err(PendingRequestCompletion::write_failure_error(failure)),
     }
 }
 

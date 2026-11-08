@@ -181,11 +181,11 @@ fn accepted(outcome: MetadataWriteSubmissionStatus) -> MetadataIoReceipt {
     }
 }
 
-fn rss() -> u64 {
-    let pid = sysinfo::get_current_pid().unwrap();
-    let mut system = sysinfo::System::new();
+fn rss() -> Option<u64> {
+    let pid = sysinfo::get_current_pid().ok()?;
+    let mut system = sysinfo::System::new().ok()?;
     system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
-    system.process(pid).unwrap().memory()
+    system.process(pid).map(|process| process.memory())
 }
 
 fn metadata_memory() -> Value {

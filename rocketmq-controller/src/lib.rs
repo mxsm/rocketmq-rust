@@ -248,6 +248,22 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
+    /// Starts a Controller using listeners retained by its test or benchmark fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either listener does not match the Controller configuration,
+    /// the manager is not initialized, or a runtime component fails to start.
+    pub async fn start_controller_with_bound_listeners(
+        manager: &Arc<ControllerManager>,
+        remoting: TcpListener,
+        raft: TcpListener,
+    ) -> Result<(), rocketmq_error::Error> {
+        manager
+            .start_with_bound_listeners(ControllerListeners { remoting, raft })
+            .await
+    }
+
     pub async fn run_controller_heartbeat_lifecycle_probe(
         service_context: ChildServiceContext,
     ) -> ControllerHeartbeatLifecycleProbe {

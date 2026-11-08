@@ -456,7 +456,7 @@ impl RmcpGateway {
             .await,
         );
         sources.push(
-            self.backend_source(
+            self.probe_observability_source(
                 "prometheus",
                 self.config.prometheus_url.as_ref(),
                 "/api/v1/query?query=up",
@@ -465,11 +465,11 @@ impl RmcpGateway {
             .await,
         );
         sources.push(
-            self.backend_source("loki", self.config.loki_url.as_ref(), "/ready", false)
+            self.probe_observability_source("loki", self.config.loki_url.as_ref(), "/ready", false)
                 .await,
         );
         sources.push(
-            self.backend_source("tempo", self.config.tempo_url.as_ref(), "/ready", false)
+            self.probe_observability_source("tempo", self.config.tempo_url.as_ref(), "/ready", false)
                 .await,
         );
         sources.extend([
@@ -528,7 +528,7 @@ impl RmcpGateway {
         }
     }
 
-    async fn backend_source(
+    async fn probe_observability_source(
         &self,
         id: &'static str,
         base_url: Option<&url::Url>,

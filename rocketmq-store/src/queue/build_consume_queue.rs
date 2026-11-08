@@ -17,7 +17,7 @@ use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchRoot;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
-use crate::queue::consume_queue_store::ConsumeQueueStoreInterface;
+use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 
 pub struct CommitLogDispatcherBuildConsumeQueue {

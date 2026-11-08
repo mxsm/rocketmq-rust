@@ -158,12 +158,12 @@ impl Default for MetricsRuntimePolicy {
 }
 
 #[derive(Clone)]
-enum HandleBackend {
+enum TelemetryBinding {
     Noop,
-    Active(Arc<ActiveHandle>),
+    Shared(Arc<SharedTelemetryState>),
 }
 
-struct ActiveHandle {
+struct SharedTelemetryState {
     state: AtomicU8,
     metrics_runtime_policy: MetricsRuntimePolicy,
     trace_policy: TracePolicy,
@@ -172,6 +172,8 @@ struct ActiveHandle {
     meters: Option<FixedMeters>,
     #[cfg(feature = "otel-metrics")]
     release_identity: parking_lot::Mutex<Option<ReleaseIdentityRegistration>>,
+    #[cfg(feature = "otel-metrics")]
+    namesrv_unregistration_age: std::sync::OnceLock<Arc<crate::metrics::namesrv::UnregistrationAge>>,
 }
 
 /// Failure to register a release identity on an explicit telemetry handle.
@@ -198,7 +200,7 @@ pub enum ReleaseIdentityRegistrationError {
 /// the corresponding non-cloneable `TelemetryRuntimeGuard` remains the sole shutdown owner.
 #[derive(Clone)]
 pub struct TelemetryHandle {
-    backend: HandleBackend,
+    binding: TelemetryBinding,
 }
 
 impl fmt::Debug for TelemetryHandle {
@@ -222,7 +224,7 @@ impl TelemetryHandle {
     #[must_use]
     pub const fn noop() -> Self {
         Self {
-            backend: HandleBackend::Noop,
+            binding: TelemetryBinding::Noop,
         }
     }
 
@@ -232,7 +234,7 @@ impl TelemetryHandle {
         meter_provider: Option<&opentelemetry_sdk::metrics::SdkMeterProvider>,
     ) -> Self {
         Self {
-            backend: HandleBackend::Active(Arc::new(ActiveHandle {
+            binding: TelemetryBinding::Shared(Arc::new(SharedTelemetryState {
                 state: AtomicU8::new(TelemetryState::Active as u8),
                 metrics_runtime_policy: MetricsRuntimePolicy::from_config(config),
                 trace_policy: TracePolicy::from_config(config),
@@ -243,6 +245,7 @@ impl TelemetryHandle {
                 ),
                 meters: meter_provider.map(FixedMeters::new),
                 release_identity: parking_lot::Mutex::new(None),
+                namesrv_unregistration_age: std::sync::OnceLock::new(),
             })),
         }
     }
@@ -250,7 +253,7 @@ impl TelemetryHandle {
     #[cfg(not(feature = "otel-metrics"))]
     pub(crate) fn active(config: &ObservabilityConfig) -> Self {
         Self {
-            backend: HandleBackend::Active(Arc::new(ActiveHandle {
+            binding: TelemetryBinding::Shared(Arc::new(SharedTelemetryState {
                 state: AtomicU8::new(TelemetryState::Active as u8),
                 metrics_runtime_policy: MetricsRuntimePolicy::from_config(config),
                 trace_policy: TracePolicy::from_config(config),
@@ -266,9 +269,9 @@ impl TelemetryHandle {
     /// Returns the current shared lifecycle state.
     #[must_use]
     pub fn state(&self) -> TelemetryState {
-        match &self.backend {
-            HandleBackend::Noop => TelemetryState::Closed,
-            HandleBackend::Active(inner) => TelemetryState::from_raw(inner.state.load(Ordering::Acquire)),
+        match &self.binding {
+            TelemetryBinding::Noop => TelemetryState::Closed,
+            TelemetryBinding::Shared(inner) => TelemetryState::from_raw(inner.state.load(Ordering::Acquire)),
         }
     }
 
@@ -290,9 +293,9 @@ impl TelemetryHandle {
     /// continue metrics work after their runtime owner begins shutdown.
     #[must_use]
     pub fn metrics_runtime_policy(&self) -> MetricsRuntimePolicy {
-        match &self.backend {
-            HandleBackend::Active(inner) if self.is_active() => inner.metrics_runtime_policy,
-            HandleBackend::Noop | HandleBackend::Active(_) => MetricsRuntimePolicy::disabled(),
+        match &self.binding {
+            TelemetryBinding::Shared(inner) if self.is_active() => inner.metrics_runtime_policy,
+            TelemetryBinding::Noop | TelemetryBinding::Shared(_) => MetricsRuntimePolicy::disabled(),
         }
     }
 
@@ -302,9 +305,9 @@ impl TelemetryHandle {
     /// cannot continue producing telemetry.
     #[must_use]
     pub fn trace_policy(&self) -> TracePolicy {
-        match &self.backend {
-            HandleBackend::Active(inner) if self.is_active() => inner.trace_policy,
-            HandleBackend::Noop | HandleBackend::Active(_) => TracePolicy::disabled(),
+        match &self.binding {
+            TelemetryBinding::Shared(inner) if self.is_active() => inner.trace_policy,
+            TelemetryBinding::Noop | TelemetryBinding::Shared(_) => TracePolicy::disabled(),
         }
     }
 
@@ -314,9 +317,9 @@ impl TelemetryHandle {
     /// handles receive independent policies and budgets.
     #[must_use]
     pub fn metric_label_policy(&self) -> MetricLabelPolicy {
-        match &self.backend {
-            HandleBackend::Active(inner) if self.is_active() => inner.metric_label_policy.clone(),
-            HandleBackend::Noop | HandleBackend::Active(_) => MetricLabelPolicy::disabled(),
+        match &self.binding {
+            TelemetryBinding::Shared(inner) if self.is_active() => inner.metric_label_policy.clone(),
+            TelemetryBinding::Noop | TelemetryBinding::Shared(_) => MetricLabelPolicy::disabled(),
         }
     }
 
@@ -336,12 +339,26 @@ impl TelemetryHandle {
     #[cfg(feature = "otel-metrics")]
     #[must_use]
     pub(crate) fn meter(&self, scope: &str) -> Option<opentelemetry::metrics::Meter> {
-        match &self.backend {
-            HandleBackend::Active(inner) if self.is_active() => {
+        match &self.binding {
+            TelemetryBinding::Shared(inner) if self.is_active() => {
                 inner.meters.as_ref().and_then(|meters| meters.get(scope))
             }
-            HandleBackend::Noop | HandleBackend::Active(_) => None,
+            TelemetryBinding::Noop | TelemetryBinding::Shared(_) => None,
         }
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    pub(crate) fn namesrv_unregistration_age(&self) -> Option<Arc<crate::metrics::namesrv::UnregistrationAge>> {
+        let TelemetryBinding::Shared(inner) = &self.binding else {
+            return None;
+        };
+        let meter = self.meter(NAMESRV_METER_SCOPE)?;
+        // One callback per runtime, even when typed recorders are reconstructed.
+        Some(Arc::clone(
+            inner
+                .namesrv_unregistration_age
+                .get_or_init(|| crate::metrics::namesrv::UnregistrationAge::new(&meter)),
+        ))
     }
 
     /// Registers one instance-scoped release identity before service readiness.
@@ -359,7 +376,7 @@ impl TelemetryHandle {
         &self,
         identity: ValidatedReleaseIdentity,
     ) -> Result<ReleaseIdentityRegistrationStatus, ReleaseIdentityRegistrationError> {
-        let HandleBackend::Active(inner) = &self.backend else {
+        let TelemetryBinding::Shared(inner) = &self.binding else {
             return Err(ReleaseIdentityRegistrationError::Inactive);
         };
 
@@ -394,7 +411,7 @@ impl TelemetryHandle {
     pub fn release_identity_registered(&self) -> bool {
         #[cfg(feature = "otel-metrics")]
         {
-            let HandleBackend::Active(inner) = &self.backend else {
+            let TelemetryBinding::Shared(inner) = &self.binding else {
                 return false;
             };
             self.is_active()
@@ -412,7 +429,7 @@ impl TelemetryHandle {
     }
 
     pub(crate) fn begin_closing(&self) {
-        if let HandleBackend::Active(inner) = &self.backend {
+        if let TelemetryBinding::Shared(inner) = &self.binding {
             #[cfg(feature = "otel-metrics")]
             let _registration = inner.release_identity.lock();
             let _ = inner.state.compare_exchange(
@@ -425,7 +442,7 @@ impl TelemetryHandle {
     }
 
     pub(crate) fn mark_closed(&self) {
-        if let HandleBackend::Active(inner) = &self.backend {
+        if let TelemetryBinding::Shared(inner) = &self.binding {
             inner.state.store(TelemetryState::Closed as u8, Ordering::Release);
         }
     }

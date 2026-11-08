@@ -1,0 +1,33 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at https://www.apache.org/licenses/LICENSE-2.0
+
+[package]
+name = "rocketmq-dashboard-storage"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Native Dashboard persistence contracts and optional SQL engines"
+publish = false
+
+[features]
+default = []
+sqlite = ["dep:sqlx", "sqlx/sqlite"]
+mysql = ["dep:sqlx", "sqlx/mysql"]
+postgres = ["dep:sqlx", "sqlx/postgres"]
+
+[dependencies]
+rocketmq-dashboard-common = { version = "1.1.0", path = "../rocketmq-dashboard-common" }
+rocketmq-runtime = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+sqlx = { version = "0.8.6", optional = true, default-features = false, features = ["runtime-tokio-rustls"] }
+
+[dev-dependencies]
+tempfile = "3"

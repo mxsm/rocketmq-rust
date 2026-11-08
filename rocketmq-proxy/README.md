@@ -47,6 +47,11 @@ The runtime is assembled by `ProxyRuntimeBuilder`:
 - `ClusterServiceManager` forwards work to the configured RocketMQ cluster.
 - `LocalServiceManager` runs against an embedded broker facade.
 
+Automatically assembled Cluster and Local services use an internal `dependency_service_context` derived from
+the application's injected parent context. Injected service managers and custom processors do not create this child
+context. Cleanup stops dependency health, the Broker Remoting handler, the dependency task group, authentication,
+and the parent Proxy task group, in that order, using one shared deadline and collecting cleanup failures.
+
 ## Protocol Surface
 
 ### gRPC
@@ -293,8 +298,16 @@ async fn run_proxy(config: ProxyConfig, context: ChildServiceContext) -> ProxyRe
 ```
 
 Use `ProxyRuntime::builder` to inject a custom `ServiceManager`,
-`ClientSessionRegistry`, `ProxyAuthRuntime`, request hooks, metrics, or remoting
-backend.
+`ClientSessionRegistry`, `ProxyAuthRuntime`, request hooks, metrics, or the
+optional broker remoting handler via `with_broker_remoting_handler`. The handler
+receives decoded commands for the broker-routed remoting request codes
+(`ForwardToBroker` and the queue-lock routes) and returns `EmbeddedDispatchResult`.
+Supply it alongside an injected `ServiceManager`; without a custom service manager,
+automatic dependency construction selects `LocalBrokerRemotingAdapter` or
+`ClusterBrokerRemotingAdapter` for the configured mode and ignores the handler
+override. A custom service manager without a handler leaves broker-routed remoting
+requests unsupported. `with_remoting_backend(...)` is a deprecated wrapper for
+`with_broker_remoting_handler(...)`; migrate by renaming the call.
 
 ## Crate Layout
 

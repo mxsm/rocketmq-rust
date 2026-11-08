@@ -87,7 +87,7 @@ use super::LocalFileMessageStore;
 use super::ReputMessageService;
 use super::ReputMessageServiceInner;
 use super::StoreRootLeaseState;
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::message_arriving_listener::MessageArrivingListener;
@@ -356,6 +356,103 @@ async fn wave_b_managed_store_bootstraps_starts_and_creates_first_queue_segments
         .is_file());
 }
 
+#[tokio::test]
+async fn replicated_append_is_dispatched_without_a_local_put() {
+    let temp_dir = tempdir().expect("temporary Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            // No HA listener: the test appends through the replica handle itself.
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("replicated-dispatch");
+    store.init().await.expect("initialize Store");
+    assert!(store.load().await, "load Store");
+    store.start().await.expect("start Store");
+
+    let record = crate::ha::test_support::replicated_message_record(topic.as_str(), 0, 0, 0);
+    assert!(store
+        .ha_replica_store_handle()
+        .append_replica_data(0, &record, 0, record.len() as i32)
+        .await
+        .expect("append replicated record"));
+
+    let queue_offset = wait_for_max_offset_in_queue(&store, &topic, 1).await;
+    store.shutdown().await;
+
+    assert_eq!(queue_offset, 1);
+}
+
+#[tokio::test]
+async fn replicated_confirm_offset_wakes_dispatch_of_confirmed_data() {
+    let temp_dir = tempdir().expect("temporary Store root");
+    let mut store = new_owned_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig {
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            // No HA listener: the test appends through the replica handle itself.
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+        // Dispatch stops at the published confirm offset, as on a Controller-mode slave.
+        StoreRuntimeConfig {
+            duplication_enable: true,
+            ..StoreRuntimeConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("replicated-confirm-dispatch");
+    store.init().await.expect("initialize Store");
+    assert!(store.load().await, "load Store");
+    store.start().await.expect("start Store");
+
+    let replica = store.ha_replica_store_handle();
+    let mut records = crate::ha::test_support::replicated_message_record(topic.as_str(), 0, 0, 0);
+    let first_end = records.len() as i64;
+    records.extend_from_slice(&crate::ha::test_support::replicated_message_record(
+        topic.as_str(),
+        0,
+        1,
+        first_end,
+    ));
+    // A single append wakes the reader once, so no stored wake-up outlives the first dispatch.
+    assert!(replica
+        .append_replica_data(0, &records, 0, records.len() as i32)
+        .await
+        .expect("append replicated records"));
+
+    // The reader dispatches the confirmed record and then sleeps, with the second one unconfirmed.
+    replica.publish_confirm_offset(first_end);
+    let first_dispatched = wait_for_max_offset_in_queue(&store, &topic, 1).await;
+    replica.publish_confirm_offset(records.len() as i64);
+    let second_dispatched = wait_for_max_offset_in_queue(&store, &topic, 2).await;
+    store.shutdown().await;
+
+    assert_eq!(first_dispatched, 1);
+    assert_eq!(second_dispatched, 2);
+}
+
+/// Polls queue 0 of `topic` for up to two seconds until it holds `expected` messages.
+async fn wait_for_max_offset_in_queue(store: &LocalFileMessageStore, topic: &CheetahString, expected: i64) -> i64 {
+    let mut queue_offset = 0;
+    for _ in 0..100 {
+        queue_offset = store.get_max_offset_in_queue(topic, 0);
+        if queue_offset == expected {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    queue_offset
+}
+
 #[cfg(any(target_os = "linux", windows))]
 #[tokio::test]
 async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destroy() {
@@ -394,7 +491,7 @@ async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destro
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    let error = BackendOps::destroy_gracefully(&mut store)
+    let error = MessageStoreEngine::destroy_gracefully(&mut store)
         .await
         .expect_err("explicit destroy must wait for ordinary shutdown");
     assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
@@ -408,7 +505,7 @@ async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destro
         "ordinary shutdown must preserve consume-queue data"
     );
 
-    assert!(BackendOps::destroy_gracefully(&mut store)
+    assert!(MessageStoreEngine::destroy_gracefully(&mut store)
         .await
         .expect("explicit managed Store destroy completes"));
     assert_eq!(store.store_root_lease_state, StoreRootLeaseState::Destroyed);
@@ -418,7 +515,7 @@ async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destro
         temp_dir.path().join(".rocketmq-lifecycle").is_dir(),
         "durable lifecycle evidence remains as the audit trail"
     );
-    assert!(BackendOps::destroy_gracefully(&mut store)
+    assert!(MessageStoreEngine::destroy_gracefully(&mut store)
         .await
         .expect("completed managed Store destroy is idempotent"));
 }
@@ -470,7 +567,7 @@ async fn wave_b_normal_shutdown_replays_the_same_segments_on_restart() {
 
     reopened.start().await.expect("start reopened managed Store");
     reopened.shutdown().await;
-    assert!(BackendOps::destroy_gracefully(&mut reopened)
+    assert!(MessageStoreEngine::destroy_gracefully(&mut reopened)
         .await
         .expect("durably destroy reopened managed Store"));
 }
@@ -715,7 +812,7 @@ async fn graceful_destroy_keeps_legacy_store_namespace_write_disabled() {
     fs::write(&commitlog, b"legacy-segment-must-remain").expect("legacy segment");
     store.set_lifecycle_state(LocalStoreState::Shutdown);
 
-    assert!(!BackendOps::destroy_gracefully(&mut store)
+    assert!(!MessageStoreEngine::destroy_gracefully(&mut store)
         .await
         .expect("legacy graceful destroy remains write-disabled"));
     assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
@@ -873,6 +970,29 @@ fn commitlog_uses_allocate_mapped_file_service_for_file_creation() {
     let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
 
     assert!(store.commit_log.has_allocate_mapped_file_service());
+}
+
+#[test]
+fn read_path_probes_page_cache_residency_only_for_cold_data_flow_control() {
+    let default_dir = tempdir().unwrap();
+    let default_store = new_configured_test_store(&default_dir, MessageStoreConfig::default());
+    assert_eq!(
+        default_store.read_path_residency_check(),
+        rocketmq_store_local::mapped_file::ResidencyCheck::AssumeResident
+    );
+
+    let cold_dir = tempdir().unwrap();
+    let cold_store = new_configured_test_store(
+        &cold_dir,
+        MessageStoreConfig {
+            cold_data_flow_control_enable: true,
+            ..MessageStoreConfig::default()
+        },
+    );
+    assert_eq!(
+        cold_store.read_path_residency_check(),
+        rocketmq_store_local::mapped_file::ResidencyCheck::Probe
+    );
 }
 
 #[test]
@@ -1465,6 +1585,37 @@ fn owned_root_wiring_scheduled_lifecycle_probe_has_no_shared_owner() {
 }
 
 #[tokio::test]
+async fn the_wait_for_dispatch_lasts_until_the_last_batch_reached_the_dispatchers() {
+    let temp_dir = tempdir().unwrap();
+    let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+    let mut inner = reput_inner_for_store(&store);
+    inner.set_reput_from_offset(0);
+    let service = ReputMessageService {
+        shutdown_token: CancellationToken::new(),
+        new_message_notify: Arc::new(tokio::sync::Notify::new()),
+        dispatch_progress_notify: Arc::new(tokio::sync::Notify::new()),
+        pending_messages: Arc::new(AtomicI64::new(0)),
+        inflight_dispatch_batches: Arc::new(AtomicU64::new(1)),
+        reput_from_offset: None,
+        dispatch_tx: None,
+        inner: None,
+        started: Arc::new(parking_lot::Mutex::new(Some(inner))),
+        position: Arc::new(parking_lot::Mutex::new(None)),
+        task_group: None,
+    };
+    let handle = service.notify_handle();
+
+    assert!(!handle.wait_until_dispatched(Duration::from_millis(20)).await);
+
+    service.inflight_dispatch_batches.store(0, Ordering::Release);
+    assert!(handle.wait_until_dispatched(Duration::from_millis(20)).await);
+
+    service.started.lock().take();
+    service.inflight_dispatch_batches.store(1, Ordering::Release);
+    assert!(handle.wait_until_dispatched(Duration::from_millis(20)).await);
+}
+
+#[tokio::test]
 async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
     let temp_dir = tempdir().unwrap();
     let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
@@ -1480,6 +1631,8 @@ async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
         reput_from_offset: None,
         dispatch_tx: None,
         inner: None,
+        started: Arc::new(parking_lot::Mutex::new(None)),
+        position: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
     let reput_from_offset = inner.reput_from_offset.clone();
@@ -1516,6 +1669,8 @@ async fn release_checkpoint_waits_for_inflight_dispatch_batch_completion() {
         reput_from_offset: None,
         dispatch_tx: None,
         inner: Some(reput_inner_for_store(&store)),
+        started: Arc::new(parking_lot::Mutex::new(None)),
+        position: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
 
@@ -1548,6 +1703,8 @@ async fn reput_shutdown_releases_the_runtime_context() {
             reput_from_offset,
             ..reput_inner_for_store(&store)
         }),
+        started: Arc::new(parking_lot::Mutex::new(None)),
+        position: Arc::new(parking_lot::Mutex::new(None)),
         task_group: None,
     };
 
@@ -1555,6 +1712,83 @@ async fn reput_shutdown_releases_the_runtime_context() {
 
     assert!(service.inner.is_none());
     assert!(service.reput_from_offset.is_some());
+}
+
+#[tokio::test]
+async fn background_reput_keeps_queue_order_across_inline_and_channel_dispatch() {
+    let temp_dir = tempdir().expect("temporary Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            // No HA listener, so parallel tests do not contend for its port.
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("reput-inline-order");
+    let group = CheetahString::from_static_str("reput-inline-order-group");
+    let body = |index: usize| Bytes::from(format!("reput-inline-body-{index:04}"));
+    store.init().await.expect("initialize Store");
+    assert!(store.load().await, "load Store");
+    store.start().await.expect("start Store");
+
+    // One put at a time: each read finds one message and an idle dispatcher, so the reader
+    // dispatches it itself.
+    let sequential = 20;
+    for index in 0..sequential {
+        let put = store.put_message(build_test_message(&topic, body(index))).await;
+        assert_eq!(put.put_message_status(), PutMessageStatus::PutOk);
+        let expected = i64::try_from(index + 1).expect("small count");
+        assert_eq!(expected, wait_for_max_offset_in_queue(&store, &topic, expected).await);
+    }
+    // A burst appended before the reader is woken: it reads a large backlog, whose batches go
+    // through the dispatcher task.
+    let total = 300;
+    let burst = futures_util::future::join_all(
+        (sequential..total).map(|index| store.commit_log.put_message(build_test_message(&topic, body(index)))),
+    )
+    .await;
+    assert!(burst
+        .iter()
+        .all(|put| put.put_message_status() == PutMessageStatus::PutOk));
+    store.reput_message_service.notify_new_message();
+    let total_offset = i64::try_from(total).expect("small count");
+    assert_eq!(
+        total_offset,
+        wait_for_max_offset_in_queue(&store, &topic, total_offset).await
+    );
+
+    let mut queue_offsets = Vec::with_capacity(total);
+    while queue_offsets.len() < total {
+        let next = i64::try_from(queue_offsets.len()).expect("small count");
+        let result = store
+            .get_message(&group, &topic, 0, next, 32, None)
+            .await
+            .expect("get message result");
+        assert_eq!(result.status(), Some(GetMessageStatus::Found));
+        for (selection, queue_offset) in result.message_mapped_list().iter().zip(result.message_queue_offset()) {
+            let index = usize::try_from(*queue_offset).expect("queue offset");
+            if index < sequential {
+                let expected = body(index);
+                assert!(
+                    selection
+                        .get_buffer()
+                        .windows(expected.len())
+                        .any(|window| window == expected.as_ref()),
+                    "queue offset {index} must hold the {index}th sequential put"
+                );
+            }
+            queue_offsets.push(*queue_offset);
+        }
+    }
+    store.shutdown().await;
+
+    let expected = (0..u64::try_from(total).expect("small count")).collect::<Vec<_>>();
+    assert_eq!(expected, queue_offsets);
 }
 
 #[tokio::test]
@@ -3356,7 +3590,7 @@ async fn local_index_failure_sentinel_keeps_store_queries_unsafe_after_restart()
         ..DispatchRequest::default()
     });
     let confirm_offset = second_append.wrote_offset + i64::from(second_append.wrote_bytes);
-    BackendOps::set_confirm_offset(&mut store, confirm_offset);
+    MessageStoreEngine::set_confirm_offset(&mut store, confirm_offset);
     store.commit_log.flush();
 
     for (key, expect_hit) in [(&first_key, true), (&missing_key, false)] {
@@ -4157,6 +4391,40 @@ async fn get_message_returns_dispatched_messages_after_reput() {
 }
 
 #[tokio::test]
+async fn get_message_selects_mapped_ranges_for_unfiltered_pulls() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_async_flush_test_store(&temp_dir);
+    let topic = CheetahString::from_static_str("get-message-mapped-range-topic");
+    let group = CheetahString::from_static_str("test-group");
+    let bodies = [
+        Bytes::from_static(b"mapped-first"),
+        Bytes::from_static(b"mapped-second"),
+    ];
+    for body in bodies.clone() {
+        let put_result = store.put_message(build_test_message(&topic, body)).await;
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+    }
+    store.reput_once().await;
+
+    let result = store
+        .get_message(&group, &topic, 0, 0, 32, None)
+        .await
+        .expect("get message result");
+
+    assert_eq!(result.status(), Some(GetMessageStatus::Found));
+    assert_eq!(result.message_mapped_list().len(), bodies.len());
+    for (selection, body) in result.message_mapped_list().iter().zip(&bodies) {
+        // Pulls read the mapping in both transfer modes; a file range would mean a positional read.
+        assert!(selection.file_range().is_none());
+        let stored = selection.get_buffer();
+        assert!(
+            stored.windows(body.len()).any(|window| window == body.as_ref()),
+            "selection must cover the stored message"
+        );
+    }
+}
+
+#[tokio::test]
 async fn store_stats_records_single_put_append_totals() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_async_flush_test_store(&temp_dir);
@@ -4628,6 +4896,8 @@ fn reput_once_initializes_from_minimum_dispatcher_progress() {
 
 #[test]
 fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset() {
+    use futures_util::FutureExt;
+
     let temp_dir = tempdir().unwrap();
     let mut store = new_controller_test_store(
         &temp_dir,
@@ -4655,6 +4925,8 @@ fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offs
                 ..DispatchRequest::default()
             });
     }
+    let reput_wakeup = Arc::clone(&store.reput_message_service.new_message_notify);
+    assert!(reput_wakeup.notified().now_or_never().is_none());
 
     store.do_recheck_reput_offset_from_dispatchers();
 
@@ -4665,6 +4937,8 @@ fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offs
         .expect("reput offset should exist")
         .load(Ordering::SeqCst);
     assert_eq!(reput_from_offset, 164);
+    // A started reader may already have gone idle at the old offset.
+    assert!(reput_wakeup.notified().now_or_never().is_some());
 }
 
 #[test]
@@ -4992,6 +5266,46 @@ async fn disabled_lmq_quota_does_not_treat_zero_as_a_limit() {
 }
 
 #[tokio::test]
+async fn concurrent_puts_to_one_queue_receive_contiguous_queue_offsets() {
+    let temp_dir = tempdir().unwrap();
+    let store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("contiguous-offset-topic");
+
+    let results = futures_util::future::join_all((0..64).map(|index| {
+        store
+            .commit_log
+            .put_message(build_test_message(&topic, Bytes::from(format!("body-{index}"))))
+    }))
+    .await;
+
+    let mut offsets = results
+        .iter()
+        .map(|result| {
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+            result
+                .append_message_result()
+                .expect("put result should include append result")
+                .logics_offset
+        })
+        .collect::<Vec<_>>();
+    offsets.sort_unstable();
+    assert_eq!(offsets, (0..64).collect::<Vec<i64>>());
+    assert_eq!(
+        store
+            .consume_queue_store
+            .get_topic_queue_table()
+            .get(&CheetahString::from_static_str("contiguous-offset-topic-0")),
+        Some(&64)
+    );
+}
+
+#[tokio::test]
 async fn put_message_with_existing_multi_queue_offsets_still_updates_lmq_offsets() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_configured_test_store(
@@ -5216,7 +5530,7 @@ async fn clean_commit_log_service_never_crosses_derived_wal_pin() {
             .expect("append commitlog file"));
     }
     let cleanup_policy =
-        super::LocalCleanupPolicy::new(store.message_store_config.normalized_local_backend_config().cleanup);
+        super::LocalCleanupPolicy::new(store.message_store_config.normalized_local_store_config().cleanup);
     store.clean_commit_log_service = Arc::new(CleanCommitLogService::new(
         store.message_store_config.clone(),
         store.commit_log.cleanup_handle(),
@@ -5326,7 +5640,7 @@ fn clean_commit_log_service_unknown_configured_root_requests_reclaim() {
         store_path_commit_log: Some(store_path_commit_log.into()),
         ..MessageStoreConfig::default()
     });
-    let cleanup_policy = super::LocalCleanupPolicy::new(message_store_config.normalized_local_backend_config().cleanup);
+    let cleanup_policy = super::LocalCleanupPolicy::new(message_store_config.normalized_local_store_config().cleanup);
     let service = CleanCommitLogService::new(
         message_store_config,
         store.commit_log.cleanup_handle(),

@@ -144,12 +144,19 @@ impl ReplicationStateRoot {
         }
     }
 
+    /// Installs the sync state set committed by the Controller.
+    ///
+    /// Re-applying the current membership keeps a pending proposal: the Broker refreshes the
+    /// Controller view periodically, possibly while its proposal is still being reported. Catch-up
+    /// times always survive, because shrinking compares them against the not-caught-up timeout.
     pub fn replace_sync_state_set(&self, sync_state_set: HashSet<i64>) {
         let mut tracker = self.tracker();
+        if tracker.local_sync_state_set == sync_state_set {
+            return;
+        }
         self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
         tracker.local_sync_state_set = sync_state_set;
         tracker.remote_sync_state_set.clear();
-        tracker.connection_caught_up_time_table.clear();
     }
 
     pub fn is_synchronizing_sync_state_set(&self) -> bool {
@@ -168,56 +175,92 @@ impl ReplicationStateRoot {
             .insert(slave_broker_id, previous.max(last_caught_up_time_ms));
     }
 
+    /// Computes the membership this master should propose to the Controller.
+    ///
+    /// The proposal keeps the local broker, the committed members, and pending additions whose
+    /// last catch-up is within `timeout_millis`; a member without a catch-up time never
+    /// connected. A proposal that differs from the committed set stays pending until the
+    /// Controller commits a new set.
     pub fn maybe_shrink_sync_state_set(&self, now_millis: u64, timeout_millis: u64) -> HashSet<i64> {
         let local_broker_id = self.local_broker_id();
         let mut tracker = self.tracker();
         let mut next = tracker.local_sync_state_set.clone();
-        let mut changed = false;
+        if self.is_synchronizing_sync_state_set() {
+            next.extend(tracker.remote_sync_state_set.iter().copied());
+        }
         next.retain(|broker_id| {
-            if *broker_id == local_broker_id {
-                return true;
-            }
-            match tracker.connection_caught_up_time_table.get(broker_id).copied() {
-                Some(caught_up_at) if now_millis.saturating_sub(caught_up_at) <= timeout_millis => true,
-                _ => {
-                    changed = true;
-                    false
-                }
-            }
+            *broker_id == local_broker_id
+                || tracker
+                    .connection_caught_up_time_table
+                    .get(broker_id)
+                    .is_some_and(|caught_up_at| now_millis.saturating_sub(*caught_up_at) <= timeout_millis)
         });
-        if changed {
+        if next != tracker.local_sync_state_set {
             self.is_synchronizing_sync_state_set.store(true, Ordering::SeqCst);
             tracker.remote_sync_state_set = next.clone();
+        } else if self.is_synchronizing_sync_state_set() {
+            self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
+            tracker.remote_sync_state_set.clear();
         }
         next
     }
 
+    /// Adds a caught-up replica to the pending proposal.
+    ///
+    /// `min_offset` is the offset the replica must have reached. Returns the new proposal, or
+    /// `None` when the replica is behind, already committed, or already proposed. Pending
+    /// additions accumulate, so the union that guards acknowledgements covers every proposed
+    /// member until the Controller answers.
     pub fn maybe_expand_sync_state_set(
         &self,
         slave_broker_id: i64,
         slave_max_offset: i64,
-        confirm_offset: i64,
+        min_offset: i64,
     ) -> Option<HashSet<i64>> {
-        if slave_max_offset < confirm_offset {
+        if slave_max_offset < min_offset {
             return None;
         }
         let mut tracker = self.tracker();
         if tracker.local_sync_state_set.contains(&slave_broker_id) {
             return None;
         }
-        let mut next = tracker.local_sync_state_set.clone();
+        let mut next = if self.is_synchronizing_sync_state_set() {
+            if tracker.remote_sync_state_set.contains(&slave_broker_id) {
+                return None;
+            }
+            tracker.remote_sync_state_set.clone()
+        } else {
+            tracker.local_sync_state_set.clone()
+        };
         next.insert(slave_broker_id);
         self.is_synchronizing_sync_state_set.store(true, Ordering::SeqCst);
         tracker.remote_sync_state_set = next.clone();
         Some(next)
     }
 
+    /// Proposes to drop a disconnected replica. Returns whether the proposal changed.
+    ///
+    /// A committed member stays committed: the Controller can still elect it, so acknowledgements
+    /// and the confirm offset go on counting it until the Controller commits the smaller set.
     pub fn remove_replica(&self, slave_broker_id: i64) -> bool {
         let mut tracker = self.tracker();
-        let removed = tracker.local_sync_state_set.remove(&slave_broker_id);
-        tracker.remote_sync_state_set.remove(&slave_broker_id);
         tracker.connection_caught_up_time_table.remove(&slave_broker_id);
-        removed
+        let mut next = if self.is_synchronizing_sync_state_set() {
+            tracker.remote_sync_state_set.clone()
+        } else {
+            tracker.local_sync_state_set.clone()
+        };
+        if !next.remove(&slave_broker_id) {
+            return false;
+        }
+        if next == tracker.local_sync_state_set {
+            self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
+            tracker.remote_sync_state_set.clear();
+        } else {
+            self.is_synchronizing_sync_state_set.store(true, Ordering::SeqCst);
+            tracker.remote_sync_state_set = next;
+        }
+        true
     }
 
     pub fn tracked_sync_state_set_size(&self) -> Option<usize> {
@@ -283,6 +326,8 @@ impl ReplicationStateRoot {
     }
 }
 
+/// The offset every member of the sync state set holds, so that any of them can be elected
+/// without losing what was confirmed. A member without an acknowledgement holds it back.
 pub fn compute_confirm_offset(
     current_confirm_offset: i64,
     max_phy_offset: i64,
@@ -294,20 +339,11 @@ pub fn compute_confirm_offset(
         .filter(|replica| replica.in_sync && replica.slave_ack_offset > 0)
         .map(|replica| replica.slave_ack_offset)
         .collect::<Vec<_>>();
-    let candidate_offsets = if in_sync_offsets.is_empty() {
-        replicas
-            .iter()
-            .filter(|replica| replica.slave_ack_offset > 0)
-            .map(|replica| replica.slave_ack_offset)
-            .collect::<Vec<_>>()
-    } else {
-        in_sync_offsets
-    };
 
-    if expected_sync_state_set_size.saturating_sub(1) > candidate_offsets.len() {
+    if expected_sync_state_set_size.saturating_sub(1) > in_sync_offsets.len() {
         return current_confirm_offset;
     }
-    candidate_offsets.into_iter().min().unwrap_or(max_phy_offset)
+    in_sync_offsets.into_iter().min().unwrap_or(max_phy_offset)
 }
 
 #[cfg(test)]
@@ -334,6 +370,95 @@ mod tests {
     }
 
     #[test]
+    fn reapplied_controller_view_keeps_pending_proposal_and_catch_up_times() {
+        let root = ReplicationStateRoot::new(true);
+        root.set_local_broker_id(1);
+        root.replace_sync_state_set(HashSet::from([1]));
+        assert_eq!(root.maybe_expand_sync_state_set(2, 64, 64), Some(HashSet::from([1, 2])));
+        root.record_caught_up(2, 10_000);
+
+        root.replace_sync_state_set(HashSet::from([1]));
+
+        assert!(root.is_synchronizing_sync_state_set());
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 2]));
+        assert_eq!(root.maybe_shrink_sync_state_set(12_000, 15_000), HashSet::from([1, 2]));
+
+        root.replace_sync_state_set(HashSet::from([1, 2]));
+
+        assert!(!root.is_synchronizing_sync_state_set());
+        assert_eq!(root.maybe_shrink_sync_state_set(12_000, 15_000), HashSet::from([1, 2]));
+        assert!(!root.is_synchronizing_sync_state_set());
+    }
+
+    #[test]
+    fn pending_additions_accumulate_into_one_proposal() {
+        let root = ReplicationStateRoot::new(true);
+        root.set_local_broker_id(1);
+        root.replace_sync_state_set(HashSet::from([1]));
+
+        assert_eq!(root.maybe_expand_sync_state_set(2, 64, 64), Some(HashSet::from([1, 2])));
+        assert_eq!(
+            root.maybe_expand_sync_state_set(3, 64, 64),
+            Some(HashSet::from([1, 2, 3]))
+        );
+        assert_eq!(root.maybe_expand_sync_state_set(2, 96, 64), None);
+        assert_eq!(root.maybe_expand_sync_state_set(4, 32, 64), None);
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 2, 3]));
+
+        assert!(root.remove_replica(3));
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 2]));
+    }
+
+    #[test]
+    fn a_lost_member_counts_until_the_controller_drops_it() {
+        let root = ReplicationStateRoot::new(true);
+        root.set_local_broker_id(1);
+        root.replace_sync_state_set(HashSet::from([1, 2, 3]));
+        root.record_caught_up(3, 1_000);
+
+        assert!(root.remove_replica(2));
+        assert!(!root.remove_replica(2));
+
+        assert_eq!(root.local_sync_state_set(), HashSet::from([1, 2, 3]));
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 2, 3]));
+        assert_eq!(root.tracked_sync_state_set_size(), Some(3));
+        assert_eq!(root.maybe_shrink_sync_state_set(1_000, 100), HashSet::from([1, 3]));
+
+        root.replace_sync_state_set(HashSet::from([1, 3]));
+
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 3]));
+        assert_eq!(root.tracked_sync_state_set_size(), Some(2));
+    }
+
+    #[test]
+    fn shrink_keeps_fresh_pending_additions_and_drops_stale_members() {
+        let root = ReplicationStateRoot::new(true);
+        root.set_local_broker_id(1);
+        root.replace_sync_state_set(HashSet::from([1, 2]));
+        root.record_caught_up(2, 10_000);
+        assert_eq!(
+            root.maybe_expand_sync_state_set(3, 64, 64),
+            Some(HashSet::from([1, 2, 3]))
+        );
+        root.record_caught_up(3, 10_000);
+
+        assert_eq!(
+            root.maybe_shrink_sync_state_set(20_000, 15_000),
+            HashSet::from([1, 2, 3])
+        );
+        assert!(root.is_synchronizing_sync_state_set());
+
+        root.record_caught_up(2, 20_000);
+        assert_eq!(root.maybe_shrink_sync_state_set(30_000, 15_000), HashSet::from([1, 2]));
+        assert!(!root.is_synchronizing_sync_state_set());
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 2]));
+
+        assert_eq!(root.maybe_shrink_sync_state_set(40_000, 15_000), HashSet::from([1]));
+        assert!(root.is_synchronizing_sync_state_set());
+        assert_eq!(root.sync_state_set(), HashSet::from([1, 2]));
+    }
+
+    #[test]
     fn confirm_offset_requires_expected_replica_coverage() {
         let replicas = [HAReplicaRuntimeSnapshot {
             slave_ack_offset: 128,
@@ -341,6 +466,15 @@ mod tests {
         }];
         assert_eq!(compute_confirm_offset(64, 256, 2, &replicas), 128);
         assert_eq!(compute_confirm_offset(64, 256, 3, &replicas), 64);
+    }
+
+    #[test]
+    fn confirm_offset_ignores_a_replica_outside_the_sync_state_set() {
+        let replicas = [HAReplicaRuntimeSnapshot {
+            slave_ack_offset: 128,
+            in_sync: false,
+        }];
+        assert_eq!(compute_confirm_offset(64, 256, 2, &replicas), 64);
     }
 
     #[test]

@@ -157,7 +157,7 @@
             "required_markers": [
               "ProxyAuthRuntime::from_proxy_config_with_metadata_service",
               ".start(health_source, &service_context, lifecycle.clone())",
-              "remaining_listeners",
+              "remaining_listener_count",
               ".mark_ready()"
             ]
           },

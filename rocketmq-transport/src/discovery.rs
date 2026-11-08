@@ -14,7 +14,9 @@
 
 //! Name-server endpoint discovery shared by network-facing services.
 
+#[cfg(feature = "http-discovery")]
 pub mod default_top_addressing;
+#[cfg(feature = "http-discovery")]
 pub mod http_tiny_client;
 pub mod name_server_update_callback;
 pub mod top_addressing;

@@ -20,10 +20,11 @@ use gpui::{
 };
 use gpui_component::{Root, WindowExt as _};
 use rocketmq_dashboard_common::{
-    TopicCategory, TopicCompleteness, TopicConfigTargetView, TopicConfigView, TopicConsumerView, TopicConsumersView,
-    TopicFailureCode, TopicFailureStage, TopicIdentity, TopicInventory, TopicInventoryItem, TopicMessageType,
-    TopicMutationGuarantee, TopicMutationKind, TopicPartialOutcome, TopicPermission, TopicRouteView, TopicStatsView,
-    TopicTargetFailure, TopicTargetIdentity, TopicTargetOutcome,
+    TopicCategory, TopicCompleteness, TopicConfigEditOutcome, TopicConfigFieldsPatch, TopicConfigTargetView,
+    TopicConfigView, TopicConsumerView, TopicConsumersView, TopicFailureCode, TopicFailureStage, TopicIdentity,
+    TopicInventory, TopicInventoryItem, TopicMessageType, TopicMutationGuarantee, TopicMutationKind,
+    TopicPartialOutcome, TopicPermission, TopicRouteView, TopicStatsView, TopicTargetFailure, TopicTargetIdentity,
+    TopicTargetOutcome,
 };
 
 use super::{
@@ -33,12 +34,12 @@ use super::{
 };
 use crate::{
     route::TopicTab,
-    services::{
-        AppServices,
-        topics::{BackendTopicQueuePatchResult, test_support::FakeTopicBackend},
-    },
+    services::{AppServices, topics::test_support::FakeTopicBackend},
     state::{Loadable, UiError, UiErrorCode},
 };
+
+#[path = "topics_fields_product_tests.rs"]
+mod fields;
 
 struct TopicsHarness {
     topics: Entity<TopicsView>,
@@ -135,6 +136,11 @@ fn config(read: u32, write: u32, version: u64) -> TopicConfigView {
         completeness: TopicCompleteness::Complete,
         failures: Vec::new(),
     }
+}
+
+fn edit_draft(read: u32, write: u32, version: u64) -> TopicEditDraft {
+    let snapshot = config(read, write, version);
+    TopicEditDraft::new(topic(), &snapshot.targets[0], snapshot.targets.clone()).expect("editable snapshot")
 }
 
 fn outcome(kind: TopicMutationKind, partial: bool) -> TopicPartialOutcome {
@@ -292,14 +298,14 @@ fn visible_detail_buttons_open_and_submit_the_six_exact_mutation_intents(cx: &mu
             &form.state.kind,
             TopicDialogKind::Edit(draft)
                 if draft.topic == topic()
-                    && draft.target == target("cluster-a", "broker-a", 10911)
-                    && draft.expected_version == 4
+                    && draft.primary_target == target("cluster-a", "broker-a", 10911)
+                    && draft.targets[0].version == 4
         ));
         edit_form.update(app, |form, cx| form.set_edit_queue_counts(10, 11, window, cx));
     });
-    fake.queue_patch(Ok(BackendTopicQueuePatchResult::Applied {
-        previous_version: 4,
-        version: 5,
+    fake.queue_fields(Ok(TopicConfigEditOutcome {
+        outcome: outcome(TopicMutationKind::Edit, false),
+        conflicts: Vec::new(),
     }));
     fake.queue_config(Ok(config(10, 11, 5)));
     fake.queue_inventory(Ok(inventory(10, 11)));
@@ -391,8 +397,8 @@ fn visible_detail_buttons_open_and_submit_the_six_exact_mutation_intents(cx: &mu
     let calls = fake.calls();
     assert_eq!(calls.send.len(), 1);
     assert_eq!(calls.send[0].body_length, "ephemeral body".len());
-    assert_eq!(calls.patch.len(), 1);
-    assert_eq!(calls.patch[0].expected_version, 4);
+    assert_eq!(calls.fields.len(), 1);
+    assert_eq!(calls.fields[0].targets[0].version, 4);
     assert_eq!(calls.delete_broker.len(), 1);
     assert_eq!(calls.delete_broker[0].2, target("cluster-a", "broker-a", 10911));
     assert_eq!(calls.reset.len(), 1);
@@ -423,25 +429,15 @@ fn remaining_six_dialogs_render_and_reach_the_coordinator_with_exact_commands(cx
     cx.run_until_parked();
     let broker_target = target("cluster-a", "broker-a", 10911);
 
-    fake.queue_patch(Ok(BackendTopicQueuePatchResult::Applied {
-        previous_version: 4,
-        version: 5,
+    fake.queue_fields(Ok(TopicConfigEditOutcome {
+        outcome: outcome(TopicMutationKind::Edit, false),
+        conflicts: Vec::new(),
     }));
     fake.queue_config(Ok(config(10, 11, 5)));
     fake.queue_inventory(Ok(inventory(10, 11)));
     cx.update(|window, app| {
         topics.update(app, |topics, cx| {
-            topics.open_topic_dialog(
-                TopicDialogKind::Edit(TopicEditDraft {
-                    topic: topic(),
-                    target: broker_target.clone(),
-                    expected_version: 4,
-                    read_queue_count: 8,
-                    write_queue_count: 8,
-                }),
-                window,
-                cx,
-            );
+            topics.open_topic_dialog(TopicDialogKind::Edit(edit_draft(8, 8, 4)), window, cx);
         });
     });
     draw(&root, cx);
@@ -577,9 +573,12 @@ fn remaining_six_dialogs_render_and_reach_the_coordinator_with_exact_commands(cx
     cx.run_until_parked();
 
     let calls = fake.calls();
-    assert_eq!(calls.patch.len(), 1);
+    assert_eq!(calls.fields.len(), 1);
     assert_eq!(
-        (calls.patch[0].read_queue_count, calls.patch[0].write_queue_count),
+        (
+            calls.fields[0].patch.read_queue_count,
+            calls.fields[0].patch.write_queue_count
+        ),
         (Some(10), Some(11))
     );
     assert_eq!(calls.delete[0].2, ["cluster-a", "cluster-b"]);
@@ -898,15 +897,21 @@ fn edit_conflict_keeps_the_submitted_draft_until_the_user_resolves_it_in_the_off
     cx.update(gpui_component::init);
     let fake = Arc::new(FakeTopicBackend::default());
     fake.queue_inventory(Ok(inventory(8, 8)));
-    fake.queue_patch(Ok(BackendTopicQueuePatchResult::VersionConflict {
-        expected_version: 7,
-        actual_version: 9,
-        latest: rocketmq_admin_core::core::topic::TopicConfigCasState {
-            version: 9,
-            read_queue_nums: 20,
-            write_queue_nums: 21,
-            order: false,
+    fake.queue_fields(Ok(TopicConfigEditOutcome {
+        outcome: TopicPartialOutcome {
+            topic: topic(),
+            kind: TopicMutationKind::Edit,
+            guarantee: TopicMutationGuarantee::VersionCas,
+            targets: vec![TopicTargetOutcome {
+                target: "broker-a".into(),
+                stage: TopicFailureStage::Mutation,
+                applied: false,
+                failure: Some(TopicFailureCode::Conflict),
+                retryable: false,
+            }],
+            reload_failed: false,
         },
+        conflicts: config(20, 21, 9).targets,
     }));
     let services = AppServices::default().with_topic_backend(fake.clone());
     let capture = Rc::new(RefCell::new(None));
@@ -922,17 +927,7 @@ fn edit_conflict_keeps_the_submitted_draft_until_the_user_resolves_it_in_the_off
     cx.run_until_parked();
     cx.update(|window, app| {
         topics.update(app, |topics, cx| {
-            topics.open_topic_dialog(
-                TopicDialogKind::Edit(TopicEditDraft {
-                    topic: topic(),
-                    target: target("cluster-a", "broker-a", 10911),
-                    expected_version: 7,
-                    read_queue_count: 8,
-                    write_queue_count: 8,
-                }),
-                window,
-                cx,
-            );
+            topics.open_topic_dialog(TopicDialogKind::Edit(edit_draft(8, 8, 7)), window, cx);
         });
     });
     draw(&root, cx);
@@ -945,13 +940,12 @@ fn edit_conflict_keeps_the_submitted_draft_until_the_user_resolves_it_in_the_off
     cx.update(|_, app| {
         assert!(matches!(
             form.read(app).state.submission,
-            super::topic_dialogs::TopicSubmissionState::Conflict {
-                actual_version: 9,
-                submitted_read_queue_count: 12,
-                submitted_write_queue_count: 13,
-                authoritative_read_queue_count: 20,
-                authoritative_write_queue_count: 21,
-            }
+            super::topic_dialogs::TopicSubmissionState::FieldsCompleted { ref result, submitted_patch }
+                if result.edit.conflicts[0].version == 9
+                    && submitted_patch.read_queue_count == Some(12)
+                    && submitted_patch.write_queue_count == Some(13)
+                    && result.edit.conflicts[0].read_queue_count == 20
+                    && result.edit.conflicts[0].write_queue_count == 21
         ));
     });
     draw(&root, cx);
@@ -959,20 +953,23 @@ fn edit_conflict_keeps_the_submitted_draft_until_the_user_resolves_it_in_the_off
         form.update(app, |form, cx| form.keep_submitted_after_conflict(window, cx));
     });
 
-    fake.queue_patch(Ok(BackendTopicQueuePatchResult::Applied {
-        previous_version: 9,
-        version: 10,
+    fake.queue_fields(Ok(TopicConfigEditOutcome {
+        outcome: outcome(TopicMutationKind::Edit, false),
+        conflicts: Vec::new(),
     }));
     fake.queue_config(Ok(config(12, 13, 10)));
     fake.queue_inventory(Ok(inventory(12, 13)));
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     let calls = fake.calls();
-    assert_eq!(calls.patch.len(), 2);
-    assert_eq!(calls.patch[0].expected_version, 7);
-    assert_eq!(calls.patch[1].expected_version, 9);
+    assert_eq!(calls.fields.len(), 2);
+    assert_eq!(calls.fields[0].targets[0].version, 7);
+    assert_eq!(calls.fields[1].targets[0].version, 9);
     assert_eq!(
-        (calls.patch[1].read_queue_count, calls.patch[1].write_queue_count),
+        (
+            calls.fields[1].patch.read_queue_count,
+            calls.fields[1].patch.write_queue_count
+        ),
         (Some(12), Some(13))
     );
 }

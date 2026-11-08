@@ -3,12 +3,6 @@
 version = 4
 
 [[package]]
-name = "adler2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
-
-[[package]]
 name = "aead"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -68,12 +62,6 @@ checksum = "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arc-swap"
@@ -336,16 +324,6 @@ dependencies = [
  "serde",
  "wasm-bindgen",
  "windows-link",
-]
-
-[[package]]
-name = "chrono-tz"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
-dependencies = [
- "chrono",
- "phf",
 ]
 
 [[package]]
@@ -647,9 +625,9 @@ dependencies = [
  "cfg-if",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "lock_api",
+ "lock_api 0.4.14",
  "once_cell",
- "parking_lot_core",
+ "parking_lot_core 0.9.12",
  "serde",
 ]
 
@@ -862,8 +840,6 @@ checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
 dependencies = [
  "crc32fast",
  "libz-sys",
- "miniz_oxide",
- "zlib-rs",
 ]
 
 [[package]]
@@ -987,8 +963,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d930c203dd0b6ff06e0201a4a2fe9149b43c684fd4420555b26d21b1a02956f"
 dependencies = [
  "futures-core",
- "lock_api",
- "parking_lot",
+ "lock_api 0.4.14",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -1618,9 +1594,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libm"
@@ -1690,6 +1666,15 @@ name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
+name = "lock_api"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
 dependencies = [
  "scopeguard",
 ]
@@ -1770,16 +1755,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "miniz_oxide"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
-dependencies = [
- "adler2",
- "simd-adler32",
-]
-
-[[package]]
 name = "mio"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1800,7 +1775,7 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "equivalent",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "smallvec",
  "tagptr",
@@ -1847,7 +1822,7 @@ dependencies = [
  "libc",
  "log",
  "neli-proc-macros",
- "parking_lot",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -2065,8 +2040,18 @@ version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api",
- "parking_lot_core",
+ "lock_api 0.4.14",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226"
+dependencies = [
+ "lock_api 0.5.0",
+ "parking_lot_core 0.10.0",
 ]
 
 [[package]]
@@ -2078,6 +2063,18 @@ dependencies = [
  "cfg-if",
  "libc",
  "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826"
+dependencies = [
+ "libc",
+ "redox_syscall 0.9.4",
  "smallvec",
  "windows-link",
 ]
@@ -2143,24 +2140,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adba4db388f687393c18c51348d44a41d870ca9df71a2c98172ea3035dc6936e"
 dependencies = [
  "pest",
-]
-
-[[package]]
-name = "phf"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
-dependencies = [
- "phf_shared",
-]
-
-[[package]]
-name = "phf_shared"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
-dependencies = [
- "siphasher",
 ]
 
 [[package]]
@@ -2534,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-admin-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -2546,7 +2525,6 @@ dependencies = [
  "rocketmq-observability",
  "rocketmq-protocol",
  "rocketmq-runtime",
- "rocketmq-security-api",
  "rocketmq-transport",
  "serde",
  "serde_json",
@@ -2556,7 +2534,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-auth"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2588,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-client-rust"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -2596,7 +2574,7 @@ dependencies = [
  "dashmap",
  "futures",
  "num_cpus",
- "parking_lot",
+ "parking_lot 0.13.0",
  "rand 0.10.2",
  "rocketmq-auth",
  "rocketmq-error",
@@ -2617,7 +2595,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-dashboard-common"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "rocketmq-error",
@@ -2655,14 +2633,11 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-error"
-version = "1.0.0"
-dependencies = [
- "thiserror",
-]
+version = "1.1.0"
 
 [[package]]
 name = "rocketmq-macros"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2672,14 +2647,14 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-model"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "base64 0.23.1",
  "byteorder",
  "bytes",
  "cheetah-string",
  "chrono",
- "crc",
+ "crc32fast",
  "dashmap",
  "flate2",
  "local-ip-address",
@@ -2697,27 +2672,22 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-observability"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
- "anyhow",
  "cheetah-string",
  "chrono",
- "chrono-tz",
  "dashmap",
- "iana-time-zone",
  "opentelemetry",
  "opentelemetry_sdk",
- "parking_lot",
+ "parking_lot 0.13.0",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-runtime",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.11.0",
  "smallvec",
  "thiserror",
- "time",
  "tokio",
  "tokio-util",
  "tracing",
@@ -2728,7 +2698,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-protocol"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bitvec",
  "bytemuck",
@@ -2753,13 +2723,13 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-runtime"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "config",
  "dashmap",
  "futures",
- "parking_lot",
+ "parking_lot 0.13.0",
  "rocketmq-error",
  "serde",
  "serde_json",
@@ -2775,7 +2745,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-security-api"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cheetah-string",
  "rocketmq-error",
@@ -2786,25 +2756,19 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-transport"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
- "anyhow",
  "arc-swap",
- "bitvec",
- "bytemuck",
  "bytes",
  "cheetah-string",
  "dashmap",
- "flate2",
  "flume 0.12.0",
  "form_urlencoded",
  "futures",
  "futures-util",
  "ipnet",
  "local-ip-address",
- "num_cpus",
- "parking_lot",
- "pin-project-lite",
+ "parking_lot 0.13.0",
  "rand 0.10.2",
  "reqwest",
  "rocketmq-error",
@@ -2814,7 +2778,6 @@ dependencies = [
  "rocketmq-security-api",
  "serde",
  "serde_json",
- "serde_json_any_key",
  "socket2",
  "thiserror",
  "tokio",
@@ -3228,12 +3191,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "simd-adler32"
-version = "0.3.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
-
-[[package]]
 name = "simd_cesu8"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3248,12 +3205,6 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
-
-[[package]]
-name = "siphasher"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "slab"
@@ -3286,7 +3237,7 @@ version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
- "lock_api",
+ "lock_api 0.4.14",
 ]
 
 [[package]]
@@ -3593,9 +3544,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.39.6"
+version = "0.40.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2071df9448915b71c4fe6d25deaf1c22f12bd234f01540b77312bb8e41361e6"
+checksum = "0e8a3edbe0394ce115f3917a00349dd242be09eb5a091ed509eaf67b55cfb8a8"
 dependencies = [
  "libc",
  "memchr",
@@ -3745,7 +3696,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -4738,12 +4689,6 @@ dependencies = [
  "quote",
  "syn 3.0.5",
 ]
-
-[[package]]
-name = "zlib-rs"
-version = "0.6.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
 name = "zmij"

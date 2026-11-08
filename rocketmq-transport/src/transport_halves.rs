@@ -1,0 +1,105 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Read and write half wrappers for native TCP and boxed asynchronous transports.
+//!
+//! This module owns [`TransportReadHalf`] and [`TransportWriteHalf`]. Byte I/O is delegated to
+//! the selected half, while framing is handled by the connection's codec, reader, and writer.
+//! Retaining the native TCP write half allows the writer to use native file transfers when
+//! eligible. TLS negotiation and file-transfer policy remain in their existing owners.
+
+use std::io;
+use std::io::IoSlice;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
+use tokio::io::ReadBuf;
+use tokio::net::tcp::OwnedReadHalf;
+use tokio::net::tcp::OwnedWriteHalf;
+
+use crate::connection::BoxedConnectionTransport;
+
+/// Owns the read half of a connection transport: either a native TCP
+/// `OwnedReadHalf` or the split read half of a boxed async transport
+/// (generic streams, including negotiated TLS). Byte reads are delegated to
+/// the selected half; framing stays in `FramedRead`.
+pub(crate) enum TransportReadHalf {
+    Tcp(OwnedReadHalf),
+    Compat(tokio::io::ReadHalf<BoxedConnectionTransport>),
+}
+
+impl AsyncRead for TransportReadHalf {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tcp(tcp_read_half) => Pin::new(tcp_read_half).poll_read(context, buffer),
+            Self::Compat(stream_read_half) => Pin::new(stream_read_half).poll_read(context, buffer),
+        }
+    }
+}
+
+/// The writable half of a connection transport: a native TCP half or the split
+/// write half of a boxed async transport (generic streams, including negotiated
+/// TLS). The native TCP half is kept so file transfer can use it directly.
+pub(crate) enum TransportWriteHalf {
+    Tcp(OwnedWriteHalf),
+    Compat(tokio::io::WriteHalf<BoxedConnectionTransport>),
+}
+
+impl AsyncWrite for TransportWriteHalf {
+    fn poll_write(mut self: Pin<&mut Self>, context: &mut Context<'_>, bytes: &[u8]) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            Self::Tcp(tcp_write_half) => Pin::new(tcp_write_half).poll_write(context, bytes),
+            Self::Compat(stream_write_half) => Pin::new(stream_write_half).poll_write(context, bytes),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tcp(tcp_write_half) => Pin::new(tcp_write_half).poll_flush(context),
+            Self::Compat(stream_write_half) => Pin::new(stream_write_half).poll_flush(context),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tcp(tcp_write_half) => Pin::new(tcp_write_half).poll_shutdown(context),
+            Self::Compat(stream_write_half) => Pin::new(stream_write_half).poll_shutdown(context),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        match self {
+            Self::Tcp(tcp_write_half) => tcp_write_half.is_write_vectored(),
+            Self::Compat(stream_write_half) => stream_write_half.is_write_vectored(),
+        }
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffers: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            Self::Tcp(tcp_write_half) => Pin::new(tcp_write_half).poll_write_vectored(context, buffers),
+            Self::Compat(stream_write_half) => Pin::new(stream_write_half).poll_write_vectored(context, buffers),
+        }
+    }
+}

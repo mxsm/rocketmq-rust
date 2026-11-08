@@ -29,6 +29,8 @@ rust-version.workspace = true
 
 [features]
 default       = ["tls"]
+# Use mimalloc as the binary's global allocator (production images enable it).
+allocator-mimalloc = ["dep:mimalloc"]
 tls           = ["rocketmq-transport/tls"]
 embedded-controller = ["dep:rocketmq-controller"]
 observability = ["otel-metrics", "otel-traces"]
@@ -40,14 +42,15 @@ otlp-traces   = ["otel-traces", "rocketmq-observability/otlp-traces"]
 otlp-logs     = ["otel-logs", "rocketmq-observability/otlp-logs"]
 
 [dependencies]
+mimalloc = { workspace = true, optional = true }
 rocketmq-model         = { workspace = true }
 rocketmq-auth          = { workspace = true }
 rocketmq-error         = { workspace = true }
 rocketmq-protocol      = { workspace = true }
-rocketmq-transport     = { workspace = true }
+rocketmq-transport     = { workspace = true, features = ["http-discovery"] }
 rocketmq-controller    = { workspace = true, optional = true }
 rocketmq-observability = { workspace = true }
-rocketmq-runtime       = { workspace = true }
+rocketmq-runtime       = { workspace = true, features = ["config-file"] }
 rocketmq-security-api  = { workspace = true }
 
 

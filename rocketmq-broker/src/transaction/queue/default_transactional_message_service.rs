@@ -25,7 +25,6 @@ use crate::broker_error::BrokerResult as Result;
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use futures::StreamExt;
-use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -1067,7 +1066,7 @@ where
     }
 
     async fn should_escape_message(&self) -> bool {
-        self.broker_config.enable_slave_acting_master && BrokerRole::Slave == self.broker_config.broker_role
+        self.broker_config.enable_slave_acting_master && self.transactional_message_bridge.is_message_store_slave()
     }
 
     /// Get half message
@@ -1416,6 +1415,13 @@ mod tests {
     use rocketmq_store::BrokerReadStore;
 
     async fn transaction_runtime() -> (tempfile::TempDir, crate::broker_runtime::BrokerRuntime) {
+        transaction_runtime_with(BrokerConfig::default(), rocketmq_store::MessageStoreConfig::default()).await
+    }
+
+    async fn transaction_runtime_with(
+        broker_config: BrokerConfig,
+        message_store_config: rocketmq_store::MessageStoreConfig,
+    ) -> (tempfile::TempDir, crate::broker_runtime::BrokerRuntime) {
         let directory = tempfile::TempDir::new().unwrap();
         let root = directory.path().to_string_lossy().into_owned();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1426,17 +1432,43 @@ mod tests {
                 store_path_root_dir: root.clone().into(),
                 auth_config_path: directory.path().join("auth.json").to_string_lossy().into_owned().into(),
                 transaction_op_batch_interval: 3_600_000,
-                ..BrokerConfig::default()
+                ..broker_config
             }),
             Arc::new(rocketmq_store::MessageStoreConfig {
                 store_path_root_dir: root.into(),
                 ha_listen_port: usize::from(ha_port),
                 mapped_file_size_commit_log: 1024 * 1024,
-                ..Default::default()
+                ..message_store_config
             }),
         );
         runtime.initialize().await.unwrap();
         (directory, runtime)
+    }
+
+    #[tokio::test]
+    async fn acting_master_slave_escapes_by_store_role() {
+        let mut broker_config = BrokerConfig {
+            enable_slave_acting_master: true,
+            ..BrokerConfig::default()
+        };
+        broker_config.broker_identity.broker_id = 1;
+        // Only the store carries the role, as with `[store].brokerRole = "SLAVE"`.
+        let (_directory, mut runtime) = transaction_runtime_with(
+            broker_config,
+            rocketmq_store::MessageStoreConfig {
+                broker_role: rocketmq_model::common::broker::broker_role::BrokerRole::Slave,
+                ..Default::default()
+            },
+        )
+        .await;
+        let service = runtime
+            .runtime_state_mut()
+            .transactional_message_service()
+            .unwrap()
+            .clone();
+
+        assert!(service.should_escape_message().await);
+        runtime.shutdown().await;
     }
 
     #[tokio::test]

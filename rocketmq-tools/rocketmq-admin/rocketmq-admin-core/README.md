@@ -124,6 +124,28 @@ this API, so no compatibility facade is retained.
 
 `tests/boundary_source_guard.rs` protects the source and feature boundaries.
 
+## Error Handling
+
+`AdminError::operation_failed(operation_name, private_detail)` creates a generic
+administrative operation failure. It uses the `TOOLS_OPERATION_FAILED` descriptor
+and `AdminFailure::OperationFailed` classification. Private detail is retained
+internally and omitted from formatting and public error views.
+
+Use `AdminError::operation_failed_with_source(operation_name, source)` to retain a
+typed cause through `std::error::Error::source`. For an existing canonical error,
+use `AdminError::from_error` to preserve its descriptor, context, protocol mappings,
+and typed source chain instead of assigning a generic operation-failure descriptor.
+
+### Canonical Error Promotion
+
+Adapter modules use internal `promote_to_admin_error` helpers. Each calls
+`source.into_canonical_error()` followed by `AdminError::from_error(operation_name, ...)`,
+preserving the canonical descriptor, context, protocol error information, typed
+cause chain, and redaction behavior. `AdminError::operation()` records the Admin
+operation label; promotion does not add or overwrite the canonical
+`OPERATION_DIAGNOSTIC` context field. These helpers are internal implementation
+details, with their existing module or crate visibility.
+
 ## Local Validation
 
 ```bash

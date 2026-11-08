@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Write;
 use std::sync::Arc;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
@@ -27,8 +28,10 @@ use rocketmq_observability::statistics::statistics_item_state_getter::Statistics
 use rocketmq_observability::statistics::statistics_kind_meta::StatisticsKindMeta;
 use rocketmq_observability::statistics::statistics_manager::StatisticsManager;
 use rocketmq_observability::stats::moment_stats_item_set::MomentStatsItemSet;
+use rocketmq_observability::stats::push_topic_group_key;
 use rocketmq_observability::stats::stats_item::StatsItem;
 use rocketmq_observability::stats::stats_item_set::StatsItemSet;
+use rocketmq_observability::stats::with_stats_key;
 use rocketmq_observability::stats::Stats;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ScheduledExecutionPolicy;
@@ -40,10 +43,20 @@ use tokio::time::Duration;
 use tracing::info;
 use tracing::warn;
 
+mod hot_path;
+
+use hot_path::add_kept;
+use hot_path::ClusterStatsItems;
+use hot_path::HotStatsSets;
+
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct BrokerStatsManager {
     stats_table: Arc<DashMap<String, StatsItemSet>>,
+    /// Sets of `stats_table` used per message, resolved by [`Self::init`].
+    hot_sets: HotStatsSets,
+    cluster_items: ClusterStatsItems,
+    manager_id: u64,
     cluster_name: String,
     enable_queue_stat: bool,
     moment_stats_item_set_fall_size: Option<Arc<MomentStatsItemSet>>,
@@ -229,6 +242,9 @@ impl BrokerStatsManager {
         let cluster_name = broker_config.broker_identity.broker_cluster_name.to_string();
         let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
+            hot_sets: HotStatsSets::default(),
+            cluster_items: ClusterStatsItems::default(),
+            manager_id: hot_path::next_manager_id(),
             cluster_name,
             enable_queue_stat,
             moment_stats_item_set_fall_size: None,
@@ -254,6 +270,9 @@ impl BrokerStatsManager {
         let stats_table = Arc::new(DashMap::new());
         let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
+            hot_sets: HotStatsSets::default(),
+            cluster_items: ClusterStatsItems::default(),
+            manager_id: hot_path::next_manager_id(),
             cluster_name,
             enable_queue_stat,
             moment_stats_item_set_fall_size: None,
@@ -426,6 +445,8 @@ impl BrokerStatsManager {
             Self::CHANNEL_ACTIVITY.to_string(),
             StatsItemSet::new(Self::CHANNEL_ACTIVITY.to_string()),
         );
+        self.hot_sets = HotStatsSets::resolve(&self.stats_table);
+        self.cluster_items = ClusterStatsItems::resolve(&self.hot_sets, &self.cluster_name);
 
         let formatter = StatisticsItemFormatter;
 
@@ -552,6 +573,10 @@ impl BrokerStatsManager {
         self.consumer_state_getter = Some(state_getter);
     }
 
+    /// Returns the table of item sets by statistics name.
+    ///
+    /// The sets are fixed by [`Self::init`]: the per-message updates write through sets resolved
+    /// then, so a set inserted into the table later is not updated by them.
     #[inline]
     pub fn get_stats_table(&self) -> Arc<DashMap<String, StatsItemSet>> {
         Arc::clone(&self.stats_table)
@@ -616,8 +641,15 @@ impl BrokerStatsManager {
     #[inline]
     pub fn record_disk_fall_behind_size(&self, group: &str, topic: &str, queue_id: i32, fall_behind: i64) {
         if let Some(fall_size_set) = &self.moment_stats_item_set_fall_size {
-            let stats_key = format!("{}@{}@{}", queue_id, topic, group);
-            let item = fall_size_set.get_and_create_stats_item(stats_key);
+            let item = with_stats_key(
+                |key| {
+                    let _ = write!(key, "{queue_id}@{topic}@{group}");
+                },
+                |key| match fall_size_set.get_stats_item_table().get(key) {
+                    Some(item) => item.clone(),
+                    None => fall_size_set.get_and_create_stats_item(key.to_owned()),
+                },
+            );
             item.get_value()
                 .store(fall_behind, std::sync::atomic::Ordering::Relaxed);
         }
@@ -625,89 +657,111 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn inc_topic_put_nums(&self, topic: &str, num: i32, times: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::TOPIC_PUT_NUMS) {
+        if let Some(stats) = &self.hot_sets.topic_put_nums {
             stats.add_value(topic, num, times);
         }
     }
 
     #[inline]
     pub fn inc_topic_put_size(&self, topic: &str, size: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::TOPIC_PUT_SIZE) {
+        if let Some(stats) = &self.hot_sets.topic_put_size {
             stats.add_value(topic, size, 1);
         }
     }
 
     #[inline]
     pub fn inc_group_get_nums(&self, group: &str, topic: &str, inc_value: i32) {
-        let stats_key = build_stats_key(Some(topic), Some(group));
-        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_NUMS) {
-            stats.add_value(&stats_key, inc_value, 1);
+        if let Some(stats) = &self.hot_sets.group_get_nums {
+            with_stats_key(
+                |key| push_topic_group_key(key, topic, group),
+                |key| stats.add_value(key, inc_value, 1),
+            );
         }
     }
 
     #[inline]
     pub fn inc_group_get_size(&self, group: &str, topic: &str, inc_value: i32) {
-        let stats_key = build_stats_key(Some(topic), Some(group));
-        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_SIZE) {
-            stats.add_value(&stats_key, inc_value, 1);
+        if let Some(stats) = &self.hot_sets.group_get_size {
+            with_stats_key(
+                |key| push_topic_group_key(key, topic, group),
+                |key| stats.add_value(key, inc_value, 1),
+            );
         }
     }
 
     #[inline]
     pub fn inc_group_ck_nums(&self, group: &str, topic: &str, inc_value: i32) {
-        let stats_key = build_stats_key(Some(topic), Some(group));
         if let Some(stats) = self.stats_table.get(Self::GROUP_CK_NUMS) {
-            stats.add_value(&stats_key, inc_value, 1);
+            with_stats_key(
+                |key| push_topic_group_key(key, topic, group),
+                |key| stats.add_value(key, inc_value, 1),
+            );
         }
     }
 
     #[inline]
     pub fn inc_group_ack_nums(&self, group: &str, topic: &str, inc_value: i32) {
-        let stats_key = build_stats_key(Some(topic), Some(group));
         if let Some(stats) = self.stats_table.get(Self::GROUP_ACK_NUMS) {
-            stats.add_value(&stats_key, inc_value, 1);
+            with_stats_key(
+                |key| push_topic_group_key(key, topic, group),
+                |key| stats.add_value(key, inc_value, 1),
+            );
         }
     }
 
     #[inline]
     pub fn inc_group_get_from_disk_nums(&self, group: &str, topic: &str, inc_value: i32) {
-        let stats_key = build_stats_key(Some(topic), Some(group));
         if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_FROM_DISK_NUMS) {
-            stats.add_value(&stats_key, inc_value, 1);
+            with_stats_key(
+                |key| push_topic_group_key(key, topic, group),
+                |key| stats.add_value(key, inc_value, 1),
+            );
         }
     }
 
     #[inline]
     pub fn inc_group_get_from_disk_size(&self, group: &str, topic: &str, inc_value: i32) {
-        let stats_key = build_stats_key(Some(topic), Some(group));
         if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_FROM_DISK_SIZE) {
-            stats.add_value(&stats_key, inc_value, 1);
+            with_stats_key(
+                |key| push_topic_group_key(key, topic, group),
+                |key| stats.add_value(key, inc_value, 1),
+            );
         }
     }
 
     #[inline]
     pub fn inc_broker_get_nums(&self, topic: &str, inc_value: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::BROKER_GET_NUMS) {
-            stats.add_value(&self.cluster_name, inc_value, 1);
-        }
-
+        add_kept(
+            self.cluster_items.get_nums.as_ref(),
+            self.hot_sets.broker_get_nums.as_ref(),
+            &self.cluster_name,
+            inc_value,
+        );
         if !TopicValidator::is_system_topic(topic) {
-            if let Some(stats) = self.stats_table.get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC) {
-                stats.add_value(&self.cluster_name, inc_value, 1);
-            }
+            add_kept(
+                self.cluster_items.get_nums_without_system_topic.as_ref(),
+                self.hot_sets.broker_get_nums_without_system_topic.as_ref(),
+                &self.cluster_name,
+                inc_value,
+            );
         }
     }
 
     #[inline]
     pub fn inc_broker_put_nums(&self, topic: &str, inc_value: i32) {
-        if let Some(stats) = self.stats_table.get(Stats::BROKER_PUT_NUMS) {
-            stats.add_value(&self.cluster_name, inc_value, 1);
-        }
-
+        add_kept(
+            self.cluster_items.put_nums.as_ref(),
+            self.hot_sets.broker_put_nums.as_ref(),
+            &self.cluster_name,
+            inc_value,
+        );
         if !TopicValidator::is_system_topic(topic) {
-            if let Some(stats) = self.stats_table.get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC) {
-                stats.add_value(&self.cluster_name, inc_value, 1);
-            }
+            add_kept(
+                self.cluster_items.put_nums_without_system_topic.as_ref(),
+                self.hot_sets.broker_put_nums_without_system_topic.as_ref(),
+                &self.cluster_name,
+                inc_value,
+            );
         }
     }
 
@@ -805,9 +859,13 @@ impl BrokerStatsManager {
     #[inline]
     pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {
         if self.enable_queue_stat {
-            let stats_key = format!("{}@{}", topic, queue_id);
-            if let Some(stats) = self.stats_table.get(Stats::QUEUE_PUT_NUMS) {
-                stats.add_value(&stats_key, num, times);
+            if let Some(stats) = &self.hot_sets.queue_put_nums {
+                with_stats_key(
+                    |key| {
+                        let _ = write!(key, "{topic}@{queue_id}");
+                    },
+                    |key| stats.add_value(key, num, times),
+                );
             }
         }
     }
@@ -815,9 +873,13 @@ impl BrokerStatsManager {
     #[inline]
     pub fn inc_queue_put_size(&self, topic: &str, queue_id: i32, size: i32) {
         if self.enable_queue_stat {
-            let stats_key = format!("{}@{}", topic, queue_id);
-            if let Some(stats) = self.stats_table.get(Stats::QUEUE_PUT_SIZE) {
-                stats.add_value(&stats_key, size, 1);
+            if let Some(stats) = &self.hot_sets.queue_put_size {
+                with_stats_key(
+                    |key| {
+                        let _ = write!(key, "{topic}@{queue_id}");
+                    },
+                    |key| stats.add_value(key, size, 1),
+                );
             }
         }
     }
@@ -825,9 +887,13 @@ impl BrokerStatsManager {
     #[inline]
     pub fn inc_queue_get_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {
         if self.enable_queue_stat {
-            let stats_key = format!("{}@{}", topic, queue_id);
-            if let Some(stats) = self.stats_table.get(Stats::QUEUE_GET_NUMS) {
-                stats.add_value(&stats_key, num, times);
+            if let Some(stats) = &self.hot_sets.queue_get_nums {
+                with_stats_key(
+                    |key| {
+                        let _ = write!(key, "{topic}@{queue_id}");
+                    },
+                    |key| stats.add_value(key, num, times),
+                );
             }
         }
     }
@@ -835,34 +901,53 @@ impl BrokerStatsManager {
     #[inline]
     pub fn inc_queue_get_size(&self, topic: &str, queue_id: i32, size: i32) {
         if self.enable_queue_stat {
-            let stats_key = format!("{}@{}", topic, queue_id);
-            if let Some(stats) = self.stats_table.get(Stats::QUEUE_GET_SIZE) {
-                stats.add_value(&stats_key, size, 1);
+            if let Some(stats) = &self.hot_sets.queue_get_size {
+                with_stats_key(
+                    |key| {
+                        let _ = write!(key, "{topic}@{queue_id}");
+                    },
+                    |key| stats.add_value(key, size, 1),
+                );
             }
         }
     }
 
     #[inline]
     pub fn inc_topic_put_latency(&self, topic: &str, queue_id: i32, inc_value: i32) {
-        let stats_key = format!("{}@{}", queue_id, topic);
-        if let Some(stats) = self.stats_table.get(Self::TOPIC_PUT_LATENCY) {
-            stats.add_value(&stats_key, inc_value, 1);
+        if let Some(stats) = &self.hot_sets.topic_put_latency {
+            with_stats_key(
+                |key| {
+                    let _ = write!(key, "{queue_id}@{topic}");
+                },
+                |key| stats.add_value(key, inc_value, 1),
+            );
         }
     }
 
     #[inline]
     pub fn inc_group_get_latency(&self, group: &str, topic: &str, queue_id: i32, inc_value: i32) {
-        let stats_key = format!("{}@{}@{}", queue_id, topic, group);
-        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_LATENCY) {
-            stats.add_rt_value(&stats_key, inc_value, 1);
+        if let Some(stats) = &self.hot_sets.group_get_latency {
+            with_stats_key(
+                |key| {
+                    let _ = write!(key, "{queue_id}@{topic}@{group}");
+                },
+                |key| stats.add_rt_value(key, inc_value, 1),
+            );
         }
     }
 
     #[inline]
     pub fn record_disk_fall_behind_time(&self, group: &str, topic: &str, queue_id: i32, fall_behind: i64) {
         if let Some(fall_time_set) = &self.moment_stats_item_set_fall_time {
-            let stats_key = format!("{}@{}@{}", queue_id, topic, group);
-            let item = fall_time_set.get_and_create_stats_item(stats_key);
+            let item = with_stats_key(
+                |key| {
+                    let _ = write!(key, "{queue_id}@{topic}@{group}");
+                },
+                |key| match fall_time_set.get_stats_item_table().get(key) {
+                    Some(item) => item.clone(),
+                    None => fall_time_set.get_and_create_stats_item(key.to_owned()),
+                },
+            );
             item.get_value()
                 .store(fall_behind, std::sync::atomic::Ordering::Relaxed);
         }
@@ -900,9 +985,11 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn inc_send_back_nums(&self, group: &str, topic: &str) {
-        let stats_key = build_stats_key(Some(topic), Some(group));
         if let Some(stats) = self.stats_table.get(Stats::SNDBCK_PUT_NUMS) {
-            stats.add_value(&stats_key, 1, 1);
+            with_stats_key(
+                |key| push_topic_group_key(key, topic, group),
+                |key| stats.add_value(key, 1, 1),
+            );
         }
     }
 
@@ -1231,6 +1318,41 @@ mod tests {
         assert_eq!(group_stats.get_stats_data_in_minute(&group_stats_key).get_sum(), 40);
         assert_eq!(group_stats.get_stats_data_in_hour(&group_stats_key).get_sum(), 40);
         assert_eq!(group_item.get_stats_data_in_day().get_sum(), 40);
+    }
+
+    /// Admin commands and the Dashboard read these exact key strings, so building them in a
+    /// reused buffer must not change them.
+    #[tokio::test]
+    async fn per_message_stats_keep_their_composite_keys() {
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
+        let manager = BrokerStatsManager::new(broker_config, test_task_group("broker-stats-manager-test"));
+
+        manager.inc_queue_put_nums("TopicA", 3, 2, 1);
+        manager.inc_queue_put_size("TopicA", 3, 64);
+        manager.inc_topic_put_latency("TopicA", 3, 5);
+        manager.inc_group_get_nums("GroupA", "TopicA", 4);
+        manager.inc_group_get_latency("GroupA", "TopicA", 3, 7);
+        manager.record_disk_fall_behind_time("GroupA", "TopicA", 3, 900);
+        manager.record_disk_fall_behind_size("GroupA", "TopicA", 3, 1_024);
+
+        let value = |name: &str, key: &str| manager.get_stats_item(name, key).map(|item| item.get_value());
+        assert_eq!(value(Stats::QUEUE_PUT_NUMS, "TopicA@3"), Some(2));
+        assert_eq!(value(Stats::QUEUE_PUT_SIZE, "TopicA@3"), Some(64));
+        assert_eq!(value(BrokerStatsManager::TOPIC_PUT_LATENCY, "3@TopicA"), Some(5));
+        assert_eq!(value(Stats::GROUP_GET_NUMS, "TopicA@GroupA"), Some(4));
+        assert_eq!(value(Stats::GROUP_GET_LATENCY, "3@TopicA@GroupA"), Some(7));
+
+        let moment = |set: &Option<Arc<MomentStatsItemSet>>| {
+            set.as_ref()
+                .and_then(|set| {
+                    set.get_stats_item_table()
+                        .get("3@TopicA@GroupA")
+                        .map(|item| item.clone())
+                })
+                .map(|item| item.get_value().load(std::sync::atomic::Ordering::Relaxed))
+        };
+        assert_eq!(moment(&manager.moment_stats_item_set_fall_time), Some(900));
+        assert_eq!(moment(&manager.moment_stats_item_set_fall_size), Some(1_024));
     }
 
     #[tokio::test]

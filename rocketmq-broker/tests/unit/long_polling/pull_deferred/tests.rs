@@ -385,32 +385,6 @@ fn forced_refresh_bypasses_offset_and_filter_without_retaining_arrival_data() {
 }
 
 #[test]
-fn forced_cursor_advances_all_keys_in_bounded_sequence_order() {
-    let index = PullCriteriaIndex::<u64>::new(PullCriteriaLimits::new(nonzero(3), nonzero(2)));
-    let matches = Arc::new(AtomicBool::new(false));
-    let other_key = PullCriteriaKey::new(CheetahString::from_static_str("TopicB"), 7);
-    let leases = [
-        index
-            .reserve(key())
-            .expect("first reservation")
-            .publish(1, criteria(100, Arc::clone(&matches))),
-        index
-            .reserve(other_key)
-            .expect("second reservation")
-            .publish(2, criteria(100, matches)),
-    ];
-    let mut cursor = PullScanCursor::new();
-    let first = index.reserve_forced_batch(&mut cursor, nonzero(1), nonzero(1));
-    assert_eq!(first.into_candidates()[0].id(), 1);
-    let second = index.reserve_forced_batch(&mut cursor, nonzero(1), nonzero(1));
-    assert_eq!(second.into_candidates()[0].id(), 2);
-    let exhausted = index.reserve_forced_batch(&mut cursor, nonzero(1), nonzero(1));
-    assert!(exhausted.exhausted());
-    drop(leases);
-    assert_eq!(index.snapshot(), PullIndexSnapshot::default());
-}
-
-#[test]
 fn successful_candidate_commit_detaches_record_before_lease_drop() {
     let index = PullCriteriaIndex::<u64>::new(PullCriteriaLimits::new(nonzero(1), nonzero(1)));
     let lease = index

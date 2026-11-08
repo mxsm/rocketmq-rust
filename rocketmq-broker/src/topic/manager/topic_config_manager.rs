@@ -33,7 +33,6 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::common::topic::TopicValidator;
-use rocketmq_model::common::TopicSysFlag;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
@@ -42,7 +41,6 @@ use rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeW
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
 use rocketmq_store::MessageStoreConfig;
@@ -1078,129 +1076,6 @@ impl TopicConfigManager {
             return is_change;
         }
         false
-    }
-
-    pub fn create_topic_if_absent(
-        &self,
-        mut topic_config: TopicConfig,
-        register: bool,
-        state_machine_version: i64,
-    ) -> Option<TopicConfigCreation> {
-        if topic_config.topic_name.is_none() {
-            error!("createTopicIfAbsent: TopicName cannot be None");
-            return None;
-        }
-
-        let topic_name = topic_config.topic_name.as_ref().unwrap().clone();
-
-        if let Some(config) = self.get_topic_config(topic_name.as_str()) {
-            return Some(TopicConfigCreation {
-                topic_config: config,
-                update: None,
-                register: false,
-                created: false,
-            });
-        }
-
-        let update = {
-            let mut data_version = self.metadata_transition.lock();
-            if let Some(config) = self
-                .topic_config_table
-                .get(&topic_name)
-                .map(|entry| entry.value().clone())
-            {
-                return Some(TopicConfigCreation {
-                    topic_config: config,
-                    update: None,
-                    register: false,
-                    created: false,
-                });
-            }
-
-            info!("Create new topic [{}] config:[{:?}]", topic_name, topic_config);
-            topic_config.topic_name = Some(topic_name.clone());
-            let topic_config = Arc::new(topic_config);
-            self.topic_config_table.insert(topic_name, topic_config.clone());
-            data_version.next_version_with(state_machine_version);
-            self.rebuild_topic_config_snapshot_locked();
-            TopicConfigUpdate {
-                topic_config,
-                data_version: data_version.clone(),
-                changed: true,
-            }
-        };
-
-        Some(TopicConfigCreation {
-            topic_config: update.topic_config.clone(),
-            update: Some(update),
-            register,
-            created: true,
-        })
-    }
-
-    pub fn update_topic_unit_flag(
-        &self,
-        topic: &str,
-        unit: bool,
-        state_machine_version: i64,
-    ) -> Option<TopicConfigUpdate> {
-        let update = self.update_existing_topic(topic, state_machine_version, |topic_config| {
-            let old_topic_sys_flag = topic_config.topic_sys_flag;
-            topic_config.topic_sys_flag = if unit {
-                TopicSysFlag::set_unit_flag(old_topic_sys_flag)
-            } else {
-                TopicSysFlag::clear_unit_flag(old_topic_sys_flag)
-            };
-            info!(
-                "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
-                old_topic_sys_flag, topic_config.topic_sys_flag
-            );
-        });
-        update
-    }
-
-    pub fn update_topic_unit_sub_flag(
-        &self,
-        topic: &str,
-        has_unit_sub: bool,
-        state_machine_version: i64,
-    ) -> Option<TopicConfigUpdate> {
-        let update = self.update_existing_topic(topic, state_machine_version, |topic_config| {
-            let old_topic_sys_flag = topic_config.topic_sys_flag;
-            topic_config.topic_sys_flag = if has_unit_sub {
-                TopicSysFlag::set_unit_sub_flag(old_topic_sys_flag)
-            } else {
-                TopicSysFlag::clear_unit_sub_flag(old_topic_sys_flag)
-            };
-            info!(
-                "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
-                old_topic_sys_flag, topic_config.topic_sys_flag
-            );
-        });
-        update
-    }
-
-    pub fn load_data_version(&self) -> bool {
-        let file_path = self.config_file_path();
-        match file_utils::file_to_string(&file_path) {
-            Ok(json_string) => {
-                if let Ok(wrapper) = TopicConfigSerializeWrapper::decode_string(json_string) {
-                    if let Some(data_version) = wrapper.data_version() {
-                        self.assign_data_version(data_version);
-                        info!(
-                            "load topic metadata dataVersion success {}, {:?}",
-                            file_path, data_version
-                        );
-                        return true;
-                    }
-                }
-                false
-            }
-            Err(e) => {
-                error!("load topic metadata dataVersion failed {}: {:?}", file_path, e);
-                false
-            }
-        }
     }
 
     #[cfg(feature = "rocksdb_store")]

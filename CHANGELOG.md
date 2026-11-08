@@ -7,8 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix(ci):** Subscribe before saving peer configuration in the GPUI notification test to avoid missing updates from background polling ([#12293](https://github.com/mxsm/rocketmq-rust/issues/12293)).
+- **fix(ci):** Set the MCP query error-boundary test recursion limit to prevent compilation failures in query and control CI ([#12285](https://github.com/mxsm/rocketmq-rust/issues/12285)).
+- **fix(ci):** Keep the HA port distinct from both remoting listener ports in Broker lifecycle test fixtures ([#12276](https://github.com/mxsm/rocketmq-rust/issues/12276)).
+- **fix(ci):** Keep Broker shutdown events visible to test subscribers during parallel test runs ([#12283](https://github.com/mxsm/rocketmq-rust/issues/12283)).
+- **fix(ci):** Register Store epoch and timer migration exports in Architecture Guards and release native Dashboard directory locks when their writer ownership ends ([#12222](https://github.com/mxsm/rocketmq-rust/issues/12222)).
+- **fix(ci):** Reconcile Architecture Guards inventories with merged Client, Store, and Transport exports and classify native Dashboard storage outside the core release scope ([#12173](https://github.com/mxsm/rocketmq-rust/issues/12173)).
+- **fix(protocol):** Support flexible JSON headers from non-Java remoting clients by accepting missing serializeTypeCurrentRPC, numeric and case-insensitive languageCode, serializeType aliases, and scalar extension fields while treating null fields as absent and preserving explicit empty strings ([#12090](https://github.com/mxsm/rocketmq-rust/issues/12090)).
+
 ### Changed
 
+- **refactor(store):** Remove the unused property-free message encoder, its length helper, multi-dispatch predicate, retained configuration field, and dedicated tests ([#12314](https://github.com/mxsm/rocketmq-rust/issues/12314)).
+- **refactor(controller):** Adopt canonical external configuration key `storageEngineType` across Controller configuration files, Helm templates, manifests, examples, and documentation while retaining `storageBackend` as a legacy input compatibility alias; canonical property output emits `storageEngineType` and updates accept either spelling with duplicate rejection and alias-aware blacklist enforcement ([#12191](https://github.com/mxsm/rocketmq-rust/issues/12191)).
+- **refactor(transport):** Rename the private transport `backend` module to `transport_halves`, matching the `TransportReadHalf` and `TransportWriteHalf` types; private naming cleanup only, transport behavior and public APIs are unchanged ([#12193](https://github.com/mxsm/rocketmq-rust/issues/12193)).
+- **refactor(namesrv):** Rename NameServer fields, constructor/worker parameters, and locals from `name_server_runtime_inner` to `name_server_runtime_handle` to match the `NameServerRuntimeHandle` type, including the misnamed `remoting_client` handle binding in `RouteInfoManager::notify_min_broker_id_changed`; private naming cleanup only, weak-reference ownership and behavior are unchanged ([#12192](https://github.com/mxsm/rocketmq-rust/issues/12192)).
+- **chore(dependencies):** Consolidate pending Rust updates to `sysinfo 0.40.1`, `simd-json 0.19.0`, `tonic-prost 0.14.9`, and `tonic-prost-build 0.14.9`; align SRE Kubernetes dependencies at `k8s-openapi 0.29.0` and `kube 5.0.0`, adapt fallible system-information initialization, and synchronize standalone lockfiles ([#12163](https://github.com/mxsm/rocketmq-rust/issues/12163)).
+- **refactor(runtime):** Make file configuration helpers optional behind the default-enabled `config-file` feature, preserving Broker, NameServer, and Controller configuration support while removing format parsers from runtime-only consumers. Consumers using `common::parse_config_file` with default features disabled must enable `config-file` explicitly.
+- **refactor(transport):** Gate HTTP NameServer discovery behind the default-enabled `http-discovery` feature, retaining Client and NameServer discovery while allowing other Transport consumers to omit the HTTP dependency stack. Consumers using these APIs with default features disabled must enable `http-discovery` explicitly.
+- **refactor(dependencies):** Remove unused Observability, Transport, and Broker dependency declarations, avoiding an unused timezone database and redundant compression backend in individual service builds.
+- **improve(dashboard-tauri):** Refresh the desktop icon with RocketMQ-Rust branding across PNG, ICO, ICNS, the sidebar, and the favicon, preserving square sidebar sizing at compact widths ([#11880](https://github.com/mxsm/rocketmq-rust/issues/11880)).
+- **refactor(proxy):** Rename the private listener readiness gate to `ListenerReadinessGate`, document its reporting contract, and align the production-readiness source policy with the renamed counter ([#11828](https://github.com/mxsm/rocketmq-rust/issues/11828)).
+- **refactor(proxy):** Rename optional Broker Remoting handler wiring to `broker_remoting_handler` and add `ProxyRuntimeBuilder::with_broker_remoting_handler`; adapter selection, dispatch behavior, diagnostics, and shutdown ordering are unchanged ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
+
+- **chore(version):** Advance the shared Cargo workspace and internal dependency requirements to `1.1.0` for continued development ([#11780](https://github.com/mxsm/rocketmq-rust/issues/11780)).
+- **improve(namesrv):** Align the NameServer CLI metadata with the `rocketmq-namesrv-rust` binary: use the Cargo package author and version for `-V` instead of a hardcoded `0.1.0`, and clarify the short and long help descriptions; `--version` release output and argument parsing are unchanged.
+- **refactor(client):** Simplify `ServiceDetector` to a single `Send` trait, removing the unused `ServiceDetectorLocal` variant and expanding the trait Rustdoc; the public export, method signature and `Send`-future guarantee are unchanged ([#11756](https://github.com/mxsm/rocketmq-rust/issues/11756)).
+- **refactor(transport):** Consolidate duplicate internal `ChannelInner` constructors without changing task or pending-request ownership ([#11726](https://github.com/mxsm/rocketmq-rust/issues/11726)).
+- **refactor(transport):** Rename the crate-private connection write-half enum to `TransportWriteHalf` and its write-half bindings to `tcp_write_half`, `stream_write_half` and `transport_write_half`, aligning it with the read-half naming; public APIs and behavior are unchanged ([#11719](https://github.com/mxsm/rocketmq-rust/issues/11719)).
+- **refactor(client):** Move the shared integration-test helper from `rocketmq-client/tests/support/mod.rs` to `tests/support.rs`, set `autotests = false` and register the previously auto-discovered test targets explicitly so the 34-target set is unchanged and `support` does not become a test target ([#11684](https://github.com/mxsm/rocketmq-rust/issues/11684)).
+- **refactor(transport):** Rename the crate-private connection read-half enum to `TransportReadHalf`, the private common connection constructor to `new_with_io_halves()`, and its read-half parameter, locals and match bindings to `transport_read_half`, `tcp_read_half` and `stream_read_half`; public APIs, framing and behavior are unchanged ([#11658](https://github.com/mxsm/rocketmq-rust/issues/11658)).
+- **refactor(store):** Rename the Timeline due-scanner error `CursorBackendMismatch` to `ContinuationIndexKindMismatch` with a clearer message, and give the formal scan's continuation variables distinct names ([#11650](https://github.com/mxsm/rocketmq-rust/issues/11650)).
 - **refactor(proxy):** Rename `RemotingRouteClass::ForwardBackend` and `RemotingIngressRoute::ForwardBackend` to `ForwardToBroker` (breaking Rust source API change; wire behavior unchanged) ([#11644](https://github.com/mxsm/rocketmq-rust/issues/11644)).
 - **refactor(store):** Rename the checkpoint discriminator to `CheckpointStoreKind` and its fields/accessor to `store_kind` (breaking), preserving the `backend` JSON key ([#11611](https://github.com/mxsm/rocketmq-rust/issues/11611)).
 - **refactor(tieredstore):** Rename the provider ID field to `storage_provider_id` and migrate configuration to `storageProviderId` (breaking) ([#11603](https://github.com/mxsm/rocketmq-rust/issues/11603)).
@@ -52,9 +82,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(store-local):** Rename `MappedFileDestroyOutcome` to `MappedFileRemovalStatus` (breaking), exported as `rocketmq_store_local::mapped_file::MappedFileRemovalStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants, `try_destroy` and retry behavior are unchanged ([#11068](https://github.com/mxsm/rocketmq-rust/issues/11068)).
 - **refactor(store-local):** Rename `AppendAdmissionOutcome` to `AppendAdmissionResult`, `AcquireTransitionOutcome` to `LeaseAcquireTransitionResult`, `LifecycleAcquireOutcome` to `MappedFileAdmissionResult`, and `NamespaceTransitionOutcome` to `NamespaceOperationResult` (breaking) ([#11292](https://github.com/mxsm/rocketmq-rust/issues/11292), [#11303](https://github.com/mxsm/rocketmq-rust/issues/11303), [#11302](https://github.com/mxsm/rocketmq-rust/issues/11302), [#11307](https://github.com/mxsm/rocketmq-rust/issues/11307)).
 
+### Deprecated
+
+- **refactor(proxy):** Deprecate `ProxyRuntimeBuilder::with_remoting_backend` in favor of `with_broker_remoting_handler`; the compatibility wrapper preserves injection behavior ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
+
 ### Removed
 
+- **refactor(store):** Remove unused extended timer payload and timeline path helpers; active configuration and Store timer paths are unchanged ([#12320](https://github.com/mxsm/rocketmq-rust/issues/12320)).
+- **refactor(store):** Consolidate Store path helpers into canonical module and remove obsolete internal config store path helper module ([#12306](https://github.com/mxsm/rocketmq-rust/issues/12306)).
+- **refactor(store):** Remove unused internal transaction state-table and redo-log path helpers together with their dedicated tests; active Store configuration and message paths are unchanged ([#12304](https://github.com/mxsm/rocketmq-rust/issues/12304)).
+- **refactor(broker):** Remove unused internal broker, LMQ offset, and timer path helpers together with their dedicated tests; active configuration and Store timer paths are unchanged ([#12296](https://github.com/mxsm/rocketmq-rust/issues/12296)).
+- **refactor(broker):** Remove unused version-only file loaders from internal topic and subscription metadata managers ([#12273](https://github.com/mxsm/rocketmq-rust/issues/12273)).
+- **refactor(broker):** Remove eight unused internal delayed-message result accessors; offset advancement and resend processing are unchanged ([#12287](https://github.com/mxsm/rocketmq-rust/issues/12287)).
+- **refactor(broker):** Remove unused internal subscription consume toggle helpers; slow-consumer protection and configuration updates remain intact ([#12223](https://github.com/mxsm/rocketmq-rust/issues/12223)).
+- **refactor(broker):** Remove obsolete publish-route queue selection state and its dedicated test; active failover selection and Lite sharding are unchanged ([#12309](https://github.com/mxsm/rocketmq-rust/issues/12309)).
+- **refactor(broker):** Remove unused internal global Pull forced-scan plumbing while retaining per-queue offset replay ([#12185](https://github.com/mxsm/rocketmq-rust/issues/12185)).
+- **refactor(store):** Remove obsolete internal CommitLog append callbacks and retain rollover coverage on the prepared append path ([#12175](https://github.com/mxsm/rocketmq-rust/issues/12175)).
+- **refactor(broker):** Remove the unused internal Producer change listener framework and notification-only session removal records ([#12166](https://github.com/mxsm/rocketmq-rust/issues/12166)).
+- **refactor(broker):** Remove unused internal attached plugin scaffolding and its unreachable runtime dispatch paths ([#12165](https://github.com/mxsm/rocketmq-rust/issues/12165)).
+- **refactor(broker):** Remove unused internal subscription group pagination and its standalone simulation test ([#12114](https://github.com/mxsm/rocketmq-rust/issues/12114)).
+- **refactor(broker):** Remove unused hook-taking BrokerOuterAPI constructors and construct the client directly with its command factory; runtime ACL hook registration is unchanged ([#12310](https://github.com/mxsm/rocketmq-rust/issues/12310)).
+- **refactor(broker):** Remove the unused internal topic creation helper and its duplicate metadata update path ([#12113](https://github.com/mxsm/rocketmq-rust/issues/12113)).
+- **refactor(broker):** Remove the unused internal ordered-consumption timestamp helper and its dedicated test ([#12167](https://github.com/mxsm/rocketmq-rust/issues/12167)).
+- **refactor(broker):** Remove unused internal broker-to-client notification wrappers; active consumer membership and Lite notifications are unchanged ([#12297](https://github.com/mxsm/rocketmq-rust/issues/12297)).
+- **refactor(broker):** Remove unused internal NameServer heartbeat broadcasts and their dedicated result types ([#12112](https://github.com/mxsm/rocketmq-rust/issues/12112)).
+- **refactor(broker):** Remove the unused Notification candidate continuation spawner while preserving active pending replay workers and shutdown behavior ([#12080](https://github.com/mxsm/rocketmq-rust/issues/12080)).
+- **refactor(client):** Remove the unused crate-private delayed client action helper; tracked rebalance scheduling is unchanged ([#12079](https://github.com/mxsm/rocketmq-rust/issues/12079)).
+- **refactor(client):** Remove four unused crate-private KV API aliases while preserving public Admin methods and request behavior ([#12078](https://github.com/mxsm/rocketmq-rust/issues/12078)).
+- **refactor(broker):** Remove unused internal subscription statistics logging and its duplicate simulation tests; active metric collection is unchanged ([#12224](https://github.com/mxsm/rocketmq-rust/issues/12224)).
+- **refactor(broker):** Remove unused subscription forbidden-table listing and removal helpers; active updates and persistence remain intact ([#12274](https://github.com/mxsm/rocketmq-rust/issues/12274)).
+- **refactor(broker):** Remove the unused internal subscription forbidden-table batch query and its duplicate simulation test ([#12186](https://github.com/mxsm/rocketmq-rust/issues/12186)).
+- **refactor(store):** Remove unused private CommitLog memory lock wrappers; active append and memory lock lifecycle paths are unchanged ([#12064](https://github.com/mxsm/rocketmq-rust/issues/12064)).
+- **refactor(store):** Remove the unused internal Compaction CommitLog dispatch wrapper; production dispatch is unchanged ([#12176](https://github.com/mxsm/rocketmq-rust/issues/12176)).
+- **refactor(broker):** Remove the unused internal send-message-back stub that cleared messages and returned success without sending them ([#12298](https://github.com/mxsm/rocketmq-rust/issues/12298)).
+- **refactor(client):** Remove the obsolete internal admin error text parser; response codes continue to use structured errors ([#12063](https://github.com/mxsm/rocketmq-rust/issues/12063)).
+- **refactor(broker):** Remove obsolete Lite dispatcher wakeup state and observer mutation helpers; owned event notification and replay remain intact ([#12288](https://github.com/mxsm/rocketmq-rust/issues/12288)).
+- **refactor(broker):** Remove unused legacy PopLite command assembly; current response and deferred reply paths are unchanged ([#12062](https://github.com/mxsm/rocketmq-rust/issues/12062)).
+- **refactor(broker):** Remove the unused internal consumer session expiry helper; manager-owned expiry and transport retirement are unchanged ([#11995](https://github.com/mxsm/rocketmq-rust/issues/11995)).
+- **refactor(broker):** Remove unused private deferred candidate spawners; active replay and shutdown paths are unchanged ([#11993](https://github.com/mxsm/rocketmq-rust/issues/11993)).
+- **refactor(broker):** Remove the unused internal named-broker escape path; active remote escape selection, authorization, and epoch fencing are unchanged ([#11976](https://github.com/mxsm/rocketmq-rust/issues/11976)).
+- **refactor(broker):** Remove the unused deferred-generation arrival adapter; canonical route admission and shutdown accounting are unchanged ([#11975](https://github.com/mxsm/rocketmq-rust/issues/11975)).
+- **refactor(store):** Remove the unused HA read buffer and manual offset parser; acknowledgement decoding continues through `OffsetDecoder` ([#11974](https://github.com/mxsm/rocketmq-rust/issues/11974)).
+- **refactor(client):** Remove the unused internal `pull_kernel_impl_default_size` wrapper ([#11942](https://github.com/mxsm/rocketmq-rust/issues/11942)).
+- **refactor(client):** Remove the unused internal `prepare_retry` helper ([#11943](https://github.com/mxsm/rocketmq-rust/issues/11943)).
+- **refactor(client):** Remove the unused lock flag and accessors from the internal `PopRequest` ([#11941](https://github.com/mxsm/rocketmq-rust/issues/11941)).
+- **refactor(broker):** Remove the unused pending-arrival coalescing shortcut while retaining insertion-time coalescing and replay accounting ([#12225](https://github.com/mxsm/rocketmq-rust/issues/12225)).
+- **refactor(broker):** Remove unused internal topic unit-flag update helpers; active topic flag handling is unchanged ([#12187](https://github.com/mxsm/rocketmq-rust/issues/12187)).
+- **refactor(store):** Remove the unused internal `WaitNotifyObject` placeholder module ([#11884](https://github.com/mxsm/rocketmq-rust/issues/11884)).
+- **refactor(store):** Remove the empty internal IndexService startup hook and its Store lifecycle call ([#12177](https://github.com/mxsm/rocketmq-rust/issues/12177)).
+- **refactor(client):** Remove two unused consume-service submission stubs and an unused weak-reference getter ([#11883](https://github.com/mxsm/rocketmq-rust/issues/11883)).
+- **refactor(broker):** Remove 17 unused mutable accessors from the internal `BrokerRuntimeState` ([#11882](https://github.com/mxsm/rocketmq-rust/issues/11882)).
+- **refactor(broker):** Remove 17 unused internal runtime component and state setters while preserving initialization and lifecycle wiring ([#12275](https://github.com/mxsm/rocketmq-rust/issues/12275)).
+- **refactor(store):** Remove the unused internal `TopicQueueLock`; CommitLog append sequencing and configuration fields are unchanged ([#11850](https://github.com/mxsm/rocketmq-rust/issues/11850)).
+- **refactor(store):** Remove the unused internal `ByteBuffer` and commented message-buffer list scaffolding ([#11856](https://github.com/mxsm/rocketmq-rust/issues/11856)).
+- **refactor(broker):** Remove the unused internal `PollingHeader`; protocol headers and deferred polling behavior are unchanged ([#11759](https://github.com/mxsm/rocketmq-rust/issues/11759)).
+- **refactor(client):** Remove unused internal consumer core-pool increment/decrement no-ops; explicit pool resizing is unchanged ([#11724](https://github.com/mxsm/rocketmq-rust/issues/11724)).
+- **refactor(broker):** Remove unused private metrics attribute/status models and constant re-export modules ([#11652](https://github.com/mxsm/rocketmq-rust/issues/11652)).
 - **refactor(proxy-core):** Remove the deprecated `remoting` and `service` module aliases (breaking); import from `ingress::remoting` and `contracts`, respectively.
+- **refactor(client):** Remove three internal LitePull offset forwarders while retaining the public consumer methods and existing offset implementations ([#11653](https://github.com/mxsm/rocketmq-rust/issues/11653)).
 - **refactor(client):** Remove the deprecated `TransactionCheckListener` compatibility trait (breaking); use `TransactionListener` for transaction execution and broker checks.
 - **refactor(client):** Remove the always-failing `MQHelper::reset_offset_by_timestamp` entry point (breaking); use the async `reset_offset_by_timestamp_with_client_runtime` method with an application-owned runtime and typed `MessageModel`.
 - **refactor(store):** Remove the deprecated `BrokerStatsManager::{GROUP_GET_FALL_SIZE, GROUP_GET_FALL_TIME, GROUP_GET_LATENCY}` constants (breaking); use the identical constants on `rocketmq_observability::stats::Stats`.
@@ -63,7 +148,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **client:** Remove deprecated `SendMessageOpenTracingHookImpl`, `ConsumeMessageOpenTracingHookImpl`, and `EndTransactionOpenTracingHookImpl` placeholders (breaking); remove their construction and use the client's supported tracing configuration where needed.
 - **broker:** Remove deprecated `ConsumerGroupInfo::get_subscription_table` and the internal `TopicConfigManager::topic_config_table` wrapper; use subscription snapshots and commands instead of the mutable table exposed through `bench_support` (breaking).
 - **client:** Remove the four no-op `MQClientInstance::on_channel_{connect,close,exception,idle}` methods, including their `test-support` surface; remove calls to these methods.
+- **refactor(client):** Remove the unused internal `ConsumeMessageService` wrapper trait; retain the active `ConsumeMessageServiceTrait` contract ([#11760](https://github.com/mxsm/rocketmq-rust/issues/11760)).
+- **refactor(store):** Remove the unregistered, fully commented-out mapped-file factory source ([#11851](https://github.com/mxsm/rocketmq-rust/issues/11851)).
+- **refactor(broker):** Remove unused internal EscapeBridge batch-write wrappers; batch sends continue through the shared Store append receipt path ([#12289](https://github.com/mxsm/rocketmq-rust/issues/12289)).
+- **refactor(store):** Remove the unused internal `MappedFileAppend` adapter and its dedicated tests ([#11857](https://github.com/mxsm/rocketmq-rust/issues/11857)).
 - **observability:** Remove the seven deprecated no-op functions in `metrics::mcp` (breaking); use the matching methods on `McpMetricsRecorder::from_handle(&handle)` to record metrics.
+- **refactor(transport):** Remove `FrameLimits::legacy_compatibility()` (breaking); use the identical `FrameLimits::java_compatibility()` profile ([#11654](https://github.com/mxsm/rocketmq-rust/issues/11654)).
 - **transport:** Remove deprecated `TransportClient::is_address_reachable`; use `reconcile_cached_connection` for direct-cache inspection and cleanup.
 - **protocol:** Remove deprecated `FastCodesHeader` and its `SendMessageResponseHeader` adapter; use `CommandCustomHeader::encode_direct_binary` and `FromMap::from` and handle their returned errors.
 - **transport:** Remove deprecated `ClientMetadata::broker_addr_table`; use owned snapshots and controlled address updates instead.
@@ -72,11 +162,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **broker:** Remove the no-op `BrokerOuterAPI::refresh_metadata` method and its periodic task (breaking); remove calls to this method.
 - **protocol:** Remove deprecated `RemotingCommand` response and custom-header compatibility aliases; use the explicit and fallible APIs instead.
 - **model:** Remove deprecated `SerdeJsonUtils::decode`; use `from_json_slice` or `from_json_bytes` instead.
+- **refactor(client):** Remove the unused internal `TraceView`; Admin trace queries and client trace encoding remain unchanged ([#11725](https://github.com/mxsm/rocketmq-rust/issues/11725)).
 - **client:** Remove the no-op `AsyncTraceDispatcher::{register_shutdown_hook, register_shut_down_hook, remove_shutdown_hook}` and `DefaultMQProducerImpl::semaphore_processor` methods; remove calls to these methods.
 - **model:** Remove the ten deprecated `Message` constructors and `with_details_body`; use `Message::builder()` instead.
+- **refactor(client):** Remove the unused internal `ProducerConfigValidator`; active producer validation and accepted configuration values are unchanged ([#11761](https://github.com/mxsm/rocketmq-rust/issues/11761)).
+- **refactor(client):** Remove unused borrowed consumer downcast adapters; retain owned request downcasting ([#11852](https://github.com/mxsm/rocketmq-rust/issues/11852)).
+- **refactor(store):** Remove nine unused internal `IndexHeader` methods; retain checked updates and the existing index format ([#11858](https://github.com/mxsm/rocketmq-rust/issues/11858)).
 
 ### Fixed
 
+- **fix(controller):** Retain remoting and Raft listeners through contract-test startup to prevent parallel fixtures from claiming reserved ports ([#12161](https://github.com/mxsm/rocketmq-rust/issues/12161)).
+- **fix(transport):** Select TLS crypto providers explicitly for clients, servers, certificate verification, and SOCKS fixtures so enabling both AWS-LC and Ring no longer causes startup panics; preserve application-installed providers ([#12161](https://github.com/mxsm/rocketmq-rust/issues/12161)).
+- **fix(mcp):** Synchronize the standalone query lockfile with `jsonschema 0.60.1` and its related dependencies to restore locked query and control CI boundary checks after the manifest upgrade ([#11929](https://github.com/mxsm/rocketmq-rust/issues/11929)).
+- **fix(namesrv):** Make the metrics-collection abort cleanup test deterministic by preventing the unregistration worker from gracefully draining between cancellation and abort, while retaining concurrent SDK collection and broker registration checks ([#11824](https://github.com/mxsm/rocketmq-rust/issues/11824)).
+- **fix(mcp):** Synchronize the standalone query lockfile with `jsonschema 0.59.0` to restore locked query and control CI boundary checks ([#11807](https://github.com/mxsm/rocketmq-rust/issues/11807)).
+- **fix(proxy-cluster):** Make cancellation lifecycle tests deterministic and assert the canonical transport descriptor across shutdown-notification and dropped-reply paths while retaining client and producer cleanup checks ([#11775](https://github.com/mxsm/rocketmq-rust/issues/11775)).
 - **docs(auth):** Describe the built-in in-memory metadata providers, optional JSON snapshots, and `ProviderBundle` extension interfaces, and align the ACL provider examples with the current public API ([#11645](https://github.com/mxsm/rocketmq-rust/issues/11645)).
 - **fix(controller):** Align the OpenRaft core, macros, and runtimes at `0.10.0-alpha.37`, adapt the snapshot and leadership APIs while preserving persisted snapshot identity, and refresh the standalone fuzz lockfile to restore locked builds for all four targets ([#11640](https://github.com/mxsm/rocketmq-rust/issues/11640)).
 - **build:** Inherit the Controller MSRV and centralize the Admin Core dependency version used by the Admin CLI and TUI.
@@ -122,6 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Consolidate Store path helpers into canonical module and remove obsolete internal config store path helper module ([#12306](https://github.com/mxsm/rocketmq-rust/issues/12306)).
 - **ci:** Retire automated Kubernetes fault and six-hour SLO workflows, and consolidate core container/chart checks into the static Kubernetes assets workflow. Keep local qualification scripts and evidence validation available ([#11010](https://github.com/mxsm/rocketmq-rust/issues/11010)).
 - **ci:** Remove the dedicated eight-lockfile Cargo security audit workflow and its PR, main-push, daily, and manual triggers ([#11008](https://github.com/mxsm/rocketmq-rust/issues/11008)).
 - **refactor(runtime):** Remove the executor services, `TaskScheduler` and the `schedule` module, `ScheduledTaskManager`, `ActorRuntime`, `compat`, `tokio_lock`, `Shutdown`, `common::util_all`, `common::thread`, `common::future`, `DetachedTaskPolicy` and the detached report fields, and the ambient-runtime `ServiceManager` constructors ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).
@@ -214,6 +315,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Consolidate Store path helpers into canonical module and remove obsolete internal config store path helper module ([#12306](https://github.com/mxsm/rocketmq-rust/issues/12306)).
 - **test(store):** Remove obsolete phase3_integration_tests.rs integration test file ([#6649](https://github.com/mxsm/rocketmq-rust/issues/6649))
 - **refactor(broker):** Update ProducerManager to use ProducerGroupName type alias for producer group mapping ([#6638](https://github.com/mxsm/rocketmq-rust/issues/6638))
 - **test(store):** Remove obsolete io_uring_integration_tests.rs integration test file ([#6620](https://github.com/mxsm/rocketmq-rust/issues/6620))

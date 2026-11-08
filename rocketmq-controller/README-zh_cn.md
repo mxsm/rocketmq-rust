@@ -32,6 +32,9 @@ storage、snapshot，以及可选 metrics exporter。
 二进制启动时要求配置加载后的 `rocketmqHome` 非空。常规运行时请设置 `ROCKETMQ_HOME`，或在 Controller 配置文件中提供
 `rocketmqHome`。
 
+可选的 [File 存储](src/storage/file_key_value_store.rs) 使用私有 `CommittedFileIndex`
+保存所选 manifest generation 的内存索引。提交仅在记录和 manifest 写入成功后发布新的内存索引。
+
 ## 目录结构
 
 | 路径 | 说明 |
@@ -58,8 +61,8 @@ storage、snapshot，以及可选 metrics exporter。
 - workspace 最低 Rust 版本和仓库构建工具链均为 stable Rust `1.95.0`。
 - 请使用仓库根目录的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 指定的固定 stable toolchain 构建。
 - 启动 Controller 二进制前，必须设置 `ROCKETMQ_HOME` 或在配置文件中设置 `rocketmqHome`。
-- 默认 feature 组合启用 RocksDB，默认配置使用 `storageBackend = "RocksDB"`。
-- 仅在启用可选 `storage-file` feature 时使用 `storageBackend = "File"`。
+- 默认 feature 组合启用 RocksDB，默认配置使用 `storageEngineType = "RocksDB"`（`storageBackend` 作为兼容性输入别名受支持）。
+- 仅在启用可选 `storage-file` feature 时使用 `storageEngineType = "File"`。
 
 ## 构建
 
@@ -108,7 +111,7 @@ controllerPeers = []
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
 storagePath = "/opt/rocketmq/controller/node-1"
-storageBackend = "RocksDB"
+storageEngineType = "RocksDB"
 enableElectUncleanMasterLocal = false
 
 [[raftPeers]]
@@ -227,8 +230,8 @@ async fn run_controller(
 
 | Feature | 默认开启 | 用途 |
 |---------|----------|------|
-| `storage-file` | 否 | 启用 File backend，用于 `storageBackend = "File"`。 |
-| `storage-rocksdb` | 是 | 启用默认 RocksDB backend，用于 `storageBackend = "RocksDB"`。 |
+| `storage-file` | 否 | 启用 File backend，用于 `storageEngineType = "File"`。 |
+| `storage-rocksdb` | 是 | 启用默认 RocksDB backend，用于 `storageEngineType = "RocksDB"`。 |
 | `metrics` | 否 | 通过 `rocketmq-observability` 启用 Controller metrics 集成。 |
 | `metrics-otlp` | 否 | 启用 OTLP metrics export 支持。 |
 | `metrics-prometheus` | 否 | 启用 Prometheus metrics export 支持。 |

@@ -82,6 +82,9 @@ class CoreHelmRuntimeTests(unittest.TestCase):
         controllers = [config for service, _, _, config in configs if service == "controller"]
         self.assertEqual({1, 2, 3}, {config["nodeId"] for config in controllers})
         for config in controllers:
+            self.assertEqual("RocksDB", config["storageEngineType"])
+            self.assertIn("storageEngineType", config["configBlackList"])
+        for config in controllers:
             self.assertEqual({1, 2, 3}, {p["id"] for p in config["raftPeerEndpoints"]})
             self.assertEqual(controllers[0]["raftPeerEndpoints"], config["raftPeerEndpoints"])
             self.assertEqual(controllers[0]["controllerPeerEndpoints"], config["controllerPeerEndpoints"])

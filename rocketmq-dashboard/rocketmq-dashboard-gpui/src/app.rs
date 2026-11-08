@@ -14,12 +14,21 @@
 
 //! Root application entity, startup lifecycle, shell composition, and page cache ownership.
 
+mod audit;
+mod sessions;
+#[path = "app/storage_authority.rs"]
+mod storage_authority;
+#[path = "app/storage_setup.rs"]
+mod storage_setup;
+
 #[path = "app/consumers.rs"]
 mod consumers;
-#[path = "app/delivery03.rs"]
-mod delivery03;
+#[path = "app/dashboard_broker.rs"]
+mod dashboard_broker;
 #[path = "app/topics.rs"]
 mod topics;
+#[path = "app/topology.rs"]
+mod topology;
 
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, Render,
@@ -30,13 +39,15 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, Root, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     input::InputEvent,
+    scroll::ScrollableElement as _,
     sidebar::{Sidebar, SidebarGroup as GpuiSidebarGroup, SidebarMenu, SidebarMenuItem},
 };
+use rocketmq_dashboard_common::EnvironmentId;
 
 use crate::{
     components::{
         app_shell::uses_fixed_sidebar,
-        data_table, dialog, page_header, query_toolbar,
+        dialog, page_header,
         sidebar::{SidebarGroup, SidebarItem, is_active, navigation_groups},
         states, status_badge, toast,
         topbar::{ConnectionSummary, TOPBAR_HEIGHT},
@@ -45,19 +56,21 @@ use crate::{
         brokers::BrokersView,
         consumers::ConsumersView,
         dashboard::DashboardView,
+        dlq::DlqView,
         login::LoginForm,
+        message_trace::MessageTraceView,
+        messages::MessagesView,
         ops::{OpsIntent, OpsView},
         producers::ProducersView,
         proxy::ProxyView,
         topics::TopicsView,
     },
-    route::{AppRoute, NavigationHistory},
+    route::{AppRoute, NavigationHistory, PageCapability},
     services::{
         AppServices, ConfigMutation, ConfigRouteTransition, ConfigUpdatePhase, ConfigUpdated, SessionState,
         StartupSnapshot,
     },
     state::{RequestEpoch, UiError, UiErrorCode},
-    ui::message_view::MessageView,
 };
 
 /// The visible startup state. Ready retains the safe destination selected by local startup data.
@@ -118,13 +131,6 @@ enum PendingDiscardAction {
     CloseWindow,
 }
 
-/// The source of visible page content for the active route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PageTarget {
-    Legacy,
-    Placeholder,
-}
-
 /// A marker for state that must be dropped on sign out. It never stores feature data in Delivery 01.
 #[derive(Default)]
 struct SensitiveFeatureCache {
@@ -144,65 +150,62 @@ impl SensitiveFeatureCache {
 
 /// Legacy content entities constructed once and reused on route changes.
 struct LegacyPageCache {
+    acl: Entity<crate::features::acl::AclView>,
+    audit: Entity<crate::features::audit::AuditView>,
+    sessions: Entity<crate::features::sessions::SessionsView>,
+    topology: Entity<crate::features::topology::TopologyView>,
+    monitors: Entity<crate::features::monitors::MonitorsView>,
     dashboard: Entity<DashboardView>,
     brokers: Entity<BrokersView>,
     topics: Entity<TopicsView>,
     consumers: Entity<ConsumersView>,
     producers: Entity<ProducersView>,
-    messages: Entity<MessageView>,
+    messages: Entity<MessagesView>,
+    dlq: Entity<DlqView>,
+    message_trace: Entity<MessageTraceView>,
     ops: Entity<OpsView>,
     proxy: Entity<ProxyView>,
-    unavailable_table: Entity<gpui_component::table::TableState<data_table::UnavailableTable>>,
 }
 
 impl LegacyPageCache {
-    fn new(window: &mut Window, services: &AppServices, cx: &mut Context<RocketmqDashboard>) -> Self {
+    fn new(window: &mut Window, services: &AppServices, revision: u64, cx: &mut Context<RocketmqDashboard>) -> Self {
         Self {
-            dashboard: cx.new(|cx| DashboardView::new(services.clone(), 0, cx)),
-            brokers: cx.new(|cx| BrokersView::new(window, services.clone(), 0, cx)),
-            topics: cx.new(|cx| TopicsView::new(window, services.clone(), 0, cx)),
-            consumers: cx.new(|cx| ConsumersView::new(window, services.clone(), 0, cx)),
-            producers: cx.new(|cx| ProducersView::new(window, services.clone(), 0, cx)),
-            messages: cx.new(|_| MessageView::new()),
+            acl: cx.new(|cx| crate::features::acl::AclView::new(window, services.clone(), revision, cx)),
+            audit: cx.new(|cx| crate::features::audit::AuditView::new(window, services.clone(), cx)),
+            sessions: cx.new(|cx| crate::features::sessions::SessionsView::new(window, services.clone(), cx)),
+            topology: cx.new(|cx| crate::features::topology::TopologyView::new(window, services.clone(), cx)),
+            monitors: cx.new(|cx| crate::features::monitors::MonitorsView::new(window, services.clone(), revision, cx)),
+            dashboard: cx.new(|cx| DashboardView::new(window, services.clone(), revision, cx)),
+            brokers: cx.new(|cx| BrokersView::new(window, services.clone(), revision, cx)),
+            topics: cx.new(|cx| TopicsView::new(window, services.clone(), revision, cx)),
+            consumers: cx.new(|cx| ConsumersView::new(window, services.clone(), revision, cx)),
+            producers: cx.new(|cx| ProducersView::new(window, services.clone(), revision, cx)),
+            messages: cx.new(|cx| MessagesView::new(window, services.clone(), revision, cx)),
+            dlq: cx.new(|cx| DlqView::new(window, services.clone(), revision, cx)),
+            message_trace: cx.new(|cx| MessageTraceView::new(window, services.clone(), revision, cx)),
             ops: cx.new(|cx| OpsView::new(window, services.clone(), cx)),
             proxy: cx.new(|cx| ProxyView::new(window, services.clone(), cx)),
-            unavailable_table: data_table::unavailable_state(
-                "No data capability is available for this route yet.",
-                window,
-                cx,
-            ),
         }
     }
 
-    const fn accepts_route(route: &AppRoute) -> bool {
-        matches!(
-            route,
-            AppRoute::Dashboard
-                | AppRoute::Brokers
-                | AppRoute::BrokerDetail { .. }
-                | AppRoute::Topics
-                | AppRoute::TopicDetail { .. }
-                | AppRoute::Consumers
-                | AppRoute::ConsumerDetail { .. }
-                | AppRoute::Producers
-                | AppRoute::Messages
-                | AppRoute::OpsSettings
-                | AppRoute::Proxy
-        )
-    }
-
     #[cfg(test)]
-    fn entity_ids(&self) -> [gpui::EntityId; 9] {
+    fn entity_ids(&self) -> [gpui::EntityId; 15] {
         [
+            self.acl.entity_id(),
+            self.audit.entity_id(),
+            self.sessions.entity_id(),
+            self.topology.entity_id(),
+            self.monitors.entity_id(),
             self.dashboard.entity_id(),
             self.brokers.entity_id(),
             self.topics.entity_id(),
             self.consumers.entity_id(),
             self.producers.entity_id(),
             self.messages.entity_id(),
+            self.dlq.entity_id(),
+            self.message_trace.entity_id(),
             self.ops.entity_id(),
             self.proxy.entity_id(),
-            self.unavailable_table.entity_id(),
         ]
     }
 }
@@ -228,12 +231,21 @@ pub struct RocketmqDashboard {
     services: AppServices,
     startup_state: StartupState,
     startup_task: Option<Task<()>>,
+    storage_setup_view: Option<Entity<crate::features::storage_setup::StorageSetupView>>,
+    storage_setup_subscription: Option<Subscription>,
     session_task: Option<Task<()>>,
+    session_watch_task: Option<Task<()>>,
+    session_validation_task: Option<Task<()>>,
     intent_task: Option<Task<()>>,
+    audit_task: Option<Task<()>>,
+    audit_retry_task: Option<Task<()>>,
+    configuration_watch_task: Option<Task<()>>,
     subscriptions: Vec<Subscription>,
     startup_epoch: RequestEpoch,
     login_epoch: RequestEpoch,
     configuration_revision: u64,
+    applied_auth_transition: Option<(u64, ConfigRouteTransition)>,
+    environment_id: Option<EnvironmentId>,
     history: NavigationHistory,
     session: SessionState,
     login: LoginForm,
@@ -256,7 +268,7 @@ impl RocketmqDashboard {
 
     /// Creates the root with injectable service seams for focused tests and host integration.
     pub fn with_services(window: &mut Window, services: AppServices, cx: &mut Context<Self>) -> Self {
-        let legacy_pages = LegacyPageCache::new(window, &services, cx);
+        let legacy_pages = LegacyPageCache::new(window, &services, 0, cx);
         let login = LoginForm::new(window, cx);
         let password_input = login.password_input();
         let mut subscriptions = vec![
@@ -283,19 +295,30 @@ impl RocketmqDashboard {
                 }
             }),
         ];
-        subscriptions.extend(Self::delivery03_subscriptions(&legacy_pages, window, cx));
+        subscriptions.extend(Self::dashboard_broker_subscriptions(&legacy_pages, window, cx));
         subscriptions.extend(Self::topic_subscriptions(&legacy_pages, window, cx));
         subscriptions.extend(Self::consumer_subscriptions(&legacy_pages, window, cx));
+        subscriptions.push(Self::topology_subscription(&legacy_pages, window, cx));
+        subscriptions.push(Self::session_focus_subscription(window, cx));
         let mut dashboard = Self {
             services,
             startup_state: StartupState::Booting,
             startup_task: None,
+            storage_setup_view: None,
+            storage_setup_subscription: None,
             session_task: None,
+            session_watch_task: None,
+            session_validation_task: None,
             intent_task: None,
+            audit_task: None,
+            audit_retry_task: None,
+            configuration_watch_task: None,
             subscriptions,
             startup_epoch: RequestEpoch::initial(),
             login_epoch: RequestEpoch::initial(),
             configuration_revision: 0,
+            applied_auth_transition: None,
+            environment_id: None,
             history: NavigationHistory::new(AppRoute::Login),
             session: SessionState::signed_out(),
             login,
@@ -308,7 +331,9 @@ impl RocketmqDashboard {
             last_intent: None,
             last_service_error: None,
         };
-        dashboard.start_bootstrap(cx);
+        dashboard.subscribe_audit(cx);
+        dashboard.subscribe_sessions(window, cx);
+        dashboard.start_bootstrap(window, cx);
         let dashboard_entity = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             let Some(dashboard) = dashboard_entity.upgrade() else {
@@ -332,7 +357,10 @@ impl RocketmqDashboard {
         dashboard
     }
 
-    fn start_bootstrap(&mut self, cx: &mut Context<Self>) {
+    fn start_bootstrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.storage_setup_view = None;
+        self.storage_setup_subscription = None;
+        self.configuration_watch_task = None;
         let epoch = match self.startup_epoch.advance() {
             Ok(request) => request,
             Err(_) => {
@@ -353,10 +381,10 @@ impl RocketmqDashboard {
         self.startup_state = StartupState::Booting;
         self.last_service_error = None;
         let services = self.services.clone();
-        self.startup_task = Some(cx.spawn(async move |this, cx| {
+        self.startup_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = services.bootstrap().await;
-            let _ = this.update(cx, move |dashboard, cx| {
-                dashboard.finish_bootstrap(request, result, cx);
+            let _ = this.update_in(cx, move |dashboard, window, cx| {
+                dashboard.finish_bootstrap(request, result, window, cx);
             });
         }));
         cx.notify();
@@ -366,6 +394,7 @@ impl RocketmqDashboard {
         &mut self,
         request: StartupRequest,
         result: Result<StartupSnapshot, UiError>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !accepts_startup_attempt(self.startup_epoch, request, self.configuration_revision) {
@@ -376,6 +405,16 @@ impl RocketmqDashboard {
             Ok(snapshot) if snapshot.configuration_revision < self.configuration_revision => return,
             Ok(snapshot) => {
                 self.configuration_revision = snapshot.configuration_revision;
+                let environment_id = self
+                    .services
+                    .connection_state()
+                    .environments
+                    .map(|catalog| catalog.active_id);
+                let changed_environment = self.environment_id.is_some() && self.environment_id != environment_id;
+                self.environment_id = environment_id;
+                if changed_environment {
+                    self.clear_environment_state(snapshot.configuration_revision, window, cx);
+                }
                 self.legacy_pages
                     .dashboard
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
@@ -391,15 +430,44 @@ impl RocketmqDashboard {
                 self.legacy_pages
                     .producers
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
-                self.session = if snapshot.has_valid_session {
-                    SessionState::restored()
+                self.legacy_pages.messages.update(cx, |view, cx| {
+                    view.set_revision(snapshot.configuration_revision, window, cx)
+                });
+                self.legacy_pages.message_trace.update(cx, |view, cx| {
+                    view.set_revision(snapshot.configuration_revision, window, cx)
+                });
+                self.legacy_pages
+                    .monitors
+                    .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
+                self.legacy_pages.acl.update(cx, |view, cx| {
+                    view.set_revision(snapshot.configuration_revision, window, cx)
+                });
+                self.legacy_pages.dlq.update(cx, |view, cx| {
+                    view.set_revision(snapshot.configuration_revision, window, cx)
+                });
+                self.legacy_pages
+                    .topology
+                    .update(cx, |view, cx| view.clear_for_context(window, cx));
+                let current_session = self.services.current_session();
+                let has_valid_session = current_session
+                    .as_ref()
+                    .map_or(snapshot.has_valid_session, SessionState::is_authenticated);
+                self.session = if has_valid_session {
+                    current_session.unwrap_or_else(SessionState::restored)
                 } else {
                     SessionState::signed_out()
                 };
-                let route = snapshot.destination();
+                let route = if snapshot.login_required && !has_valid_session {
+                    AppRoute::Login
+                } else {
+                    AppRoute::Dashboard
+                };
                 self.history.replace(route.clone());
                 self.startup_state = StartupState::Ready(ReadyScreen::from_route(&route));
-                self.legacy_pages.ops.update(cx, |view, cx| view.sync_from_services(cx));
+                self.subscribe_configuration(window, cx);
+                self.legacy_pages
+                    .ops
+                    .update(cx, |view, cx| view.sync_from_services(window, cx));
                 self.legacy_pages.ops.update(cx, |view, cx| {
                     view.sync_local_session(self.session.is_authenticated(), cx);
                 });
@@ -415,9 +483,9 @@ impl RocketmqDashboard {
         }
     }
 
-    fn retry_startup(&mut self, cx: &mut Context<Self>) {
+    fn retry_startup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.startup_state.can_retry() {
-            self.start_bootstrap(cx);
+            self.start_bootstrap(window, cx);
         }
     }
 
@@ -447,9 +515,11 @@ impl RocketmqDashboard {
 
     fn navigate_now(&mut self, route: AppRoute, window: &mut Window, cx: &mut Context<Self>) {
         self.history.navigate(route);
+        self.sync_message_route(window, cx);
         self.sync_broker_route(window, cx);
         self.sync_topic_route(window, cx);
         self.sync_consumer_route(window, cx);
+        self.sync_monitor_route(window, cx);
         cx.notify();
     }
 
@@ -461,9 +531,11 @@ impl RocketmqDashboard {
             return;
         }
         if self.history.back().is_some() {
+            self.sync_message_route(window, cx);
             self.sync_broker_route(window, cx);
             self.sync_topic_route(window, cx);
             self.sync_consumer_route(window, cx);
+            self.sync_monitor_route(window, cx);
             cx.notify();
         }
     }
@@ -476,9 +548,11 @@ impl RocketmqDashboard {
             return;
         }
         if self.history.forward().is_some() {
+            self.sync_message_route(window, cx);
             self.sync_broker_route(window, cx);
             self.sync_topic_route(window, cx);
             self.sync_consumer_route(window, cx);
+            self.sync_monitor_route(window, cx);
             cx.notify();
         }
     }
@@ -550,16 +624,20 @@ impl RocketmqDashboard {
                         PendingDiscardAction::Navigate(target) => dashboard.navigate_now(target, window, cx),
                         PendingDiscardAction::Back => {
                             let _ = dashboard.history.back();
+                            dashboard.sync_message_route(window, cx);
                             dashboard.sync_broker_route(window, cx);
                             dashboard.sync_topic_route(window, cx);
                             dashboard.sync_consumer_route(window, cx);
+                            dashboard.sync_monitor_route(window, cx);
                             cx.notify();
                         }
                         PendingDiscardAction::Forward => {
                             let _ = dashboard.history.forward();
+                            dashboard.sync_message_route(window, cx);
                             dashboard.sync_broker_route(window, cx);
                             dashboard.sync_topic_route(window, cx);
                             dashboard.sync_consumer_route(window, cx);
+                            dashboard.sync_monitor_route(window, cx);
                             cx.notify();
                         }
                         PendingDiscardAction::CloseWindow => window.remove_window(),
@@ -599,10 +677,11 @@ impl RocketmqDashboard {
         let username = credentials.username().to_owned();
         let password = credentials.password().to_owned();
         drop(credentials);
-        let services = self.services.clone();
+        self.login.clear_submitted_password(window, cx);
+        let authentication = self.services.authenticate(&username, &password);
+        drop(password);
         self.session_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = services.authenticate(&username, &password).await;
-            drop(password);
+            let result = authentication.await;
             let _ = this.update_in(cx, |dashboard, window, cx| {
                 dashboard.finish_login(request, result, window, cx);
             });
@@ -621,7 +700,25 @@ impl RocketmqDashboard {
             }
         }
         self.configuration_revision = event.revision;
+        if event.phase == ConfigUpdatePhase::Persisted {
+            let environment_id = self
+                .services
+                .connection_state()
+                .environments
+                .map(|catalog| catalog.active_id);
+            if self.environment_id != environment_id {
+                self.environment_id = environment_id;
+                self.clear_environment_state(event.revision, window, cx);
+            }
+        }
+        self.apply_config_auth_transition(event, window, cx);
         if event.phase == ConfigUpdatePhase::Invalidated {
+            self.legacy_pages
+                .sessions
+                .update(cx, |view, cx| view.clear_context(window, cx));
+            self.legacy_pages
+                .audit
+                .update(cx, |view, cx| view.clear_context(window, cx));
             let _ = self.startup_epoch.advance();
             self.sensitive_feature_cache.clear();
             self.pending_discard = None;
@@ -642,6 +739,24 @@ impl RocketmqDashboard {
             self.legacy_pages
                 .producers
                 .update(cx, |view, cx| view.set_revision(event.revision, cx));
+            self.legacy_pages
+                .messages
+                .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
+            self.legacy_pages
+                .message_trace
+                .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
+            self.legacy_pages
+                .monitors
+                .update(cx, |view, cx| view.set_revision(event.revision, cx));
+            self.legacy_pages
+                .acl
+                .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
+            self.legacy_pages
+                .dlq
+                .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
+            self.legacy_pages
+                .topology
+                .update(cx, |view, cx| view.clear_for_context(window, cx));
             window.close_all_dialogs(cx);
             window.clear_notifications(cx);
         }
@@ -656,29 +771,109 @@ impl RocketmqDashboard {
             self.legacy_pages
                 .proxy
                 .update(cx, |view, cx| view.clear_recoverable_error(cx));
-            match event.route_transition {
-                ConfigRouteTransition::None => {}
-                ConfigRouteTransition::AuthenticationDisabled => {
-                    self.session.clear();
-                    self.login_security_recovery = false;
-                    self.legacy_pages
-                        .ops
-                        .update(cx, |view, cx| view.show_security_recovery(false, cx));
-                    self.history.reset(AppRoute::Dashboard);
-                    self.startup_state = StartupState::Ready(ReadyScreen::MainShell);
-                }
-                ConfigRouteTransition::AuthenticationEnabled => {
-                    self.session.clear();
-                    self.login_security_recovery = false;
-                    self.history.reset(AppRoute::Login);
-                    self.startup_state = StartupState::Ready(ReadyScreen::Login);
-                }
-            }
+            self.sync_message_route(window, cx);
         }
-        self.legacy_pages.ops.update(cx, |view, cx| view.sync_from_services(cx));
+        self.legacy_pages
+            .ops
+            .update(cx, |view, cx| view.sync_from_services(window, cx));
         self.legacy_pages
             .proxy
             .update(cx, |view, cx| view.sync_from_services(cx));
+        if matches!(
+            event.phase,
+            ConfigUpdatePhase::Completed | ConfigUpdatePhase::RolledBack
+        ) {
+            self.sync_monitor_route(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn sync_message_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let topology_visible = matches!(self.history.current(), AppRoute::Topology);
+        self.legacy_pages
+            .topology
+            .update(cx, |view, cx| view.set_visible(topology_visible, window, cx));
+        self.legacy_pages.messages.update(cx, |view, cx| {
+            if matches!(self.history.current(), AppRoute::Messages) {
+                view.ensure_topics(window, cx);
+            } else {
+                view.leave(window, cx);
+            }
+        });
+        self.legacy_pages.dlq.update(cx, |view, cx| {
+            if matches!(self.history.current(), AppRoute::DlqMessages) {
+                view.ensure_groups(window, cx);
+            } else {
+                view.leave(window, cx);
+            }
+        });
+        self.legacy_pages.message_trace.update(cx, |view, cx| {
+            if matches!(self.history.current(), AppRoute::MessageTrace) {
+                view.ensure_topics(window, cx);
+            } else {
+                view.leave(window, cx);
+            }
+        });
+    }
+
+    fn clear_environment_state(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_pages
+            .sessions
+            .update(cx, |view, cx| view.clear_context(window, cx));
+        self.legacy_pages
+            .audit
+            .update(cx, |view, cx| view.clear_context(window, cx));
+        self.legacy_pages
+            .topology
+            .update(cx, |view, cx| view.clear_for_context(window, cx));
+        let _ = self.startup_epoch.advance();
+        self.sensitive_feature_cache.clear();
+        self.pending_discard = None;
+        self.login.clear_sensitive(window, cx);
+        self.last_service_error = None;
+        self.legacy_pages
+            .dashboard
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .brokers
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .topics
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .consumers
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .producers
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .messages
+            .update(cx, |view, cx| view.set_revision(revision, window, cx));
+        self.legacy_pages
+            .message_trace
+            .update(cx, |view, cx| view.set_revision(revision, window, cx));
+        self.legacy_pages
+            .monitors
+            .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
+        self.legacy_pages
+            .acl
+            .update(cx, |view, cx| view.set_revision(revision, window, cx));
+        self.legacy_pages
+            .dlq
+            .update(cx, |view, cx| view.set_revision(revision, window, cx));
+        self.legacy_pages
+            .ops
+            .update(cx, |view, cx| view.clear_environment_drafts(window, cx));
+        let route = match self.history.current() {
+            AppRoute::BrokerDetail { .. } => AppRoute::Brokers,
+            AppRoute::TopicDetail { .. } => AppRoute::Topics,
+            AppRoute::ConsumerDetail { .. } => AppRoute::Consumers,
+            route => route.clone(),
+        };
+        self.history.reset(route);
+        window.close_sheet(cx);
+        window.close_all_dialogs(cx);
+        window.clear_notifications(cx);
         cx.notify();
     }
 
@@ -693,8 +888,17 @@ impl RocketmqDashboard {
             return;
         }
         match result {
-            Ok(session) if session.is_authenticated() => {
+            Ok(session)
+                if session.is_authenticated()
+                    && self
+                        .services
+                        .current_session()
+                        .as_ref()
+                        .is_none_or(|current| current == &session) =>
+            {
                 self.login.clear_sensitive(window, cx);
+                self.clear_environment_state(self.configuration_revision, window, cx);
+                self.rebuild_pages(window, cx);
                 self.session = session;
                 self.history.replace(AppRoute::Dashboard);
                 self.startup_state = StartupState::Ready(ReadyScreen::MainShell);
@@ -717,9 +921,19 @@ impl RocketmqDashboard {
     }
 
     fn finish_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = self.login_epoch.advance();
+        let revision = self
+            .configuration_revision
+            .max(self.services.connection_state().config.revision);
+        self.configuration_revision = revision;
+        self.clear_environment_state(revision, window, cx);
+        self.legacy_pages.acl.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages.dlq.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages
+            .message_trace
+            .update(cx, |view, cx| view.clear_context(window, cx));
         self.session.clear();
-        self.login.clear_sensitive(window, cx);
-        self.sensitive_feature_cache.clear();
         self.rebuild_pages(window, cx);
         self.history.reset(AppRoute::Login);
         self.startup_state = StartupState::Ready(ReadyScreen::Login);
@@ -730,7 +944,7 @@ impl RocketmqDashboard {
     }
 
     fn rebuild_pages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let pages = LegacyPageCache::new(window, &self.services, cx);
+        let pages = LegacyPageCache::new(window, &self.services, self.configuration_revision, cx);
         let password_input = self.login.password_input();
         let mut subscriptions = vec![
             cx.subscribe_in(&pages.ops, window, |this, _, event: &ConfigUpdated, window, cx| {
@@ -748,9 +962,11 @@ impl RocketmqDashboard {
                 }
             }),
         ];
-        subscriptions.extend(Self::delivery03_subscriptions(&pages, window, cx));
+        subscriptions.extend(Self::dashboard_broker_subscriptions(&pages, window, cx));
         subscriptions.extend(Self::topic_subscriptions(&pages, window, cx));
         subscriptions.extend(Self::consumer_subscriptions(&pages, window, cx));
+        subscriptions.push(Self::topology_subscription(&pages, window, cx));
+        subscriptions.push(Self::session_focus_subscription(window, cx));
         self.subscriptions = subscriptions;
         self.legacy_pages = pages;
     }
@@ -763,6 +979,9 @@ impl RocketmqDashboard {
     }
 
     fn return_to_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_pages
+            .audit
+            .update(cx, |view, cx| view.clear_context(window, cx));
         let _ = self.login_epoch.advance();
         self.login.clear_sensitive(window, cx);
         self.login_security_recovery = false;
@@ -823,12 +1042,20 @@ impl RocketmqDashboard {
     }
 
     fn begin_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let services = self.services.clone();
+        // Logout persistence can outlive session revocation. Drop protected UI at confirmation;
+        // accepted service mutations retain their application-owned runtime work and attribution.
+        let logout = self.services.sign_out();
+        let logout_owner = self.services.current_session();
+        self.finish_sign_out(window, cx);
         self.session_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = services.sign_out().await;
-            let _ = this.update_in(cx, |dashboard, window, cx| match result {
-                Ok(()) => dashboard.finish_sign_out(window, cx),
-                Err(error) => toast::ToastHost::error(error.summary().to_owned(), window, cx),
+            let result = logout.await;
+            let _ = this.update_in(cx, |dashboard, window, cx| {
+                if dashboard.services.current_session() != logout_owner {
+                    return;
+                }
+                if let Err(error) = result {
+                    toast::ToastHost::error(error.summary().to_owned(), window, cx);
+                }
             });
         }));
         cx.notify();
@@ -858,8 +1085,8 @@ impl RocketmqDashboard {
         self.session.is_authenticated()
     }
 
-    fn current_page_target(&self) -> PageTarget {
-        page_target(self.history.current())
+    fn current_page_capability(&self) -> PageCapability {
+        self.history.current().page_capability()
     }
 
     fn open_navigation_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -888,6 +1115,9 @@ impl RocketmqDashboard {
     }
 
     fn render_startup_failure(&self, cx: &mut Context<Self>) -> gpui::Div {
+        if let Some(view) = &self.storage_setup_view {
+            return div().size_full().child(view.clone());
+        }
         let theme = cx.theme();
         let error = match &self.startup_state {
             StartupState::Failed(error) => error,
@@ -905,73 +1135,94 @@ impl RocketmqDashboard {
             .items_center()
             .justify_center()
             .bg(theme.background)
+            .flex_col()
+            .gap_3()
             .child(states::error_state(
                 "Dashboard startup needs attention",
                 &detail,
                 theme.foreground,
                 theme.muted_foreground,
-                retryable.then(|| cx.listener(|this, _, _, cx| this.retry_startup(cx))),
+                retryable.then(|| cx.listener(|this, _, window, cx| this.retry_startup(window, cx))),
                 Some(cx.listener(|this, _, window, cx| this.open_config_location(window, cx))),
             ))
+            .child(
+                Button::new("startup-storage-setup")
+                    .debug_selector(|| "startup-storage-setup".into())
+                    .label("Storage setup")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_storage_setup(window, cx))),
+            )
     }
 
     fn render_login(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = cx.theme();
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(theme.background)
-            .child(
+        div().size_full().bg(theme.background).child(
+            div().size_full().overflow_y_scrollbar().child(
                 div()
-                    .w(px(440.))
-                    .max_w_full()
-                    .p_6()
-                    .rounded(theme.radius_lg)
-                    .bg(theme.popover)
-                    .border_1()
-                    .border_color(theme.border)
+                    .w_full()
+                    .min_h_full()
                     .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(page_header::render(
-                        "Sign in",
-                        "Use the configured local authentication service.",
-                        theme.foreground,
-                        theme.muted_foreground,
-                    ))
-                    .child(self.login.render(
-                        theme.danger,
-                        cx.listener(|this, _, window, cx| this.submit_login(window, cx)),
-                    ))
+                    .items_center()
+                    .justify_center()
+                    .p_4()
                     .child(
                         div()
+                            .w(px(440.))
+                            .max_w_full()
+                            .min_w_0()
+                            .h_auto()
+                            .flex_shrink_0()
+                            .text_color(theme.foreground)
+                            .p_6()
+                            .rounded(theme.radius_lg)
+                            .bg(theme.popover)
+                            .border_1()
+                            .border_color(theme.border)
                             .flex()
-                            .gap_2()
+                            .flex_col()
+                            .gap_5()
+                            .child(page_header::render(
+                                "Sign in",
+                                "Use the configured local authentication service.",
+                                theme.foreground,
+                                theme.muted_foreground,
+                            ))
+                            .child(self.login.render(
+                                theme.danger,
+                                cx.listener(|this, _, window, cx| this.submit_login(window, cx)),
+                            ))
                             .child(
-                                Button::new("login-back")
-                                    .label("Back")
-                                    .ghost()
-                                    .on_click(cx.listener(|_, _, window, _| window.remove_window())),
-                            )
-                            .child(
-                                Button::new("login-security")
-                                    .label("Security settings")
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _, _, cx| this.open_login_security(cx))),
-                            )
-                            .child(
-                                Button::new("login-disable-auth")
-                                    .label("Disable Auth")
-                                    .danger()
-                                    .disabled(self.login.is_submitting())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.disable_auth_from_login(window, cx);
-                                    })),
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("login-back")
+                                            .label("Back")
+                                            .ghost()
+                                            .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                                    )
+                                    .child(
+                                        Button::new("login-security")
+                                            .label("Security settings")
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _, _, cx| this.open_login_security(cx))),
+                                    )
+                                    .child(
+                                        Button::new("login-disable-auth")
+                                            .label("Disable Auth")
+                                            .danger()
+                                            .disabled(self.login.is_submitting())
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.disable_auth_from_login(window, cx);
+                                            })),
+                                    ),
                             ),
                     ),
-            )
+            ),
+        )
     }
 
     fn render_login_security(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -1021,7 +1272,7 @@ impl RocketmqDashboard {
                 .h_full()
                 .flex()
                 .flex_col()
-                .child(self.render_topbar(!fixed_sidebar, fixed_sidebar, cx))
+                .child(self.render_topbar(!fixed_sidebar, window.viewport_size().width >= px(1440.), window, cx))
                 .child(self.render_page_content(cx)),
         )
     }
@@ -1068,14 +1319,38 @@ impl RocketmqDashboard {
             }))
     }
 
-    fn render_topbar(&self, show_menu: bool, show_full_status: bool, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_fullscreen_button(&self, window: &Window, cx: &Context<Self>) -> Button {
+        let (label, icon) = if window.is_fullscreen() {
+            ("Exit fullscreen", IconName::Minimize)
+        } else {
+            ("Enter fullscreen", IconName::Maximize)
+        };
+        Button::new("toggle-fullscreen")
+            .debug_selector(|| "toggle-fullscreen".to_owned())
+            .icon(icon)
+            .label(label)
+            .tooltip(label)
+            .ghost()
+            .on_click(cx.listener(|_, _, window, cx| {
+                window.toggle_fullscreen();
+                cx.notify();
+            }))
+    }
+
+    fn render_topbar(
+        &self,
+        show_menu: bool,
+        show_full_status: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let theme = cx.theme();
         let current = self.history.current();
         let global_connection = self.services.connection_state();
         let connection = ConnectionSummary::from_state(&global_connection, &self.session);
         let revision_label = format!("Rev {}", connection.revision);
         let compact_label = connection.compact_label();
-        let mut topbar = div()
+        let topbar = div()
             .debug_selector(|| "topbar".to_owned())
             .h(TOPBAR_HEIGHT)
             .min_h(TOPBAR_HEIGHT)
@@ -1120,8 +1395,15 @@ impl RocketmqDashboard {
                     .child(current.title()),
             );
 
+        let mut status = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .min_w_0()
+            .flex_shrink()
+            .overflow_hidden();
         if show_full_status {
-            topbar = topbar
+            status = status
                 .child(
                     status_badge::render(&connection.nameserver, theme.muted, theme.muted_foreground)
                         .debug_selector(|| "topbar-nameserver".to_owned()),
@@ -1151,15 +1433,17 @@ impl RocketmqDashboard {
                         .debug_selector(|| "topbar-health".to_owned()),
                 );
         } else {
-            topbar = topbar.child(
+            status = status.child(
                 status_badge::render(&compact_label, theme.muted, theme.muted_foreground)
                     .debug_selector(|| "topbar-compact-status".to_owned()),
             );
         }
 
         topbar
+            .child(status)
             .child(
                 Button::new("go-back")
+                    .debug_selector(|| "go-back".to_owned())
                     .icon(IconName::ArrowLeft)
                     .ghost()
                     .tooltip("Back")
@@ -1167,6 +1451,7 @@ impl RocketmqDashboard {
             )
             .child(
                 Button::new("go-forward")
+                    .debug_selector(|| "go-forward".to_owned())
                     .icon(IconName::ArrowRight)
                     .ghost()
                     .tooltip("Forward")
@@ -1177,7 +1462,7 @@ impl RocketmqDashboard {
                     .icon(IconName::Redo)
                     .ghost()
                     .tooltip("Refresh configuration")
-                    .on_click(cx.listener(|this, _, _, cx| this.start_bootstrap(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.start_bootstrap(window, cx))),
             )
             .child(
                 Button::new("open-ops-settings")
@@ -1197,90 +1482,126 @@ impl RocketmqDashboard {
                         .on_click(cx.listener(|this, _, window, cx| this.request_sign_out(window, cx))),
                 )
             })
+            .child(self.render_fullscreen_button(window, cx))
+    }
+
+    fn sync_monitor_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.history.current(), AppRoute::OpsSettings) {
+            self.legacy_pages
+                .ops
+                .update(cx, |view, cx| view.refresh_visible_storage(window, cx));
+        }
+        self.sync_acl_route(window, cx);
+        self.legacy_pages.audit.update(cx, |view, cx| {
+            view.set_active(matches!(self.history.current(), AppRoute::Audit), window, cx)
+        });
+        self.legacy_pages.sessions.update(cx, |view, cx| {
+            view.set_active(matches!(self.history.current(), AppRoute::Sessions), window, cx)
+        });
+        let active = matches!(self.history.current(), AppRoute::Monitors);
+        self.legacy_pages
+            .monitors
+            .update(cx, |view, cx| view.set_active(active, window, cx));
+    }
+
+    fn sync_acl_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active = matches!(self.history.current(), AppRoute::Acl);
+        self.legacy_pages
+            .acl
+            .update(cx, |view, cx| view.set_active(active, window, cx));
     }
 
     fn render_page_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = cx.theme();
         let route = self.history.current().clone();
-        let uses_legacy_page = self.current_page_target() == PageTarget::Legacy;
-        let (description, body) = match &route {
-            AppRoute::Dashboard if uses_legacy_page => (
-                "Connection-independent dashboard content.",
+        let (description, body) = match self.current_page_capability() {
+            PageCapability::Dashboard => (
+                "Inspect cluster metrics and collected history for the active connection.",
                 div().size_full().child(self.legacy_pages.dashboard.clone()),
             ),
-            AppRoute::Brokers | AppRoute::BrokerDetail { .. } if uses_legacy_page => (
+            PageCapability::Brokers => (
                 "Filter real Broker inventory and inspect runtime or generation-aware configuration.",
                 div().size_full().child(self.legacy_pages.brokers.clone()),
             ),
-            AppRoute::Topics | AppRoute::TopicDetail { .. } if uses_legacy_page => (
+            PageCapability::Topology => (
+                "Read independently observed topology layers and replication evidence in the selected environment.",
+                div().size_full().child(self.legacy_pages.topology.clone()),
+            ),
+            PageCapability::Topics => (
                 "Filter real Topic inventory and inspect independently loaded lifecycle resources.",
                 div().size_full().child(self.legacy_pages.topics.clone()),
             ),
-            AppRoute::Consumers | AppRoute::ConsumerDetail { .. } if uses_legacy_page => (
+            PageCapability::Consumers => (
                 "Filter real Consumer observations and inspect independently loaded group resources.",
                 div().size_full().child(self.legacy_pages.consumers.clone()),
             ),
-            AppRoute::Producers if uses_legacy_page => (
+            PageCapability::Producers => (
                 "Inspect discovered Producer groups and apply an explicit Topic + Group client query.",
                 div().size_full().child(self.legacy_pages.producers.clone()),
             ),
-            AppRoute::Messages if uses_legacy_page => (
-                "Legacy read-only message content is preserved until the diagnostic delivery.",
+            PageCapability::Messages => (
+                "Search real messages, inspect bounded details, and confirm a direct-consume attempt.",
                 div().size_full().child(self.legacy_pages.messages.clone()),
             ),
-            AppRoute::OpsSettings if uses_legacy_page => (
+            PageCapability::MessageTrace => (
+                "Read real client-reported Trace records for a selected message.",
+                div().size_full().child(self.legacy_pages.message_trace.clone()),
+            ),
+            PageCapability::Monitors => (
+                "Configure persisted consumer-group thresholds. Evaluation and notifications are not implemented.",
+                div().size_full().child(self.legacy_pages.monitors.clone()),
+            ),
+            PageCapability::Acl => (
+                "Confirm a Broker scope before reading or managing ACL users and structured policy entries.",
+                div().size_full().child(self.legacy_pages.acl.clone()),
+            ),
+            PageCapability::DlqMessages => (
+                "Inspect dead-letter pages, review recovery outcomes, and export one applied page.",
+                div().size_full().child(self.legacy_pages.dlq.clone()),
+            ),
+            PageCapability::Audit => (
+                "Search native operation records retained by the selected desktop storage.",
+                div().size_full().child(self.legacy_pages.audit.clone()),
+            ),
+            PageCapability::Sessions => (
+                "Manage persistent operator sessions in the selected desktop storage.",
+                div().size_full().child(self.legacy_pages.sessions.clone()),
+            ),
+            PageCapability::OpsSettings => (
                 "Manage NameServers, transport security, sessions, and local storage.",
                 div().size_full().child(self.legacy_pages.ops.clone()),
             ),
-            AppRoute::Proxy if uses_legacy_page => (
+            PageCapability::Proxy => (
                 "Manage Proxy endpoints and the active consumer query scope.",
                 div().size_full().child(self.legacy_pages.proxy.clone()),
             ),
-            detail_or_future => (
-                "This route is intentionally a safe placeholder until its dedicated delivery adds the required capability.",
-                div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .p_6()
-                    .child(query_toolbar::unavailable(
-                        "Query controls are unavailable until this route receives its dedicated capability.",
-                        theme.muted,
-                        theme.muted_foreground,
-                    ))
-                    .child(div().flex_1().min_h_0().child(data_table::render(&self.legacy_pages.unavailable_table)))
-                    .child(states::empty_state(
-                        detail_or_future.title(),
-                        "No RocketMQ runtime, provider, network request, or persisted data is available in Delivery 01.",
-                        theme.foreground,
-                        theme.muted_foreground,
-                    )),
-            ),
+            PageCapability::Login => ("Sign in to continue.", div()),
         };
 
         div()
             .debug_selector(|| "page-content".to_owned())
             .flex_1()
+            .min_w_0()
             .min_h_0()
             .overflow_hidden()
             .flex()
             .flex_col()
-            .child(div().px_6().pt_5().pb_3().child(page_header::render(
-                route.title(),
-                description,
-                theme.foreground,
-                theme.muted_foreground,
-            )))
-            .child(div().flex_1().min_h_0().overflow_hidden().child(body))
-    }
-}
-
-const fn page_target(route: &AppRoute) -> PageTarget {
-    if LegacyPageCache::accepts_route(route) {
-        PageTarget::Legacy
-    } else {
-        PageTarget::Placeholder
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .px_6()
+                    .pt_5()
+                    .pb_3()
+                    .child(page_header::render(
+                        route.title(),
+                        description,
+                        theme.foreground,
+                        theme.muted_foreground,
+                    )),
+            )
+            .child(div().flex_1().min_w_0().min_h_0().overflow_hidden().child(body))
     }
 }
 
@@ -1313,7 +1634,25 @@ impl Render for RocketmqDashboard {
                     }))
                     .child(Button::new("dirty-confirmation-reopen").tab_stop(false).ghost()),
             )
-            .child(content)
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(self.render_audit_warning(cx))
+                    .child(div().relative().flex_1().min_h_0().child(content).when(
+                        !matches!(self.startup_state, StartupState::Ready(ReadyScreen::MainShell)),
+                        |body| {
+                            body.child(
+                                div()
+                                    .absolute()
+                                    .top_3()
+                                    .right_3()
+                                    .child(self.render_fullscreen_button(window, cx)),
+                            )
+                        },
+                    )),
+            )
             .children(sheet_layer)
             .children(notification_layer)
             .children(dialog_layer)
@@ -1371,4 +1710,4 @@ fn drawer_sidebar_group(
 
 #[cfg(test)]
 #[path = "app/tests.rs"]
-mod tests;
+pub(crate) mod tests;

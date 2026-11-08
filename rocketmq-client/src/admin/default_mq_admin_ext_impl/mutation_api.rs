@@ -1487,6 +1487,48 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
     }
 }
 
+impl crate::admin::MQAdminResolvedMessageMutationExt for DefaultMQAdminExtImpl {
+    async fn consume_resolved_message(
+        &self,
+        request: crate::admin::ResolvedMessageConsumeRequest,
+    ) -> crate::ClientResult<ConsumeMessageDirectlyResult> {
+        let crate::admin::ResolvedMessageConsumeRequest {
+            broker_addr,
+            consumer_group,
+            client_id,
+            message,
+        } = request;
+        let timeout = self.remoting_timeout_millis()?;
+        let connection = self
+            .mq_client_api()?
+            .get_consumer_connection_list(broker_addr.as_str(), consumer_group.clone(), timeout)
+            .await?;
+        if connection.get_connection_set().is_empty() {
+            return Err(mq_client_err!(
+                ResponseCode::ConsumerNotOnline,
+                "Not found the consumer group connection"
+            ));
+        }
+        let (resolved_client_id, _) =
+            select_consumer_direct_connection(&consumer_group, &connection, client_id.as_ref())?;
+        // The reported client address is the Consumer's outbound socket. The verified Broker
+        // accepts Request309 and forwards it over that registered channel.
+        let request_header = ConsumeMessageDirectlyResultRequestHeader {
+            consumer_group,
+            client_id: Some(resolved_client_id),
+            msg_id: Some(message.msg_id().clone()),
+            broker_name: (!message.broker_name().is_empty()).then(|| message.broker_name.clone()),
+            topic: Some(message.topic().clone()),
+            topic_sys_flag: None,
+            group_sys_flag: None,
+            topic_request_header: None,
+        };
+        self.mq_client_api()?
+            .consume_message_directly(&broker_addr, request_header, &message, timeout)
+            .await
+    }
+}
+
 #[cfg(test)]
 mod detailed_offset_tests {
     use std::collections::BTreeMap;
@@ -1531,6 +1573,7 @@ mod detailed_offset_tests {
         delays: Mutex<HashMap<i32, VecDeque<Duration>>>,
         counts: Mutex<HashMap<i32, usize>>,
         kv_reads: Mutex<Vec<(String, String)>>,
+        direct_consumes: Mutex<Vec<ConsumeMessageDirectlyResultRequestHeader>>,
     }
 
     impl ScriptedRequestLedger {
@@ -1574,6 +1617,12 @@ mod detailed_offset_tests {
                         .lock()
                         .expect("KV reads")
                         .push((header.namespace.to_string(), header.key.to_string()));
+                }
+                if request.code() == RequestCode::ConsumeMessageDirectly.to_i32() {
+                    self.direct_consumes
+                        .lock()
+                        .expect("direct consumes")
+                        .push(request.decode_command_custom_header()?);
                 }
                 *self
                     .counts
@@ -1710,6 +1759,101 @@ mod detailed_offset_tests {
 
     fn request_delta(before: &HashMap<i32, usize>, after: &HashMap<i32, usize>, code: RequestCode) -> usize {
         after.get(&code.to_i32()).copied().unwrap_or(0) - before.get(&code.to_i32()).copied().unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn production_resolved_consume_uses_the_verified_broker_and_not_the_consumer_socket() {
+        use crate::admin::{MQAdminResolvedMessageMutationExt, ResolvedMessageConsumeRequest};
+        use rocketmq_model::common::message::MessageTrait as _;
+        use rocketmq_protocol::protocol::body::{cm_result::CMResult, connection::Connection};
+
+        let harness = ProductionAdminHarness::new("resolved-consume-broker-test").await;
+        // This bound, non-listening socket models the Consumer's outbound ephemeral address.
+        // It is not an RPC server; attempting to invoke it cannot produce the scripted results.
+        let consumer_socket = tokio::net::TcpSocket::new_v4().unwrap();
+        consumer_socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let mut client = Connection::new();
+        client.set_client_id("selected-client".into());
+        client.set_client_addr(consumer_socket.local_addr().unwrap().to_string().into());
+        let mut connection = ConsumerConnection::new();
+        connection.insert_connection(client);
+        let message = || {
+            let mut message = MessageExt {
+                // Neither this encoded address nor the Consumer socket is the transport target.
+                msg_id: "C000020100002A9F0000000000000001".into(),
+                commit_log_offset: 1,
+                ..Default::default()
+            };
+            message.set_topic("orders".into());
+            message.set_body(bytes::Bytes::from_static(b"transient message"));
+            message
+        };
+        let before = harness.ledger.snapshot();
+        for status in [CMResult::CRSuccess, CMResult::CRLater] {
+            harness.ledger.push(
+                RequestCode::GetConsumerConnectionList,
+                RemotingCommand::create_success_response_command().set_body(connection.encode().unwrap()),
+            );
+            harness.ledger.push(
+                RequestCode::ConsumeMessageDirectly,
+                RemotingCommand::create_success_response_command().set_body(
+                    ConsumeMessageDirectlyResult::new(false, true, status, "consumer result".into(), 1)
+                        .encode()
+                        .unwrap(),
+                ),
+            );
+            let result = harness
+                .facade
+                .consume_resolved_message(ResolvedMessageConsumeRequest {
+                    broker_addr: harness.broker_addr.clone(),
+                    consumer_group: "orders-consumer".into(),
+                    client_id: Some("selected-client".into()),
+                    message: message(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.consume_result(), Some(&status));
+        }
+        assert_request_delta(
+            &before,
+            &harness.ledger.snapshot(),
+            &[
+                (RequestCode::GetConsumerConnectionList, 2),
+                (RequestCode::ConsumeMessageDirectly, 2),
+            ],
+        );
+        {
+            let requests = harness.ledger.direct_consumes.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            for request in requests.iter() {
+                assert_eq!(request.consumer_group.as_str(), "orders-consumer");
+                assert_eq!(request.client_id.as_deref(), Some("selected-client"));
+                assert_eq!(request.topic.as_deref(), Some("orders"));
+                assert_eq!(request.msg_id.as_deref(), Some("C000020100002A9F0000000000000001"));
+            }
+        }
+        // A caller-selected client must exist at this same Broker before the mutation is sent.
+        harness.ledger.push(
+            RequestCode::GetConsumerConnectionList,
+            RemotingCommand::create_success_response_command().set_body(connection.encode().unwrap()),
+        );
+        let before_missing = harness.ledger.snapshot();
+        assert!(harness
+            .facade
+            .consume_resolved_message(ResolvedMessageConsumeRequest {
+                broker_addr: harness.broker_addr.clone(),
+                consumer_group: "orders-consumer".into(),
+                client_id: Some("missing-client".into()),
+                message: message(),
+            })
+            .await
+            .is_err());
+        assert_request_delta(
+            &before_missing,
+            &harness.ledger.snapshot(),
+            &[(RequestCode::GetConsumerConnectionList, 1)],
+        );
+        harness.shutdown().await;
     }
 
     fn assert_request_delta(

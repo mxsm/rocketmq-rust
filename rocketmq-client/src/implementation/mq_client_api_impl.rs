@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use crate::base::client_config::ClientConfig;
 #[cfg(feature = "admin-full")]
-use crate::base::mq_client_admin::MqClientAdminInner;
+use crate::base::mq_client_admin::MqClientAdmin;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::ack_status::AckStatus;
@@ -319,12 +319,22 @@ use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::warn;
 
-static SEND_SMART_MSG: LazyLock<bool> = LazyLock::new(|| {
-    std::env::var("org.apache.rocketmq.client.sendSmartMsg")
-        .unwrap_or("false".to_string())
-        .parse()
-        .unwrap_or(false)
-});
+/// Environment variable that turns compact `SendMessageV2` request headers off.
+const SEND_SMART_MSG_ENV: &str = "org.apache.rocketmq.client.sendSmartMsg";
+
+static SEND_SMART_MSG: LazyLock<bool> =
+    LazyLock::new(|| send_smart_msg_enabled(std::env::var(SEND_SMART_MSG_ENV).ok().as_deref()));
+
+/// Reads the `sendSmartMsg` switch like Java's `MQClientAPIImpl`: on by default, and once set,
+/// on only for a case-insensitive `true` (`Boolean.parseBoolean`).
+fn send_smart_msg_enabled(value: Option<&str>) -> bool {
+    value.is_none_or(|value| value.eq_ignore_ascii_case("true"))
+}
+
+/// Whether sends use the compact `SendMessageV2` / `SendReplyMessageV2` request headers.
+pub(crate) fn send_smart_msg() -> bool {
+    *SEND_SMART_MSG
+}
 
 fn java_long_to_u64_field(operation: &'static str, field: &'static str, value: i64) -> crate::ClientResult<u64> {
     u64::try_from(value).map_err(|_| {
@@ -365,8 +375,9 @@ struct AsyncRetryRequest {
 }
 
 impl AsyncRetryRequest {
-    fn new(mut request: RemotingCommand) -> Self {
-        request.materialize_custom_header_to_ext_fields();
+    fn new(request: RemotingCommand) -> Self {
+        // The typed header is shared by every clone, so retries re-encode it directly instead of
+        // carrying a materialized field map in each attempt.
         Self {
             template: Some(request),
         }

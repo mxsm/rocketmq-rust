@@ -72,6 +72,8 @@ Broker 的 `recallMessageEnable` 当前默认为 true，但仍适用实际部署
 
 ExtendedTimeline 模式中，当前处理器使用类型化取消操作。`Cancelled` 和 `AlreadyCancelled` 映射成功；`TooLate`、`NotFound` 映射非法操作；`Retry` 映射服务不可用；`Quarantined`、`Unsupported` 映射系统错误。这种显式状态结果与标准标记路径不同。
 
+`timerStoreMode = "native"` 时，Broker 先在 native 引擎中登记召回，再写入删除标记，因此两者之间开始的投递也能看到这次召回。召回结果同样是类型化的：只有定时消息尚未到期时召回才会成功；对已到期定时消息的召回会被拒绝，按非法操作返回，且不写入标记。如果标记写入失败，登记会被撤回，召回返回系统错误。
+
 任何模式的召回都不会撤销消费者已经完成的外部副作用。业务取消状态应保持权威，使迟到提醒可以按应用规则识别、忽略或补偿。
 
 ## 失败与恢复决策
@@ -86,6 +88,108 @@ ExtendedTimeline 模式中，当前处理器使用类型化取消操作。`Cance
 | 实际投递晚于请求时间 | 分别检查定时分派、时钟、存储及消费者积压 |
 
 批次校验和事务生产者在各自路径拒绝延迟或定时组合。延迟发送也不会与后来发往同一业务主题的普通消息建立顺序关系。
+
+## 定时文件与无法投递的定时消息
+
+标准定时引擎默认把索引保存在 Apache RocketMQ 5.x 的 `timerlog`、`timerwheel` 和 `config/timercheck` 文件中（`timerFileFormat = "java"`）。因此 Rust Broker 与 Java 5.x Broker 可以接管同一个存储目录，而不丢失待投递的定时消息。设置 `timerFileFormat = "rust_v2"` 则改用分段的 Rust 文件。修改该设置后，仍保存在原格式中的定时消息会继续从原格式投递。
+
+`[store]` 中的两个键决定无法投递的定时消息如何处理。它们沿用 Apache RocketMQ 中的同名开关，但只要消息体还在 CommitLog 中，Rust 的默认值就不会丢弃定时消息：
+
+| 键 | Rust 默认值 | Java 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `timerSkipUnknownError` | `false` | `false` | 设为 `true` 时，隔离并跳过这类定时消息：记录无法读取或路由，或写入被 Store 拒绝。为 `false` 时，该消息被隔离，排在它之后的定时消息等待运维处理。 |
+| `timerEnableRetryUntilSuccess` | `true` | `false` | 设为 `false` 时，因临时原因写入失败三次的投递会被丢弃并记录日志，与 Java 的默认行为一致。为 `true` 时，写入会一直重试直到成功。 |
+
+如果 CommitLog 清理（例如磁盘空间不足时）已删除某条定时消息或召回的消息体，无论这两个键如何设置，都会跳过它并记录告警日志，与 Java 一致：消息体已无法恢复，继续等待只会拖住之后所有的定时消息。被跳过的召回不再取消它的目标定时消息。
+
+即使 `timerSkipUnknownError = false`，Java 也会丢弃无法读取的消息体和被拒绝的消息，而 Rust 会保留它们。被隔离的定时消息记录在存储根目录下的 `timer-v2/quarantine.jsonl` 中。
+
+## 使用 native 引擎投递长延迟消息
+
+`timerStoreMode = "native"` 时，延迟不超过 `timerNative.maxDelayDays`（默认 400 天）的定时消息由 native 引擎接纳。该引擎是存储根目录下 `timer-native/` 中的分层时间桶日志。在中期范围内到期的定时消息直接引用 CommitLog；更晚到期的会被复制一次，因此在到期之前，CommitLog 清理不会删除它。到期时间与标准引擎一样按 `timerPrecisionMs` 取整，并且该引擎要求 `timerWheelEnable = true`。
+
+```toml
+[store]
+timerWheelEnable = true
+timerStoreMode = "native"
+
+[store.timerNative]
+maxDelayDays = 400
+```
+
+| `[store.timerNative]` 下的键 | 默认值 | 含义 |
+| --- | --- | --- |
+| `maxDelayDays` | `400` | 可接纳的最长延迟 |
+| `laneCount` | `16` | 投递通道数；`timer-native/` 创建后不可更改 |
+| `nearWindowSec` | `600` | 在此秒数内到期的定时消息保存在内存中 |
+| `nearWheelMemoryBytes` | 256 MiB | 这些定时消息可使用的内存 |
+| `midHorizonHours` | `48` | 晚于此范围到期的定时消息会被复制；引擎实际最多使用 `fileReservedTime` 减去六小时 |
+| `payloadSegmentBytes` | 256 MiB | 每个定时消息副本段的大小 |
+| `checkpointIntervalMs` | `5000` | 已索引的定时消息与投递进度落盘的间隔 |
+| `deliveryBatchMessages` | `512` | 每个通道每批投递的到期定时消息数 |
+| `deliveryInflightWrites` | `32` | 每批同时进行中的写入数 |
+| `shadowEnable` | `false` | 在其他 `timerStoreMode` 下以 shadow 方式运行 native 引擎，见下文 |
+| `shadowGraceMs` | `60000` | shadow 等待活动引擎投递一条到期定时消息的时长 |
+
+每条定时消息都由接纳它的引擎投递，因此 `timerStoreMode` 可以双向切换：
+
+- 切换到 `native` 后，标准引擎继续投递切换前接纳的定时消息。
+- 从 `native` 切换到其他模式后，native 引擎继续投递它持有的定时消息。正常关闭时如果发现它已不再持有任何定时消息，存储就不再运行它；之后再切换回 `native` 会重新启动它。
+- 无论当前是哪种模式，召回都会送达接纳该定时消息的引擎。只有 native 模式会返回类型化结果。
+- 仍持有 native 定时消息的存储不能以 ExtendedTimeline 模式加载。
+
+Broker 运行时信息用三项描述 native 引擎：`timerNativeRole`（`active` 或 `draining`）、`timerNativeMetrics` 和 `timerNativePipelineMetrics`。`timerNativeMetrics` 包含引擎当前持有的内容，例如 `wheelTimers`、`hourBuckets`、`minuteRuns`、`payloadDays`、`recalls` 和 `sourceBehind`，以及 Broker 启动以来的处理量，例如 `indexed`、`written`、`recalled`、`dropped` 和 `skipped`；从节点上还有 `followed`。OpenTelemetry 的定时消息入队与出队总数同样统计 native 定时消息。
+
+在主从部署中，从节点会索引 native 定时消息，并通过主节点写入的消息跟随其投递进度。因此从节点被提升为主节点后，只会写入原主节点尚未写入的定时消息。Broker 重启时会从 CommitLog 读回最多 1 GiB 的近期投递记录，所以从节点能继续跟随主节点，主节点也不会重复写入这些消息。与标准引擎一样，故障切换前后仍可能重复投递一条定时消息。
+
+checkpoint 使投递进度落盘后，已投递定时消息的文件及其副本会被删除，它们引用的 CommitLog 文件也可以被正常清理。召回在其目标定时消息投递后会从内存中移除，但磁盘上的召回日志暂不会压缩。
+
+### 以 shadow 方式将 native 引擎与活动引擎对比
+
+切换到 `native` 之前，可以在 `[store.timerNative]` 下设置 `shadowEnable = true`，同时保持当前的 `timerStoreMode` 不变。
+
+- **shadow 做什么。** 第二个 native 引擎会索引活动引擎接纳的每条定时消息，并在到期时把它移出时间轮，与 native 引擎真正投递时的做法一致。
+- **shadow 不做什么。** 它不写任何消息，也不获取投递租约，不会阻止 CommitLog 清理。
+- **文件放在哪里。** 所有文件都放在存储根目录的 `timer-native-shadow/` 下，因此之后切换到 `native` 时会从空状态开始。
+
+shadow 通过双方共有的投递令牌，把每条到期定时消息与活动引擎的投递对应起来。Broker 运行时信息会给出两项：
+
+- **`timerNativeShadowMetrics`** 包含 native 引擎的各项指标，外加以下计数：
+  - `shadowMatched`：找到了对应投递的定时消息数。
+  - `shadowOnTime`、`shadowLateWithin1s`、`shadowLateWithin5s`、`shadowLateWithin30s` 和 `shadowLateOver30s`：活动引擎存储这些投递的时间比 shadow 的到期时间晚了多少。
+  - `shadowMaxLatenessMs`：其中最晚的一条。
+  - `shadowEarly`：比到期时间早出超过 `timerPrecisionMs` 的投递。
+  - `shadowNotDelivered`：到期后 `shadowGraceMs` 内仍未投递的定时消息。
+  - `shadowUnindexed`：shadow 从未发现到期的投递。这类投递要等两倍宽限期后才计入，并且只在 shadow 跟得上自身到期时间时才统计。
+- **`timerNativeShadowSamples`** 列出最近 64 条差异及其投递令牌。
+
+shadow 在重启后会像 native 引擎一样读回令牌。从节点运行自己的 shadow，并与其复制到的投递进行对比。在 `timerStoreMode = "native"` 下，该配置不起作用。
+
+## 将 Extended Timeline 定时消息迁移到 native 引擎
+
+`timerStoreMode = "extended_timeline"` 已弃用，由 `native` 取代，并将与 `timerExtendedShadowEnable` 一起在后续某个主版本中移除。使用其中任一配置启动的 Broker 会输出一条警告。如需在切换前对比两种引擎，请使用上文介绍的 native shadow。
+
+Extended Timeline 在某个存储上运行过之后，该存储便不能以其他任何 `timerStoreMode` 加载，因此它的定时消息无法像其他引擎的定时消息那样在 native 引擎旁边继续投递完毕。请在 Broker 停止时，使用 `rocketmq-tools/rocketmq-store-inspect` 中的 `rocketmq-cli-rust` 迁移这些定时消息：
+
+```bash
+rocketmq-cli-rust migrate-extended-timers --config broker.toml --dry-run
+rocketmq-cli-rust migrate-extended-timers --config broker.toml
+```
+
+1. 停止 Broker。该命令会获取存储锁，而运行中的 Broker 持有这把锁。
+2. 通过 `--config` 传入 Broker 下次运行要使用的配置：在 `[store]` 中设置 `timerStoreMode = "native"` 和 `timerWheelEnable = true`，并去掉 `timerExtendedAdmissionEnable`、`timerExtendedActivationEpoch` 以及其他 `timerExtended*` 配置项，这些配置项只有 Extended 模式接受。请保留 Extended Timeline 运行时使用的 `[store.timerStoreConfig]` 配置，命令会按这些配置读取它保存的消息副本。命令还会从该配置段读取存储根目录和 `[store.timerNative]`。
+3. 先加 `--dry-run` 运行。此时不做任何修改，只输出一份 JSON 报告：
+   - `migrated`：将被迁移的 pending、ready 和 delivering 定时消息。其中 `delivering` 是正在投递的定时消息，可能会被再投递一次。
+   - `committed`、`finished` 和 `shadow`：不迁移的定时消息，原因分别是消息已经写入、已经投递／取消／隔离，或者属于 shadow 记录。
+4. 不加 `--dry-run` 运行。native 引擎会为每条要迁移的定时消息建立索引并保存一份消息副本，因此它们都不依赖 CommitLog。随后 `timer-extended/` 和 `config/timer-store-owner.meta` 会被加上 `.migrated` 后缀重命名，报告中的 `backup` 给出该目录的名称。在 native 引擎投递完迁移过来的定时消息之前，请保留该目录。
+5. 以 native 模式启动 Broker。
+
+只要报告中列出了 `blockers`，命令就不做任何修改，并以退出码 `2` 结束：
+
+- `payloadHandoffPending`：Extended Timeline 尚未复制其消息的定时消息。请以 `extended_timeline` 模式运行 Broker，直到复制完成，然后停止 Broker 再重试。
+- `beyondNativeMaxDelay`：到期时间晚于 `timerNative.maxDelayDays` 允许范围的定时消息。`requiredDays` 给出该配置需要的值。
+
+中途停止的迁移可以再次运行，并会从头开始。主从组中的每个 Broker 都有自己的存储，因此需要对 Extended Timeline 拥有的每个存储分别运行该命令；对于其他存储，命令会拒绝执行。
 
 ## 示例与验证范围
 

@@ -36,10 +36,10 @@ write-tools = ["dep:rocketmq-admin-core"]
 otlp = ["rocketmq-observability/otlp-metrics"]
 
 [dependencies]
-rocketmq-observability = { version = "1.0.0", path = "../../rocketmq-observability" }
-rocketmq-runtime = { version = "1.0.0", path = "../../rocketmq-runtime" }
-rocketmq-transport = { version = "1.0.0", path = "../../rocketmq-transport", default-features = false, features = ["tls"] }
-rocketmq-admin-core = { version = "1.0.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["mutation-client-adapter"], optional = true }
+rocketmq-observability = { version = "1.1.0", path = "../../rocketmq-observability" }
+rocketmq-runtime = { version = "1.1.0", path = "../../rocketmq-runtime" }
+rocketmq-transport = { version = "1.1.0", path = "../../rocketmq-transport", default-features = false, features = ["tls"] }
+rocketmq-admin-core = { version = "1.1.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["mutation-client-adapter"], optional = true }
 rocketmq-mcp-auth = { version = "1.0.0", path = "../rocketmq-mcp-auth" }
 
 axum = "0.8"

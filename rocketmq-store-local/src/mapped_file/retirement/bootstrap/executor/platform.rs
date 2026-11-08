@@ -39,7 +39,7 @@ use super::super::types::ReconciliationPhase;
 use super::durable_unit::DurableUnitFailure;
 use super::durable_unit::DurableUnitMachine;
 use super::private;
-use super::InitialBootstrapBackend;
+use super::InitialBootstrapOperations;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::io::FileLedgerIo;
 use crate::mapped_file::retirement::io::LedgerIoFailure;
@@ -221,7 +221,7 @@ pub(in crate::mapped_file::retirement::bootstrap) fn execute_prepared_initial_bo
     mut prepared: PreparedInitialBootstrapFoundation,
 ) -> Result<InitialBootstrapCompletion, super::InitialBootstrapExecutionFailure<InitialBootstrapFoundationFailure>> {
     let foundation = prepared.foundation.take().ok_or_else(|| {
-        super::InitialBootstrapExecutionFailure::Backend(InitialBootstrapFoundationFailure::invalid(
+        super::InitialBootstrapExecutionFailure::Operation(InitialBootstrapFoundationFailure::invalid(
             "bootstrap foundation was already consumed",
         ))
     })?;
@@ -231,7 +231,7 @@ pub(in crate::mapped_file::retirement::bootstrap) fn execute_prepared_initial_bo
 
 impl private::Sealed for PreparedInitialBootstrapFoundation {}
 
-impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
+impl InitialBootstrapOperations for PreparedInitialBootstrapFoundation {
     type Error = InitialBootstrapFoundationFailure;
 
     fn inspect_store_initialized(

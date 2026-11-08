@@ -12,193 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Versioned, non-sensitive desktop configuration persisted on the storage-I/O lane.
+//! Safe native storage failures and compatibility re-exports.
 
-use std::{
-    error::Error as StdError,
-    fmt,
-    fs::{self, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+#[cfg(test)]
+use std::io;
+use std::{error::Error as StdError, fmt, path::PathBuf, sync::Arc};
+
+#[cfg(test)]
+use rocketmq_dashboard_common::CredentialSourceKind;
+pub use rocketmq_dashboard_storage::{
+    AuthConfig, CONFIG_SCHEMA_VERSION, DesktopConfig, FoundationFlags, HISTORY_MAX_POINTS_CAP, HISTORY_MAX_SERIES_CAP,
+    HISTORY_MAX_TOTAL_POINTS_CAP,
 };
+use rocketmq_dashboard_storage::{StorageError, StorageErrorKind};
 
-use rocketmq_dashboard_common::{
-    ConnectionScope, ConnectionSnapshot, CredentialSourceKind, TransportSettings, normalize_nameserver_selection,
-    normalize_proxy_selection,
-};
-use rocketmq_runtime::ChildServiceContext;
-use serde::{Deserialize, Serialize};
+#[path = "config_authority.rs"]
+mod authority;
+pub use authority::DesktopConfigStore;
+pub(crate) use authority::NativeConfigurationChange;
+pub(crate) use authority::{NativeStorageSetup, SelectionSource, WorkspaceSetupAction};
 
-/// Current on-disk schema understood by this delivery.
-pub const CONFIG_SCHEMA_VERSION: u32 = 1;
-/// Environment override used by tests, packaged builds, and portable deployments.
+/// Existing portable configuration path override.
 pub const CONFIG_PATH_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH";
-
-static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
-/// Authentication settings that never contain credential values.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct AuthConfig {
-    /// Whether local dashboard sign-in is required.
-    pub enabled: bool,
-    /// Source category for RocketMQ Admin credentials.
-    pub credential_source: CredentialSourceKind,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            credential_source: CredentialSourceKind::None,
-        }
-    }
-}
-
-/// Maximum accepted per-series History retention.
-pub const HISTORY_MAX_POINTS_CAP: usize = 100_000;
-/// Maximum accepted distinct History series.
-pub const HISTORY_MAX_SERIES_CAP: usize = 4_096;
-/// Maximum accepted observations across the complete History file.
-pub const HISTORY_MAX_TOTAL_POINTS_CAP: usize = 100_000;
-
-/// Feature and bounded-lifecycle settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct FoundationFlags {
-    /// Enables the owned History collector.
-    pub history_enabled: bool,
-    /// Collection interval in seconds. Zero disables collection even when the flag is enabled.
-    pub history_interval_seconds: u64,
-    /// Maximum retained observations for each metric series.
-    pub history_max_points_per_series: usize,
-    /// Maximum retained metric series across the complete History file.
-    pub history_max_series: usize,
-    /// Maximum retained observations across the complete History file.
-    pub history_max_total_points: usize,
-    /// Enables the local Monitor store without exposing a Monitor page in Delivery 02.
-    pub monitor_enabled: bool,
-}
-
-impl Default for FoundationFlags {
-    fn default() -> Self {
-        Self {
-            history_enabled: false,
-            history_interval_seconds: 60,
-            history_max_points_per_series: 1_440,
-            history_max_series: 512,
-            history_max_total_points: 20_000,
-            monitor_enabled: false,
-        }
-    }
-}
-
-/// Complete non-sensitive desktop configuration.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub struct DesktopConfig {
-    /// Schema discriminator. Unknown versions are never overwritten.
-    pub schema_version: u32,
-    /// Monotonic persisted revision used to invalidate sessions and requests.
-    pub revision: u64,
-    /// Configured normalized NameServer endpoints.
-    pub nameservers: Vec<String>,
-    /// Selected NameServer endpoint.
-    pub current_nameserver: Option<String>,
-    /// Admin transport settings.
-    pub transport: TransportSettings,
-    /// Configured normalized Proxy endpoints.
-    pub proxies: Vec<String>,
-    /// Selected Proxy endpoint.
-    pub current_proxy: Option<String>,
-    /// Active query scope.
-    pub scope: ConnectionScope,
-    /// Non-sensitive authentication configuration.
-    pub auth: AuthConfig,
-    /// Delivery-foundation feature flags.
-    pub foundations: FoundationFlags,
-}
-
-impl fmt::Debug for DesktopConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DesktopConfig")
-            .field("schema_version", &self.schema_version)
-            .field("revision", &self.revision)
-            .field("nameserver_count", &self.nameservers.len())
-            .field("current_nameserver_configured", &self.current_nameserver.is_some())
-            .field("transport", &self.transport)
-            .field("proxy_count", &self.proxies.len())
-            .field("current_proxy_configured", &self.current_proxy.is_some())
-            .field("scope", &self.scope)
-            .field("auth", &self.auth)
-            .field("foundations", &self.foundations)
-            .finish()
-    }
-}
-
-impl Default for DesktopConfig {
-    fn default() -> Self {
-        Self {
-            schema_version: CONFIG_SCHEMA_VERSION,
-            revision: 0,
-            nameservers: Vec::new(),
-            current_nameserver: None,
-            transport: TransportSettings::default(),
-            proxies: Vec::new(),
-            current_proxy: None,
-            scope: ConnectionScope::NameServer,
-            auth: AuthConfig::default(),
-            foundations: FoundationFlags::default(),
-        }
-    }
-}
-
-impl DesktopConfig {
-    /// Validates and normalizes the complete persisted compatibility surface.
-    pub fn normalize(mut self) -> Result<Self, ConfigStoreFailure> {
-        if self.schema_version != CONFIG_SCHEMA_VERSION {
-            return Err(ConfigStoreFailure::unsupported_schema(
-                self.schema_version,
-                CONFIG_SCHEMA_VERSION,
-            ));
-        }
-        (self.nameservers, self.current_nameserver) =
-            normalize_nameserver_selection(&self.nameservers, self.current_nameserver.as_deref())
-                .map_err(ConfigStoreFailure::validation)?;
-        (self.proxies, self.current_proxy) = normalize_proxy_selection(&self.proxies, self.current_proxy.as_deref())
-            .map_err(ConfigStoreFailure::validation)?;
-        if self.scope == ConnectionScope::Proxy && self.current_proxy.is_none() {
-            return Err(ConfigStoreFailure::validation(ConfigValidation::ProxyRequiresSelection));
-        }
-        self.foundations.history_max_points_per_series = self
-            .foundations
-            .history_max_points_per_series
-            .min(HISTORY_MAX_POINTS_CAP);
-        self.foundations.history_max_series = self.foundations.history_max_series.min(HISTORY_MAX_SERIES_CAP);
-        self.foundations.history_max_total_points = self
-            .foundations
-            .history_max_total_points
-            .min(HISTORY_MAX_TOTAL_POINTS_CAP);
-        Ok(self)
-    }
-
-    /// Projects the immutable provider input without any credential values.
-    pub fn connection_snapshot(&self) -> ConnectionSnapshot {
-        ConnectionSnapshot {
-            revision: self.revision,
-            nameserver: self.current_nameserver.clone(),
-            proxy: self.current_proxy.clone(),
-            scope: self.scope,
-            transport: self.transport,
-            credential_source: self.auth.credential_source,
-        }
-    }
-}
+/// Explicit native authority, defaulting to file when no choice is supplied.
+pub const STORAGE_ENGINE_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE";
+/// External database connection input. Its value is never persisted or formatted.
+pub const DATABASE_URL_ENV: &str = "ROCKETMQ_DASHBOARD_GPUI_DATABASE_URL";
 
 /// Opaque recoverable storage failure with a fixed safe projection.
 #[derive(Clone)]
@@ -218,6 +57,9 @@ enum ConfigStoreRejection {
     StaleRevision,
     RevisionExhausted,
     ProtectedOriginal,
+    WriterUnavailable,
+    Uninitialized,
+    Closed,
 }
 
 #[derive(Clone)]
@@ -239,6 +81,7 @@ enum ConfigStoreCondition {
     InvalidDocument,
     Validation,
     Runtime,
+    Storage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,16 +94,23 @@ enum ConfigStoreFailureCode {
     RevisionExhausted,
     ProtectedOriginal,
     Runtime,
+    WriterUnavailable,
+    Storage,
+    Uninitialized,
 }
 
 #[derive(Debug, thiserror::Error)]
 enum ConfigValidation {
     #[error("the user configuration directory is unavailable")]
     UserDirectoryUnavailable,
-    #[error("Proxy scope requires a selected Proxy endpoint")]
-    ProxyRequiresSelection,
-    #[error("the storage path has no parent")]
-    PathHasNoParent,
+    #[error("select file, sqlite, mysql, or postgres as the native storage engine")]
+    StorageEngine,
+    #[error("external database connection configuration is required for the selected engine")]
+    DatabaseConnection,
+    #[error("the external storage engine override must be changed before saving a local choice")]
+    StorageEngineOverride,
+    #[error("the selected engine was not compiled into this application")]
+    StorageDriverUnavailable,
 }
 
 impl ConfigStoreFailure {
@@ -289,6 +139,7 @@ impl ConfigStoreFailure {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn io(operation: &'static str, path: PathBuf, source: io::Error) -> Self {
         Self::operational(ConfigStoreErrorInner {
             condition: ConfigStoreCondition::Io,
@@ -298,6 +149,7 @@ impl ConfigStoreFailure {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn invalid_document(path: PathBuf, source: serde_json::Error) -> Self {
         Self::caused_by(ConfigStoreCondition::InvalidDocument, Some(path), source)
     }
@@ -317,6 +169,7 @@ impl ConfigStoreFailure {
                 ConfigStoreCondition::InvalidDocument => ConfigStoreFailureCode::InvalidDocument,
                 ConfigStoreCondition::Validation => ConfigStoreFailureCode::Validation,
                 ConfigStoreCondition::Runtime => ConfigStoreFailureCode::Runtime,
+                ConfigStoreCondition::Storage => ConfigStoreFailureCode::Storage,
             },
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. }) => {
                 ConfigStoreFailureCode::UnsupportedSchema
@@ -330,11 +183,26 @@ impl ConfigStoreFailure {
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::ProtectedOriginal) => {
                 ConfigStoreFailureCode::ProtectedOriginal
             }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::WriterUnavailable) => {
+                ConfigStoreFailureCode::WriterUnavailable
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Uninitialized) => {
+                ConfigStoreFailureCode::Uninitialized
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Closed) => ConfigStoreFailureCode::Storage,
         }
     }
 
     pub(super) fn unsupported_schema(found: u32, supported: u32) -> Self {
         Self::rejected(ConfigStoreRejection::UnsupportedSchema { found, supported })
+    }
+
+    pub(super) fn writer_unavailable() -> Self {
+        Self::rejected(ConfigStoreRejection::WriterUnavailable)
+    }
+
+    pub(super) fn stale_revision() -> Self {
+        Self::rejected(ConfigStoreRejection::StaleRevision)
     }
 
     fn protects_original(&self) -> bool {
@@ -344,7 +212,9 @@ impl ConfigStoreFailure {
                 if error.inner.condition == ConfigStoreCondition::InvalidDocument
         ) || matches!(
             &self.kind,
-            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. })
+            ConfigStoreFailureKind::Rejected(
+                ConfigStoreRejection::UnsupportedSchema { .. } | ConfigStoreRejection::WriterUnavailable
+            )
         )
     }
 
@@ -358,11 +228,86 @@ impl ConfigStoreFailure {
     pub(crate) fn is_retryable(&self) -> bool {
         match &self.kind {
             ConfigStoreFailureKind::Rejected(
-                ConfigStoreRejection::StaleRevision | ConfigStoreRejection::ProtectedOriginal,
+                ConfigStoreRejection::StaleRevision
+                | ConfigStoreRejection::ProtectedOriginal
+                | ConfigStoreRejection::WriterUnavailable,
             ) => true,
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Uninitialized) => true,
             ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. })
             | ConfigStoreFailureKind::Rejected(ConfigStoreRejection::RevisionExhausted) => false,
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Closed) => false,
             ConfigStoreFailureKind::Operational(_) => true,
+        }
+    }
+
+    pub(crate) fn safe_summary(&self) -> &'static str {
+        match &self.kind {
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Closed) => "The selected native storage is closed.",
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::Uninitialized) => {
+                "The selected database has no native Dashboard data. Initialize it or import existing files explicitly."
+            }
+            ConfigStoreFailureKind::Operational(error) if error.inner.condition == ConfigStoreCondition::Storage => {
+                match error
+                    .inner
+                    .source
+                    .downcast_ref::<StorageError>()
+                    .map(StorageError::kind)
+                {
+                    Some(StorageErrorKind::DriverUnavailable { .. }) => {
+                        "The selected native storage engine is unavailable in this application build."
+                    }
+                    Some(StorageErrorKind::Connection | StorageErrorKind::Query | StorageErrorKind::Closed) => {
+                        "The selected native database is unavailable. Check its external connection configuration and retry."
+                    }
+                    Some(StorageErrorKind::LeaseLost) => {
+                        "History collection ownership changed; the sample was not persisted."
+                    }
+                    Some(StorageErrorKind::EmptySource) => "The import source has no native Dashboard configuration.",
+                    Some(StorageErrorKind::AlreadyInitialized) => {
+                        "The selected storage already contains native Dashboard data."
+                    }
+                    _ => "The selected native storage could not complete the operation.",
+                }
+            }
+            ConfigStoreFailureKind::Operational(error) if error.inner.condition == ConfigStoreCondition::Validation => {
+                match error.inner.source.downcast_ref::<ConfigValidation>() {
+                    Some(ConfigValidation::StorageEngine) => {
+                        "Select file, sqlite, mysql, or postgres as the native storage engine."
+                    }
+                    Some(ConfigValidation::DatabaseConnection) => {
+                        "External database connection configuration is required for the selected engine."
+                    }
+                    Some(ConfigValidation::StorageEngineOverride) => {
+                        "The engine is controlled by ROCKETMQ_DASHBOARD_GPUI_STORAGE_ENGINE. Change or remove that external override and restart."
+                    }
+                    Some(ConfigValidation::StorageDriverUnavailable) => {
+                        "The selected native storage engine is unavailable in this application build."
+                    }
+                    _ => "The local dashboard configuration could not be loaded or updated.",
+                }
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::WriterUnavailable) => {
+                "Another Dashboard instance owns this data directory. Close it before opening this instance."
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. }) => {
+                "The local dashboard data uses an unsupported schema version. The original files were preserved."
+            }
+            _ => "The local dashboard configuration could not be loaded or updated.",
+        }
+    }
+}
+
+impl fmt::Display for ConfigStoreFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.safe_summary())
+    }
+}
+
+impl StdError for ConfigStoreFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match &self.kind {
+            ConfigStoreFailureKind::Operational(error) => Some(error),
+            ConfigStoreFailureKind::Rejected(_) => None,
         }
     }
 }
@@ -408,6 +353,7 @@ impl fmt::Display for ConfigStoreError {
             ConfigStoreCondition::InvalidDocument => "The local dashboard data is not valid JSON.",
             ConfigStoreCondition::Validation => "The local dashboard data failed validation.",
             ConfigStoreCondition::Runtime => "The local dashboard storage runtime is unavailable.",
+            ConfigStoreCondition::Storage => "The selected native Dashboard storage is unavailable.",
         })
     }
 }
@@ -418,334 +364,33 @@ impl StdError for ConfigStoreError {
     }
 }
 
-/// File-backed store with serialized updates and explicit corrupt-original protection.
-pub struct DesktopConfigStore {
-    path: PathBuf,
-    context: ChildServiceContext,
-    io_gate: tokio::sync::Mutex<()>,
-    known_revision: AtomicU64,
-    protected_original: AtomicBool,
-}
-
-impl DesktopConfigStore {
-    /// Resolves the configured path, preferring [`CONFIG_PATH_ENV`].
-    pub fn from_environment(context: ChildServiceContext) -> Result<Arc<Self>, ConfigStoreFailure> {
-        let path = match std::env::var_os(CONFIG_PATH_ENV) {
-            Some(path) if !path.is_empty() => PathBuf::from(path),
-            _ => dirs::config_dir()
-                .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::UserDirectoryUnavailable))?
-                .join("rocketmq-dashboard")
-                .join("gpui")
-                .join("config.json"),
-        };
-        Ok(Self::new(path, context))
-    }
-
-    /// Creates a store at an injected path. Tests use this to avoid user directories.
-    pub fn new(path: PathBuf, context: ChildServiceContext) -> Arc<Self> {
-        Arc::new(Self {
-            path,
-            context,
-            io_gate: tokio::sync::Mutex::new(()),
-            known_revision: AtomicU64::new(0),
-            protected_original: AtomicBool::new(false),
-        })
-    }
-
-    /// Returns the exact non-secret storage path.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Loads, parses, validates, and records the on-disk revision.
-    pub async fn load(&self) -> Result<DesktopConfig, ConfigStoreFailure> {
-        let _guard = self.io_gate.lock().await;
-        let path = self.path.clone();
-        let result = self
-            .context
-            .storage_io()
-            .spawn_io("gpui-config-load", move || load_file(&path))
-            .await
-            .map_err(ConfigStoreFailure::runtime)?;
-        match result {
-            Ok(config) => {
-                self.known_revision.store(config.revision, Ordering::Release);
-                self.protected_original.store(false, Ordering::Release);
-                Ok(config)
-            }
-            Err(error) if error.protects_original() => {
-                self.protected_original.store(true, Ordering::Release);
-                Err(error)
-            }
-            Err(error) => Err(error),
+impl From<StorageError> for ConfigStoreFailure {
+    fn from(error: StorageError) -> Self {
+        match error.kind() {
+            StorageErrorKind::UnsupportedSchema { found, supported } => Self::unsupported_schema(found, supported),
+            StorageErrorKind::Conflict => Self::stale_revision(),
+            StorageErrorKind::WriterUnavailable => Self::writer_unavailable(),
+            StorageErrorKind::Uninitialized => Self::rejected(ConfigStoreRejection::Uninitialized),
+            StorageErrorKind::RevisionExhausted => Self::rejected(ConfigStoreRejection::RevisionExhausted),
+            StorageErrorKind::InvalidDocument => Self::caused_by(ConfigStoreCondition::InvalidDocument, None, error),
+            StorageErrorKind::Io => Self::caused_by(ConfigStoreCondition::Io, None, error),
+            StorageErrorKind::Validation => Self::validation(error),
+            StorageErrorKind::Runtime => Self::runtime(error),
+            StorageErrorKind::DriverUnavailable { .. }
+            | StorageErrorKind::Connection
+            | StorageErrorKind::Query
+            | StorageErrorKind::EmptySource
+            | StorageErrorKind::AlreadyInitialized
+            | StorageErrorKind::LeaseLost
+            | StorageErrorKind::Closed => Self::caused_by(ConfigStoreCondition::Storage, None, error),
         }
     }
-
-    /// Atomically persists a validated next revision.
-    pub async fn save_next(&self, config: DesktopConfig) -> Result<DesktopConfig, ConfigStoreFailure> {
-        let _guard = self.io_gate.lock().await;
-        if self.protected_original.load(Ordering::Acquire) {
-            return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::ProtectedOriginal));
-        }
-        let known_revision = self.known_revision.load(Ordering::Acquire);
-        if config.revision != known_revision {
-            return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::StaleRevision));
-        }
-        let mut config = config.normalize()?;
-        config.revision = config
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
-        let path = self.path.clone();
-        let persisted = config.clone();
-        self.context
-            .storage_io()
-            .spawn_io("gpui-config-save", move || save_file(&path, &persisted))
-            .await
-            .map_err(ConfigStoreFailure::runtime)??;
-        self.known_revision.store(config.revision, Ordering::Release);
-        Ok(config)
-    }
-}
-
-fn load_file(path: &Path) -> Result<DesktopConfig, ConfigStoreFailure> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DesktopConfig::default()),
-        Err(source) => {
-            return Err(ConfigStoreFailure::io("read", path.to_path_buf(), source));
-        }
-    };
-    let config = serde_json::from_slice::<DesktopConfig>(&bytes)
-        .map_err(|source| ConfigStoreFailure::invalid_document(path.to_path_buf(), source))?;
-    config.normalize()
-}
-
-fn save_file(path: &Path, config: &DesktopConfig) -> Result<(), ConfigStoreFailure> {
-    write_json_atomically(path, config)
-}
-
-pub(super) fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigStoreFailure> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::PathHasNoParent))?;
-    fs::create_dir_all(parent)
-        .map_err(|source| ConfigStoreFailure::io("create directory", parent.to_path_buf(), source))?;
-    let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("config.json");
-    let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), sequence));
-    // Keep a synced temporary file on failure. In particular, Windows replacement failures may
-    // require both the original/backup and replacement file for operator recovery.
-    write_and_replace(&temporary, path, value)
-}
-
-fn write_and_replace<T: Serialize>(temporary: &Path, target: &Path, value: &T) -> Result<(), ConfigStoreFailure> {
-    let mut bytes = serde_json::to_vec_pretty(value)
-        .map_err(|source| ConfigStoreFailure::caused_by(ConfigStoreCondition::Validation, None, source))?;
-    bytes.push(b'\n');
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(temporary)
-        .map_err(|source| ConfigStoreFailure::io("create temporary file", temporary.to_path_buf(), source))?;
-    file.write_all(&bytes)
-        .map_err(|source| ConfigStoreFailure::io("write temporary file", temporary.to_path_buf(), source))?;
-    file.sync_all()
-        .map_err(|source| ConfigStoreFailure::io("sync temporary file", temporary.to_path_buf(), source))?;
-    drop(file);
-    atomic_replace(temporary, target).map_err(|source| {
-        ConfigStoreFailure::caused_by(ConfigStoreCondition::Io, Some(target.to_path_buf()), source)
-    })?;
-    sync_parent(target)?;
-    Ok(())
-}
-
-enum AtomicReplaceFailure {
-    Io(io::Error),
-    #[cfg(windows)]
-    Recovery {
-        replacement: io::Error,
-        restore: io::Error,
-    },
-}
-
-impl AtomicReplaceFailure {
-    #[cfg(all(test, windows))]
-    fn raw_os_error(&self) -> Option<i32> {
-        match self {
-            Self::Io(source) => source.raw_os_error(),
-            Self::Recovery { replacement, .. } => replacement.raw_os_error(),
-        }
-    }
-}
-
-impl fmt::Debug for AtomicReplaceFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let restore_kind: Option<io::ErrorKind> = match self {
-            #[cfg(windows)]
-            Self::Recovery { restore, .. } => Some(restore.kind()),
-            Self::Io(_) => None,
-        };
-        #[cfg(windows)]
-        let recovery_failed = matches!(self, Self::Recovery { .. });
-        #[cfg(not(windows))]
-        let recovery_failed = false;
-        formatter
-            .debug_struct("AtomicReplaceFailure")
-            .field("recovery_failed", &recovery_failed)
-            .field("restore_kind", &restore_kind)
-            .finish()
-    }
-}
-
-impl fmt::Display for AtomicReplaceFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Io(_) => "Atomic replacement failed.",
-            #[cfg(windows)]
-            Self::Recovery { .. } => "Atomic replacement and recovery both failed.",
-        })
-    }
-}
-
-impl StdError for AtomicReplaceFailure {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Self::Io(source) => Some(source),
-            #[cfg(windows)]
-            Self::Recovery { replacement, .. } => Some(replacement),
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn atomic_replace(temporary: &Path, target: &Path) -> Result<(), AtomicReplaceFailure> {
-    fs::rename(temporary, target).map_err(AtomicReplaceFailure::Io)
-}
-
-#[cfg(windows)]
-fn atomic_replace(temporary: &Path, target: &Path) -> Result<(), AtomicReplaceFailure> {
-    atomic_replace_with(temporary, target, &SystemWindowsReplace)
-}
-
-#[cfg(windows)]
-trait WindowsReplace {
-    fn replace(&self, target: &Path, replacement: &Path, backup: &Path) -> io::Result<()>;
-}
-
-#[cfg(windows)]
-struct SystemWindowsReplace;
-
-#[cfg(windows)]
-impl WindowsReplace for SystemWindowsReplace {
-    fn replace(&self, target: &Path, replacement: &Path, backup: &Path) -> io::Result<()> {
-        use std::os::windows::ffi::OsStrExt as _;
-
-        #[link(name = "Kernel32")]
-        unsafe extern "system" {
-            fn ReplaceFileW(
-                replaced_file_name: *const u16,
-                replacement_file_name: *const u16,
-                backup_file_name: *const u16,
-                replace_flags: u32,
-                exclude: *mut std::ffi::c_void,
-                reserved: *mut std::ffi::c_void,
-            ) -> i32;
-        }
-
-        let replaced = target.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
-        let replacement = replacement.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
-        let backup = backup.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
-        // SAFETY: all path buffers are NUL-terminated and live for the call; reserved pointer
-        // arguments are null, and ReplaceFileW does not retain any supplied pointer.
-        let replaced_ok = unsafe {
-            ReplaceFileW(
-                replaced.as_ptr(),
-                replacement.as_ptr(),
-                backup.as_ptr(),
-                0x0000_0002,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if replaced_ok == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[cfg(windows)]
-fn atomic_replace_with(temporary: &Path, target: &Path, api: &dyn WindowsReplace) -> Result<(), AtomicReplaceFailure> {
-    if !target.exists() {
-        return fs::rename(temporary, target).map_err(AtomicReplaceFailure::Io);
-    }
-    let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let file_name = target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("config.json");
-    let backup = target.with_file_name(format!(
-        ".{file_name}.{}.{}.replacement-backup",
-        std::process::id(),
-        sequence
-    ));
-    let recovery = target.with_file_name(format!(
-        ".{file_name}.{}.{}.pre-replacement-recovery",
-        std::process::id(),
-        sequence
-    ));
-    fs::hard_link(target, &recovery).map_err(AtomicReplaceFailure::Io)?;
-
-    match api.replace(target, temporary, &backup) {
-        Ok(()) => {
-            if backup.exists() {
-                let _ = fs::remove_file(&backup);
-            }
-            let _ = fs::remove_file(&recovery);
-            Ok(())
-        }
-        Err(replace_error) => {
-            if !target.exists() {
-                let restore_result = if backup.exists() {
-                    fs::rename(&backup, target)
-                } else {
-                    fs::copy(&recovery, target).map(|_| ())
-                };
-                if let Err(restore_error) = restore_result {
-                    return Err(AtomicReplaceFailure::Recovery {
-                        replacement: replace_error,
-                        restore: restore_error,
-                    });
-                }
-            }
-            Err(AtomicReplaceFailure::Io(replace_error))
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn sync_parent(target: &Path) -> Result<(), ConfigStoreFailure> {
-    use std::fs::File;
-
-    let parent = target
-        .parent()
-        .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::PathHasNoParent))?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| ConfigStoreFailure::io("sync directory", parent.to_path_buf(), source))
-}
-
-#[cfg(windows)]
-fn sync_parent(_target: &Path) -> Result<(), ConfigStoreFailure> {
-    // ReplaceFileW completes the same-volume atomic replacement. Windows does not expose
-    // directory handles through std::fs::File, while the temporary file itself is synced above.
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use rocketmq_runtime::{ProcessMemoryLimit, RuntimeConfig, RuntimeOwner};
 
@@ -823,6 +468,35 @@ mod tests {
     }
 
     #[test]
+    fn injected_native_authority_is_the_same_handle_and_never_opens_a_second_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime();
+        let path = directory.path().join("config.json");
+        let context = runtime.root_context().component("native");
+        runtime.block_on(async {
+            let native = Arc::new(
+                rocketmq_dashboard_storage::DashboardStore::open(
+                    rocketmq_dashboard_storage::StorageOptions::File {
+                        config_path: path.clone(),
+                    },
+                    context.clone(),
+                )
+                .await
+                .unwrap(),
+            );
+            let store = DesktopConfigStore::with_native_storage(path, context, Arc::clone(&native));
+            store.load().await.unwrap();
+            assert!(Arc::ptr_eq(&native, &store.native_storage().await.unwrap()));
+            assert!(store.owns_writer());
+            store.close().await.unwrap();
+            assert!(!store.owns_writer());
+            assert!(store.load().await.is_err());
+            assert_eq!(native.status().await.unwrap_err().kind(), StorageErrorKind::Closed);
+        });
+        runtime.shutdown_runtime_blocking().unwrap();
+    }
+
+    #[test]
     fn storage_error_retains_typed_source_and_redacts_path_and_source_text() {
         let path = PathBuf::from("C:/private/token/config.json");
         let failure = ConfigStoreFailure::io(
@@ -857,90 +531,5 @@ mod tests {
 
         let schema = ConfigStoreFailure::unsupported_schema(99, CONFIG_SCHEMA_VERSION);
         assert!(schema.into_operational().is_none());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_existing_target_is_replaced_atomically() {
-        let directory = tempfile::tempdir().expect("temp directory");
-        let target = directory.path().join("config.json");
-        let replacement = directory.path().join("replacement.tmp");
-        fs::write(&target, b"old").expect("old target");
-        fs::write(&replacement, b"new").expect("new replacement");
-
-        atomic_replace(&replacement, &target).expect("atomic replacement");
-
-        assert_eq!(fs::read(&target).expect("target"), b"new");
-        assert!(!replacement.exists());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_move_replacement_failure_restores_original_and_preserves_replacement() {
-        struct MoveReplacementFailure;
-
-        impl WindowsReplace for MoveReplacementFailure {
-            fn replace(&self, target: &Path, _replacement: &Path, backup: &Path) -> io::Result<()> {
-                fs::rename(target, backup)?;
-                Err(io::Error::from_raw_os_error(1177))
-            }
-        }
-
-        let directory = tempfile::tempdir().expect("temp directory");
-        let target = directory.path().join("config.json");
-        let replacement = directory.path().join("replacement.tmp");
-        fs::write(&target, b"old").expect("old target");
-        fs::write(&replacement, b"new").expect("new replacement");
-
-        let error = atomic_replace_with(&replacement, &target, &MoveReplacementFailure)
-            .expect_err("injected replacement failure");
-
-        assert_eq!(error.raw_os_error(), Some(1177));
-        assert_eq!(fs::read(&target).expect("restored target"), b"old");
-        assert_eq!(fs::read(&replacement).expect("preserved replacement"), b"new");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_remove_replaced_failure_retains_both_original_names() {
-        struct RemoveReplacedFailure;
-
-        impl WindowsReplace for RemoveReplacedFailure {
-            fn replace(&self, _target: &Path, _replacement: &Path, _backup: &Path) -> io::Result<()> {
-                Err(io::Error::from_raw_os_error(1175))
-            }
-        }
-
-        assert_windows_replacement_failure_preserves_files(&RemoveReplacedFailure, 1175);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_move_replacement_failure_restores_from_pre_replacement_recovery() {
-        struct MoveReplacementFailure;
-
-        impl WindowsReplace for MoveReplacementFailure {
-            fn replace(&self, target: &Path, _replacement: &Path, _backup: &Path) -> io::Result<()> {
-                fs::remove_file(target)?;
-                Err(io::Error::from_raw_os_error(1176))
-            }
-        }
-
-        assert_windows_replacement_failure_preserves_files(&MoveReplacementFailure, 1176);
-    }
-
-    #[cfg(windows)]
-    fn assert_windows_replacement_failure_preserves_files(api: &dyn WindowsReplace, code: i32) {
-        let directory = tempfile::tempdir().expect("temp directory");
-        let target = directory.path().join("config.json");
-        let replacement = directory.path().join("replacement.tmp");
-        fs::write(&target, b"old").expect("old target");
-        fs::write(&replacement, b"new").expect("new replacement");
-
-        let error = atomic_replace_with(&replacement, &target, api).expect_err("injected replacement failure");
-
-        assert_eq!(error.raw_os_error(), Some(code));
-        assert_eq!(fs::read(&target).expect("retained/restored target"), b"old");
-        assert_eq!(fs::read(&replacement).expect("preserved replacement"), b"new");
     }
 }

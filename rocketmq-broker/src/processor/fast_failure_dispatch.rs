@@ -168,7 +168,7 @@ impl FastFailureAdmission {
             task: Arc::clone(&self.task),
             response_rx: Some(response_rx),
             opaque: self.opaque,
-            _permit: permit,
+            permit: Some(permit),
             settled: false,
         };
         // Cancellation may race the permit/CAS transition. The affine run
@@ -229,11 +229,18 @@ pub(super) struct FastFailureRunGuard {
     task: Arc<FastFailureTask>,
     response_rx: Option<tokio::sync::oneshot::Receiver<Option<RemotingCommand>>>,
     opaque: i32,
-    _permit: OwnedSemaphorePermit,
+    permit: Option<OwnedSemaphorePermit>,
     settled: bool,
 }
 
 impl FastFailureRunGuard {
+    /// Takes the queue permit so the caller can release it before the run settles.
+    ///
+    /// The run still counts as running until it completes or finishes.
+    pub(super) fn take_permit(&mut self) -> Option<OwnedSemaphorePermit> {
+        self.permit.take()
+    }
+
     pub(super) async fn complete(
         mut self,
         response: Option<RemotingCommand>,

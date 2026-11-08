@@ -24,18 +24,18 @@ pub use local_file_message_store::LocalStoreComposition;
 mod tests {
     use std::path::PathBuf;
 
-    use crate::config::backend::LocalBackendConfig;
-    use crate::config::backend::LocalCleanupConfig;
-    use crate::config::backend::LocalQueryConfig;
-    use crate::config::backend::LocalRecoveryConfig;
-    use crate::config::backend::LocalReputConfig;
+    use crate::config::local_store::LocalCleanupConfig;
+    use crate::config::local_store::LocalQueryConfig;
+    use crate::config::local_store::LocalRecoveryConfig;
+    use crate::config::local_store::LocalReputConfig;
+    use crate::config::local_store::LocalStoreConfig;
 
     use super::*;
     use crate::message_store::lifecycle::LocalStoreState;
 
     #[test]
     fn composition_initializes_each_local_boundary_from_normalized_config() {
-        let config = LocalBackendConfig {
+        let local_store_config = LocalStoreConfig {
             store_path_root_dir: PathBuf::from("store"),
             commit_log_paths: vec![PathBuf::from("store/commitlog")],
             store_io_hint_enabled: true,
@@ -57,7 +57,7 @@ mod tests {
             },
         };
 
-        let composition = LocalStoreComposition::new(config);
+        let composition = LocalStoreComposition::new(local_store_config);
 
         assert_eq!(composition.lifecycle().state(), LocalStoreState::Created);
         assert!(composition.query().index_safety(10, 10).safe);

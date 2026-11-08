@@ -17,6 +17,7 @@ build standalone Cargo or Node projects; follow the matching local guide when wo
 | Path | Role / local guide |
 | --- | --- |
 | `rocketmq-dashboard/rocketmq-dashboard-common/` | Root workspace member; this guide |
+| `rocketmq-dashboard/rocketmq-dashboard-storage/` | [Native Dashboard storage](rocketmq-dashboard/rocketmq-dashboard-storage/AGENTS.md) |
 | `fuzz/` | [Fuzz targets](fuzz/AGENTS.md) |
 | `rocketmq-example/` | [Standalone examples](rocketmq-example/AGENTS.md) |
 | `rocketmq-macros/tests/fixtures/renamed-consumer/` | [Renamed dependency fixture](rocketmq-macros/tests/fixtures/renamed-consumer/AGENTS.md) |

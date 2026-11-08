@@ -25,6 +25,9 @@ pub const JAVA_COMPAT_TIMER_FORMAT_VERSION: u16 = 1;
 /// Current record format written by the extended timeline engine.
 pub const EXTENDED_TIMELINE_FORMAT_VERSION: u16 = 1;
 
+/// Current route format written by the native timer engine.
+pub const NATIVE_TIMER_FORMAT_VERSION: u16 = 1;
+
 /// Broker-to-store request for generation-aware Extended Timer cancellation.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TimerRecallRequest {
@@ -34,7 +37,19 @@ pub struct TimerRecallRequest {
     pub unique_key: String,
 }
 
-/// Stable outcome of an Extended Timer cancellation attempt.
+/// Broker-to-store registration of a native timer recall, made before its tombstone is
+/// written so a delivery batch taken in between still sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TimerRecallRegistration {
+    /// The key the tombstone carries in `TIMER_DEL_UNIQKEY`.
+    pub key: String,
+    /// The generation the tombstone carries.
+    pub generation: u64,
+    /// The deadline the Recall handle names.
+    pub deliver_ms: i64,
+}
+
+/// Stable outcome of a typed Timer cancellation attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimerRecallStatus {
     /// Pending/ready generation was atomically cancelled.
@@ -60,8 +75,15 @@ pub enum TimerStoreMode {
     /// RocketMQ Java-compatible timer wheel and timer log.
     #[default]
     JavaCompat,
-    /// Native long-horizon timeline. This mode must fail closed until the capability is installed.
+    /// RocksDB-backed long-horizon timeline, which needs the `rocketmq-store/extended_timeline`
+    /// feature.
+    ///
+    /// Deprecated in favor of [`TimerStoreMode::Native`] and planned for removal. A stopped
+    /// Broker's timers move to the native engine with `rocketmq-cli-rust migrate-extended-timers`.
     ExtendedTimeline,
+    /// Tiered time-bucket log for delays of up to `timerNative.maxDelayDays`. Timers the
+    /// Java-compatible engine admitted before the switch are still delivered by it.
+    Native,
 }
 
 impl TimerStoreMode {
@@ -70,7 +92,94 @@ impl TimerStoreMode {
         match self {
             Self::JavaCompat => "java_compat",
             Self::ExtendedTimeline => "extended_timeline",
+            Self::Native => "native",
         }
+    }
+}
+
+/// On-disk format of the Java-compatible engine's TimerLog, TimerWheel and checkpoint.
+///
+/// The default is [`Java`](Self::Java), so a Rust Broker can replace a Java Broker in place
+/// without losing its pending timers. A store that still holds `rust_v2` timers delivers them
+/// from those files while new timers go to the configured format.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimerFileFormat {
+    /// Segmented, checksummed Rust files with A/B wheel pages.
+    RustV2,
+    /// The Apache RocketMQ 5.x `timerlog`, `timerwheel` and `timercheck` files, so the store can
+    /// take over a Java Broker's pending timers and hand them back.
+    #[default]
+    Java,
+}
+
+impl TimerFileFormat {
+    /// Returns the stable configuration value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RustV2 => "rust_v2",
+            Self::Java => "java",
+        }
+    }
+}
+
+/// How new timer messages are admitted under one [`TimerStoreMode`]: the engine that owns them
+/// and the limits that engine applies. Admission, recall handles and recall read this instead of
+/// deciding per mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimerAdmissionRoute {
+    /// Engine that owns the timer messages admitted now.
+    pub engine: TimerEngineId,
+    /// Format version stamped on each admitted message.
+    pub format_version: u16,
+    /// Longest delay the engine admits, in seconds.
+    pub max_delay_sec: u64,
+    /// Whether the engine admits new timer messages at all.
+    pub admission_open: bool,
+    /// Whether admission rejects a message whose wheel slot is congested.
+    pub rejects_congested_slots: bool,
+}
+
+impl TimerAdmissionRoute {
+    /// Returns the route of `mode`. The Java-compatible engine admits up to
+    /// `java_compat_max_delay_sec` and checks wheel slot congestion; the Extended Timeline admits
+    /// up to `extended_horizon_days` while `extended_admission_enable` is set; the native engine
+    /// admits up to `native_max_delay_days`.
+    pub const fn for_mode(
+        mode: TimerStoreMode,
+        java_compat_max_delay_sec: u64,
+        extended_horizon_days: u16,
+        extended_admission_enable: bool,
+        native_max_delay_days: u16,
+    ) -> Self {
+        match mode {
+            TimerStoreMode::JavaCompat => Self {
+                engine: TimerEngineId::JavaCompat,
+                format_version: JAVA_COMPAT_TIMER_FORMAT_VERSION,
+                max_delay_sec: java_compat_max_delay_sec,
+                admission_open: true,
+                rejects_congested_slots: true,
+            },
+            TimerStoreMode::ExtendedTimeline => Self {
+                engine: TimerEngineId::ExtendedTimeline,
+                format_version: EXTENDED_TIMELINE_FORMAT_VERSION,
+                max_delay_sec: (extended_horizon_days as u64).saturating_mul(86_400),
+                admission_open: extended_admission_enable,
+                rejects_congested_slots: false,
+            },
+            TimerStoreMode::Native => Self {
+                engine: TimerEngineId::Native,
+                format_version: NATIVE_TIMER_FORMAT_VERSION,
+                max_delay_sec: (native_max_delay_days as u64).saturating_mul(86_400),
+                admission_open: true,
+                rejects_congested_slots: false,
+            },
+        }
+    }
+
+    /// Longest admitted delay in milliseconds, or `None` when it does not fit in `u64`.
+    pub const fn max_delay_ms(&self) -> Option<u64> {
+        self.max_delay_sec.checked_mul(1_000)
     }
 }
 
@@ -83,6 +192,9 @@ pub enum TimerEngineId {
     /// Extended timeline, encoded as `R` for the existing RocksDB protocol value.
     #[serde(rename = "R")]
     ExtendedTimeline,
+    /// Native tiered time-bucket log, encoded as `N`.
+    #[serde(rename = "N")]
+    Native,
 }
 
 impl TimerEngineId {
@@ -91,6 +203,7 @@ impl TimerEngineId {
         match self {
             Self::JavaCompat => "F",
             Self::ExtendedTimeline => "R",
+            Self::Native => "N",
         }
     }
 
@@ -103,6 +216,7 @@ impl TimerEngineId {
         match value {
             "F" => Ok(Self::JavaCompat),
             "R" => Ok(Self::ExtendedTimeline),
+            "N" => Ok(Self::Native),
             value => Err(StoreContractViolation::TimerUnknownEngine(value.to_owned())),
         }
     }

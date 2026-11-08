@@ -19,14 +19,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_store_api::PersistedTimerRoute;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerEngineId;
@@ -55,7 +53,10 @@ use thiserror::Error;
 use crate::config::timer_store_config::TimerStoreConfig;
 use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
+use crate::queue::ArcConsumeQueue;
 use crate::timer::delivery::delivery_shard;
+use crate::timer::source::read_timer_source_frames;
+use crate::timer::source::TimerSourceRead;
 use crate::timer::timer_message_store::TIMER_TOPIC;
 
 use super::shadow::ShadowExpectedRecord;
@@ -89,12 +90,41 @@ pub(crate) struct ShadowTimelineMaterializer {
     materialized_records: AtomicU64,
     materialized_bytes: AtomicU64,
     materialization_failures: AtomicU64,
+    unmaterialized_sources: Mutex<UnmaterializedSourceBytes>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TimelineMaterializationMode {
     Shadow,
     Formal { admission_epoch: TimerEngineEpoch },
+}
+
+/// Running total of the CommitLog sizes of the Timer CQ entries in `[start_offset, end_offset)`.
+#[derive(Debug, Default)]
+struct UnmaterializedSourceBytes {
+    start_offset: i64,
+    end_offset: i64,
+    bytes: u64,
+}
+
+impl UnmaterializedSourceBytes {
+    fn starting_at(offset: i64) -> Self {
+        Self {
+            start_offset: offset,
+            end_offset: offset,
+            bytes: 0,
+        }
+    }
+}
+
+/// Timer CQ entries that are not materialized yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MaterializationBacklog {
+    /// Entries between the materialized checkpoint and the Timer CQ max offset.
+    pub(crate) messages: u64,
+    /// CommitLog bytes of those entries; an entry whose CQ unit cannot be read yet is charged
+    /// at the payload record ceiling.
+    pub(crate) bytes: u64,
 }
 
 impl ShadowTimelineMaterializer {
@@ -179,6 +209,7 @@ impl ShadowTimelineMaterializer {
             materialized_records: AtomicU64::new(0),
             materialized_bytes: AtomicU64::new(0),
             materialization_failures: AtomicU64::new(0),
+            unmaterialized_sources: Mutex::new(UnmaterializedSourceBytes::default()),
         };
         materializer.restore_cleanup_fence()?;
         Ok(materializer)
@@ -217,20 +248,13 @@ impl ShadowTimelineMaterializer {
 
     /// Returns bounded operational counters without scanning Timeline keys.
     pub(crate) fn metrics(&self) -> ExtendedTimelineShadowMetrics {
-        let checkpoint = self.source_checkpoint().ok();
-        let materialized_offset = checkpoint
-            .map(|checkpoint| checkpoint.materialized_source_offset.get())
-            .unwrap_or(-1);
-        let source_max_offset = self
-            .consume_queues
-            .find_or_create_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
-            .map(|queue| queue.read().get_max_offset_in_queue())
-            .unwrap_or_default();
+        let backlog = self.source_backlog();
         let payload = self.payload_store.metrics();
         let rocks = self.timeline.store().metrics();
         let ticker = self.timeline.store().ticker_metrics();
         ExtendedTimelineShadowMetrics {
-            materialization_lag: source_max_offset.saturating_sub(materialized_offset.saturating_add(1)) as u64,
+            materialization_lag: backlog.messages,
+            unmaterialized_source_bytes: backlog.bytes,
             materialized_records: self.materialized_records.load(Ordering::Relaxed),
             materialized_bytes: self.materialized_bytes.load(Ordering::Relaxed),
             materialization_failures: self.materialization_failures.load(Ordering::Relaxed),
@@ -243,6 +267,79 @@ impl ShadowTimelineMaterializer {
             timeline_errors: rocks.error_count,
             reconciliation: self.reconciler.snapshot(),
         }
+    }
+
+    /// Returns the Timer CQ entries that are not materialized yet, without the Timeline
+    /// statistics that [`Self::metrics`] also reads. Admission calls it for every Extended Timer.
+    pub(crate) fn source_backlog(&self) -> MaterializationBacklog {
+        let materialized_offset = self
+            .source_checkpoint()
+            .ok()
+            .map(|checkpoint| checkpoint.materialized_source_offset.get())
+            .unwrap_or(-1);
+        let start_offset = materialized_offset.saturating_add(1);
+        let Some(queue) = self
+            .consume_queues
+            .find_or_create_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
+        else {
+            return MaterializationBacklog::default();
+        };
+        let end_offset = queue.read().get_max_offset_in_queue();
+        MaterializationBacklog {
+            messages: end_offset.saturating_sub(start_offset) as u64,
+            bytes: self.unmaterialized_source_bytes(&queue, start_offset, end_offset),
+        }
+    }
+
+    /// Returns the CommitLog bytes of the Timer CQ entries in `[start_offset, end_offset)`.
+    ///
+    /// The total is kept incrementally: an entry is read once when it is first counted and once
+    /// when it is materialized, so admission does not walk the whole backlog for every message.
+    /// An entry whose CQ unit cannot be read yet is charged at the payload record ceiling.
+    fn unmaterialized_source_bytes(&self, queue: &ArcConsumeQueue, start_offset: i64, end_offset: i64) -> u64 {
+        let mut tracked = self.unmaterialized_sources.lock();
+        if start_offset < tracked.start_offset || start_offset > tracked.end_offset || end_offset < tracked.end_offset {
+            *tracked = UnmaterializedSourceBytes::starting_at(start_offset);
+        }
+        let ceiling = self.config.payload_record_bytes as u64;
+        let unit_bytes = |size: i32| u64::try_from(size).unwrap_or(ceiling);
+        let queue = queue.read();
+        if tracked.start_offset < start_offset {
+            let consumed = start_offset.saturating_sub(tracked.start_offset);
+            let mut released = 0u64;
+            let mut read = 0i64;
+            if let Some(units) =
+                queue.iterate_from_with_count(tracked.start_offset, i32::try_from(consumed).unwrap_or(i32::MAX))
+            {
+                for unit in units {
+                    released = released.saturating_add(unit_bytes(unit.size));
+                    read = read.saturating_add(1);
+                }
+            }
+            if read == consumed {
+                tracked.bytes = tracked.bytes.saturating_sub(released);
+                tracked.start_offset = start_offset;
+            } else {
+                // Materialized entries were cleaned before they were released: count again.
+                *tracked = UnmaterializedSourceBytes::starting_at(start_offset);
+            }
+        }
+        if tracked.end_offset < end_offset {
+            let arrived = end_offset.saturating_sub(tracked.end_offset);
+            if let Some(units) =
+                queue.iterate_from_with_count(tracked.end_offset, i32::try_from(arrived).unwrap_or(i32::MAX))
+            {
+                for unit in units {
+                    if unit.queue_offset != tracked.end_offset {
+                        break;
+                    }
+                    tracked.bytes = tracked.bytes.saturating_add(unit_bytes(unit.size));
+                    tracked.end_offset = tracked.end_offset.saturating_add(1);
+                }
+            }
+        }
+        let unread = u64::try_from(end_offset.saturating_sub(tracked.end_offset)).unwrap_or(0);
+        tracked.bytes.saturating_add(unread.saturating_mul(ceiling))
     }
 
     /// Recomputes the fail-closed cleanup fence after ConsumeQueue recovery.
@@ -292,6 +389,13 @@ impl ShadowTimelineMaterializer {
             .checkpoint(TimelineCheckpointKind::Due, due_checkpoint_lane)?
             .map(|checkpoint| checkpoint.due_cursor.due_time_ms())
             .unwrap_or_default();
+        // The due scanner resumes after the last key it scanned and never reads past its own
+        // clock, which may be ahead of its persisted cursor. A source due within the safety
+        // overlap of the later of the two may already be behind it, so it goes through the
+        // late-ready outbox.
+        let late_through_ms = due_cursor
+            .max(rocketmq_runtime::common::time_utils::current_millis() as i64)
+            .saturating_add(self.config.safety_overlap_ms);
         let start_offset = checkpoint.materialized_source_offset.get().saturating_add(1);
         let Some(queue) = self
             .consume_queues
@@ -319,18 +423,39 @@ impl ShadowTimelineMaterializer {
             return Ok(0);
         }
 
-        let mut prepared = Vec::new();
+        // The batch is chosen from the consume queue sizes, then its frames are read together.
+        let mut selected = Vec::new();
         let mut retained_bytes = 0usize;
         for source in sources {
+            if source.size <= 0 {
+                return Err(TimelineMaterializerError::InvalidSourceSize);
+            }
             let size = usize::try_from(source.size).map_err(|_| TimelineMaterializerError::InvalidSourceSize)?;
-            if prepared.is_empty() && size > max_bytes {
+            if selected.is_empty() && size > max_bytes {
                 return Ok(0);
             }
-            if !prepared.is_empty() && retained_bytes.saturating_add(size) > max_bytes {
+            if !selected.is_empty() && retained_bytes.saturating_add(size) > max_bytes {
                 break;
             }
-            let raw_frame = self.read_frame(source)?;
-            let message = decode_frame(&raw_frame)?;
+            retained_bytes = retained_bytes.saturating_add(size);
+            selected.push(source);
+        }
+        let locators: Vec<_> = selected
+            .iter()
+            .map(|source| (source.physical_offset, source.size))
+            .collect();
+        let frames = read_timer_source_frames(&self.commit_log, &locators, retained_bytes);
+
+        let mut prepared = Vec::with_capacity(selected.len());
+        for (source, frame) in selected.into_iter().zip(frames) {
+            let (raw_frame, message) = match frame {
+                TimerSourceRead::Frame { bytes, message } => (bytes.to_vec(), message),
+                TimerSourceRead::Undecodable => return Err(TimelineMaterializerError::InvalidCommitLogFrame),
+                TimerSourceRead::InvalidLocator => return Err(TimelineMaterializerError::InvalidSourceSize),
+                TimerSourceRead::Missing | TimerSourceRead::ShortRead => {
+                    return Err(TimelineMaterializerError::SourcePayloadMissing(source.physical_offset));
+                }
+            };
             let mut decoded = decode_source(
                 source,
                 raw_frame,
@@ -339,8 +464,7 @@ impl ShadowTimelineMaterializer {
                 self.mode,
                 self.format_fingerprint,
             )?;
-            decoded.late = !decoded.cancelled
-                && decoded.key.due_time_ms <= due_cursor.saturating_add(self.config.safety_overlap_ms);
+            decoded.late = !decoded.cancelled && decoded.key.due_time_ms <= late_through_ms;
             let generation = decoded.key.generation;
             let existing = match self.mode {
                 TimelineMaterializationMode::Shadow => {
@@ -359,10 +483,8 @@ impl ShadowTimelineMaterializer {
                     matches!(self.mode, TimelineMaterializationMode::Shadow),
                 )?;
                 prepared.push(PreparedSource::Existing(decoded));
-                retained_bytes = retained_bytes.saturating_add(size);
                 continue;
             }
-            retained_bytes = retained_bytes.saturating_add(size);
             prepared.push(PreparedSource::New(decoded));
         }
         if prepared.is_empty() {
@@ -579,17 +701,6 @@ impl ShadowTimelineMaterializer {
         Ok(checkpoint)
     }
 
-    fn read_frame(&self, source: SourceIdentity) -> Result<Vec<u8>, TimelineMaterializerError> {
-        if source.size <= 0 {
-            return Err(TimelineMaterializerError::InvalidSourceSize);
-        }
-        self.commit_log
-            .get_message(source.physical_offset, source.size)
-            .and_then(|result| result.get_bytes())
-            .map(|bytes| bytes.to_vec())
-            .ok_or(TimelineMaterializerError::SourcePayloadMissing(source.physical_offset))
-    }
-
     fn restore_cleanup_fence(&self) -> Result<(), TimelineMaterializerError> {
         let next = self
             .source_checkpoint()?
@@ -781,6 +892,7 @@ fn decode_route(
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ExtendedTimelineShadowMetrics {
     pub(crate) materialization_lag: u64,
+    pub(crate) unmaterialized_source_bytes: u64,
     pub(crate) materialized_records: u64,
     pub(crate) materialized_bytes: u64,
     pub(crate) materialization_failures: u64,
@@ -792,11 +904,6 @@ pub(crate) struct ExtendedTimelineShadowMetrics {
     pub(crate) timeline_bytes_read: u64,
     pub(crate) timeline_errors: u64,
     pub(crate) reconciliation: ShadowReconciliationSnapshot,
-}
-
-fn decode_frame(frame: &[u8]) -> Result<MessageExt, TimelineMaterializerError> {
-    MessageDecoder::decode(&mut Bytes::copy_from_slice(frame), true, false, false, false, false)
-        .ok_or(TimelineMaterializerError::InvalidCommitLogFrame)
 }
 
 fn property(message: &MessageExt, name: &'static str) -> Option<String> {

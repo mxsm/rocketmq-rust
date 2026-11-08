@@ -8,7 +8,8 @@ import {
   fixtureConsumers,
   fixtureProducers,
   fixtureSnapshot,
-  fixtureTopics
+  fixtureTopics,
+  withReplication
 } from './topology-fixtures';
 import {
   aggregateProducers,
@@ -245,6 +246,33 @@ describe('carryForwardFailedLayers', () => {
 
     expect(carryForwardFailedLayers(next, null)).toBe(next);
   });
+
+  it('keeps the last replication readings and Controllers on the fresh broker list when only replication fails', () => {
+    const before = withReplication(previous);
+    const fresh = fixtureSnapshot({}, [], 20_000);
+    // The aggregated endpoint lists the replicas of a group even when it could not read them.
+    const next: TopologySnapshot = {
+      ...fresh,
+      sources: [...fresh.sources, { source: 'replication', status: 'failed', durationMs: 3_000, message: 'The query failed.' }],
+      clusters: fresh.clusters.map((cluster) => ({
+        ...cluster,
+        brokers: cluster.brokers.map((group) =>
+          group.brokerName === 'broker-d' ? { ...group, replicas: [{ brokerId: 1, address: '10.0.5.123:10911' }] } : group
+        )
+      }))
+    };
+
+    const merged = carryForwardFailedLayers(next, before);
+    const brokerD = merged.clusters.flatMap((cluster) => cluster.brokers).find((group) => group.brokerName === 'broker-d');
+
+    expect(merged.controllers).toBe(before.controllers);
+    expect(brokerD).toMatchObject({
+      election: 'controller',
+      controllerState: { masterEpoch: 3, syncStateSetEpoch: 5 },
+      replicas: [{ brokerId: 1, address: '10.0.5.123:10911', lagBytes: 0, transferBytesPerSecond: 2_048 }]
+    });
+    expect(merged.clusters).not.toBe(before.clusters);
+  });
 });
 
 describe('derived states', () => {
@@ -413,6 +441,16 @@ describe('selectTopologyView', () => {
     expect(view.producersInScope).toBe(120);
     expect(view.producers.length).toBeLessThanOrEqual(MAX_GROUPS_PER_SIDE);
   });
+
+  it('keeps only the Controllers that elect the masters of the groups in scope', () => {
+    const replicated = withReplication(snapshot);
+    const controllersOf = (scope: string) =>
+      selectTopologyView(replicated, { scope, producerLimit: 6, consumerLimit: 6 }).controllers.map((controller) => controller.address);
+
+    expect(controllersOf(ALL_CLUSTERS)).toHaveLength(3);
+    expect(controllersOf('cluster-east')).toEqual(['10.0.9.1:9878', '10.0.9.2:9878', '10.0.9.3:9878']);
+    expect(controllersOf('DefaultCluster')).toEqual([]);
+  });
 });
 
 describe('buildSignals', () => {
@@ -440,5 +478,13 @@ describe('describeTopology', () => {
       '2 clusters; 4 broker groups; NameServer unavailable: 10.0.4.12:9876; no slave registered: broker-c; '
         + 'consumer backlog above 1,000: order-consumer, payment-consumer.'
     );
+  });
+
+  it('names the Controller leader, or says that none is known', () => {
+    const summary = (leader: number) =>
+      describeTopology(selectTopologyView(withReplication(fixtureSnapshot(), leader), { scope: ALL_CLUSTERS, producerLimit: 6, consumerLimit: 6 }));
+
+    expect(summary(0)).toContain('; 3 Controllers, leader 10.0.9.1:9878; ');
+    expect(summary(-1)).toContain('; 3 Controllers, no leader known; ');
   });
 });

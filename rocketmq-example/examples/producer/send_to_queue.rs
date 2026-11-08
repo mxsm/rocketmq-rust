@@ -34,7 +34,7 @@ pub const TOPIC: &str = "SendToQueueTestTopic";
 pub const TAG: &str = "QueueTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

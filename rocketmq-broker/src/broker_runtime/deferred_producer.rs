@@ -29,7 +29,6 @@ use rocketmq_runtime::TaskKind;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
-use rocketmq_transport::api::DeferredWakeReason;
 use tracing::warn;
 
 use crate::deferred_generation_handoff::DeferredGenerationHandoff;
@@ -149,9 +148,9 @@ where
         let producer = Arc::new_cyclic(|weak_producer: &Weak<Self>| {
             let weak_lite = weak_producer.clone();
             let lite_observer: Arc<DeferredEventObserver> = Arc::new(move |client_id| {
-                weak_lite
-                    .upgrade()
-                    .is_some_and(|producer| producer.notify_pop_lite_event(client_id))
+                if let Some(producer) = weak_lite.upgrade() {
+                    producer.notify_pop_lite_event(client_id);
+                }
             });
             let weak_pop = weak_producer.clone();
             let pop_lag_refresh_callback: Arc<PopLagRefreshCallback> = Arc::new(move |topic, consumer_group| {
@@ -416,22 +415,21 @@ where
         None
     }
 
-    fn notify_pop_lite_event(&self, client_id: &CheetahString) -> bool {
+    fn notify_pop_lite_event(&self, client_id: &CheetahString) {
         let Ok(route) = self.handoff.acquire_pop_lite_candidate(client_id.clone()) else {
-            return true;
+            return;
         };
         match self.pop_lite.observe_pending_replay(client_id) {
-            PopLiteReplayObservation::NoEvent | PopLiteReplayObservation::AlreadyObserved => true,
+            PopLiteReplayObservation::NoEvent | PopLiteReplayObservation::AlreadyObserved => {}
             PopLiteReplayObservation::NewlyObserved => {
                 self.spawn_pop_lite_client(client_id.clone(), route);
-                true
             }
         }
     }
 
     fn produce_pending_pop_lite_events(&self) {
         for client_id in self.pop_lite.take_pending_replays(NonZeroUsize::MIN) {
-            let _ = self.notify_pop_lite_event(&client_id);
+            self.notify_pop_lite_event(&client_id);
         }
     }
 
@@ -525,62 +523,6 @@ where
         }
     }
 
-    fn spawn_pull_candidates(
-        &self,
-        candidates: Vec<crate::long_polling::pull_deferred::PullCandidateReservation>,
-        reason: DeferredWakeReason,
-    ) {
-        for candidate in candidates {
-            let key = candidate.key();
-            let Ok(route) = self.handoff.acquire_pull_candidate(key.topic().clone(), key.queue_id()) else {
-                continue;
-            };
-            self.spawn_pull_candidate(candidate, reason, route);
-        }
-    }
-
-    fn spawn_pull_candidate(
-        &self,
-        candidate: crate::long_polling::pull_deferred::PullCandidateReservation,
-        reason: DeferredWakeReason,
-        route: RoutePermit,
-    ) {
-        let service = Arc::clone(&self.pull);
-        let processor = self.pull_processor.clone();
-        let spawn = self
-            .task_group
-            .spawn("broker.deferred.pull-arrival", TaskKind::Worker, async move {
-                let _route = route;
-                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
-                    submit_pull(service, processor, claimed);
-                }
-            });
-        if let Err(error) = spawn {
-            warn!(%error, "failed to submit deferred Pull arrival");
-        }
-    }
-
-    fn spawn_pop_candidate(
-        &self,
-        candidate: crate::long_polling::pop_deferred::index::PopCandidateReservation,
-        reason: DeferredWakeReason,
-        route: RoutePermit,
-    ) {
-        let service = Arc::clone(&self.pop);
-        let processor = self.pop_processor.clone();
-        let spawn = self
-            .task_group
-            .spawn("broker.deferred.pop-arrival", TaskKind::Worker, async move {
-                let _route = route;
-                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
-                    submit_pop(service, processor, claimed);
-                }
-            });
-        if let Err(error) = spawn {
-            warn!(%error, "failed to submit deferred POP arrival");
-        }
-    }
-
     fn spawn_observed_pop_candidate(
         &self,
         candidate: crate::long_polling::pop_deferred::index::PopCandidateReservation,
@@ -613,26 +555,6 @@ where
             });
         if let Err(error) = spawn {
             warn!(%error, "failed to submit deferred POP lag refresh");
-        }
-    }
-
-    fn spawn_notification_candidate(
-        &self,
-        candidate: crate::long_polling::notification_deferred::index::NotificationCandidateReservation,
-        route: RoutePermit,
-    ) {
-        let service = Arc::clone(&self.notification);
-        let processor = self.notification_processor.clone();
-        let spawn = self
-            .task_group
-            .spawn("broker.deferred.notification-arrival", TaskKind::Worker, async move {
-                let _route = route;
-                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_arrival_candidate(candidate).await {
-                    submit_notification(service, processor, claimed);
-                }
-            });
-        if let Err(error) = spawn {
-            warn!(%error, "failed to submit deferred Notification arrival");
         }
     }
 

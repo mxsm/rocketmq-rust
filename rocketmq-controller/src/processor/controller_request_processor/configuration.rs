@@ -23,16 +23,25 @@ use super::ControllerRequestProcessor;
 
 impl ControllerRequestProcessor {
     pub(super) fn init_config_blacklist(controller_manager: &ControllerManager) -> HashSet<String> {
+        Self::build_config_blacklist(&controller_manager.controller_config().config_black_list)
+    }
+
+    pub(super) fn build_config_blacklist(config_black_list: &str) -> HashSet<String> {
         let mut blacklist = HashSet::from([
             "configBlackList".to_string(),
             "configStorePath".to_string(),
             "rocketmqHome".to_string(),
         ]);
 
-        for item in controller_manager.controller_config().config_black_list.split(';') {
+        for item in config_black_list.split(';') {
             let trimmed = item.trim();
             if !trimmed.is_empty() {
                 blacklist.insert(trimmed.to_string());
+                if trimmed == "storageEngineType" {
+                    blacklist.insert("storageBackend".to_string());
+                } else if trimmed == "storageBackend" {
+                    blacklist.insert("storageEngineType".to_string());
+                }
             }
         }
 
@@ -111,5 +120,15 @@ mod tests {
             operation.value(),
             rocketmq_error::ViewValueRef::Text("UPDATE_CONTROLLER_CONFIG")
         );
+    }
+    #[test]
+    fn config_blacklist_covers_both_storage_engine_selector_spellings() {
+        let blacklist_canonical = ControllerRequestProcessor::build_config_blacklist("storageEngineType");
+        assert!(blacklist_canonical.contains("storageEngineType"));
+        assert!(blacklist_canonical.contains("storageBackend"));
+
+        let blacklist_legacy = ControllerRequestProcessor::build_config_blacklist("storageBackend");
+        assert!(blacklist_legacy.contains("storageEngineType"));
+        assert!(blacklist_legacy.contains("storageBackend"));
     }
 }

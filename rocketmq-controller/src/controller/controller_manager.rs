@@ -180,7 +180,9 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
                     broker_name: broker_name.clone(),
                 };
                 let should_elect = match controller_manager.controller().get_replica_info(&replica_request).await {
-                    Ok(Some(response)) if response.code() == ResponseCode::Success as i32 => {
+                    Ok(Some(mut response)) if response.code() == ResponseCode::Success as i32 => {
+                        // This response never crossed the wire, so its header is still the typed one.
+                        response.make_custom_header_to_net();
                         response
                             .decode_command_custom_header::<GetReplicaInfoResponseHeader>()
                             .ok()

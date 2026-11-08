@@ -66,10 +66,6 @@ impl IndexHeader {
         self.store_record(record);
     }
 
-    pub fn update_byte_buffer(&self) {
-        let _ = self.try_update_byte_buffer();
-    }
-
     pub(crate) fn try_update_byte_buffer(&self) -> bool {
         self.mapped_file.put_slice(&self.record().encode(), 0)
     }
@@ -128,26 +124,9 @@ impl IndexHeader {
         self.begin_timestamp.load(Ordering::Acquire)
     }
 
-    pub fn set_begin_timestamp(&self, begin_timestamp: i64) {
-        let _ = self.try_apply_updates(&[IndexHeaderUpdate::SetBeginTimestamp(begin_timestamp)]);
-    }
-
     #[inline]
     pub fn get_end_timestamp(&self) -> i64 {
         self.end_timestamp.load(Ordering::Acquire)
-    }
-
-    pub fn set_end_timestamp(&self, end_timestamp: i64) {
-        let _ = self.try_apply_updates(&[IndexHeaderUpdate::SetEndTimestamp(end_timestamp)]);
-    }
-
-    #[inline]
-    pub fn get_begin_phy_offset(&self) -> i64 {
-        self.begin_phy_offset.load(Ordering::Acquire)
-    }
-
-    pub fn set_begin_phy_offset(&self, begin_phy_offset: i64) {
-        let _ = self.try_apply_updates(&[IndexHeaderUpdate::SetBeginPhyOffset(begin_phy_offset)]);
     }
 
     #[inline]
@@ -155,25 +134,8 @@ impl IndexHeader {
         self.end_phy_offset.load(Ordering::Acquire)
     }
 
-    pub fn set_end_phy_offset(&self, end_phy_offset: i64) {
-        let _ = self.try_apply_updates(&[IndexHeaderUpdate::SetEndPhyOffset(end_phy_offset)]);
-    }
-
-    #[inline]
-    pub fn get_hash_slot_count(&self) -> i32 {
-        self.hash_slot_count.load(Ordering::SeqCst)
-    }
-
-    pub fn inc_hash_slot_count(&self) {
-        let _ = self.try_apply_updates(&[IndexHeaderUpdate::IncrementHashSlotCount]);
-    }
-
     #[inline]
     pub fn get_index_count(&self) -> i32 {
         self.index_count.load(Ordering::Acquire)
-    }
-
-    pub fn inc_index_count(&self) {
-        let _ = self.try_apply_updates(&[IndexHeaderUpdate::IncrementIndexCount]);
     }
 }

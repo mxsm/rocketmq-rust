@@ -37,6 +37,7 @@ impl ProducerLoadRequest {
             scope: ConsumerRequestScope {
                 revision: resource.revision(),
                 epoch: resource.epoch(),
+                query_scope: Default::default(),
             },
             resource,
         }
@@ -45,6 +46,7 @@ impl ProducerLoadRequest {
 
 pub struct ProducersStore {
     pub inventory: ResourceSlot<ProducerInventory>,
+    pub topics: ResourceSlot<rocketmq_dashboard_common::ProducerTopicCandidates>,
     pub draft_filter: ProducerFilterDraft,
     pub applied_filter: ProducerFilterDraft,
     pub page: usize,
@@ -58,6 +60,7 @@ impl Default for ProducersStore {
     fn default() -> Self {
         Self {
             inventory: ResourceSlot::default(),
+            topics: ResourceSlot::default(),
             draft_filter: ProducerFilterDraft::default(),
             applied_filter: ProducerFilterDraft::default(),
             page: 1,
@@ -147,6 +150,7 @@ impl ProducersStore {
 
     pub fn clear_for_revision(&mut self) {
         self.inventory.clear();
+        self.topics.clear();
         self.connections.clear();
         self.applied_query = None;
         self.selected_client = None;

@@ -500,7 +500,7 @@ pub(crate) mod fixtures {
     }
 
     pub(crate) fn unavailable<T>() -> Result<T, ToolFailure> {
-        Err(ToolFailure::Operational(ToolExecutionError::Backend(None)))
+        Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)))
     }
 
     /// The description of the Broker that holds the most lag, as the workflow selects it.

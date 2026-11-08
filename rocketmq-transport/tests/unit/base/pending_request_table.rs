@@ -48,6 +48,7 @@ fn response(completion: PendingRequestCompletion) -> RemotingCommand {
         PendingRequestCompletion::Cancelled => panic!("request was cancelled"),
         PendingRequestCompletion::SessionClosed => panic!("request session closed"),
         PendingRequestCompletion::OperationalFailure(_) => panic!("request failed operationally"),
+        PendingRequestCompletion::WriteFailed(_) => panic!("request write failed"),
     }
 }
 
@@ -545,7 +546,8 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
             }
             PendingRequestCompletion::DeadlineExpired
             | PendingRequestCompletion::Cancelled
-            | PendingRequestCompletion::OperationalFailure(_) => {
+            | PendingRequestCompletion::OperationalFailure(_)
+            | PendingRequestCompletion::WriteFailed(_) => {
                 panic!("race returned an unrelated pending completion")
             }
         }

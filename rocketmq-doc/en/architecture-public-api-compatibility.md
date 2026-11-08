@@ -18,7 +18,7 @@ paths removed by the architecture migration.
 
   | Package | Intent entries |
   |---|---:|
-  | `rocketmq-client-rust` | 251 |
+  | `rocketmq-client-rust` | 252 |
   | `rocketmq-model` | 20 |
   | `rocketmq-protocol` | 21 |
   | `rocketmq-runtime` | 145 |

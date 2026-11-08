@@ -1,0 +1,2 @@
+// GPUI loads the application window icon from resource ID 1 in the executable.
+1 ICON "assets/app-icon.ico"

@@ -37,11 +37,11 @@ use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreLifecycle;
 use rocketmq_store_api::TimerStoreMode;
-use rocketmq_store_local::config::backend::LocalBackendConfig;
-use rocketmq_store_local::config::backend::LocalCleanupConfig;
-use rocketmq_store_local::config::backend::LocalQueryConfig;
-use rocketmq_store_local::config::backend::LocalRecoveryConfig;
-use rocketmq_store_local::config::backend::LocalReputConfig;
+use rocketmq_store_local::config::local_store::LocalCleanupConfig;
+use rocketmq_store_local::config::local_store::LocalQueryConfig;
+use rocketmq_store_local::config::local_store::LocalRecoveryConfig;
+use rocketmq_store_local::config::local_store::LocalReputConfig;
+use rocketmq_store_local::config::local_store::LocalStoreConfig;
 use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
 use rocketmq_store_local::message_store::LocalStoreComposition;
 
@@ -336,7 +336,7 @@ fn canonical_capability_compile_fixture_is_monomorphized() {
 #[tokio::test]
 async fn local_backend_conforms_to_the_canonical_lifecycle() {
     let root = tempfile::tempdir().expect("temporary local-store root");
-    let mut store = LocalStoreComposition::new(LocalBackendConfig {
+    let mut store = LocalStoreComposition::new(LocalStoreConfig {
         store_path_root_dir: root.path().to_path_buf(),
         commit_log_paths: vec![root.path().join("commitlog")],
         store_io_hint_enabled: false,

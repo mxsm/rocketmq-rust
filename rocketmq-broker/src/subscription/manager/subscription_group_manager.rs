@@ -28,7 +28,6 @@ use dashmap::DashMap;
 use rocketmq_model::common::attribute::attribute_util::AttributeUtil;
 use rocketmq_model::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
 use rocketmq_model::common::mix_all::is_sys_consumer_group;
-use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_configs;
@@ -56,7 +55,6 @@ use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 
 pub const CHARACTER_MAX_LENGTH: usize = SUBSCRIPTION_GROUP_NAME_MAX_LENGTH;
-pub const TOPIC_MAX_LENGTH: usize = 127;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SubscriptionGroupConfigUpdate {
@@ -345,37 +343,6 @@ impl SubscriptionGroupManager {
     /// Get the forbidden table
     pub fn forbidden_table(&self) -> &Arc<DashMap<CheetahString, DashMap<CheetahString, i32>>> {
         &self.forbidden_table
-    }
-
-    /// Validate topic name
-    ///
-    /// # Arguments
-    /// * `topic` - The topic name to validate
-    ///
-    /// # Returns
-    /// `true` if valid, `false` otherwise
-    fn validate_topic_name(topic: &str) -> bool {
-        if topic.is_empty() {
-            warn!("Topic name validation failed: empty name");
-            return false;
-        }
-
-        if topic.len() > TOPIC_MAX_LENGTH {
-            warn!(
-                "Topic name validation failed: name too long ({} > {}): {}",
-                topic.len(),
-                TOPIC_MAX_LENGTH,
-                topic
-            );
-            return false;
-        }
-
-        if TopicValidator::is_topic_or_group_illegal(topic) {
-            warn!("Topic name validation failed: contains illegal characters: {}", topic);
-            return false;
-        }
-
-        true
     }
 
     /// Validate forbidden index range
@@ -1065,41 +1032,6 @@ impl SubscriptionGroupManager {
             .unwrap_or(0)
     }
 
-    /// Disable consume capability for a specific consumer group
-    ///
-    /// # Arguments
-    /// * `group_name` - The name of the consumer group to disable
-    ///
-    /// # Returns
-    /// Returns the updated config if the group exists, None otherwise
-    pub fn disable_consume(&self, group_name: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
-        let result = {
-            let _transition = self.metadata_transition.lock();
-            let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
-                let mut new_config = (**entry.value()).clone();
-                new_config.set_consume_enable(false);
-                let arc_config = Arc::new(new_config);
-                *entry.value_mut() = Arc::clone(&arc_config);
-                arc_config
-            });
-            if result.is_some() {
-                self.data_version
-                    .write()
-                    .next_version_with(self.state_machine_version.get());
-            }
-            result
-        };
-
-        if result.is_some() {
-            self.persist_after_mutation("disable-consume");
-            info!("Disabled consume for group: {}", group_name);
-        } else {
-            warn!("Cannot disable consume, group not found: {}", group_name);
-        }
-
-        result
-    }
-
     pub(crate) fn disable_consume_for_lag(
         &self,
         group_name: &CheetahString,
@@ -1138,42 +1070,6 @@ impl SubscriptionGroupManager {
 
     pub(crate) fn slow_consumer_marker(&self, group_name: &CheetahString) -> Option<SlowConsumerDisableMarker> {
         self.slow_consumer_markers.get(group_name).map(|marker| marker.clone())
-    }
-
-    /// Enable consume capability for a specific consumer group
-    ///
-    /// # Arguments
-    /// * `group_name` - The name of the consumer group to enable
-    ///
-    /// # Returns
-    /// Returns the updated config if the group exists, None otherwise
-    pub fn enable_consume(&self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
-        let result = {
-            let _transition = self.metadata_transition.lock();
-            let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
-                let mut new_config = (**entry.value()).clone();
-                new_config.set_consume_enable(true);
-                let arc_config = Arc::new(new_config);
-                *entry.value_mut() = Arc::clone(&arc_config);
-                arc_config
-            });
-            if result.is_some() {
-                self.slow_consumer_markers.remove(group_name);
-                self.data_version
-                    .write()
-                    .next_version_with(self.state_machine_version.get());
-            }
-            result
-        };
-
-        if result.is_some() {
-            self.persist_after_mutation("enable-consume");
-            info!("Enabled consume for group: {}", group_name);
-        } else {
-            warn!("Cannot enable consume, group not found: {}", group_name);
-        }
-
-        result
     }
 
     /// Check if consume is enabled for a specific consumer group
@@ -1387,197 +1283,6 @@ impl SubscriptionGroupManager {
             .unwrap_or(false)
     }
 
-    /// Get all forbidden topics for a consumer group
-    ///
-    /// # Arguments
-    /// * `group` - Consumer group name
-    ///
-    /// # Returns
-    /// A vector of tuples (topic, forbidden_value) for all topics with forbidden flags set
-    pub fn get_forbidden_topics(&self, group: &str) -> Vec<(CheetahString, i32)> {
-        self.forbidden_table
-            .get(group)
-            .map(|topic_map| {
-                topic_map
-                    .iter()
-                    .map(|entry| (entry.key().clone(), *entry.value()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Remove all forbidden flags for a consumer group
-    ///
-    /// # Arguments
-    /// * `group` - Consumer group name
-    pub fn remove_forbidden_group(&self, group: &str) {
-        if self.forbidden_table.remove(group).is_some() {
-            info!("Removed all forbidden flags for group: {}", group);
-        }
-    }
-
-    /// Remove forbidden flags for a specific topic in a consumer group
-    ///
-    /// # Arguments
-    /// * `group` - Consumer group name
-    /// * `topic` - Topic name
-    pub fn remove_forbidden_topic(&self, group: &str, topic: &str) {
-        if let Some(topic_map) = self.forbidden_table.get(group) {
-            if topic_map.remove(topic).is_some() {
-                info!("Removed forbidden flags for group: {}, topic: {}", group, topic);
-            }
-        }
-    }
-
-    /// Get a subset of subscription group configurations for pagination
-    ///
-    /// # Arguments
-    /// * `data_version` - Expected data version for consistency check
-    /// * `group_seq` - Starting sequence number for pagination (0-based)
-    /// * `max_group_num` - Maximum number of groups to return
-    ///
-    /// # Returns
-    /// A HashMap containing subscription group configurations for the requested page.
-    /// Returns empty map if data version doesn't match or no groups in range.
-    ///
-    /// # Use Case
-    /// Large-scale clusters can use this for incremental synchronization to avoid
-    /// transferring all group configs at once.
-    pub fn sub_group_table(
-        &self,
-        data_version: &DataVersion,
-        group_seq: usize,
-        max_group_num: usize,
-    ) -> HashMap<CheetahString, Arc<SubscriptionGroupConfig>> {
-        // Check data version consistency
-        let current_version = self.data_version.read();
-        let mut begin_index = group_seq;
-
-        if data_version != &*current_version {
-            begin_index = 0;
-            info!(
-                "Get sub subscription group table from {} due to DataVersion Changed",
-                begin_index
-            );
-        }
-        drop(current_version);
-
-        let mut result = HashMap::new();
-        let total_size = self.subscription_group_table.len();
-
-        if begin_index < total_size {
-            // Sort keys to ensure consistent pagination (like Java's ImmutableSortedMap)
-            let mut sorted_keys: Vec<CheetahString> = self
-                .subscription_group_table
-                .iter()
-                .map(|entry| entry.key().clone())
-                .collect();
-            sorted_keys.sort();
-
-            let end_index = std::cmp::min(begin_index + max_group_num, total_size);
-
-            for key in sorted_keys.iter().skip(begin_index).take(end_index - begin_index) {
-                if let Some(config) = self.subscription_group_table.get(key) {
-                    result.insert(key.clone(), Arc::clone(config.value()));
-                }
-            }
-        }
-
-        info!(
-            "Retrieved {} subscription groups (seq: {}-{})",
-            result.len(),
-            begin_index,
-            begin_index + result.len()
-        );
-
-        result
-    }
-
-    /// Get forbidden tables for specified consumer groups
-    ///
-    /// # Arguments
-    /// * `group_set` - Set of consumer group names to query
-    ///
-    /// # Returns
-    /// A nested HashMap: group -> (topic -> forbidden_bitmap)
-    /// Only includes groups that exist in group_set and have forbidden entries.
-    ///
-    /// # Use Case
-    /// Batch query optimization for checking forbidden status of multiple groups
-    pub fn sub_forbidden_table(
-        &self,
-        group_set: &std::collections::HashSet<CheetahString>,
-    ) -> HashMap<CheetahString, HashMap<CheetahString, i32>> {
-        let mut result = HashMap::new();
-
-        for group in group_set {
-            if let Some(topic_map) = self.forbidden_table.get(group) {
-                let topics: HashMap<_, _> = topic_map
-                    .iter()
-                    .map(|entry| (entry.key().clone(), *entry.value()))
-                    .collect();
-
-                if !topics.is_empty() {
-                    result.insert(group.clone(), topics);
-                }
-            }
-        }
-
-        info!(
-            "Retrieved forbidden tables for {} groups (out of {} requested)",
-            result.len(),
-            group_set.len()
-        );
-
-        result
-    }
-
-    /// Load only the data version from configuration file without loading full config
-    ///
-    /// # Returns
-    /// `true` if data version was successfully loaded, `false` otherwise
-    ///
-    /// # Use Case
-    /// Fast configuration change detection without the overhead of loading
-    /// all subscription group configurations. Useful for master-slave synchronization.
-    pub fn load_data_version(&mut self) -> bool {
-        let config_file_path = self.config_file_path();
-
-        if !std::path::Path::new(&config_file_path).exists() {
-            warn!("Config file does not exist: {}", config_file_path);
-            return false;
-        }
-
-        match std::fs::read_to_string(&config_file_path) {
-            Ok(json_string) => match serde_json::from_str::<serde_json::Value>(&json_string) {
-                Ok(json_obj) => {
-                    if let Some(data_version_obj) = json_obj.get("dataVersion") {
-                        match serde_json::from_value::<DataVersion>(data_version_obj.clone()) {
-                            Ok(loaded_version) => {
-                                *self.data_version.write() = loaded_version;
-                                info!("Successfully loaded data version from {}", config_file_path);
-                                return true;
-                            }
-                            Err(e) => {
-                                warn!("Failed to deserialize data version: {:?}", e);
-                            }
-                        }
-                    } else {
-                        warn!("No dataVersion field found in config file");
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to parse config file as JSON: {:?}", e);
-                }
-            },
-            Err(e) => {
-                warn!("Failed to read config file {}: {:?}", config_file_path, e);
-            }
-        }
-
-        false
-    }
-
     /// Get the total count of subscription groups
     pub fn group_count(&self) -> usize {
         self.subscription_group_table.len()
@@ -1589,61 +1294,6 @@ impl SubscriptionGroupManager {
             .iter()
             .map(|entry| entry.key().clone())
             .collect()
-    }
-
-    /// Get statistics about subscription groups
-    ///
-    /// # Returns
-    /// A tuple of (total_groups, enabled_groups, disabled_groups)
-    pub fn get_statistics(&self) -> (usize, usize, usize) {
-        let total = self.subscription_group_table.len();
-        let mut enabled = 0;
-        let mut disabled = 0;
-
-        for entry in self.subscription_group_table.iter() {
-            if entry.value().consume_enable() {
-                enabled += 1;
-            } else {
-                disabled += 1;
-            }
-        }
-
-        (total, enabled, disabled)
-    }
-
-    /// Get detailed statistics about forbidden table
-    ///
-    /// # Returns
-    /// A tuple of (groups_with_forbidden, total_forbidden_topics, total_forbidden_flags)
-    pub fn get_forbidden_statistics(&self) -> (usize, usize, usize) {
-        let groups_with_forbidden = self.forbidden_table.len();
-        let mut total_topics = 0;
-        let mut total_flags = 0;
-
-        for entry in self.forbidden_table.iter() {
-            let topic_map = entry.value();
-            total_topics += topic_map.len();
-
-            for topic_entry in topic_map.iter() {
-                // Count number of set bits in the forbidden value
-                let forbidden_value = *topic_entry.value();
-                total_flags += forbidden_value.count_ones() as usize;
-            }
-        }
-
-        (groups_with_forbidden, total_topics, total_flags)
-    }
-
-    /// Print comprehensive statistics to log
-    pub fn log_statistics(&self) {
-        let (total_groups, enabled, disabled) = self.get_statistics();
-        let (forbidden_groups, forbidden_topics, forbidden_flags) = self.get_forbidden_statistics();
-
-        info!(
-            "SubscriptionGroupManager Statistics: Total Groups: {}, Enabled: {}, Disabled: {}, Forbidden Groups: {}, \
-             Forbidden Topics: {}, Active Forbidden Flags: {}",
-            total_groups, enabled, disabled, forbidden_groups, forbidden_topics, forbidden_flags
-        );
     }
 
     /// Check if a group exists
@@ -2374,74 +2024,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sub_group_table_pagination() {
-        // Test pagination using DashMap directly
-        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
-
-        // Create 10 groups
-        for i in 0_usize..10 {
-            let group_name = CheetahString::from_string(format!("GROUP_{}", i));
-            let config = SubscriptionGroupConfig::new(group_name.clone());
-            table.insert(group_name, Arc::new(config));
-        }
-
-        // Test pagination logic
-        let mut collected = Vec::new();
-        let mut seq = 0;
-
-        for entry in table.iter() {
-            if (3..6).contains(&seq) {
-                collected.push(entry.key().clone());
-            }
-            seq += 1;
-            if seq >= 6 {
-                break;
-            }
-        }
-
-        // Should collect 3 items (seq 3, 4, 5)
-        assert_eq!(collected.len(), 3);
-    }
-
-    #[test]
-    fn test_sub_forbidden_table_batch_query() {
-        // Test batch query of forbidden table
-        let forbidden_table: DashMap<CheetahString, DashMap<CheetahString, i32>> = DashMap::new();
-
-        // Setup test data
-        for i in 0..5 {
-            let group = CheetahString::from_string(format!("GROUP_{}", i));
-            let topics = DashMap::new();
-            topics.insert(CheetahString::from_string(format!("TOPIC_{}", i)), 1 << i);
-            forbidden_table.insert(group, topics);
-        }
-
-        // Query subset
-        let mut query_set = std::collections::HashSet::new();
-        query_set.insert(CheetahString::from_static_str("GROUP_1"));
-        query_set.insert(CheetahString::from_static_str("GROUP_3"));
-        query_set.insert(CheetahString::from_static_str("GROUP_9")); // Non-existent
-
-        let mut result = HashMap::new();
-        for group in &query_set {
-            if let Some(topic_map) = forbidden_table.get(group) {
-                let topics: HashMap<_, _> = topic_map
-                    .iter()
-                    .map(|entry| (entry.key().clone(), *entry.value()))
-                    .collect();
-                if !topics.is_empty() {
-                    result.insert(group.clone(), topics);
-                }
-            }
-        }
-
-        // Should only have 2 results (GROUP_1 and GROUP_3)
-        assert_eq!(result.len(), 2);
-        assert!(result.contains_key(&CheetahString::from_static_str("GROUP_1")));
-        assert!(result.contains_key(&CheetahString::from_static_str("GROUP_3")));
-    }
-
-    #[test]
     fn test_validation_functions() {
         // Test group name validation logic
         // Empty group name test omitted (const expression)
@@ -2461,57 +2043,6 @@ mod tests {
         let invalid_indices = vec![-1, 32, 100];
         for idx in invalid_indices {
             assert!(!(0..32).contains(&idx));
-        }
-    }
-
-    #[test]
-    fn test_statistics_calculation() {
-        // Test statistics using DashMap
-        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
-
-        // Create mixed groups
-        for i in 0_usize..10 {
-            let group_name = CheetahString::from_string(format!("GROUP_{}", i));
-            let mut config = SubscriptionGroupConfig::new(group_name.clone());
-
-            // Disable every other group
-            if i.is_multiple_of(2) {
-                config.set_consume_enable(false);
-            }
-
-            table.insert(group_name, Arc::new(config));
-        }
-
-        let total = table.len();
-        let mut enabled = 0;
-        let mut disabled = 0;
-
-        for entry in table.iter() {
-            if entry.value().consume_enable() {
-                enabled += 1;
-            } else {
-                disabled += 1;
-            }
-        }
-
-        assert_eq!(total, 10);
-        assert_eq!(enabled, 5);
-        assert_eq!(disabled, 5);
-    }
-
-    #[test]
-    fn test_forbidden_statistics_bit_counting() {
-        // Test counting set bits in forbidden values
-        let test_values: Vec<(i32, u32)> = vec![
-            (0b0000i32, 0),
-            (0b0001i32, 1),
-            (0b1111i32, 4),
-            (0b10101010i32, 4),
-            (0b11111111i32, 8),
-        ];
-
-        for (value, expected_count) in test_values {
-            assert_eq!(value.count_ones(), expected_count);
         }
     }
 

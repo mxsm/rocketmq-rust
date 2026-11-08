@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -33,6 +32,8 @@ use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
 use crate::timer::metrics::TimerStorageMetrics;
+use crate::timer::positional_io::read_exact_at;
+use crate::timer::positional_io::write_all_at;
 use crate::timer::service::TimerLogRecord;
 use crate::timer::storage_format::crc32c;
 use crate::timer::storage_format::TimerLogOffset;
@@ -46,6 +47,7 @@ const RECORD_VERSION: u16 = 2;
 const MANIFEST_MAGIC: u32 = 0x544D_4E32;
 const MANIFEST_SIZE: usize = 40;
 const MANIFEST_FILE: &str = "manifest";
+const RECOVERY_READ_RECORDS: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TimerLogV2Record {
@@ -169,6 +171,10 @@ struct SegmentedTimerLogState {
     next_offset: u64,
     durable_length: u64,
     min_live_offset: u64,
+    /// Read-write handle of the active segment. It stays open between appends: reopening the
+    /// segment per append costs milliseconds on Windows, where closing a written file triggers
+    /// on-access scanning.
+    active_writer: Option<File>,
     handles: HashMap<u64, File>,
     handle_order: VecDeque<u64>,
 }
@@ -177,6 +183,13 @@ struct SegmentedTimerLogState {
 struct SegmentState {
     records: u64,
     sealed: bool,
+}
+
+struct RecoveredSegment {
+    file: File,
+    records: u64,
+    sealed: bool,
+    complete_records: u64,
 }
 
 impl SegmentedTimerLog {
@@ -256,12 +269,18 @@ impl SegmentedTimerLog {
                 continue;
             }
 
-            let (records, sealed, replayed) = self.recover_active_segment(start, length)?;
-            self.metrics.record_recovery_replay(replayed);
-            state.segments.insert(start, SegmentState { records, sealed });
-            if sealed {
+            let recovered = self.recover_active_segment(start, length)?;
+            self.metrics.record_recovery_replay(recovered.complete_records);
+            state.segments.insert(
+                start,
+                SegmentState {
+                    records: recovered.records,
+                    sealed: recovered.sealed,
+                },
+            );
+            if recovered.sealed {
                 let next_start = start + self.logical_segment_span;
-                self.open_writer(next_start)?;
+                state.active_writer = Some(self.open_writer(next_start)?);
                 state.segments.insert(
                     next_start,
                     SegmentState {
@@ -273,9 +292,10 @@ impl SegmentedTimerLog {
                 state.active_records = 0;
                 state.next_offset = next_start;
             } else {
+                state.active_writer = Some(recovered.file);
                 state.active_start = start;
-                state.active_records = records;
-                state.next_offset = start + records * TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
+                state.active_records = recovered.records;
+                state.next_offset = start + recovered.records * TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
             }
         }
         state.durable_length = manifest
@@ -308,16 +328,17 @@ impl SegmentedTimerLog {
             let count = available.min(records.len() - index);
             let mut bytes = Vec::with_capacity(count * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE);
             for record in &records[index..index + count] {
-                offsets.push(TimerLogOffset::new(state.next_offset));
                 bytes.extend_from_slice(&record.encode());
-                state.active_records += 1;
+            }
+            let position = state.active_records * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64;
+            write_all_at(self.active_writer(&mut state)?, &bytes, position)?;
+            // The end advances only after the chunk is in the segment, so a failed write leaves
+            // the in-memory end at the last record that reached the file.
+            for _ in 0..count {
+                offsets.push(TimerLogOffset::new(state.next_offset));
                 state.next_offset += TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
             }
-            let mut writer = self.open_writer(state.active_start)?;
-            writer.seek(SeekFrom::Start(
-                (state.active_records - count as u64) * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64,
-            ))?;
-            writer.write_all(&bytes)?;
+            state.active_records += count as u64;
             let active_start = state.active_start;
             let active_records = state.active_records;
             if let Some(segment) = state.segments.get_mut(&active_start) {
@@ -351,12 +372,36 @@ impl SegmentedTimerLog {
             .max(usize::from(max_messages > 0 && max_bytes >= TimerLogRecord::SIZE));
         let mut entries = Vec::with_capacity(count_limit);
         while offset < state.next_offset && entries.len() < count_limit {
-            let typed_offset = TimerLogOffset::new(offset);
-            entries.push(TimerLogBatchEntry {
-                offset: typed_offset,
-                record: self.read_locked(&mut state, typed_offset)?,
-            });
-            offset += TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
+            if !offset.is_multiple_of(TIMER_LOG_V2_LOGICAL_RECORD_SIZE) {
+                return Err(SegmentedTimerLogFailure::Violation(
+                    SegmentedTimerLogViolation::UnalignedOffset(offset),
+                ));
+            }
+            let segment_start = (offset / self.logical_segment_span) * self.logical_segment_span;
+            if !state.segments.contains_key(&segment_start) {
+                return Err(SegmentedTimerLogFailure::MissingSegment(segment_start));
+            }
+            // Consecutive records of one segment are contiguous on disk, so each segment run is
+            // one positional read.
+            let run_end = (segment_start + self.logical_segment_span).min(state.next_offset);
+            let run_records = ((run_end - offset) / TIMER_LOG_V2_LOGICAL_RECORD_SIZE) as usize;
+            let count = run_records.min(count_limit - entries.len());
+            let record_index = (offset - segment_start) / TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
+            let mut bytes = vec![0u8; count * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE];
+            self.read_segment_at(
+                &mut state,
+                segment_start,
+                record_index * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64,
+                &mut bytes,
+            )?;
+            for record in bytes.chunks_exact(TIMER_LOG_V2_PHYSICAL_RECORD_SIZE) {
+                entries.push(TimerLogBatchEntry {
+                    offset: TimerLogOffset::new(offset),
+                    record: TimerLogV2Record::decode_checked(record)
+                        .map_err(SegmentedTimerLogFailure::RecordViolation)?,
+                });
+                offset += TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
+            }
         }
         Ok(TimerLogReadBatch {
             entries,
@@ -376,7 +421,7 @@ impl SegmentedTimerLog {
             ));
         }
         let started = Instant::now();
-        self.open_writer(state.active_start)?.sync_data()?;
+        self.active_writer(&mut state)?.sync_data()?;
         state.durable_length = offset.get();
         self.write_manifest(&state)?;
         self.metrics.record_fsync(started.elapsed().as_nanos() as u64);
@@ -435,31 +480,27 @@ impl SegmentedTimerLog {
             .map(|(start, _)| *start)
             .collect();
         for start in remove {
+            Self::close_segment_handles(&mut state, start);
             let path = self.segment_path(start);
             if path.exists() {
                 std::fs::remove_file(path)?;
             }
             state.segments.remove(&start);
-            state.handles.remove(&start);
-            state.handle_order.retain(|cached| *cached != start);
         }
-        if let std::collections::btree_map::Entry::Vacant(entry) = state.segments.entry(target_start) {
-            self.open_writer(target_start)?;
-            entry.insert(SegmentState {
-                records: 0,
-                sealed: false,
-            });
-        }
+        let writer = match state.active_writer.take() {
+            Some(writer) if state.active_start == target_start => writer,
+            _ => self.open_writer(target_start)?,
+        };
         let records = (length.get() - target_start) / TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
-        self.open_writer(target_start)?
-            .set_len(records * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64)?;
+        writer.set_len(records * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64)?;
+        state.active_writer = Some(writer);
         state.active_start = target_start;
         state.active_records = records;
         state.next_offset = length.get();
         state.durable_length = state.durable_length.min(length.get());
-        if let Some(segment) = state.segments.get_mut(&target_start) {
-            *segment = SegmentState { records, sealed: false };
-        }
+        state
+            .segments
+            .insert(target_start, SegmentState { records, sealed: false });
         self.write_manifest(&state)?;
         self.metrics.set_segment_count(state.segments.len() as u64);
         self.update_log_byte_metrics(&state);
@@ -485,10 +526,9 @@ impl SegmentedTimerLog {
             })
             .collect();
         for start in &removable {
+            Self::close_segment_handles(&mut state, *start);
             std::fs::remove_file(self.segment_path(*start))?;
             state.segments.remove(start);
-            state.handles.remove(start);
-            state.handle_order.retain(|cached| cached != start);
         }
         state.min_live_offset = state.min_live_offset.max(min_live_offset.get());
         self.write_manifest(&state)?;
@@ -524,31 +564,53 @@ impl SegmentedTimerLog {
             return Err(SegmentedTimerLogFailure::MissingSegment(segment_start));
         }
         let record_index = (offset.get() - segment_start) / TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
-        let mut file = self.cached_reader(state, segment_start)?;
-        file.seek(SeekFrom::Start(record_index * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64))?;
         let mut bytes = [0u8; TIMER_LOG_V2_PHYSICAL_RECORD_SIZE];
-        file.read_exact(&mut bytes)?;
+        self.read_segment_at(
+            state,
+            segment_start,
+            record_index * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64,
+            &mut bytes,
+        )?;
         TimerLogV2Record::decode_checked(&bytes).map_err(SegmentedTimerLogFailure::RecordViolation)
     }
 
+    fn read_segment_at(
+        &self,
+        state: &mut SegmentedTimerLogState,
+        segment_start: u64,
+        position: u64,
+        output: &mut [u8],
+    ) -> Result<(), SegmentedTimerLogFailure> {
+        let file = if segment_start == state.active_start {
+            self.active_writer(state)?
+        } else {
+            self.cached_reader(state, segment_start)?
+        };
+        read_exact_at(file, output, position)?;
+        Ok(())
+    }
+
     fn seal_and_rotate(&self, state: &mut SegmentedTimerLogState) -> Result<(), SegmentedTimerLogFailure> {
-        let mut writer = self.open_writer(state.active_start)?;
-        writer.seek(SeekFrom::Start(
+        let writer = self.active_writer(state)?;
+        write_all_at(
+            writer,
+            &blank_record(),
             self.records_per_segment * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64,
-        ))?;
-        writer.write_all(&blank_record())?;
+        )?;
         writer.sync_data()?;
         self.metrics
             .record_physical_write(TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64);
+        let next_start = state.active_start + self.logical_segment_span;
+        let next_writer = self.open_writer(next_start)?;
         if let Some(segment) = state.segments.get_mut(&state.active_start) {
             segment.sealed = true;
         }
-        state.active_start += self.logical_segment_span;
+        state.active_writer = Some(next_writer);
+        state.active_start = next_start;
         state.active_records = 0;
-        state.next_offset = state.active_start;
-        self.open_writer(state.active_start)?;
+        state.next_offset = next_start;
         state.segments.insert(
-            state.active_start,
+            next_start,
             SegmentState {
                 records: 0,
                 sealed: false,
@@ -566,35 +628,42 @@ impl SegmentedTimerLog {
                 expected: self.segment_size,
             });
         }
-        let mut file = OpenOptions::new().read(true).open(self.segment_path(start))?;
-        file.seek(SeekFrom::Start(
-            self.records_per_segment * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64,
-        ))?;
+        let file = OpenOptions::new().read(true).open(self.segment_path(start))?;
         let mut bytes = [0u8; TIMER_LOG_V2_PHYSICAL_RECORD_SIZE];
-        file.read_exact(&mut bytes)?;
+        read_exact_at(
+            &file,
+            &mut bytes,
+            self.records_per_segment * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64,
+        )?;
         if !is_blank_record(&bytes) {
             return Err(SegmentedTimerLogFailure::InvalidBlankMarker(start));
         }
         Ok(())
     }
 
-    fn recover_active_segment(&self, start: u64, length: u64) -> Result<(u64, bool, u64), SegmentedTimerLogFailure> {
-        let mut file = self.open_writer(start)?;
+    fn recover_active_segment(&self, start: u64, length: u64) -> Result<RecoveredSegment, SegmentedTimerLogFailure> {
+        let file = self.open_writer(start)?;
         let complete_records = length / TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64;
+        let scan_limit = complete_records.min(self.records_per_segment + 1);
+        let mut buffer = vec![0u8; RECOVERY_READ_RECORDS * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE];
         let mut valid_data = 0u64;
         let mut sealed = false;
-        for index in 0..complete_records.min(self.records_per_segment + 1) {
-            file.seek(SeekFrom::Start(index * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64))?;
-            let mut bytes = [0u8; TIMER_LOG_V2_PHYSICAL_RECORD_SIZE];
-            file.read_exact(&mut bytes)?;
-            if is_blank_record(&bytes) {
-                sealed = index == self.records_per_segment;
-                break;
+        // The scan stops at the first record that is not valid data, so `valid_data` is also the
+        // index of the next record to inspect.
+        'scan: while valid_data < scan_limit {
+            let count = (scan_limit - valid_data).min(RECOVERY_READ_RECORDS as u64) as usize;
+            let chunk = &mut buffer[..count * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE];
+            read_exact_at(&file, chunk, valid_data * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE as u64)?;
+            for bytes in chunk.chunks_exact(TIMER_LOG_V2_PHYSICAL_RECORD_SIZE) {
+                if is_blank_record(bytes) {
+                    sealed = valid_data == self.records_per_segment;
+                    break 'scan;
+                }
+                if TimerLogV2Record::decode_checked(bytes).is_err() {
+                    break 'scan;
+                }
+                valid_data += 1;
             }
-            if TimerLogV2Record::decode_checked(&bytes).is_err() {
-                break;
-            }
-            valid_data += 1;
         }
         let target_len = if sealed {
             self.segment_size
@@ -605,25 +674,55 @@ impl SegmentedTimerLog {
             file.set_len(target_len)?;
             file.sync_data()?;
         }
-        Ok((valid_data, sealed, complete_records))
+        Ok(RecoveredSegment {
+            file,
+            records: valid_data,
+            sealed,
+            complete_records,
+        })
     }
 
-    fn cached_reader(&self, state: &mut SegmentedTimerLogState, start: u64) -> Result<File, SegmentedTimerLogFailure> {
-        if let Some(file) = state.handles.get(&start) {
-            let file = file.try_clone()?;
-            state.handle_order.retain(|cached| *cached != start);
-            state.handle_order.push_back(start);
-            return Ok(file);
+    fn active_writer<'a>(&self, state: &'a mut SegmentedTimerLogState) -> Result<&'a File, SegmentedTimerLogFailure> {
+        if state.active_writer.is_none() {
+            state.active_writer = Some(self.open_writer(state.active_start)?);
         }
-        let file = OpenOptions::new().read(true).open(self.segment_path(start))?;
-        state.handles.insert(start, file.try_clone()?);
-        state.handle_order.push_back(start);
-        while state.handles.len() > self.handle_limit {
-            if let Some(evicted) = state.handle_order.pop_front() {
+        match state.active_writer.as_ref() {
+            Some(writer) => Ok(writer),
+            None => Err(SegmentedTimerLogFailure::MissingSegment(state.active_start)),
+        }
+    }
+
+    fn cached_reader<'a>(
+        &self,
+        state: &'a mut SegmentedTimerLogState,
+        start: u64,
+    ) -> Result<&'a File, SegmentedTimerLogFailure> {
+        if let Entry::Vacant(entry) = state.handles.entry(start) {
+            entry.insert(OpenOptions::new().read(true).open(self.segment_path(start))?);
+            state.handle_order.push_back(start);
+            while state.handles.len() > self.handle_limit {
+                let Some(evicted) = state.handle_order.pop_front() else {
+                    break;
+                };
                 state.handles.remove(&evicted);
             }
+        } else if state.handle_order.back() != Some(&start) {
+            state.handle_order.retain(|cached| *cached != start);
+            state.handle_order.push_back(start);
         }
-        Ok(file)
+        state
+            .handles
+            .get(&start)
+            .ok_or(SegmentedTimerLogFailure::MissingSegment(start))
+    }
+
+    /// Drops every handle of one segment, so the segment file can be deleted and its name reused.
+    fn close_segment_handles(state: &mut SegmentedTimerLogState, start: u64) {
+        state.handles.remove(&start);
+        state.handle_order.retain(|cached| *cached != start);
+        if state.active_start == start {
+            state.active_writer = None;
+        }
     }
 
     fn open_writer(&self, start: u64) -> Result<File, SegmentedTimerLogFailure> {
@@ -987,5 +1086,114 @@ mod tests {
             .unwrap();
         reloaded.load().unwrap();
         assert_eq!(reloaded.len(), 40);
+    }
+
+    fn loaded_log(
+        directory: &Path,
+        records_per_segment: usize,
+        metrics: Arc<TimerStorageMetrics>,
+    ) -> SegmentedTimerLog {
+        let log = SegmentedTimerLog::new(
+            directory,
+            TIMER_LOG_V2_PHYSICAL_RECORD_SIZE * (records_per_segment + 1),
+            2,
+            metrics,
+        )
+        .unwrap()
+        .unwrap();
+        log.load().unwrap();
+        log
+    }
+
+    fn offsets(entries: &[TimerLogBatchEntry]) -> Vec<u64> {
+        entries.iter().map(|entry| entry.offset.get()).collect()
+    }
+
+    #[test]
+    fn read_batch_reads_segment_runs_across_boundaries() {
+        let directory = tempdir().unwrap();
+        let log = loaded_log(directory.path(), 3, Arc::new(TimerStorageMetrics::default()));
+        log.append_batch(&(0..7).map(record).collect::<Vec<_>>()).unwrap();
+
+        let page = log
+            .read_batch(TimerLogOffset::new(40), 100, usize::MAX)
+            .unwrap()
+            .unwrap();
+        assert_eq!(offsets(&page.entries), vec![40, 80, 120, 160, 200, 240]);
+        assert_eq!(
+            page.entries.iter().map(|entry| entry.record).collect::<Vec<_>>(),
+            (1..7).map(record).collect::<Vec<_>>()
+        );
+        assert_eq!(page.next_cursor.get(), 280);
+        assert!(page.end_of_log);
+
+        let bounded = log.read_batch(TimerLogOffset::new(80), 2, usize::MAX).unwrap().unwrap();
+        assert_eq!(offsets(&bounded.entries), vec![80, 120]);
+        assert_eq!(bounded.next_cursor.get(), 160);
+        assert!(!bounded.end_of_log);
+        assert!(log
+            .read_batch(TimerLogOffset::new(20), 2, usize::MAX)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn recovery_keeps_records_across_scan_chunks_and_drops_a_corrupt_tail() {
+        let directory = tempdir().unwrap();
+        let metrics = Arc::new(TimerStorageMetrics::default());
+        let records = RECOVERY_READ_RECORDS * 2 + 10;
+        let log = loaded_log(directory.path(), records + 5, Arc::clone(&metrics));
+        log.append_batch(&(0..records as i64).map(record).collect::<Vec<_>>())
+            .unwrap();
+        log.flush().unwrap();
+        drop(log);
+
+        // One flipped payload byte in the second scan chunk ends the valid tail there.
+        let corrupt_index = RECOVERY_READ_RECORDS + 7;
+        let path = directory.path().join("00000000000000000000");
+        let segment = OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        write_all_at(
+            &segment,
+            &[0xFF],
+            (corrupt_index * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE + 20) as u64,
+        )
+        .unwrap();
+        drop(segment);
+
+        let reloaded = loaded_log(directory.path(), records + 5, metrics);
+        assert_eq!(reloaded.len(), corrupt_index as u64 * TIMER_LOG_V2_LOGICAL_RECORD_SIZE);
+        assert_eq!(
+            path.metadata().unwrap().len(),
+            (corrupt_index * TIMER_LOG_V2_PHYSICAL_RECORD_SIZE) as u64
+        );
+        let last_valid = (corrupt_index as u64 - 1) * TIMER_LOG_V2_LOGICAL_RECORD_SIZE;
+        assert_eq!(
+            reloaded.read(TimerLogOffset::new(last_valid)).unwrap().unwrap(),
+            record(corrupt_index as i64 - 1)
+        );
+    }
+
+    #[test]
+    fn appends_after_truncate_reach_the_new_active_segment() {
+        let directory = tempdir().unwrap();
+        let metrics = Arc::new(TimerStorageMetrics::default());
+        let log = loaded_log(directory.path(), 3, Arc::clone(&metrics));
+        log.append_batch(&(0..7).map(record).collect::<Vec<_>>()).unwrap();
+        assert!(directory.path().join("00000000000000000240").exists());
+
+        log.truncate(TimerLogOffset::new(160)).unwrap().unwrap();
+        let appended = log.append_batch(&[record(40), record(41)]).unwrap();
+        assert_eq!(
+            appended.iter().map(|offset| offset.get()).collect::<Vec<_>>(),
+            vec![160, 200]
+        );
+        log.flush().unwrap();
+        drop(log);
+
+        let reloaded = loaded_log(directory.path(), 3, metrics);
+        assert_eq!(reloaded.len(), 240);
+        assert_eq!(reloaded.read(TimerLogOffset::new(120)).unwrap().unwrap(), record(3));
+        assert_eq!(reloaded.read(TimerLogOffset::new(160)).unwrap().unwrap(), record(40));
+        assert_eq!(reloaded.read(TimerLogOffset::new(200)).unwrap().unwrap(), record(41));
     }
 }

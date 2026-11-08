@@ -13,8 +13,10 @@
 // limitations under the License.
 
 /// Detects whether a remote service endpoint is healthy.
-#[trait_variant::make(ServiceDetector: Send)]
-pub trait ServiceDetectorLocal: Send + Sync + 'static {
+///
+/// [`detect`](Self::detect) returns a `Send` future.
+#[trait_variant::make(Send)]
+pub trait ServiceDetector: Sync + 'static {
     /// Checks if the remote service at the given endpoint is reachable.
     ///
     /// Returns `true` if the service is back to normal; `false` otherwise.

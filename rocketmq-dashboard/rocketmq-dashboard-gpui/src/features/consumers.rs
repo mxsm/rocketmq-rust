@@ -14,33 +14,34 @@
 
 //! Truthful Consumer inventory table and one bounded route-driven Sheet.
 
+#[path = "consumers_mutations.rs"]
+mod mutations;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
+    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window,
+    div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
-    button::Button,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
     table::{Column, Table, TableDelegate, TableEvent, TableState},
 };
 use rocketmq_dashboard_common::{
-    CapabilityAvailability, ConsumerAclClassification, ConsumerCategory, ConsumerConfigEntries,
-    ConsumerConnectionFilter, ConsumerConnectionState, ConsumerCreateCommand, ConsumerGroupObservation,
-    ConsumerIdentity, ConsumerObservation, ConsumerObservationState, ConsumerPartialOutcome, ConsumerSortKey,
+    CapabilityAvailability, ConsumerCategory, ConsumerConnectionFilter, ConsumerConnectionState,
+    ConsumerGroupObservation, ConsumerIdentity, ConsumerObservation, ConsumerObservationState, ConsumerPartialOutcome,
+    ConsumerSortKey,
 };
 
 use crate::{
     features::{
-        consumer_detail::{ConsumerDetail, ConsumerDetailIntent},
+        consumer_detail::{CONSUMER_SHEET_WIDTH, ConsumerDetail, ConsumerDetailIntent},
         consumers_store::ConsumersStore,
     },
     route::{AppRoute, ConsumerTab, RouteKey},
-    services::{
-        AppServices,
-        consumers::{ConsumerMutationResult, ConsumerRequestScope},
-    },
+    services::AppServices,
     state::Loadable,
 };
 
@@ -56,24 +57,28 @@ struct ConsumerTableDelegate {
     rows: Vec<ConsumerGroupObservation>,
     loading: bool,
     owner: Option<WeakEntity<ConsumersView>>,
+    session_owner: Option<crate::services::SessionState>,
+    revision: u64,
 }
 
 impl ConsumerTableDelegate {
     fn new() -> Self {
         Self {
             columns: vec![
-                Column::new("group", "Consumer group"),
-                Column::new("category", "Category"),
-                Column::new("connection", "Connection"),
-                Column::new("clients", "Clients"),
-                Column::new("lag", "Lag"),
-                Column::new("consume-type", "Consume type"),
-                Column::new("message-model", "Message model"),
-                Column::new("actions", "Actions"),
+                Column::new("group", "Consumer group").width(px(380.)),
+                Column::new("category", "Category").width(px(112.)),
+                Column::new("connection", "Connection").width(px(128.)),
+                Column::new("clients", "Clients").width(px(88.)),
+                Column::new("lag", "Lag").width(px(112.)),
+                Column::new("consume-type", "Consume type").width(px(156.)),
+                Column::new("message-model", "Message model").width(px(164.)),
+                Column::new("actions", "Actions").width(px(100.)),
             ],
             rows: Vec::new(),
             loading: true,
             owner: None,
+            session_owner: None,
+            revision: 0,
         }
     }
 }
@@ -104,7 +109,42 @@ impl TableDelegate for ConsumerTableDelegate {
     ) -> impl IntoElement {
         let item = &self.rows[row];
         let value = match column {
-            0 => item.identity.as_str().to_owned(),
+            0 => {
+                let group = item.identity.as_str().to_owned();
+                let owner = self.owner.clone();
+                let session_owner = self.session_owner.clone();
+                let revision = self.revision;
+                return div()
+                    .w_full()
+                    .min_w_0()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().truncate().child(group.clone()))
+                    .child(
+                        Button::new(("copy-consumer-row", row))
+                            .icon(IconName::Copy)
+                            .small()
+                            .ghost()
+                            .debug_selector(move || format!("consumer-copy-row-{row}"))
+                            .tooltip(group.clone())
+                            .on_click(move |_, window, cx| {
+                                if let Some(owner) = &owner {
+                                    let _ = owner.update(cx, |view, cx| {
+                                        view.access_task = Some(crate::components::protected_action::copy(
+                                            view.services.clone(),
+                                            session_owner.clone(),
+                                            revision,
+                                            group.clone(),
+                                            window,
+                                            cx,
+                                        ));
+                                    });
+                                }
+                            }),
+                    );
+            }
             1 => category_label(item.category).into(),
             2 => connection_label(&item.connection_state),
             3 => observed_value(&item.client_count),
@@ -147,12 +187,18 @@ impl TableDelegate for ConsumerTableDelegate {
 
 pub struct ConsumersView {
     services: AppServices,
+    session_owner: Option<crate::services::SessionState>,
+    access_task: Option<Task<()>>,
     revision: u64,
     pub store: ConsumersStore,
     keyword: Entity<InputState>,
     create_group: Entity<InputState>,
+    create_dialog: Option<Entity<crate::features::consumer_dialogs::ConsumerDialogForm>>,
+    query_scope: rocketmq_dashboard_common::ConsumerQueryScope,
     table: Entity<TableState<ConsumerTableDelegate>>,
     detail: Option<Entity<ConsumerDetail>>,
+    // Retain accepted writes after removing the old environment's visible detail.
+    pending_details: Vec<(Entity<ConsumerDetail>, Subscription)>,
     detail_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
     inventory_task: Option<Task<()>>,
@@ -199,14 +245,20 @@ impl ConsumersView {
                 }
             }),
         ];
+        let session_owner = services.current_session();
         let view = Self {
             services,
+            session_owner,
+            access_task: None,
             revision,
             store: ConsumersStore::default(),
             keyword,
             create_group,
+            create_dialog: None,
+            query_scope: Default::default(),
             table,
             detail: None,
+            pending_details: Vec::new(),
             detail_subscription: None,
             _subscriptions: subscriptions,
             inventory_task: None,
@@ -227,6 +279,13 @@ impl ConsumersView {
     #[cfg(test)]
     pub(crate) fn create_group_for_test(&self) -> Entity<InputState> {
         self.create_group.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create_dialog_for_test(
+        &self,
+    ) -> Option<Entity<crate::features::consumer_dialogs::ConsumerDialogForm>> {
+        self.create_dialog.clone()
     }
 
     #[cfg(test)]
@@ -253,6 +312,40 @@ impl ConsumersView {
         }
     }
 
+    pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.access_task = None;
+        self.revision = revision;
+        self.inventory_task = None;
+        self.create_dialog = None;
+        self.query_scope = Default::default();
+        self.pending_route = None;
+        self.detail_subscription = None;
+        self.pending_details
+            .retain(|(detail, _)| detail.read(cx).has_pending_mutation());
+        if let Some(detail) = self.detail.take() {
+            detail.update(cx, |detail, cx| detail.clear_for_environment(revision, window, cx));
+            if detail.read(cx).has_pending_mutation() {
+                let completion = cx.observe(&detail, |view, _, cx| {
+                    view.pending_details
+                        .retain(|(detail, _)| detail.read(cx).has_pending_mutation());
+                });
+                self.pending_details.push((detail, completion));
+            }
+        }
+        self.store.clear_for_revision();
+        self.store.draft_filter = Default::default();
+        self.store.applied_filter = Default::default();
+        self.store.page = 1;
+        self.mutation_status = None;
+        self.mutation_outcome = None;
+        self.mutation_replay_blocked = false;
+        self.keyword.update(cx, |input, cx| input.set_value("", window, cx));
+        self.create_group
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.table.update(cx, |table, cx| table.clear_selection(cx));
+        self.sync_table(cx);
+    }
+
     pub fn ensure_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.store.inventory.state, Loadable::Idle) {
             self.refresh_in(window, cx);
@@ -260,9 +353,10 @@ impl ConsumersView {
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(request) = self.store.begin_inventory(self.revision) else {
+        let Some(mut request) = self.store.begin_inventory(self.revision) else {
             return;
         };
+        request.scope.query_scope = self.query_scope;
         self.sync_table(cx);
         let services = self.services.clone();
         self.inventory_task = Some(cx.spawn(async move |this, cx| {
@@ -276,9 +370,10 @@ impl ConsumersView {
     }
 
     fn refresh_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(request) = self.store.begin_inventory(self.revision) else {
+        let Some(mut request) = self.store.begin_inventory(self.revision) else {
             return;
         };
+        request.scope.query_scope = self.query_scope;
         self.sync_table(cx);
         let services = self.services.clone();
         self.inventory_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -308,17 +403,19 @@ impl ConsumersView {
 
     pub fn close_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_route = None;
-        if self.detail.is_some() && window.has_active_sheet(cx) {
-            self.suppress_sheet_closed = true;
+        let Some(detail) = self.detail.take() else {
+            return;
+        };
+        detail.update(cx, |detail, cx| detail.discard_queries(cx));
+        self.detail_subscription = None;
+        self.store.close_detail();
+        if window.has_active_sheet(cx) {
             window.close_sheet(cx);
-        } else if self.detail.take().is_some() {
-            self.detail_subscription = None;
-            self.store.close_detail();
-            if self.store.take_focus_restore() {
-                self.table.focus_handle(cx).focus(window);
-            }
-            cx.notify();
         }
+        if self.store.take_focus_restore() {
+            self.table.focus_handle(cx).focus(window);
+        }
+        cx.notify();
     }
 
     fn open_pending_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -376,6 +473,10 @@ impl ConsumersView {
         else {
             return;
         };
+        if let Some(previous) = self.detail.take() {
+            previous.update(cx, |detail, cx| detail.discard_queries(cx));
+        }
+        self.detail_subscription = None;
         self.store.open_route(group.clone(), tab);
         self.table.focus_handle(cx).focus(window);
         if window.has_active_sheet(cx) {
@@ -390,6 +491,7 @@ impl ConsumersView {
                 tab,
                 targets,
                 capabilities,
+                self.query_scope,
                 cx,
             )
         });
@@ -397,6 +499,7 @@ impl ConsumersView {
             &detail,
             window,
             |view, _, event: &ConsumerDetailIntent, window, cx| match event {
+                ConsumerDetailIntent::QueryScopeChanged(scope) => view.apply_query_scope(*scope, window, cx),
                 ConsumerDetailIntent::ReplaceRoute(route) => cx.emit(ConsumersIntent::ReplaceRoute(route.clone())),
                 ConsumerDetailIntent::InventoryReloaded(inventory) => {
                     view.store.inventory.replace(inventory.clone());
@@ -413,15 +516,22 @@ impl ConsumersView {
         self.detail = Some(detail.clone());
         let owner = cx.entity().downgrade();
         let title = group.as_str().to_owned();
-        window.open_sheet(cx, move |sheet, _, _| {
+        window.open_sheet(cx, move |sheet, window, _| {
             let owner = owner.clone();
             sheet
-                .title(title.clone())
-                .size(px(800.))
+                .title(div().flex_1().min_w_0().truncate().child(title.clone()))
+                .size(window.viewport_size().width.min(CONSUMER_SHEET_WIDTH))
+                .w_full()
+                .min_w_0()
+                .h_full()
+                .min_h_0()
+                .p_0()
                 .on_close(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| {
                         view.store.close_detail();
-                        view.detail = None;
+                        if let Some(detail) = view.detail.take() {
+                            detail.update(cx, |detail, cx| detail.discard_queries(cx));
+                        }
                         view.detail_subscription = None;
                         if view.store.take_focus_restore() {
                             view.table.focus_handle(cx).focus(window);
@@ -438,116 +548,6 @@ impl ConsumersView {
         if emit_route && let Ok(group) = RouteKey::parse(group.as_str()) {
             cx.emit(ConsumersIntent::Navigate(AppRoute::ConsumerDetail { group, tab }));
         }
-    }
-
-    fn create_ready(&self) -> bool {
-        self.store.inventory.state.value().is_some_and(|inventory| {
-            inventory.capabilities.create == CapabilityAvailability::Available
-                && inventory.observation == ConsumerObservationState::Complete
-                && inventory.failures.is_empty()
-                && !inventory.targets.is_empty()
-        }) && self.mutation_task.is_none()
-            && !self.mutation_replay_blocked
-    }
-
-    fn submit_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.create_ready() {
-            self.mutation_status =
-                Some("Create requires a complete authoritative target inventory and Direct capability.".into());
-            cx.notify();
-            return;
-        }
-        let value = self.create_group.read(cx).value().to_string();
-        let Ok(group) = ConsumerIdentity::parse(value) else {
-            self.mutation_status = Some("Enter a valid non-empty Consumer group.".into());
-            cx.notify();
-            return;
-        };
-        let Some(targets) = self
-            .store
-            .inventory
-            .state
-            .value()
-            .map(|inventory| inventory.targets.clone())
-        else {
-            return;
-        };
-        self.mutation_epoch = self.mutation_epoch.saturating_add(1);
-        let scope = ConsumerRequestScope {
-            revision: self.revision,
-            epoch: self.mutation_epoch,
-        };
-        let command = ConsumerCreateCommand {
-            group,
-            targets,
-            entries: ConsumerConfigEntries {
-                retry_max_times: 16,
-                retry_queue_nums: 1,
-                consume_timeout_minutes: 15,
-            },
-            authorization: ConsumerAclClassification::Authorized,
-        };
-        let services = self.services.clone();
-        self.mutation_status = Some("Verifying all-target absence before any write…".into());
-        self.mutation_outcome = None;
-        self.mutation_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = services.create_consumer(scope, command).await;
-            let _ = this.update_in(cx, |view, window, cx| {
-                view.mutation_task = None;
-                match result {
-                    Ok(ConsumerMutationResult::Rejected(outcome)) => {
-                        view.mutation_replay_blocked = true;
-                        view.mutation_outcome = Some(outcome.clone());
-                        view.mutation_status = Some(format!(
-                            "Create rejected with zero accepted writes (Partial: {}/{} applied).",
-                            outcome.applied_count(),
-                            outcome.targets.len()
-                        ));
-                    }
-                    Ok(ConsumerMutationResult::Applied {
-                        outcome,
-                        inventory,
-                        invalidations,
-                    }) => {
-                        view.mutation_replay_blocked = false;
-                        view.mutation_outcome = Some(outcome.clone());
-                        view.observe_invalidations(&invalidations);
-                        view.store.inventory.replace(inventory);
-                        view.create_group
-                            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
-                        view.mutation_status = Some(format!(
-                            "Created on {} target(s); authoritative inventory reloaded.",
-                            outcome.applied_count()
-                        ));
-                        view.sync_table(cx);
-                    }
-                    Ok(ConsumerMutationResult::AppliedReloadFailed {
-                        outcome,
-                        invalidations,
-                        error,
-                    }) => {
-                        view.mutation_replay_blocked = true;
-                        view.mutation_outcome = Some(outcome.clone());
-                        view.observe_invalidations(&invalidations);
-                        view.create_group
-                            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
-                        view.mutation_status = Some(format!(
-                            "Create applied on {} target(s), but authoritative reload failed: {} Draft cleared; refresh and do not replay blindly.",
-                            outcome.applied_count(),
-                            error.summary()
-                        ));
-                    }
-                    Err(error) => {
-                        view.mutation_replay_blocked = true;
-                        view.mutation_status = Some(format!(
-                            "{} Command state is unknown; change the draft before a new command.",
-                            error.summary()
-                        ));
-                    }
-                }
-                cx.notify();
-            });
-        }));
     }
 
     fn observe_invalidations(&mut self, invalidations: &[crate::services::consumers::ConsumerCacheInvalidation]) {
@@ -572,6 +572,8 @@ impl ConsumersView {
         self.table.update(cx, |table, cx| {
             table.delegate_mut().rows = page.items;
             table.delegate_mut().loading = loading;
+            table.delegate_mut().session_owner = self.session_owner.clone();
+            table.delegate_mut().revision = self.revision;
             table.refresh(cx);
             cx.notify();
         });
@@ -580,6 +582,47 @@ impl ConsumersView {
     fn apply_filter(&mut self, cx: &mut Context<Self>) {
         self.store.apply_filter();
         self.sync_table(cx);
+        cx.notify();
+    }
+
+    fn switch_query_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let scope = match self.query_scope {
+            rocketmq_dashboard_common::ConsumerQueryScope::Configured => {
+                rocketmq_dashboard_common::ConsumerQueryScope::BrokerDirect
+            }
+            rocketmq_dashboard_common::ConsumerQueryScope::BrokerDirect => {
+                rocketmq_dashboard_common::ConsumerQueryScope::Configured
+            }
+        };
+        self.apply_query_scope(scope, window, cx);
+    }
+
+    fn apply_query_scope(
+        &mut self,
+        scope: rocketmq_dashboard_common::ConsumerQueryScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if scope == self.query_scope {
+            return;
+        }
+        let reopen = self.detail.as_ref().map(|detail| {
+            let detail = detail.read(cx);
+            (detail.store.group.as_str().to_owned(), detail.store.active_tab)
+        });
+        self.query_scope = scope;
+        self.inventory_task = None;
+        self.detail_subscription = None;
+        if let Some(detail) = self.detail.take() {
+            detail.update(cx, |detail, cx| detail.clear_for_environment(self.revision, window, cx));
+        }
+        if window.has_active_sheet(cx) {
+            window.close_sheet(cx);
+        }
+        self.store.clear_for_revision();
+        self.pending_route = reopen;
+        self.create_dialog = None;
+        self.refresh_in(window, cx);
         cx.notify();
     }
 
@@ -606,7 +649,7 @@ impl ConsumersView {
 }
 
 impl Render for ConsumersView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self.store.page();
         let partial = self
             .store
@@ -627,6 +670,8 @@ impl Render for ConsumersView {
         div()
             .id("consumers-page")
             .size_full()
+            .min_w_0()
+            .whitespace_normal()
             .px_6()
             .pb_6()
             .flex()
@@ -641,11 +686,26 @@ impl Render for ConsumersView {
                         .child("Partial Consumer inventory — failed targets are not inferred as zero or offline."),
                 )
             })
-            .when_some(self.mutation_status.clone(), |this, status| {
-                this.child(div().p_3().rounded_md().bg(cx.theme().muted).child(status))
-            })
-            .when_some(self.mutation_outcome.clone(), |this, outcome| {
-                this.child(render_consumer_outcome(&outcome, cx))
+            .when(self.mutation_status.is_some() || self.mutation_outcome.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("consumer-result-notices")
+                        .debug_selector(|| "consumer-result-notices".to_owned())
+                        .w_full()
+                        .min_w_0()
+                        .flex_shrink_0()
+                        .max_h(window.viewport_size().height / 4.)
+                        .overflow_y_scroll()
+                        .child(
+                            div().flex().flex_col().gap_3()
+                                .when_some(self.mutation_status.clone(), |body, status| {
+                                    body.child(div().p_3().rounded_md().bg(cx.theme().muted).child(status))
+                                })
+                                .when_some(self.mutation_outcome.clone(), |body, outcome| {
+                                    body.child(render_consumer_outcome(&outcome, cx))
+                                }),
+                        ),
+                )
             })
             .when(
                 self.store
@@ -658,22 +718,28 @@ impl Render for ConsumersView {
                         div()
                             .flex()
                             .gap_2()
-                            .child(Input::new(&self.create_group).w(px(280.)))
                             .child(
                                 Button::new("consumer-create")
-                                    .label("Create on all targets")
+                                    .label("Create Consumer…")
                                     .disabled(!self.create_ready())
                                     .debug_selector(|| "consumer-create".to_owned())
-                                    .on_click(cx.listener(|view, _, window, cx| view.submit_create(window, cx))),
+                                    .on_click(cx.listener(|view, _, window, cx| view.open_create_dialog(window, cx))),
                             ),
                     )
                 },
             )
+            .child(div().w_full().min_w_0().flex().flex_wrap().items_center().gap_2()
+                .child(div().w_full().min_w_0().whitespace_normal().child(format!("Consumer reads: {}",self.query_scope.description(&self.services.connection_state().config.connection_snapshot()))))
+                .child(Button::new("consumer-query-scope").debug_selector(|| "consumer-query-scope".to_owned()).label("Switch query scope").on_click(cx.listener(|view,_,window,cx| view.switch_query_scope(window,cx))))
+                .child(div().w_full().min_w_0().whitespace_normal()
+                    .debug_selector(|| "consumer-read-description".to_owned())
+                    .child("Configuration and diagnostics use verified Broker Direct targets. Mutation capability follows the configured connection.")))
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .gap_2()
-                    .child(Input::new(&self.keyword).w(px(280.)))
+                    .child(Input::new(&self.keyword).w(px(240.)))
                     .child(
                         Button::new("consumer-apply-filter")
                             .label("Apply")
@@ -693,6 +759,7 @@ impl Render for ConsumersView {
                     )
                     .child(
                         Button::new("consumer-refresh")
+                            .debug_selector(|| "consumer-refresh".to_owned())
                             .label("Refresh")
                             .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
                     ),
@@ -709,9 +776,11 @@ impl Render for ConsumersView {
             .child(div().text_sm().child(format!("{} Consumer groups", page.total)))
             .child(
                 div()
+                    .debug_selector(|| "consumer-inventory-table".to_owned())
                     .flex_1()
                     .min_h_0()
-                    .child(Table::new(&self.table).bordered(true).small()),
+                    .min_w_0()
+                    .child(Table::new(&self.table).bordered(true).scrollbar_visible(true,true).small()),
             )
             .child(
                 div()
@@ -742,6 +811,7 @@ impl Render for ConsumersView {
 }
 
 fn render_consumer_outcome(outcome: &ConsumerPartialOutcome, cx: &gpui::App) -> impl IntoElement {
+    let cleanup = outcome.counts().cleanup_steps;
     div()
         .p_3()
         .rounded_md()
@@ -750,26 +820,39 @@ fn render_consumer_outcome(outcome: &ConsumerPartialOutcome, cx: &gpui::App) -> 
         .flex_col()
         .gap_1()
         .child(format!(
-            "{}: {}/{} target outcomes applied",
+            "{}: {}/{} Broker targets applied",
             if outcome.is_complete_success() {
                 "Complete"
+            } else if !outcome.has_applied_effects() && outcome.has_unconfirmed_effects() {
+                "Unconfirmed"
+            } else if !outcome.has_applied_effects() {
+                "Rejected"
             } else {
                 "Partial"
             },
             outcome.applied_count(),
-            outcome.targets.len()
+            outcome.target_count()
         ))
-        .children(outcome.targets.iter().map(|target| {
-            div().text_sm().child(format!(
-                "{} · stage={:?} · code={} · retryable={} · applied={}",
-                target.target,
-                target.stage,
-                target
-                    .failure
-                    .map_or_else(|| "None".to_owned(), |failure| format!("{failure:?}")),
-                target.retryable,
-                target.applied
+        .when(cleanup.total() > 0, |this| {
+            this.child(format!(
+                "Cleanup steps: {} applied, {} not applied, {} unconfirmed",
+                cleanup.applied, cleanup.not_applied, cleanup.unconfirmed
             ))
+        })
+        .children(outcome.targets.iter().enumerate().map(|(index, target)| {
+            div()
+                .debug_selector(move || format!("consumer-mutation-target-{index}"))
+                .text_sm()
+                .child(format!(
+                    "{} · stage={:?} · code={} · retryable={} · applied={}",
+                    target.target,
+                    target.stage,
+                    target
+                        .failure
+                        .map_or_else(|| "None".to_owned(), |failure| format!("{failure:?}")),
+                    target.retryable,
+                    target.applied
+                ))
         }))
 }
 
@@ -795,5 +878,91 @@ fn observed_value<T: std::fmt::Display>(observation: &ConsumerObservation<T>) ->
         ConsumerObservation::Complete(value) => value.to_string(),
         ConsumerObservation::Partial { value, .. } => format!("Partial ({value})"),
         ConsumerObservation::Unknown { .. } => "Unknown".into(),
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[gpui::test]
+    fn environment_clear_retains_consumer_write_owners_and_clears_detail_data(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|window, cx| ConsumersView::new(window, AppServices::default(), 10, cx));
+        let (complete_create, create_completion) = tokio::sync::oneshot::channel::<()>();
+        let (complete_detail, detail_completion) = tokio::sync::oneshot::channel::<()>();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let create_completed = completed.clone();
+        let detail_completed = completed.clone();
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                view.mutation_task = Some(cx.spawn(async move |_, _| {
+                    create_completion.await.unwrap();
+                    create_completed.fetch_add(1, Ordering::SeqCst);
+                }));
+                let group = ConsumerIdentity::parse("same-group").unwrap();
+                let detail = cx.new(|cx| {
+                    ConsumerDetail::new(
+                        AppServices::default(),
+                        10,
+                        group.clone(),
+                        ConsumerTab::Progress,
+                        Vec::new(),
+                        rocketmq_dashboard_common::ConsumerCapabilities::for_scope(
+                            rocketmq_dashboard_common::ConnectionScope::NameServer,
+                        ),
+                        Default::default(),
+                        cx,
+                    )
+                });
+                detail.update(cx, |detail, cx| {
+                    detail.store.progress.replace(ConsumerObservation::Complete(
+                        rocketmq_dashboard_common::ConsumerProgress::from_rows(group, Vec::new()),
+                    ));
+                    detail.set_mutation_task_for_test(Some(cx.spawn(async move |owner, cx| {
+                        detail_completion.await.unwrap();
+                        detail_completed.fetch_add(1, Ordering::SeqCst);
+                        let _ = owner.update(cx, |detail, cx| {
+                            detail.set_mutation_task_for_test(None);
+                            cx.notify();
+                        });
+                    })));
+                });
+                view.detail = Some(detail);
+                view.clear_for_environment(11, window, cx);
+                assert!(view.mutation_task.is_some());
+                assert!(view.detail.is_none());
+                assert_eq!(view.pending_details.len(), 1);
+                assert!(
+                    view.pending_details[0]
+                        .0
+                        .read(cx)
+                        .store
+                        .progress
+                        .state
+                        .value()
+                        .is_none()
+                );
+                assert!(
+                    view.pending_details[0]
+                        .0
+                        .read(cx)
+                        .store
+                        .diagnostic
+                        .state
+                        .value()
+                        .is_none()
+                );
+            })
+        });
+        complete_create.send(()).unwrap();
+        complete_detail.send(()).unwrap();
+        cx.run_until_parked();
+        assert_eq!(completed.load(Ordering::SeqCst), 2);
+        cx.update(|_, app| assert!(view.read(app).pending_details.is_empty()));
     }
 }

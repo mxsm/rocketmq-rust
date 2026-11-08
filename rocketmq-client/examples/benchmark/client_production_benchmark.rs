@@ -14,7 +14,7 @@
 
 #![recursion_limit = "256"]
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 use std::path::PathBuf;
@@ -41,6 +41,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 use serde::Serialize;
+use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scenario {
@@ -111,6 +112,8 @@ struct Config {
     message_count: usize,
     message_size: usize,
     batch_size: usize,
+    /// Async sends that may await their callbacks at once.
+    inflight: usize,
     timeout_ms: u64,
     use_tls: bool,
     access_key: Option<String>,
@@ -120,12 +123,62 @@ struct Config {
     run_id: String,
 }
 
+/// Default async window. A client instance admits at most 512 pending requests and rejects the
+/// rest at once instead of queueing them, so the window stays below that with room for heartbeats
+/// and route queries.
+const DEFAULT_ASYNC_INFLIGHT: usize = 256;
+/// Upper bound on one LitePull seed batch, well below the Broker's 4 MiB message limit.
+const SEED_BATCH_MAX_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Default)]
 struct Stats {
     success_count: usize,
     send_failed_count: usize,
     response_failed_count: usize,
+    /// Async messages without a completed callback when the wait deadline passed, including any
+    /// left unsubmitted because the window never freed a slot. They also count as send failures.
+    unfinished_count: usize,
     latency_us: Vec<u64>,
+}
+
+/// Wall-clock bounds of the run, so external samplers can attribute process CPU to the measured
+/// phase only.
+#[derive(Debug, Default, Clone, Copy, Serialize, PartialEq)]
+struct Phases {
+    seed_started_epoch_ms: Option<u128>,
+    measure_started_epoch_ms: u128,
+    measure_finished_epoch_ms: u128,
+}
+
+/// The measured window: it starts after clients are started (and LitePull messages are seeded).
+struct MeasureWindow {
+    started: Instant,
+    started_epoch_ms: u128,
+}
+
+impl MeasureWindow {
+    fn start() -> Self {
+        let window = Self {
+            started: Instant::now(),
+            started_epoch_ms: epoch_ms(),
+        };
+        println!("[Phase] measure-start epoch_ms={}", window.started_epoch_ms);
+        window
+    }
+
+    fn finish(self, seed_started_epoch_ms: Option<u128>) -> (Duration, Phases) {
+        let elapsed = self.started.elapsed();
+        let finished = epoch_ms();
+        println!("[Phase] measure-end epoch_ms={finished}");
+        (
+            elapsed,
+            Phases {
+                seed_started_epoch_ms,
+                measure_started_epoch_ms: self.started_epoch_ms,
+                measure_finished_epoch_ms: finished,
+            },
+        )
+    }
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -158,6 +211,7 @@ struct BenchmarkResult {
     success_count: usize,
     send_failed_count: usize,
     response_failed_count: usize,
+    unfinished_count: usize,
     throughput_messages_per_second: f64,
     payload_mib_per_second: f64,
     latency_us: LatencySummary,
@@ -173,6 +227,9 @@ struct BenchmarkReport<'a> {
     operation: &'static str,
     target: BenchmarkTarget<'a>,
     workload: BenchmarkWorkload,
+    /// The async in-flight window; absent for the other scenarios.
+    async_inflight: Option<usize>,
+    phases: Phases,
     result: BenchmarkResult,
 }
 
@@ -185,38 +242,39 @@ pub async fn main() -> ClientResult<()> {
 
     println!(
         "RocketMQ Rust client production benchmark namesrv={} topic={} scenario={} messageCount={} messageSize={} \
-         batchSize={} tls={} acl={}",
+         batchSize={} inflight={} tls={} acl={}",
         config.namesrv_addr,
         config.topic,
         config.scenario.as_str(),
         config.message_count,
         config.message_size,
         config.batch_size,
+        config.inflight,
         config.use_tls,
         config.access_key.is_some()
     );
 
-    let start = Instant::now();
-    let (stats, elapsed) = match config.scenario {
+    let (stats, elapsed, phases) = match config.scenario {
         Scenario::Sync | Scenario::Async | Scenario::Batch => {
             let mut producer = build_producer(client_runtime.clone(), &config)?;
             producer.start().await?;
+            let window = MeasureWindow::start();
             let stats = match config.scenario {
                 Scenario::Sync => run_sync(&mut producer, &config, &body).await,
                 Scenario::Async => run_async(&mut producer, &config, &body).await,
                 Scenario::Batch => run_batch(&mut producer, &config, &body).await,
                 Scenario::LitePull => unreachable!("lite-pull is handled by the outer match"),
             };
-            let elapsed = start.elapsed();
+            let (elapsed, phases) = window.finish(None);
             producer.shutdown().await;
-            (stats?, elapsed)
+            (stats?, elapsed, phases)
         }
         Scenario::LitePull => run_lite_pull(client_runtime, &config, &body).await?,
     };
 
     print_complete_summary(&stats, elapsed, config.scenario.operation());
     if let Some(output_json) = &config.output_json {
-        write_json_report(output_json, &config, &stats, elapsed)?;
+        write_json_report(output_json, &config, &stats, elapsed, phases)?;
     }
     example_runtime.shutdown().await;
 
@@ -309,8 +367,20 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
     let send_failed_count = Arc::new(AtomicUsize::new(0));
     let response_failed_count = Arc::new(AtomicUsize::new(0));
     let latency_us = Arc::new(Mutex::new(Vec::with_capacity(config.message_count)));
+    // Without a window every send is submitted at once, so callbacks queue behind the whole run
+    // and the slowest ones miss the wait deadline; that measures overload, not throughput.
+    let window = Arc::new(Semaphore::new(config.inflight));
+    let permit_wait = Duration::from_millis(config.timeout_ms.saturating_mul(2));
 
     for _ in 0..config.message_count {
+        let Ok(Ok(permit)) = tokio::time::timeout(permit_wait, Arc::clone(&window).acquire_owned()).await else {
+            eprintln!("async send window did not free a slot within {permit_wait:?}; stopping submission");
+            break;
+        };
+        // The callback is `Fn` and may be retained after it runs, so the slot is released
+        // explicitly on completion instead of when the closure drops.
+        let slot = Arc::new(Mutex::new(Some(permit)));
+        let slot_inner = Arc::clone(&slot);
         let begin = Instant::now();
         let success_count_inner = Arc::clone(&success_count);
         let send_failed_count_inner = Arc::clone(&send_failed_count);
@@ -326,6 +396,7 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
                     if completed_inner.swap(true, Ordering::AcqRel) {
                         return;
                     }
+                    slot_inner.lock().take();
                     latency_us_inner.lock().push(elapsed_us_u64(begin.elapsed()));
 
                     match (result, error) {
@@ -345,6 +416,7 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
             .await
         {
             if !completed.swap(true, Ordering::AcqRel) {
+                slot.lock().take();
                 send_failed_count.fetch_add(1, Ordering::Relaxed);
                 latency_us.lock().push(elapsed_us_u64(begin.elapsed()));
             }
@@ -352,7 +424,7 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
         }
     }
 
-    let deadline = Instant::now() + Duration::from_millis(config.timeout_ms.saturating_mul(2));
+    let deadline = Instant::now() + permit_wait;
     while observed_count(&success_count, &send_failed_count, &response_failed_count) < config.message_count
         && Instant::now() < deadline
     {
@@ -360,12 +432,12 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
     }
 
     let observed = observed_count(&success_count, &send_failed_count, &response_failed_count);
-    if observed < config.message_count {
-        let missing = config.message_count - observed;
-        send_failed_count.fetch_add(missing, Ordering::Relaxed);
+    let unfinished_count = config.message_count.saturating_sub(observed);
+    if unfinished_count > 0 {
+        send_failed_count.fetch_add(unfinished_count, Ordering::Relaxed);
         latency_us.lock().extend(std::iter::repeat_n(
             config.timeout_ms.saturating_mul(2).saturating_mul(1_000),
-            missing,
+            unfinished_count,
         ));
     }
 
@@ -374,6 +446,7 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
         success_count: success_count.load(Ordering::Relaxed),
         send_failed_count: send_failed_count.load(Ordering::Relaxed),
         response_failed_count: response_failed_count.load(Ordering::Relaxed),
+        unfinished_count,
         latency_us,
     })
 }
@@ -417,7 +490,7 @@ async fn run_lite_pull(
     client_runtime: Arc<ClientRuntime>,
     config: &Config,
     body: &[u8],
-) -> ClientResult<(Stats, Duration)> {
+) -> ClientResult<(Stats, Duration, Phases)> {
     let tag = format!("RustLitePullBenchmark-{}", config.run_id);
 
     let mut producer = build_producer(client_runtime.clone(), config)?;
@@ -431,20 +504,23 @@ async fn run_lite_pull(
 
     let queues = consumer.fetch_message_queues(&config.topic).await?;
     let queue = first_queue(queues)?;
+    let seed_started_epoch_ms = epoch_ms();
     seed_lite_pull_messages(&mut producer, config, body, tag.as_str(), &queue).await?;
     consumer.assign(vec![queue]).await?;
 
-    let start = Instant::now();
-    let stats = consume_lite_pull_messages(&consumer, config, tag.as_str(), start).await;
-    let elapsed = start.elapsed();
+    let window = MeasureWindow::start();
+    let stats = consume_lite_pull_messages(&consumer, config, tag.as_str(), window.started).await;
+    let (elapsed, phases) = window.finish(Some(seed_started_epoch_ms));
 
     consumer.commit().await;
     consumer.shutdown().await;
     producer.shutdown().await;
 
-    Ok((stats, elapsed))
+    Ok((stats, elapsed, phases))
 }
 
+/// Seeds the queue in batches: one synchronous send per message made the seed phase dominate the
+/// run (about 50 s of 55 s for 200,000 messages), although only the consume phase is measured.
 async fn seed_lite_pull_messages(
     producer: &mut DefaultMQProducer,
     config: &Config,
@@ -452,26 +528,31 @@ async fn seed_lite_pull_messages(
     tag: &str,
     queue: &MessageQueue,
 ) -> ClientResult<()> {
-    for _ in 0..config.message_count {
-        match producer
-            .send_to_queue_with_timeout(message(&config.topic, tag, body), queue.clone(), config.timeout_ms)
-            .await?
-        {
-            Some(send_result) if send_result.send_status == SendStatus::SendOk => {}
-            Some(send_result) => {
-                return Err(ClientError::illegal_argument(format!(
-                    "LitePull seed send status was {:?}",
-                    send_result.send_status
-                )));
-            }
-            None => {
-                return Err(ClientError::illegal_argument(
-                    "LitePull seed send returned no SendResult",
-                ))
-            }
+    let mut remaining = config.message_count;
+    while remaining > 0 {
+        let batch_len = seed_batch_len(remaining, config.batch_size, config.message_size);
+        let messages = (0..batch_len)
+            .map(|_| message(&config.topic, tag, body))
+            .collect::<Vec<_>>();
+        let send_result = producer
+            .send_batch_to_queue_with_timeout(messages, queue.clone(), config.timeout_ms)
+            .await?;
+        if send_result.send_status != SendStatus::SendOk {
+            return Err(ClientError::illegal_argument(format!(
+                "LitePull seed send status was {:?}",
+                send_result.send_status
+            )));
         }
+        remaining -= batch_len;
     }
     Ok(())
+}
+
+/// Messages in the next seed batch: up to `batch_size`, within [`SEED_BATCH_MAX_BYTES`] of bodies,
+/// and always at least one.
+fn seed_batch_len(remaining: usize, batch_size: usize, message_size: usize) -> usize {
+    let by_bytes = (SEED_BATCH_MAX_BYTES / message_size.max(1)).max(1);
+    remaining.min(batch_size.max(1)).min(by_bytes)
 }
 
 async fn consume_lite_pull_messages(
@@ -572,28 +653,31 @@ fn print_complete_summary(stats: &Stats, elapsed: Duration, operation: Operation
     );
 }
 
-fn write_json_report(path: &PathBuf, config: &Config, stats: &Stats, elapsed: Duration) -> ClientResult<()> {
+fn write_json_report(
+    path: &PathBuf,
+    config: &Config,
+    stats: &Stats,
+    elapsed: Duration,
+    phases: Phases,
+) -> ClientResult<()> {
     if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .map_err(|error| ClientError::internal("create benchmark report directory", error))?;
     }
-    let report = benchmark_report(config, stats, elapsed);
+    let report = benchmark_report(config, stats, elapsed, phases);
     let body = serde_json::to_vec_pretty(&report)
         .map_err(|error| ClientError::internal("serialize benchmark report", error))?;
     std::fs::write(path, body).map_err(|error| ClientError::internal("write benchmark report", error))
 }
 
-fn benchmark_report<'a>(config: &'a Config, stats: &Stats, elapsed: Duration) -> BenchmarkReport<'a> {
+fn benchmark_report<'a>(config: &'a Config, stats: &Stats, elapsed: Duration, phases: Phases) -> BenchmarkReport<'a> {
     let elapsed_secs = elapsed.as_secs_f64().max(0.000_001);
     let successful_bytes = stats.success_count.saturating_mul(config.message_size);
     BenchmarkReport {
         schema_version: 1,
         artifact_kind: "rocketmq_message_path_measurement",
         run_id: &config.run_id,
-        generated_at_epoch_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or_default(),
+        generated_at_epoch_ms: epoch_ms(),
         scenario: config.scenario.as_str(),
         operation: config.scenario.operation().as_str(),
         target: BenchmarkTarget {
@@ -605,11 +689,14 @@ fn benchmark_report<'a>(config: &'a Config, stats: &Stats, elapsed: Duration) ->
             message_size_bytes: config.message_size,
             batch_size: config.batch_size,
         },
+        async_inflight: (config.scenario == Scenario::Async).then_some(config.inflight),
+        phases,
         result: BenchmarkResult {
             duration_us: elapsed_us_u64(elapsed),
             success_count: stats.success_count,
             send_failed_count: stats.send_failed_count,
             response_failed_count: stats.response_failed_count,
+            unfinished_count: stats.unfinished_count,
             throughput_messages_per_second: stats.success_count as f64 / elapsed_secs,
             payload_mib_per_second: successful_bytes as f64 / (1024.0 * 1024.0) / elapsed_secs,
             latency_us: latency_summary(&stats.latency_us),
@@ -668,6 +755,13 @@ fn elapsed_us_u64(elapsed: Duration) -> u64 {
     elapsed.as_micros().try_into().unwrap_or(u64::MAX)
 }
 
+fn epoch_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
 impl Config {
     fn parse() -> ClientResult<Self> {
         let mut config = Self {
@@ -678,6 +772,7 @@ impl Config {
             message_count: 100,
             message_size: 128,
             batch_size: 16,
+            inflight: DEFAULT_ASYNC_INFLIGHT,
             timeout_ms: 30_000,
             use_tls: env_flag("ROCKETMQ_ENABLE_TLS_SMOKE"),
             access_key: env_non_empty("ROCKETMQ_ACL_ACCESS_KEY"),
@@ -704,6 +799,9 @@ impl Config {
                 }
                 "--batch-size" => {
                     config.batch_size = parse_positive_usize(next_arg(&mut args, "--batch-size")?, "--batch-size")?;
+                }
+                "--inflight" => {
+                    config.inflight = parse_positive_usize(next_arg(&mut args, "--inflight")?, "--inflight")?;
                 }
                 "--timeout-ms" => {
                     config.timeout_ms = parse_positive_u64(next_arg(&mut args, "--timeout-ms")?, "--timeout-ms")?;
@@ -836,6 +934,7 @@ mod tests {
             message_count: 4,
             message_size: 1_024,
             batch_size: 1,
+            inflight: DEFAULT_ASYNC_INFLIGHT,
             timeout_ms: 3_000,
             use_tls: false,
             access_key: None,
@@ -864,12 +963,11 @@ mod tests {
         let config = test_config();
         let stats = Stats {
             success_count: 4,
-            send_failed_count: 0,
-            response_failed_count: 0,
             latency_us: vec![100, 200, 300, 400],
+            ..Stats::default()
         };
 
-        let report = benchmark_report(&config, &stats, Duration::from_secs(2));
+        let report = benchmark_report(&config, &stats, Duration::from_secs(2), Phases::default());
         let value = serde_json::to_value(report).expect("benchmark report should serialize");
 
         assert_eq!(1, value["schema_version"]);
@@ -880,6 +978,57 @@ mod tests {
         assert_eq!(4, value["result"]["success_count"]);
         assert_eq!(2.0, value["result"]["throughput_messages_per_second"]);
         assert_eq!(400, value["result"]["latency_us"]["p95"]);
+    }
+
+    #[test]
+    fn report_adds_phases_without_changing_the_qualification_workload() {
+        let config = Config {
+            scenario: Scenario::Async,
+            inflight: 64,
+            ..test_config()
+        };
+        let stats = Stats {
+            success_count: 3,
+            send_failed_count: 1,
+            unfinished_count: 1,
+            latency_us: vec![100, 200, 300, 400],
+            ..Stats::default()
+        };
+        let phases = Phases {
+            seed_started_epoch_ms: None,
+            measure_started_epoch_ms: 1_000,
+            measure_finished_epoch_ms: 3_000,
+        };
+
+        let value = serde_json::to_value(benchmark_report(&config, &stats, Duration::from_secs(2), phases))
+            .expect("benchmark report should serialize");
+
+        // scripts/message_path_qualification.py compares the workload object for equality.
+        let workload = value["workload"].as_object().expect("workload object");
+        let mut keys = workload.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(vec!["batch_size", "message_count", "message_size_bytes"], keys);
+        assert_eq!(64, value["async_inflight"]);
+        assert_eq!(1_000, value["phases"]["measure_started_epoch_ms"]);
+        assert_eq!(3_000, value["phases"]["measure_finished_epoch_ms"]);
+        assert!(value["phases"]["seed_started_epoch_ms"].is_null());
+        assert_eq!(1, value["result"]["unfinished_count"]);
+        assert_eq!(1, value["result"]["send_failed_count"]);
+
+        let sync_config = test_config();
+        let sync = benchmark_report(&sync_config, &stats, Duration::from_secs(2), phases);
+        assert_eq!(None, sync.async_inflight);
+    }
+
+    #[test]
+    fn seed_batches_respect_batch_size_and_byte_bound() {
+        assert_eq!(32, seed_batch_len(200_000, 32, 1_024));
+        assert_eq!(5, seed_batch_len(5, 32, 1_024));
+        // 64 KiB bodies: 16 fit in 1 MiB.
+        assert_eq!(16, seed_batch_len(200_000, 32, 64 * 1024));
+        // A body above the bound still seeds one message per batch.
+        assert_eq!(1, seed_batch_len(200_000, 32, 4 * 1024 * 1024));
+        assert_eq!(1, seed_batch_len(200_000, 0, 1_024));
     }
 
     #[test]

@@ -78,7 +78,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             self.timer_message_store(),
             self.transactional_message_check_service.as_ref(),
             self.ack_message_processor.as_ref(),
-            &self.broker_attached_plugins,
             Arc::clone(&self.is_schedule_service_start),
             Arc::clone(&self.is_transaction_check_service_start),
             Arc::clone(&self.shutdown),
@@ -325,7 +324,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             self.timer_message_store(),
             self.transactional_message_check_service.as_ref(),
             self.ack_message_processor.as_ref(),
-            &self.broker_attached_plugins,
             Arc::clone(&self.is_schedule_service_start),
             Arc::clone(&self.is_transaction_check_service_start),
             Arc::clone(&shutdown),
@@ -354,7 +352,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             &self.consumer_offset_manager,
             &schedule,
             self.timer_message_store(),
-            &self.broker_attached_plugins,
             transition,
             self.metadata_io
                 .as_ref()
@@ -414,98 +411,13 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     }
 
     #[inline]
-    pub fn store_host_mut(&mut self) -> &mut SocketAddr {
-        &mut self.store_host
-    }
-
-    #[inline]
-    pub fn topic_queue_mapping_manager_mut(&mut self) -> &mut TopicQueueMappingManager {
-        Arc::get_mut(&mut self.topic_queue_mapping_manager)
-            .expect("topic queue mapping manager mutation requires an unpublished owner")
-    }
-
-    #[inline]
     pub fn subscription_group_manager_mut(&mut self) -> &mut SubscriptionGroupManager {
         self.subscription_group_manager.as_mut().unwrap()
     }
 
     #[inline]
-    pub fn consumer_filter_manager_mut(&mut self) -> &mut ConsumerFilterManager {
-        self.consumer_filter_manager.as_mut().unwrap()
-    }
-
-    #[inline]
     pub fn message_store_mut(&mut self) -> Option<&mut MS> {
         self.message_store.as_mut().and_then(Arc::get_mut)
-    }
-
-    #[inline]
-    pub fn broker_stats_mut(&mut self) -> &mut Option<Arc<BrokerStats<MS>>> {
-        &mut self.broker_stats
-    }
-
-    #[inline]
-    pub fn timer_message_store_mut(&mut self) -> &mut Option<Arc<TimerMessageStore>> {
-        &mut self.timer_message_store
-    }
-
-    #[inline]
-    pub fn broker_outer_api_mut(&mut self) -> &mut BrokerOuterAPI {
-        &mut self.broker_outer_api
-    }
-
-    #[inline]
-    pub fn producer_manager_mut(&mut self) -> &mut ProducerManager {
-        &mut self.producer_manager
-    }
-
-    #[inline]
-    pub fn consumer_manager_mut(&mut self) -> &mut ConsumerManager {
-        &mut self.consumer_manager
-    }
-
-    #[inline]
-    pub fn broadcast_offset_manager_mut(&mut self) -> &mut BroadcastOffsetManager {
-        &mut self.broadcast_offset_manager
-    }
-
-    #[inline]
-    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> Option<&mut TopicQueueMappingCleanService> {
-        self.topic_queue_mapping_clean_service.as_mut()
-    }
-
-    #[inline]
-    pub fn update_master_haserver_addr_periodically_mut(&mut self) -> &mut bool {
-        &mut self.update_master_haserver_addr_periodically
-    }
-
-    #[inline]
-    pub fn rebalance_lock_manager_mut(&mut self) -> &mut RebalanceLockManager {
-        &mut self.rebalance_lock_manager
-    }
-
-    #[inline]
-    pub fn broker_member_group_mut(&mut self) -> impl std::ops::DerefMut<Target = BrokerMemberGroup> + '_ {
-        self.broker_member_group.write()
-    }
-
-    #[inline]
-    pub fn transactional_message_check_listener_mut(
-        &mut self,
-    ) -> &mut Option<DefaultTransactionalMessageCheckListener> {
-        &mut self.transactional_message_check_listener
-    }
-
-    #[inline]
-    pub fn transactional_message_check_service_mut(
-        &mut self,
-    ) -> Option<&mut Arc<TransactionalMessageCheckService<MS>>> {
-        self.transactional_message_check_service.as_mut()
-    }
-
-    #[inline]
-    pub fn pop_inflight_message_counter_mut(&mut self) -> &mut PopInflightMessageCounter {
-        &mut self.pop_inflight_message_counter
     }
 
     #[inline]
@@ -665,11 +577,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     }
 
     #[inline]
-    pub fn broker_attached_plugins(&self) -> &[Arc<dyn BrokerAttachedPlugin>] {
-        &self.broker_attached_plugins
-    }
-
-    #[inline]
     pub fn broker_outer_api(&self) -> &BrokerOuterAPI {
         &self.broker_outer_api
     }
@@ -785,11 +692,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     }
 
     #[inline]
-    pub fn slave_synchronize_mut(&mut self) -> Option<&SlaveSynchronize<MS>> {
-        self.slave_synchronize.as_deref()
-    }
-
-    #[inline]
     pub fn update_slave_master_addr(&mut self, master_addr: Option<CheetahString>) {
         self.slave_master_addr.store(master_addr.as_ref());
     }
@@ -837,105 +739,12 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     }
 
     #[inline]
-    pub fn set_topic_queue_mapping_manager(&mut self, topic_queue_mapping_manager: TopicQueueMappingManager) {
-        self.topic_queue_mapping_manager = Arc::new(topic_queue_mapping_manager);
-    }
-
-    #[inline]
-    pub fn set_subscription_group_manager(&mut self, subscription_group_manager: SubscriptionGroupManager) {
-        self.subscription_group_manager = Some(subscription_group_manager);
-    }
-
-    #[inline]
-    pub fn set_consumer_filter_manager(&mut self, consumer_filter_manager: ConsumerFilterManager) {
-        self.consumer_filter_manager = Some(consumer_filter_manager);
-    }
-
-    #[inline]
-    pub fn set_broker_stats(&mut self, broker_stats: BrokerStats<MS>) {
-        self.broker_stats = Some(Arc::new(broker_stats));
-    }
-
-    #[inline]
     pub fn set_timer_message_store(&mut self, timer_message_store: TimerMessageStore) {
         self.timer_message_store = Some(Arc::new(timer_message_store));
     }
 
-    #[inline]
-    pub fn set_broker_outer_api(&mut self, broker_outer_api: BrokerOuterAPI) {
-        self.broker_outer_api = broker_outer_api;
-    }
-
-    #[inline]
-    pub fn set_producer_manager(&mut self, producer_manager: ProducerManager) {
-        self.producer_manager = producer_manager;
-    }
-
-    #[inline]
-    pub fn set_consumer_manager(&mut self, consumer_manager: ConsumerManager) {
-        self.consumer_manager = consumer_manager;
-    }
-
-    #[inline]
-    pub fn set_broadcast_offset_manager(&mut self, broadcast_offset_manager: BroadcastOffsetManager) {
-        self.broadcast_offset_manager = broadcast_offset_manager;
-    }
-
-    #[inline]
-    pub fn set_broker_stats_manager(&mut self, broker_stats_manager: Arc<BrokerStatsManager>) {
-        self.broker_stats_manager = Some(broker_stats_manager);
-    }
-
-    #[inline]
-    pub fn set_topic_queue_mapping_clean_service(
-        &mut self,
-        topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
-    ) {
-        self.topic_queue_mapping_clean_service = Some(topic_queue_mapping_clean_service);
-    }
-
-    #[inline]
-    pub fn set_update_master_haserver_addr_periodically(&mut self, update_master_haserver_addr_periodically: bool) {
-        self.update_master_haserver_addr_periodically = update_master_haserver_addr_periodically;
-    }
-
-    #[inline]
-    pub fn set_should_start_time(&mut self, should_start_time: Arc<AtomicU64>) {
-        self.should_start_time = should_start_time;
-    }
-
-    #[inline]
-    pub fn set_rebalance_lock_manager(&mut self, rebalance_lock_manager: RebalanceLockManager) {
-        self.rebalance_lock_manager = rebalance_lock_manager;
-    }
-
-    #[inline]
-    pub fn set_broker_member_group(&mut self, broker_member_group: BrokerMemberGroup) {
-        self.broker_member_group.publish(broker_member_group);
-    }
-
     pub fn get_min_broker_id_in_group(&self) -> u64 {
         self.online_role_state.min_broker_id()
-    }
-
-    #[inline]
-    pub fn set_transactional_message_check_listener(
-        &mut self,
-        transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
-    ) {
-        self.transactional_message_check_listener = Some(transactional_message_check_listener);
-    }
-
-    #[inline]
-    pub fn set_transactional_message_check_service(
-        &mut self,
-        transactional_message_check_service: TransactionalMessageCheckService<MS>,
-    ) {
-        self.transactional_message_check_service = Some(Arc::new(transactional_message_check_service));
-    }
-
-    pub fn set_pop_inflight_message_counter(&mut self, pop_inflight_message_counter: PopInflightMessageCounter) {
-        self.pop_inflight_message_counter = pop_inflight_message_counter;
     }
 
     pub(super) async fn update_namesrv_addr_inner(&mut self) {
@@ -999,9 +808,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         if let Err(error) = self.change_schedule_service_status(should_start).await {
             error!(?error, should_start, "Failed to change ScheduleMessageService status");
             return;
-        }
-        for plugin in self.broker_attached_plugins.iter() {
-            plugin.status_changed(should_start);
         }
         self.change_transaction_check_service_status(should_start).await;
 
@@ -1324,7 +1130,6 @@ impl BrokerRuntime {
             notification_processor: None,
             query_assignment_processor: None,
             metadata_io,
-            broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
             slave_master_addr,

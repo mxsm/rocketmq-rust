@@ -90,18 +90,16 @@ tempfile = "3.27.0"
 
 memmap2                 = "0.9.10"
 trait-variant.workspace = true
-sysinfo                 = "0.39.3"
+sysinfo                 = "0.40.1"
 cheetah-string          = { workspace = true }
 thiserror               = { workspace = true }
 
 futures-util = "0.3.32"
 rand         = { workspace = true }
 uuid         = { workspace = true }
-anyhow       = { workspace = true }
 fs2          = "0.4"
 
 dashmap   = { workspace = true }
-hashbrown = "0.17"
 rayon     = "1.12"
 
 [target.'cfg(unix)'.dependencies]

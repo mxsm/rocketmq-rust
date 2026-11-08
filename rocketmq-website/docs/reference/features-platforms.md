@@ -20,7 +20,7 @@ Features are additive across a dependency graph. Disabling defaults on one depen
 | --- | --- | --- | --- |
 | [`rocketmq-broker`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/Cargo.toml) | `local_file_store` | `rocksdb_store`, alias `rocksdb-store`; `extended_timeline`; `tieredstore` | Select a compatible store/timer configuration; build selection does not migrate existing data. |
 | [`rocketmq-namesrv`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-namesrv/Cargo.toml) | `tls` | `embedded-controller` | TLS still needs endpoint configuration. Embedded Controller additionally needs `enableControllerInNamesrv` and Controller configuration. |
-| [`rocketmq-controller`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-controller/Cargo.toml) | `storage-rocksdb` | `storage-file`; `dev-single` enables `storage-file` | Match `storageBackend` to the available implementation. `dev-single` does not itself change the default `RocksDB` configuration value. |
+| [`rocketmq-controller`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-controller/Cargo.toml) | `storage-rocksdb` | `storage-file`; `dev-single` enables `storage-file` | Match `storageEngineType` (or legacy alias `storageBackend`) to the available implementation. `dev-single` does not itself change the default `RocksDB` configuration value. |
 | [`rocketmq-proxy`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-proxy/Cargo.toml) | `cluster-mode` and `local-mode` | `tls`; `tieredstore` also enables Local mode | Choose `mode = "cluster"` or `"local"`. Built-in gRPC TLS requires both the TLS feature and TLS material. |
 | [`rocketmq-client-rust`](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/Cargo.toml) | `admin-full`, expanding to `admin-read` and `admin-mutation` | `nameserver-dns-discovery`; separate telemetry features below | Inject an owned client runtime and configure discovery. Compiled admin APIs do not bypass authentication or authorization. |
 
@@ -90,6 +90,6 @@ cargo build -p rocketmq-proxy --no-default-features --features cluster-mode
 cargo build -p rocketmq-controller --no-default-features --features dev-single
 ```
 
-The last command selects file-storage support; pair it with `storageBackend = "File"` and the intended single-node development configuration. These are alternative build examples, not a requirement to build every profile. For an embedded application, inspect that application's manifest and feature graph, because it can differ from the package-level commands above.
+The last command selects file-storage support; pair it with `storageEngineType = "File"` and the intended single-node development configuration. These are alternative build examples, not a requirement to build every profile. For an embedded application, inspect that application's manifest and feature graph, because it can differ from the package-level commands above.
 
-The Controller `File` backend is accepted only with `dev-single`; selecting `storage-file` alone does not enable the runtime File path. Select `storageBackend = "File"` explicitly for that development profile.
+The Controller `File` backend is accepted only with `dev-single`; selecting `storage-file` alone does not enable the runtime File path. Select `storageEngineType = "File"` explicitly for that development profile.

@@ -17,7 +17,7 @@ use bytes::BytesMut;
 
 use super::super::RemotingCommand;
 use super::super::SerializeType;
-use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::HeaderMap;
 use crate::protocol::header_codec::write_json_string;
 use crate::protocol::LanguageCode;
 
@@ -25,6 +25,29 @@ use crate::protocol::LanguageCode;
 fn write_json_i32(out: &mut BytesMut, value: i32) {
     let mut buffer = itoa::Buffer::new();
     out.extend_from_slice(buffer.format(value).as_bytes());
+}
+
+/// Appends `fields` to the JSON object the header encoder wrote at `fields_start`.
+fn append_json_fields(dst: &mut BytesMut, fields_start: usize, fields: &HeaderMap) -> rocketmq_error::Result<()> {
+    if dst.len() < fields_start + 2 || dst.last() != Some(&b'}') {
+        return Err(crate::error::serialization_encode_failed(
+            "remoting-command",
+            "direct JSON header did not end with a closing brace",
+        ));
+    }
+    dst.truncate(dst.len() - 1);
+    let mut needs_separator = dst.len() > fields_start + 1;
+    for (key, value) in fields {
+        if needs_separator {
+            dst.extend_from_slice(b",");
+        }
+        needs_separator = true;
+        write_json_string(dst, key.as_str());
+        dst.extend_from_slice(b":");
+        write_json_string(dst, value.as_str());
+    }
+    dst.extend_from_slice(b"}");
+    Ok(())
 }
 
 #[inline]
@@ -51,13 +74,12 @@ impl RemotingCommand {
     /// Optimized JSON encoding with pre-calculated capacity and zero-copy optimizations
     #[inline]
     pub(super) fn fast_encode_json(&mut self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::Result<()> {
-        let direct_fields = !self.custom_header_to_net
-            && self.ext_fields.is_absent()
-            && self
-                .command_custom_header_ref()
-                .is_some_and(CommandCustomHeader::supports_direct_json_fields);
-        if direct_fields {
-            return self.fast_encode_json_direct(dst, body_length);
+        let direct_extra_fields = self
+            .command_custom_header_ref()
+            .filter(|header| header.supports_direct_json_fields())
+            .and_then(|header| self.direct_header_extra_fields(header));
+        if let Some(extra_fields) = direct_extra_fields {
+            return self.fast_encode_json_direct(dst, body_length, extra_fields);
         }
 
         self.try_make_custom_header_to_net()
@@ -87,7 +109,12 @@ impl RemotingCommand {
     }
 
     #[inline]
-    fn fast_encode_json_direct(&self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::Result<()> {
+    fn fast_encode_json_direct(
+        &self,
+        dst: &mut BytesMut,
+        body_length: usize,
+        extra_fields: Option<&HeaderMap>,
+    ) -> rocketmq_error::Result<()> {
         let header = self.command_custom_header_ref().ok_or_else(|| {
             crate::error::serialization_encode_failed(
                 "remoting-command",
@@ -120,9 +147,13 @@ impl RemotingCommand {
             dst.extend_from_slice(b"null");
         }
         dst.extend_from_slice(b",\"extFields\":");
+        let fields_start = dst.len();
         header
             .encode_direct_json_fields(dst)
             .map_err(crate::protocol::header_codec::into_error)?;
+        if let Some(extra_fields) = extra_fields {
+            append_json_fields(dst, fields_start, extra_fields)?;
+        }
         dst.extend_from_slice(b",\"serializeTypeCurrentRPC\":\"JSON\"}");
 
         let header_length = dst.len() - header_index;

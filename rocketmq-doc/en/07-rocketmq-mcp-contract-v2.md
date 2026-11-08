@@ -17,8 +17,8 @@ error that lists the supported revision. The server does not expose a
 dual-version compatibility path.
 
 Every Tool descriptor includes complete input and output JSON Schemas,
-annotations, and `taskSupport: forbidden`. Input validation and business or
-backend failures are Tool execution errors so a model can correct arguments
+annotations, and `taskSupport: forbidden`. Input validation, business failures, and source
+unavailability are Tool execution errors so a model can correct arguments
 and retry. Unknown Tool names and malformed JSON-RPC requests remain protocol
 errors.
 
@@ -240,14 +240,14 @@ Resources are always scoped to an explicit configured cluster:
 Resource readers execute live queries through `QueryFacade`. Successful
 payloads identify `source` as `live`, include `observed_at`, `freshness_ms`, and
 `cache_status`, set `partial` to `false`, and contain the same normalized read
-models used by Tools. A backend failure is returned as a Resource error rather
+models used by Tools. Source unavailability is returned as a Resource error rather
 than being represented as an empty inventory.
 
 Resource errors use Resource Not Found for invalid URIs, unknown clusters, and
 unknown entities. Other failures retain a non-sensitive machine-readable data
 code: `resource_permission_denied`, `resource_rate_limited`,
 `resource_query_timeout`, `resource_query_cancelled`, or
-`resource_backend_unavailable`.
+`source_unavailable`.
 
 `resources/list` exposes only the four cluster root Resources and uses an
 opaque versioned MCP cursor when more than 50 descriptors exist.

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "consumer_parity_tests.rs"]
+mod parity;
+
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use gpui::{
@@ -32,7 +35,7 @@ use rocketmq_dashboard_common::{
     TopicPartialOutcome, TopicTargetOutcome,
 };
 
-use super::{consumers::ConsumersView, producers::ProducersView};
+use super::{consumer_dialogs::ConsumerNumberField, consumers::ConsumersView, producers::ProducersView};
 use crate::{
     route::ConsumerTab,
     services::{AppServices, consumers::test_support::FakeConsumerBackend, topics::test_support::FakeTopicBackend},
@@ -91,13 +94,15 @@ fn inventory(groups: Vec<ConsumerGroupObservation>) -> ConsumerInventory {
     ConsumerInventory {
         groups,
         targets: vec![target()],
+        target_observation: ConsumerObservationState::Complete,
+        group_observation: ConsumerObservationState::Complete,
         observation: ConsumerObservationState::Complete,
         failures: Vec::new(),
         capabilities: ConsumerCapabilities::for_scope(ConnectionScope::NameServer),
     }
 }
 
-fn configuration(generation: u64, retry_max_times: u32) -> ConsumerConfiguration {
+fn configuration(generation: u64, retry_max_times: i32) -> ConsumerConfiguration {
     ConsumerConfiguration {
         group: group(),
         snapshots: vec![ConsumerConfigSnapshot {
@@ -110,7 +115,9 @@ fn configuration(generation: u64, retry_max_times: u32) -> ConsumerConfiguration
                 retry_max_times,
                 retry_queue_nums: 1,
                 consume_timeout_minutes: 15,
+                ..ConsumerConfigEntries::default()
             },
+            read_only: Default::default(),
         }],
         observation: ConsumerObservationState::Complete,
         failures: Vec::new(),
@@ -266,6 +273,79 @@ fn mount(
 }
 
 #[gpui::test]
+fn late_create_completion_after_environment_switch_reenables_the_button_without_replacing_new_state(
+    cx: &mut gpui::TestAppContext,
+) {
+    let fake = Arc::new(FakeConsumerBackend::default());
+    fake.queue_inventory(Ok(inventory(vec![group_observation()])));
+    fake.queue_create(Ok(consumer_outcome(ConsumerMutationKind::Create, false)));
+    let complete_create = fake.hold_next_create();
+    let services = AppServices::default().with_consumer_backend(fake.clone());
+    let (root, cx, consumers) = mount(cx, services);
+    cx.run_until_parked();
+    let input = cx.read(|app| consumers.read(app).create_group_for_test());
+    cx.update(|window, app| input.update(app, |input, cx| input.set_value("old-environment-group", window, cx)));
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-create");
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-target-0");
+    click_debug(cx, "consumer-dialog-confirm");
+    assert_eq!(fake.calls().create.len(), 1);
+
+    cx.update(|window, app| {
+        consumers.update(app, |view, cx| {
+            window.close_all_dialogs(cx);
+            view.clear_for_environment(8, window, cx);
+            view.store.inventory.replace(inventory(Vec::new()));
+        });
+        input.update(app, |input, cx| input.set_value("new-environment-group", window, cx));
+    });
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-create");
+    assert_eq!(
+        fake.calls().create.len(),
+        1,
+        "Create stays disabled while the accepted write is pending"
+    );
+
+    let notifications = Rc::new(std::cell::Cell::new(0));
+    let observed_notifications = notifications.clone();
+    let _subscription = cx.update(|_, app| {
+        app.observe(&consumers, move |_, _| {
+            observed_notifications.set(observed_notifications.get() + 1);
+        })
+    });
+    fake.queue_inventory(Ok(inventory(vec![group_observation()])));
+    complete_create.send(()).unwrap();
+    cx.run_until_parked();
+    assert!(
+        notifications.get() > 0,
+        "Releasing the old write must schedule a render of Create's enabled state"
+    );
+    cx.update(|_, app| {
+        let view = consumers.read(app);
+        assert!(
+            view.store.inventory.state.value().unwrap().groups.is_empty(),
+            "The old response cannot populate the new environment"
+        );
+        assert!(view.mutation_status_for_test().is_none());
+        assert_eq!(input.read(app).value().as_str(), "new-environment-group");
+    });
+
+    fake.queue_create(Ok(consumer_outcome(ConsumerMutationKind::Create, false)));
+    fake.queue_inventory(Ok(inventory(Vec::new())));
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-create");
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-target-0");
+    click_debug(cx, "consumer-dialog-confirm");
+    let calls = fake.calls();
+    assert_eq!(calls.create.len(), 2);
+    assert_eq!(calls.create[1].0.revision, 8);
+    assert_eq!(calls.create[1].1.group.as_str(), "new-environment-group");
+}
+
+#[gpui::test]
 fn create_button_submits_exact_targets_and_authoritatively_reloads(cx: &mut gpui::TestAppContext) {
     let fake = Arc::new(FakeConsumerBackend::default());
     fake.queue_inventory(Ok(inventory(vec![group_observation()])));
@@ -278,6 +358,9 @@ fn create_button_submits_exact_targets_and_authoritatively_reloads(cx: &mut gpui
     fake.queue_inventory(Ok(inventory(vec![group_observation()])));
     draw(&root, cx, 1440., 960.);
     click_debug(cx, "consumer-create");
+    draw(&root, cx, 1440., 960.);
+    click_debug(cx, "consumer-target-0");
+    click_debug(cx, "consumer-dialog-confirm");
 
     let calls = fake.calls();
     assert_eq!(calls.create.len(), 1);
@@ -294,7 +377,7 @@ fn create_button_submits_exact_targets_and_authoritatively_reloads(cx: &mut gpui
 }
 
 #[gpui::test]
-fn configuration_buttons_retain_conflicted_draft_and_block_same_command_replay(cx: &mut gpui::TestAppContext) {
+fn configuration_form_retains_conflicted_draft_and_blocks_same_command_replay(cx: &mut gpui::TestAppContext) {
     let fake = Arc::new(FakeConsumerBackend::default());
     fake.queue_inventory(Ok(inventory(vec![group_observation()])));
     let services = AppServices::default().with_consumer_backend(fake.clone());
@@ -309,13 +392,16 @@ fn configuration_buttons_retain_conflicted_draft_and_block_same_command_replay(c
     cx.run_until_parked();
     draw(&root, cx, 1440., 960.);
     let detail = cx.read(|app| consumers.read(app).detail_for_test().expect("detail"));
-    click_debug(cx, "draft-retry-max-0");
+    click_debug(cx, "consumer-edit-config-0");
+    let form = cx.read(|app| detail.read(app).mutation_dialog_for_test().unwrap());
+    let input = cx.read(|app| form.read(app).number_input(ConsumerNumberField::RetryMax));
+    cx.update(|window, app| input.update(app, |input, cx| input.set_value("3", window, cx)));
     draw(&root, cx, 1440., 960.);
     fake.queue_patch(Ok(ConsumerConfigPatchOutcome::GenerationConflict {
         expected_generation: 7,
         actual_generation: 8,
     }));
-    click_debug(cx, "apply-consumer-config-draft");
+    click_debug(cx, "consumer-dialog-confirm");
     assert!(cx.read(|app| {
         detail
             .read(app)
@@ -324,7 +410,7 @@ fn configuration_buttons_retain_conflicted_draft_and_block_same_command_replay(c
     }));
 
     draw(&root, cx, 1440., 960.);
-    click_debug(cx, "apply-consumer-config-draft");
+    click_debug(cx, "consumer-dialog-confirm");
     assert_eq!(fake.calls().patch.len(), 1);
 }
 
@@ -492,7 +578,8 @@ fn delete_button_uses_confirm_dialog_and_single_backend_attempt(cx: &mut gpui::T
     draw(&root, cx, 1440., 960.);
     click_debug(cx, "consumer-delete");
     draw(&root, cx, 1440., 960.);
-    click_debug(cx, "confirm-dialog-ok");
+    click_debug(cx, "consumer-target-0");
+    click_debug(cx, "consumer-dialog-confirm");
 
     let calls = fake.calls();
     assert_eq!(calls.delete.len(), 1);
@@ -519,7 +606,8 @@ fn partial_delete_reloads_inventory_but_keeps_sheet_and_failed_target_visible(cx
     draw(&root, cx, 1440., 960.);
     click_debug(cx, "consumer-delete");
     draw(&root, cx, 1440., 960.);
-    click_debug(cx, "confirm-dialog-ok");
+    click_debug(cx, "consumer-target-0");
+    click_debug(cx, "consumer-dialog-confirm");
     draw(&root, cx, 1440., 960.);
 
     assert!(cx.read(|app| consumers.read(app).detail_for_test().is_some()));
@@ -534,7 +622,7 @@ fn partial_delete_reloads_inventory_but_keeps_sheet_and_failed_target_visible(cx
     }));
     assert_eq!(fake.calls().inventory.len(), 3);
     draw(&root, cx, 1440., 960.);
-    click_debug(cx, "consumer-delete");
+    click_debug(cx, "consumer-dialog-confirm");
     assert_eq!(fake.calls().delete.len(), 1);
 }
 

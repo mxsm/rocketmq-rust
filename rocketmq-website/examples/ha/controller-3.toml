@@ -4,7 +4,7 @@ controllerType = "Raft"
 nodeId = 3
 listenAddr = "127.0.0.1:19898"
 storagePath = "./.rocketmq-ha-demo/controller-3/raft"
-storageBackend = "RocksDB"
+storageEngineType = "RocksDB"
 enableElectUncleanMaster = false
 enableElectUncleanMasterLocal = false
 

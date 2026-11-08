@@ -163,3 +163,113 @@ fn ext_key_length_matches_java_signed_short_boundary() {
         Some("value")
     );
 }
+
+#[test]
+fn non_java_remoting_client_route_query_decodes_successfully() {
+    use bytes::BufMut;
+    use cheetah_string::CheetahString;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+
+    let json_header = br#"{"code":105,"languageCode":2,"version":317,"opaque":1,"flag":0,"remark":null,"extFields":{"topic":"AttributionTest","sysFlag":64,"logicalQueueIdsFilter":null}}"#;
+
+    let mut frame = BytesMut::with_capacity(8 + json_header.len());
+    frame.put_i32(i32::try_from(4 + json_header.len()).unwrap());
+    frame.put_i32(RemotingCommand::mark_serialize_type(
+        i32::try_from(json_header.len()).unwrap(),
+        SerializeType::JSON,
+    ));
+    frame.extend_from_slice(json_header);
+
+    let decoded = RemotingCommand::decode(&mut frame)
+        .expect("decoding must succeed")
+        .expect("frame must be complete");
+
+    assert_eq!(decoded.code(), 105);
+    assert_eq!(decoded.language(), LanguageCode::DOTNET);
+    assert_eq!(decoded.version(), 317);
+    assert_eq!(decoded.opaque(), 1);
+    assert_eq!(decoded.get_serialize_type(), SerializeType::JSON);
+
+    let ext = decoded.ext_fields().expect("ext_fields must be present");
+    assert_eq!(ext.get("topic").map(CheetahString::as_str), Some("AttributionTest"));
+    assert_eq!(ext.get("sysFlag").map(CheetahString::as_str), Some("64"));
+    assert!(!ext.contains_key("logicalQueueIdsFilter"));
+
+    let header = decoded
+        .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+        .expect("GetRouteInfoRequestHeader must decode from ext_fields");
+    assert_eq!(header.topic.as_str(), "AttributionTest");
+}
+
+#[test]
+fn extension_fields_support_numeric_and_null_variants() {
+    use bytes::BufMut;
+    use cheetah_string::CheetahString;
+
+    for header_bytes in [
+        br#"{"code":105,"languageCode":2,"version":317,"opaque":1,"flag":0,"remark":null,"extFields":{"topic":"Test","sysFlag":64}}"#.as_slice(),
+        br#"{"code":105,"languageCode":2,"version":317,"opaque":1,"flag":0,"remark":null,"extFields":{"topic":"Test","logicalQueueIdsFilter":null}}"#.as_slice(),
+    ] {
+        let mut frame = BytesMut::with_capacity(8 + header_bytes.len());
+        frame.put_i32(i32::try_from(4 + header_bytes.len()).unwrap());
+        frame.put_i32(RemotingCommand::mark_serialize_type(
+            i32::try_from(header_bytes.len()).unwrap(),
+            SerializeType::JSON,
+        ));
+        frame.extend_from_slice(header_bytes);
+
+        let decoded = RemotingCommand::decode(&mut frame)
+            .expect("decoding must succeed")
+            .expect("frame must be complete");
+        let ext = decoded.ext_fields().expect("ext_fields must be present");
+        assert_eq!(ext.get("topic").map(CheetahString::as_str), Some("Test"));
+    }
+}
+
+#[test]
+fn language_code_and_serialize_type_deserialize_flexible_shapes() {
+    // Integer languageCode and omitted serializeType
+    let cmd1: RemotingCommand = serde_json::from_str(
+        r#"{"code":105,"languageCode":2,"version":317,"opaque":1,"flag":0,"remark":null,"extFields":{"topic":"TopicA"}}"#,
+    )
+    .expect("should deserialize integer languageCode and default serializeType");
+    assert_eq!(cmd1.code(), 105);
+    assert_eq!(cmd1.language(), LanguageCode::DOTNET);
+    assert_eq!(cmd1.get_serialize_type(), SerializeType::JSON);
+
+    // Case-insensitive string languageCode and serializeType
+    let cmd2: RemotingCommand = serde_json::from_str(
+        r#"{"code":105,"languageCode":"Dotnet","version":317,"opaque":1,"flag":0,"serializeType":"json","extFields":{"topic":"TopicA"}}"#,
+    )
+    .expect("should deserialize mixed-case languageCode and serializeType alias");
+    assert_eq!(cmd2.code(), 105);
+    assert_eq!(cmd2.language(), LanguageCode::DOTNET);
+    assert_eq!(cmd2.get_serialize_type(), SerializeType::JSON);
+
+    // Unknown and out-of-range language codes map to OTHER on both Serde and parser paths
+    for invalid_lang in ["99", "258", "-1"] {
+        let json =
+            format!(r#"{{"code":105,"language":{invalid_lang},"version":0,"opaque":1,"flag":0,"extFields":null}}"#);
+        let cmd: RemotingCommand = serde_json::from_str(&json).expect("should map to OTHER");
+        assert_eq!(cmd.language(), LanguageCode::OTHER);
+
+        let mut frame_bytes = BytesMut::from(json.as_bytes());
+        let len = frame_bytes.len();
+        let cmd_parsed = RemotingCommand::header_decode(&mut frame_bytes, len, SerializeType::JSON)
+            .expect("decode should not fail")
+            .expect("command must be present");
+        assert_eq!(cmd_parsed.language(), LanguageCode::OTHER);
+    }
+
+    // Out-of-range serializeType is rejected
+    for invalid_type in ["256", "-1"] {
+        let json = format!(
+            r#"{{"code":105,"language":"RUST","version":0,"opaque":1,"flag":0,"serializeType":{invalid_type},"extFields":null}}"#
+        );
+        assert!(serde_json::from_str::<RemotingCommand>(&json).is_err());
+
+        let mut frame_bytes = BytesMut::from(json.as_bytes());
+        let len = frame_bytes.len();
+        assert!(RemotingCommand::header_decode(&mut frame_bytes, len, SerializeType::JSON).is_err());
+    }
+}

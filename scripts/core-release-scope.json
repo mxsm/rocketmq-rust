@@ -158,6 +158,11 @@
       "name": "rocketmq-dashboard-common",
       "path": "rocketmq-dashboard/rocketmq-dashboard-common",
       "reason": "excluded-dashboard"
+    },
+    {
+      "name": "rocketmq-dashboard-storage",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-storage",
+      "reason": "excluded-dashboard"
     }
   ],
   "repository_exclusions": [

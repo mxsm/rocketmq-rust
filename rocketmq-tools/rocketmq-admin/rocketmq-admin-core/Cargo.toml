@@ -61,7 +61,6 @@ rocksdb-export = ["dep:rocksdb"]
 rocketmq-model        = { workspace = true }
 rocketmq-error        = { workspace = true }
 rocketmq-protocol     = { workspace = true }
-rocketmq-security-api = { workspace = true }
 
 rocketmq-client-rust = { workspace = true, optional = true, default-features = false }
 rocketmq-observability = { workspace = true, optional = true }

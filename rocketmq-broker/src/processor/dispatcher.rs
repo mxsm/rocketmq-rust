@@ -552,12 +552,18 @@ where
         let Some(queue_kind) = queue_kind else {
             return processor.process(request).await;
         };
-        let Some(broker_fast_failure) = &self.broker_fast_failure else {
-            return processor.process(request).await;
+        let is_send = queue_kind == crate::latency::broker_fast_failure::FastFailureQueueKind::Send;
+        let Some(broker_fast_failure) = self
+            .broker_fast_failure
+            .as_ref()
+            .filter(|broker_fast_failure| broker_fast_failure.is_enabled())
+        else {
+            return if is_send {
+                process_send(&mut processor, request, None).await
+            } else {
+                processor.process(request).await
+            };
         };
-        if !broker_fast_failure.is_enabled() {
-            return processor.process(request).await;
-        }
 
         let opaque = request.original_identity().original_opaque();
         let metadata = fast_failure_dispatch::FastFailureRequestMetadata::from_command(request.command());
@@ -570,7 +576,7 @@ where
                     .map_err(|error| crate::broker_error::internal("broker-fast-failure", error));
             }
         };
-        let run = match admission
+        let mut run = match admission
             .await_run(fast_failure_dispatch::FastFailureControl::from(request.control()))
             .await
         {
@@ -587,7 +593,11 @@ where
                 ));
             }
         };
-        let result = processor.process(request).await;
+        let result = if is_send {
+            process_send(&mut processor, request, run.take_permit()).await
+        } else {
+            processor.process(request).await
+        };
         run.finish();
         match result {
             Ok(outcome) => Ok(outcome),
@@ -605,6 +615,32 @@ where
                 BrokerResponseParts::from_command(response)?.into_response_action()
             }
         }
+    }
+}
+
+/// Runs a send so that what it needs only for its append is released once the message is in the
+/// CommitLog, before it waits for the flush or replicas.
+///
+/// - The fast-failure permit stands for one of Java's send threads, which `asyncPutMessage` frees
+///   after the append.
+/// - The transport ordering slot keeps sends to the same queue appending in order; the next one
+///   may append while this one waits for durability.
+///
+/// When the send appends nothing, both are released when the processor returns.
+async fn process_send<P: RequestProcessor>(
+    processor: &mut P,
+    request: &mut RemotingRequest,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+) -> crate::broker_error::BrokerResult<ResponseAction> {
+    rocketmq_store::hold_until_appended((permit, SendOrderingRelease), processor.process(request)).await
+}
+
+/// Ends the current send's transport ordering slot when dropped.
+struct SendOrderingRelease;
+
+impl Drop for SendOrderingRelease {
+    fn drop(&mut self) {
+        rocketmq_transport::api::release_request_ordering();
     }
 }
 

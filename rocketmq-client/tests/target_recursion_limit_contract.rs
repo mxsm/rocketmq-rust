@@ -17,45 +17,51 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 const RECURSION_LIMIT_ATTRIBUTE: &str = "#![recursion_limit = \"";
 
-fn top_level_rust_files(directory: &Path) -> Vec<PathBuf> {
-    fs::read_dir(directory)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", directory.display()))
-        .map(|entry| {
-            entry
-                .unwrap_or_else(|error| panic!("failed to read an entry in {}: {error}", directory.display()))
-                .path()
-        })
-        .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
-        .collect()
-}
+fn cargo_target_roots(manifest_dir: &Path) -> Vec<PathBuf> {
+    // Cargo's target inventory respects disabled automatic discovery and excludes
+    // shared support modules that happen to live beside target entry files.
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--no-deps",
+            "--locked",
+            "--offline",
+            "--format-version",
+            "1",
+        ])
+        .arg("--manifest-path")
+        .arg(manifest_dir.join("Cargo.toml"))
+        .output()
+        .expect("Cargo target metadata should be available");
+    assert!(
+        output.status.success(),
+        "Cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid Cargo metadata");
+    let package = metadata["packages"]
+        .as_array()
+        .expect("Cargo packages")
+        .iter()
+        .find(|package| package["name"] == "rocketmq-client-rust")
+        .expect("client package metadata");
 
-fn explicit_example_roots(manifest_dir: &Path) -> Vec<PathBuf> {
-    let manifest_path = manifest_dir.join("Cargo.toml");
-    let manifest = fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", manifest_path.display()));
-
-    manifest
-        .lines()
-        .filter_map(|line| {
-            line.trim()
-                .strip_prefix("path = \"")
-                .and_then(|path| path.strip_suffix('"'))
-                .filter(|path| path.starts_with("examples/") && path.ends_with(".rs"))
-                .map(|path| manifest_dir.join(path))
-        })
+    package["targets"]
+        .as_array()
+        .expect("client Cargo targets")
+        .iter()
+        .map(|target| PathBuf::from(target["src_path"].as_str().expect("Cargo target source path")))
         .collect()
 }
 
 #[test]
 fn every_client_cargo_target_declares_a_recursion_limit() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut target_roots = vec![manifest_dir.join("src/lib.rs")];
-    target_roots.extend(top_level_rust_files(&manifest_dir.join("tests")));
-    target_roots.extend(top_level_rust_files(&manifest_dir.join("benches")));
-    target_roots.extend(explicit_example_roots(&manifest_dir));
+    let mut target_roots = cargo_target_roots(&manifest_dir);
     target_roots.sort();
     target_roots.dedup();
 

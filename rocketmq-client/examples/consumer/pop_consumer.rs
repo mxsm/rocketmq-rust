@@ -14,7 +14,7 @@
 
 #![recursion_limit = "512"]
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 use rocketmq_client_rust::ClientResult;

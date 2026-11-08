@@ -46,6 +46,7 @@ use rocketmq_protocol::protocol::body::broker_body::register_broker_body::Regist
 use rocketmq_protocol::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
 use rocketmq_protocol::protocol::body::controller_write_lease::ControllerWriteLeaseGrant;
 use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
+use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
 use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
@@ -120,37 +121,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct OnewayBroadcastReport {
-    pub attempted: usize,
-    pub succeeded: usize,
-    pub failures: Vec<OnewayTargetFailure>,
-}
-
-impl OnewayBroadcastReport {
-    #[must_use]
-    pub fn is_healthy(&self) -> bool {
-        self.failures.is_empty()
-    }
-
-    fn record(&mut self, address: CheetahString, result: crate::broker_error::BrokerResult<()>) {
-        self.attempted = self.attempted.saturating_add(1);
-        match result {
-            Ok(()) => self.succeeded = self.succeeded.saturating_add(1),
-            Err(error) => self.failures.push(OnewayTargetFailure {
-                address,
-                error: error.to_string(),
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OnewayTargetFailure {
-    pub address: CheetahString,
-    pub error: String,
-}
-
 #[derive(Clone)]
 pub struct BrokerOuterAPI {
     remoting_client: Arc<RemotingClient<DefaultRequestProcessor>>,
@@ -216,37 +186,6 @@ impl BrokerOuterAPI {
         telemetry: TransportTelemetry,
         command_factory: RemotingCommandFactory,
     ) -> Self {
-        Self::new_with_hook_and_remoting_command_factory(
-            tokio_client_config,
-            None,
-            service_context,
-            telemetry,
-            command_factory,
-        )
-    }
-
-    pub fn new_with_hook(
-        tokio_client_config: Arc<TransportClientConfig>,
-        rpc_hook: Option<Arc<dyn RPCHook>>,
-        service_context: ChildServiceContext,
-        telemetry: TransportTelemetry,
-    ) -> Self {
-        Self::new_with_hook_and_remoting_command_factory(
-            tokio_client_config,
-            rpc_hook,
-            service_context,
-            telemetry,
-            application_remoting_command_factory(),
-        )
-    }
-
-    pub fn new_with_hook_and_remoting_command_factory(
-        tokio_client_config: Arc<TransportClientConfig>,
-        rpc_hook: Option<Arc<dyn RPCHook>>,
-        service_context: ChildServiceContext,
-        telemetry: TransportTelemetry,
-        command_factory: RemotingCommandFactory,
-    ) -> Self {
         let client = Arc::new(
             RemotingClient::builder(tokio_client_config, DefaultRequestProcessor, service_context)
                 .telemetry(telemetry)
@@ -254,9 +193,6 @@ impl BrokerOuterAPI {
                 .expect("clamped broker remoting client budgets must be valid"),
         );
         let client_metadata = Arc::new(ClientMetadata::new());
-        if let Some(rpc_hook) = rpc_hook {
-            client.register_rpc_hook(rpc_hook);
-        }
         Self {
             remoting_client: client.clone(),
             name_server_address: None,
@@ -475,137 +411,6 @@ impl BrokerOuterAPI {
         self.remoting_client.shutdown_with_report(timeout).await
     }
 
-    /// Send heartbeat to name servers
-    ///
-    /// # Arguments
-    /// * `cluster_name` - Cluster name
-    /// * `broker_addr` - Broker address
-    /// * `broker_name` - Broker name
-    /// * `broker_id` - Broker ID
-    /// * `timeout_millis` - Request timeout in milliseconds
-    /// * `is_in_broker_container` - Whether broker is in container
-    pub async fn send_heartbeat(
-        &self,
-        cluster_name: CheetahString,
-        broker_addr: CheetahString,
-        broker_name: CheetahString,
-        broker_id: i64,
-        timeout_millis: u64,
-        _is_in_broker_container: bool,
-    ) -> OnewayBroadcastReport {
-        let name_server_address_list = self.remoting_client.get_available_name_srv_list();
-        if name_server_address_list.is_empty() {
-            warn!("No available name server for sending heartbeat");
-            return OnewayBroadcastReport::default();
-        }
-
-        let request_header = BrokerHeartbeatRequestHeader {
-            cluster_name,
-            broker_addr,
-            broker_name,
-            broker_id: Some(broker_id),
-            epoch: None,
-            max_offset: None,
-            confirm_offset: None,
-            store_ready: None,
-            heartbeat_timeout_mills: None,
-            election_priority: None,
-        };
-
-        // Parallel heartbeat to all NameServers
-        let futures = name_server_address_list.iter().map(|namesrv_addr| {
-            let addr = namesrv_addr.clone();
-            let header = request_header.clone();
-            let client = self.remoting_client.clone();
-
-            async move {
-                let request = self
-                    .command_factory
-                    .create_request_command(RequestCode::BrokerHeartbeat, header);
-                let result = client.invoke_request_oneway(&addr, request, timeout_millis).await;
-                (addr, result)
-            }
-        });
-        let mut report = OnewayBroadcastReport::default();
-        for (addr, result) in futures::future::join_all(futures).await {
-            if let Err(error) = &result {
-                warn!(remote_addr = %addr, error_code = %error.descriptor().code(), "name server heartbeat failed");
-            }
-            report.record(addr, result);
-        }
-        report
-    }
-
-    /// Send heartbeat with data version to name servers
-    ///
-    /// This method sends data version along with heartbeat to allow
-    /// name server to determine if broker metadata has changed.
-    pub async fn send_heartbeat_via_data_version(
-        &self,
-        cluster_name: CheetahString,
-        broker_addr: CheetahString,
-        broker_name: CheetahString,
-        broker_id: u64,
-        timeout_millis: u64,
-        data_version: &DataVersion,
-        _is_in_broker_container: bool,
-    ) -> OnewayBroadcastReport {
-        let name_server_address_list = self.remoting_client.get_available_name_srv_list();
-        if name_server_address_list.is_empty() {
-            return OnewayBroadcastReport::default();
-        }
-
-        let request_header = QueryDataVersionRequestHeader {
-            broker_addr,
-            broker_name,
-            broker_id,
-            cluster_name,
-        };
-
-        let body = match data_version.encode() {
-            Ok(body) => body,
-            Err(error) => {
-                let error = error.to_string();
-                return OnewayBroadcastReport {
-                    attempted: name_server_address_list.len(),
-                    succeeded: 0,
-                    failures: name_server_address_list
-                        .into_iter()
-                        .map(|address| OnewayTargetFailure {
-                            address,
-                            error: error.clone(),
-                        })
-                        .collect(),
-                };
-            }
-        };
-
-        let futures = name_server_address_list.iter().map(|namesrv_addr| {
-            let addr = namesrv_addr.clone();
-            let header = request_header.clone();
-            let body_clone = body.clone();
-            let client = self.remoting_client.clone();
-
-            async move {
-                let mut request = self
-                    .command_factory
-                    .create_request_command(RequestCode::QueryDataVersion, header);
-                request.set_body_mut_ref(bytes::Bytes::from(body_clone));
-
-                let result = client.invoke_request_oneway(&addr, request, timeout_millis).await;
-                (addr, result)
-            }
-        });
-        let mut report = OnewayBroadcastReport::default();
-        for (addr, result) in futures::future::join_all(futures).await {
-            if let Err(error) = &result {
-                warn!(remote_addr = %addr, error_code = %error.descriptor().code(), "data-version heartbeat failed");
-            }
-            report.record(addr, result);
-        }
-        report
-    }
-
     /// Check if broker needs to register to name servers
     ///
     /// This method queries all name servers to determine if broker
@@ -766,6 +571,42 @@ impl BrokerOuterAPI {
             _ => Err(crate::broker_error::broker_operation_failed_with_address(
                 "get_max_offset",
                 response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            )),
+        }
+    }
+
+    /// The master terms of the Broker at `addr`, and where its CommitLog ends.
+    pub async fn get_broker_epoch_cache(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> crate::broker_error::BrokerResult<EpochEntryCache> {
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetBrokerEpochCache);
+        let response = match self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await
+        {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_broker_epoch_cache", rejection));
+            }
+            Ok(OutboundRequestResult::Contract(contract)) => {
+                return Err(broker_request_contract_error(contract));
+            }
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
+        };
+        let code = response.code();
+        match (ResponseCode::from(code), response.get_body()) {
+            (ResponseCode::Success, Some(body)) => EpochEntryCache::decode(body)
+                .map_err(|error| crate::broker_error::invalid_argument(format!("invalid broker epoch cache: {error}"))),
+            _ => Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_broker_epoch_cache",
+                code,
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 Some(addr.to_string()),
             )),

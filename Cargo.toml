@@ -43,6 +43,7 @@ members = [
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
   "rocketmq-tools/rocketmq-store-inspect",
   "rocketmq-dashboard/rocketmq-dashboard-common",
+  "rocketmq-dashboard/rocketmq-dashboard-storage",
 ]
 exclude = [
   "rocketmq-ai/rocketmq-mcp",
@@ -54,7 +55,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "1.0.0"
+version = "1.1.0"
 authors = ["mxsm <mxsm@apache.org>"]
 edition = "2021"
 homepage = "https://github.com/mxsm/rocketmq-rust"
@@ -74,29 +75,29 @@ Unofficial Rust implementation of Apache RocketMQ
 """
 rust-version = "1.95.0"
 [workspace.dependencies]
-rocketmq-admin-core  = { version = "1.0.0", path = "./rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
-rocketmq-runtime     = { version = "1.0.0", path = "./rocketmq-runtime" }
-rocketmq-macros      = { version = "1.0.0", path = "./rocketmq-macros" }
-rocketmq-filter      = { version = "1.0.0", path = "./rocketmq-filter" }
-rocketmq-store       = { version = "1.0.0", path = "./rocketmq-store", default-features = true }
-rocketmq-client-rust = { version = "1.0.0", path = "./rocketmq-client", default-features = false }
-rocketmq-broker      = { version = "1.0.0", path = "./rocketmq-broker" }
-rocketmq-error       = { version = "1.0.0", path = "./rocketmq-error" }
-rocketmq-auth        = { version = "1.0.0", path = "./rocketmq-auth" }
-rocketmq-controller  = { version = "1.0.0", path = "./rocketmq-controller" }
-rocketmq-namesrv     = { version = "1.0.0", path = "./rocketmq-namesrv" }
-rocketmq-observability = { version = "1.0.0", path = "./rocketmq-observability" }
-rocketmq-model       = { version = "1.0.0", path = "./rocketmq-model" }
-rocketmq-protocol    = { version = "1.0.0", path = "./rocketmq-protocol" }
-rocketmq-proxy-cluster = { version = "1.0.0", path = "./rocketmq-proxy-cluster" }
-rocketmq-proxy-core  = { version = "1.0.0", path = "./rocketmq-proxy-core" }
-rocketmq-proxy-local = { version = "1.0.0", path = "./rocketmq-proxy-local" }
-rocketmq-security-api = { version = "1.0.0", path = "./rocketmq-security-api" }
-rocketmq-store-api     = { version = "1.0.0", path = "./rocketmq-store-api", default-features = false }
-rocketmq-store-local   = { version = "1.0.0", path = "./rocketmq-store-local", default-features = false }
-rocketmq-store-rocksdb = { version = "1.0.0", path = "./rocketmq-store-rocksdb", default-features = false }
-rocketmq-tieredstore   = { version = "1.0.0", path = "./rocketmq-tieredstore" }
-rocketmq-transport    = { version = "1.0.0", path = "./rocketmq-transport", default-features = false }
+rocketmq-admin-core  = { version = "1.1.0", path = "./rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
+rocketmq-runtime     = { version = "1.1.0", path = "./rocketmq-runtime", default-features = false }
+rocketmq-macros      = { version = "1.1.0", path = "./rocketmq-macros" }
+rocketmq-filter      = { version = "1.1.0", path = "./rocketmq-filter" }
+rocketmq-store       = { version = "1.1.0", path = "./rocketmq-store", default-features = true }
+rocketmq-client-rust = { version = "1.1.0", path = "./rocketmq-client", default-features = false }
+rocketmq-broker      = { version = "1.1.0", path = "./rocketmq-broker" }
+rocketmq-error       = { version = "1.1.0", path = "./rocketmq-error" }
+rocketmq-auth        = { version = "1.1.0", path = "./rocketmq-auth" }
+rocketmq-controller  = { version = "1.1.0", path = "./rocketmq-controller" }
+rocketmq-namesrv     = { version = "1.1.0", path = "./rocketmq-namesrv" }
+rocketmq-observability = { version = "1.1.0", path = "./rocketmq-observability" }
+rocketmq-model       = { version = "1.1.0", path = "./rocketmq-model" }
+rocketmq-protocol    = { version = "1.1.0", path = "./rocketmq-protocol" }
+rocketmq-proxy-cluster = { version = "1.1.0", path = "./rocketmq-proxy-cluster" }
+rocketmq-proxy-core  = { version = "1.1.0", path = "./rocketmq-proxy-core" }
+rocketmq-proxy-local = { version = "1.1.0", path = "./rocketmq-proxy-local" }
+rocketmq-security-api = { version = "1.1.0", path = "./rocketmq-security-api" }
+rocketmq-store-api     = { version = "1.1.0", path = "./rocketmq-store-api", default-features = false }
+rocketmq-store-local   = { version = "1.1.0", path = "./rocketmq-store-local", default-features = false }
+rocketmq-store-rocksdb = { version = "1.1.0", path = "./rocketmq-store-rocksdb", default-features = false }
+rocketmq-tieredstore   = { version = "1.1.0", path = "./rocketmq-tieredstore" }
+rocketmq-transport    = { version = "1.1.0", path = "./rocketmq-transport", default-features = false }
 
 tokio = { version = "1.52", features = [
   "fs",
@@ -150,7 +151,7 @@ num_cpus           = "1.17"
 
 config = "0.15.23"
 
-parking_lot   = "0.12"
+parking_lot   = "0.13"
 dirs          = "7.0"
 trait-variant = "0.1.2"
 
@@ -158,7 +159,7 @@ mockall = "0.15.0"
 cfg-if  = "1.0.4"
 windows-sys = "0.61.2"
 
-sysinfo = "0.39.3"
+sysinfo = "0.40.1"
 uuid = { version = "1.23.3", features = [
   "v4",                # Lets you generate random UUIDs
   "fast-rng",          # Use a faster (but still sufficiently random) RNG
@@ -187,8 +188,16 @@ opentelemetry-semantic-conventions = { version = "0.33" }
 tracing-opentelemetry              = { version = "0.34", default-features = false }
 prometheus                         = { version = "0.14", default-features = false }
 rocksdb                            = { version = "0.25", default-features = false, features = ["bindgen-runtime", "multi-threaded-cf", "lz4", "zstd"] }
+mimalloc                           = { version = "0.1.52", default-features = false }
 
 # Native RocksDB debug symbols exceed MSVC's PDB limits when linking this crate's
 # standalone test binaries. Keep the override scoped to the new backend owner.
 [profile.test.package.rocketmq-store-rocksdb]
 debug = 0
+
+# Server binaries spend their time in per-message code that crosses many workspace crates
+# (protocol, transport, broker, store). Whole-program LTO with one codegen unit lets that code
+# inline across crates; it only affects release builds.
+[profile.release]
+lto           = "fat"
+codegen-units = 1

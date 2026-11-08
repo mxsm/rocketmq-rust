@@ -32,8 +32,8 @@ use crate::consumer::pop_status::PopStatus;
 /// Trait for handling the results of a pop operation.
 ///
 /// This trait defines the methods for handling successful and error results of a pop operation.
-#[trait_variant::make(PopCallback: Send)]
-pub trait PopCallbackInner {
+#[trait_variant::make(Send)]
+pub trait PopCallback {
     /// Called when the pop operation is successful.
     ///
     /// # Arguments

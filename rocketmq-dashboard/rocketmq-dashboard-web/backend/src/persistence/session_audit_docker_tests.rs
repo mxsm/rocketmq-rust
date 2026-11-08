@@ -27,9 +27,36 @@ use crate::model::SessionTokenHash;
 use crate::model::StorageEngine;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::Revision;
+use crate::persistence::StorageMode;
+use crate::persistence::StorageStatus;
 use crate::persistence::audit_repository::AuditQuery;
 use crate::persistence::session_repository::SessionQuery;
 use rocketmq_runtime::RuntimeOwner;
+
+#[test]
+fn local_session_audit_contracts_reopen_file_and_sqlite() {
+    let directory = tempfile::tempdir().expect("temporary storage directory");
+    let owner = RuntimeOwner::new().expect("runtime owner");
+    owner.block_on(async {
+        for (index, backend) in [StorageEngine::File, StorageEngine::Sqlite].into_iter().enumerate() {
+            let store = run_session_contract(
+                &owner,
+                StorageConfig {
+                    backend,
+                    data_path: directory.path().join(format!("session-audit-{index}")),
+                    database_url: None,
+                    pool: SqlPoolConfig::default(),
+                },
+                index as u8,
+            )
+            .await;
+            if backend == StorageEngine::Sqlite {
+                assert_session_audit_rollback(&store, "storage-contract-1").await;
+            }
+        }
+    });
+    owner.shutdown_runtime_blocking().expect("runtime shutdown");
+}
 
 #[test]
 #[ignore = "requires fresh docker-compose.storage-test.yml volumes"]
@@ -79,7 +106,7 @@ fn docker_session_audit_contracts_cover_file_sqlite_mysql_and_postgres() {
     owner.shutdown_runtime_blocking().expect("runtime shutdown");
 }
 
-async fn run_contract(owner: &RuntimeOwner, config: StorageConfig, discriminator: u8) {
+async fn run_session_contract(owner: &RuntimeOwner, config: StorageConfig, discriminator: u8) -> DashboardPersistence {
     let hash = SessionTokenHash([discriminator.saturating_add(1); 32]);
     let username = format!("storage-contract-{discriminator}");
     let store = DashboardPersistence::initialize(
@@ -109,7 +136,25 @@ async fn run_contract(owner: &RuntimeOwner, config: StorageConfig, discriminator
             .unwrap_or_else(|error| panic!("find session for {:?}: {error:?}", config.backend))
             .is_some()
     );
-    store
+    // Only network SQL engines support independent Backend instances. File's
+    // directory lock and SQLite's single-node deployment are not replication.
+    let peer = if matches!(config.backend, StorageEngine::MySql | StorageEngine::Postgres) {
+        let peer = DashboardPersistence::initialize(
+            &config,
+            owner.root_context().component("session-audit-independent-peer"),
+        )
+        .await
+        .expect("open independent SQL instance");
+        assert_eq!(
+            peer.find_session(&hash).await.expect("peer reads created session"),
+            store.find_session(&hash).await.expect("primary reads created session")
+        );
+        Some(peer)
+    } else {
+        None
+    };
+    peer.as_ref()
+        .unwrap_or(&store)
         .revoke_session_with_audit(&hash, 2, audit_event(AuditAction::SessionRevokeCurrent, &username, 2))
         .await
         .expect("revoke session with audit");
@@ -134,7 +179,57 @@ async fn run_contract(owner: &RuntimeOwner, config: StorageConfig, discriminator
         .await
         .expect("query audit history");
     assert_eq!(page.events.len(), 2);
+    if let Some(peer) = &peer {
+        assert_eq!(
+            peer.query_audit_events(audit_query(&username))
+                .await
+                .expect("peer reads shared audit history")
+                .events,
+            page.events
+        );
+    }
+    let revoked_session = store.find_session(&hash).await.expect("session before reopen");
+    drop(peer);
+    drop(store);
+    let store =
+        DashboardPersistence::initialize(&config, owner.root_context().component("session-audit-storage-reopen"))
+            .await
+            .expect("reopen selected storage engine");
+    assert_eq!(
+        store.find_session(&hash).await.expect("session after reopen"),
+        revoked_session
+    );
+    assert_eq!(
+        store
+            .query_audit_events(audit_query(&username))
+            .await
+            .expect("audit history after reopen")
+            .events,
+        page.events
+    );
+    let status = crate::service::storage_status(&store).await;
+    assert_eq!(status.backend, config.backend);
+    assert_eq!(status.status, StorageStatus::Available);
+    assert_eq!(
+        status.mode,
+        match config.backend {
+            StorageEngine::File | StorageEngine::Sqlite => StorageMode::SingleNode,
+            StorageEngine::MySql | StorageEngine::Postgres => StorageMode::MultiNode,
+        }
+    );
+    let status_json = serde_json::to_string(&status).expect("serialize safe status");
+    assert!(!status_json.contains(config.data_path.to_string_lossy().as_ref()));
+    if let Some(database_url) = &config.database_url {
+        assert!(!status_json.contains(database_url));
+    }
+    assert!(!status_json.contains("databaseUrl"));
+    assert!(!status_json.contains("dataPath"));
+    store
+}
 
+async fn run_contract(owner: &RuntimeOwner, config: StorageConfig, discriminator: u8) {
+    let username = format!("storage-contract-{discriminator}");
+    let store = run_session_contract(owner, config.clone(), discriminator).await;
     // The public list is capped at 200 records, but cleanup and revoke-all
     // must retain their complete semantic scope across a larger account.
     // This also proves the File transaction marker no longer inherits the
@@ -335,6 +430,7 @@ async fn run_contract(owner: &RuntimeOwner, config: StorageConfig, discriminator
     // backend proves that neither configuration nor monitor state escapes
     // without its successful audit event.
     if !matches!(config.backend, StorageEngine::File) {
+        assert_session_audit_rollback(&store, &username).await;
         let duplicate_configuration_audit = resource_audit_event(
             AuditAction::ConfigTlsSet,
             AuditResourceType::Environment,
@@ -409,6 +505,73 @@ async fn run_contract(owner: &RuntimeOwner, config: StorageConfig, discriminator
                 .is_empty()
         );
     }
+}
+
+fn audit_query(username: &str) -> AuditQuery {
+    AuditQuery {
+        start_ms: 0,
+        end_ms: 10,
+        actor: Some(username.to_string()),
+        action: None,
+        outcome: None,
+        environment_id: None,
+        cursor: None,
+        limit: 10,
+    }
+}
+
+async fn assert_session_audit_rollback(store: &DashboardPersistence, username: &str) {
+    let hash = SessionTokenHash([250; 32]);
+    let duplicate_create_audit = audit_event(AuditAction::SessionCreate, username, 16);
+    store
+        .append_audit_event(duplicate_create_audit.clone())
+        .await
+        .expect("seed duplicate session-create audit id");
+    let session = NewSession {
+        session_id: uuid::Uuid::now_v7().to_string(),
+        token_hash: hash,
+        username: username.to_string(),
+        created_at_ms: 16,
+        expires_at_ms: 10_000,
+    };
+    assert!(
+        store
+            .create_session_with_audit(session.clone(), duplicate_create_audit)
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .find_session(&hash)
+            .await
+            .expect("rolled-back session create")
+            .is_none()
+    );
+
+    store
+        .create_session_with_audit(session, audit_event(AuditAction::SessionCreate, username, 17))
+        .await
+        .expect("create session before revoke rollback");
+    let active_session = store
+        .find_session(&hash)
+        .await
+        .expect("active session before failed revoke");
+    let duplicate_revoke_audit = audit_event(AuditAction::SessionRevokeCurrent, username, 18);
+    store
+        .append_audit_event(duplicate_revoke_audit.clone())
+        .await
+        .expect("seed duplicate session-revoke audit id");
+    assert!(
+        store
+            .revoke_session_with_audit(&hash, 18, duplicate_revoke_audit)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.find_session(&hash).await.expect("session after failed revoke"),
+        active_session
+    );
+    assert!(active_session.is_some_and(|session| session.revoked_at_ms.is_none()));
 }
 
 fn audit_event(action: AuditAction, username: &str, created_at_ms: i64) -> AuditEvent {

@@ -58,9 +58,20 @@ pub struct PolicyEngine {
     roles: BTreeMap<String, PermissionRole>,
 }
 
+pub(crate) const BUILTIN_PERMISSIONS_PATH: &str = "builtin:local-development-permissions";
+
 impl PolicyEngine {
     pub fn load(path: &Path) -> crate::McpResult<Self> {
-        let config = config::Config::builder().add_source(config::File::from(path)).build()?;
+        let builder = config::Config::builder();
+        let builder = if path == Path::new(BUILTIN_PERMISSIONS_PATH) {
+            builder.add_source(config::File::from_str(
+                include_str!("../../conf/permissions.example.toml"),
+                config::FileFormat::Toml,
+            ))
+        } else {
+            builder.add_source(config::File::from(path))
+        };
+        let config = builder.build()?;
         let permissions = config.try_deserialize::<PermissionConfig>()?;
         if permissions.roles.is_empty() {
             return Err(crate::McpError::invalid_config(

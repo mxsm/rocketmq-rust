@@ -55,14 +55,19 @@ pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_INFLIGHT;
 pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_WAITING;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "otel-metrics")]
 use std::sync::atomic::AtomicU64;
 #[cfg(feature = "otel-metrics")]
 use std::sync::atomic::Ordering;
+
 #[cfg(feature = "otel-metrics")]
-use std::sync::Arc;
+pub(crate) use self::unregistration::UnregistrationAge;
+pub use self::unregistration::UnregistrationAgeSource;
+
+mod unregistration;
 
 /// Fixed low-cardinality labels for failed route requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -354,6 +359,18 @@ impl NameServerMetrics {
     pub fn record_unregistration_queue(&self, _outcome: &'static str, _depth: usize) {}
 
     #[inline]
+    pub fn record_unregistration_queue_state(&self, _depth: usize, _oldest_age: Duration) {}
+
+    #[inline]
+    pub fn record_unregistration_queue_depth(&self, _depth: usize) {}
+
+    #[inline]
+    pub fn register_unregistration_age_source<S: UnregistrationAgeSource + 'static>(&self, _source: &Arc<S>) {}
+
+    #[inline]
+    pub fn record_unregistration_fallback(&self, _reason: &'static str, _depth: usize) {}
+
+    #[inline]
     pub fn record_unregistration_batch(&self, _size: usize) {}
 
     #[inline]
@@ -454,7 +471,7 @@ struct NameServerMetricInstruments {
     mutation_latency: opentelemetry::metrics::Histogram<u64>,
     snapshot_rebuilds_total: opentelemetry::metrics::Counter<u64>,
     expiry_events_total: opentelemetry::metrics::Counter<u64>,
-    unregistration_oldest_age: opentelemetry::metrics::Gauge<u64>,
+    unregistration_oldest_age: Arc<UnregistrationAge>,
     kv_generation: opentelemetry::metrics::Gauge<u64>,
     kv_queue_depth: opentelemetry::metrics::Gauge<u64>,
     kv_queue_bytes: opentelemetry::metrics::Gauge<u64>,
@@ -476,9 +493,12 @@ impl NameServerMetrics {
         let Some(meter) = telemetry.meter(crate::NAMESRV_METER_SCOPE) else {
             return Self::noop();
         };
+        let Some(age) = telemetry.namesrv_unregistration_age() else {
+            return Self::noop();
+        };
         Self {
             telemetry: Some(telemetry.clone()),
-            instruments: Some(NameServerMetricInstruments::new(&meter)),
+            instruments: Some(NameServerMetricInstruments::new(&meter, age)),
             route_freshness_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -487,7 +507,7 @@ impl NameServerMetrics {
     pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         Self {
             telemetry: None,
-            instruments: Some(NameServerMetricInstruments::new(meter)),
+            instruments: Some(NameServerMetricInstruments::new(meter, UnregistrationAge::new(meter))),
             route_freshness_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -703,6 +723,50 @@ impl NameServerMetrics {
         }
     }
 
+    /// Records depth and an age sample for callers without a live age source.
+    pub fn record_unregistration_queue_state(&self, depth: usize, oldest_age: Duration) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.unregistration_queue_depth.record(depth as u64, &[]);
+                instruments.unregistration_oldest_age.record(oldest_age);
+            }
+        }
+    }
+
+    /// Records depth while the collection callback samples the live pending age.
+    pub fn record_unregistration_queue_depth(&self, depth: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.unregistration_queue_depth.record(depth as u64, &[]);
+            }
+        }
+    }
+
+    /// Binds live queue state without retaining its lifecycle owner.
+    pub fn register_unregistration_age_source<S: UnregistrationAgeSource + 'static>(&self, source: &Arc<S>) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.unregistration_oldest_age.register(source);
+            }
+        }
+    }
+
+    /// Retains the fallback outcome while distinguishing full and closed queues.
+    pub fn record_unregistration_fallback(&self, reason: &'static str, depth: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.unregistration_events_total.add(
+                    1,
+                    &[
+                        opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, "synchronous-fallback"),
+                        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason),
+                    ],
+                );
+                instruments.unregistration_queue_depth.record(depth as u64, &[]);
+            }
+        }
+    }
+
     pub fn record_unregistration_batch(&self, size: usize) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
@@ -833,9 +897,7 @@ impl NameServerMetrics {
     pub fn record_unregistration_oldest_age(&self, age: Duration) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments
-                    .unregistration_oldest_age
-                    .record(duration_millis_u64(age), &[]);
+                instruments.unregistration_oldest_age.record(age);
             }
         }
     }
@@ -915,7 +977,7 @@ impl NameServerMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl NameServerMetricInstruments {
-    fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    fn new(meter: &opentelemetry::metrics::Meter, unregistration_oldest_age: Arc<UnregistrationAge>) -> Self {
         let route_request_total = meter
             .u64_counter(NAMESRV_ROUTE_REQUEST_TOTAL)
             .with_description("Total number of NameServer route requests")
@@ -1079,11 +1141,6 @@ impl NameServerMetricInstruments {
             .with_description("NameServer expiry index mismatch and safety reconciliation events")
             .with_unit("{event}")
             .build();
-        let unregistration_oldest_age = meter
-            .u64_gauge(NAMESRV_UNREGISTRATION_OLDEST_AGE)
-            .with_description("Age of the oldest NameServer pending broker unregistration")
-            .with_unit("ms")
-            .build();
         let kv_generation = meter
             .u64_gauge(NAMESRV_KV_GENERATION)
             .with_description("NameServer KV desired, durable, and applied generation")
@@ -1189,10 +1246,99 @@ impl NameServerMetricInstruments {
 
 #[cfg(all(test, feature = "otel-metrics"))]
 mod tests {
+    use std::sync::Arc;
+
+    use opentelemetry::metrics::Counter;
+    use opentelemetry::metrics::Gauge;
+    use opentelemetry::metrics::InstrumentBuilder;
+    use opentelemetry::metrics::InstrumentProvider;
+    use opentelemetry::metrics::Meter;
     use opentelemetry::metrics::MeterProvider;
+    use opentelemetry::metrics::SyncInstrument;
     use opentelemetry_sdk::metrics::SdkMeterProvider;
 
     use super::*;
+
+    #[derive(Default)]
+    struct CapturedMeasurements(parking_lot::Mutex<Vec<(String, u64, Vec<opentelemetry::KeyValue>)>>);
+
+    struct RecordingInstrument {
+        name: String,
+        measurements: Arc<CapturedMeasurements>,
+    }
+
+    struct RecordingProvider(Arc<CapturedMeasurements>);
+
+    impl SyncInstrument<u64> for RecordingInstrument {
+        fn measure(&self, value: u64, attributes: &[opentelemetry::KeyValue]) {
+            self.measurements
+                .0
+                .lock()
+                .push((self.name.clone(), value, attributes.to_vec()));
+        }
+    }
+
+    impl InstrumentProvider for RecordingProvider {
+        fn u64_counter(&self, builder: InstrumentBuilder<'_, Counter<u64>>) -> Counter<u64> {
+            Counter::new(Arc::new(RecordingInstrument {
+                name: builder.name.into_owned(),
+                measurements: Arc::clone(&self.0),
+            }))
+        }
+
+        fn u64_gauge(&self, builder: InstrumentBuilder<'_, Gauge<u64>>) -> Gauge<u64> {
+            Gauge::new(Arc::new(RecordingInstrument {
+                name: builder.name.into_owned(),
+                measurements: Arc::clone(&self.0),
+            }))
+        }
+    }
+
+    #[test]
+    fn unregistration_state_updates_do_not_count_events_and_fallback_reasons_remain_distinct() {
+        use crate::semantic::metrics::NAMESRV_UNREGISTRATION_EVENTS_TOTAL;
+        use crate::semantic::metrics::NAMESRV_UNREGISTRATION_OLDEST_AGE;
+        use crate::semantic::metrics::NAMESRV_UNREGISTRATION_QUEUE_DEPTH;
+
+        let captured = Arc::new(CapturedMeasurements::default());
+        let metrics = NameServerMetrics::new(&Meter::new(Arc::new(RecordingProvider(Arc::clone(&captured)))));
+        metrics.record_unregistration_queue("queued", 2);
+        metrics.record_unregistration_queue_state(1, Duration::from_millis(10));
+        metrics.record_unregistration_queue_state(0, Duration::ZERO);
+        metrics.record_unregistration_fallback("full", 0);
+        metrics.record_unregistration_fallback("closed", 0);
+
+        let measurements = captured.0.lock();
+        let events = measurements
+            .iter()
+            .filter(|(name, _, _)| name == NAMESRV_UNREGISTRATION_EVENTS_TOTAL)
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 3);
+        for (event, reason) in events[1..].iter().zip(["full", "closed"]) {
+            assert_eq!(event.1, 1);
+            assert!(event.2.contains(&opentelemetry::KeyValue::new(
+                crate::semantic::labels::RESULT,
+                "synchronous-fallback"
+            )));
+            assert!(event
+                .2
+                .contains(&opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason)));
+        }
+        let depths = measurements
+            .iter()
+            .filter(|(name, _, _)| name == NAMESRV_UNREGISTRATION_QUEUE_DEPTH)
+            .map(|(_, value, _)| *value)
+            .collect::<Vec<_>>();
+        assert_eq!(depths, [2, 1, 0, 0, 0]);
+        let ages = measurements
+            .iter()
+            .filter(|(name, _, _)| name == NAMESRV_UNREGISTRATION_OLDEST_AGE)
+            .map(|(_, value, _)| *value)
+            .collect::<Vec<_>>();
+        // Age is sampled by the observable instrument, not recorded into a
+        // synchronous gauge; real-reader coverage lives in unregistration.
+        assert!(ages.is_empty());
+    }
 
     #[test]
     fn namesrv_metrics_constructs_and_records() {

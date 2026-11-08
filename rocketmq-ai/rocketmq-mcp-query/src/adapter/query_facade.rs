@@ -225,7 +225,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::topic_tools::GetTopicStatsArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn topic_config(
@@ -233,7 +233,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::config_tools::GetTopicConfigArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns what one connected consumer client reports about itself, named by its pseudonym.
@@ -242,7 +242,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::consumer_tools::GetConsumerRunningInfoArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerRunningInfoOutput>, ToolFailure>>
            + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns how many messages of a Consumer Group were dead-lettered and when the last one was.
@@ -251,7 +251,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::consumer_tools::GetDlqSummaryArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetDlqSummaryOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns one page of the Consumer Groups that consume a Topic.
@@ -260,7 +260,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::topic_tools::ListTopicConsumersArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::topic_tools::ListTopicConsumersOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn list_consumer_groups(
@@ -276,7 +276,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         _args: ListConsumerGroupsArgs,
     ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupNamesOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn describe_consumer_group(
@@ -324,7 +324,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
     ) -> impl Future<
         Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolFailure>,
     > + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn consumer_progress(
@@ -332,7 +332,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::consumer_tools::GetConsumerProgressArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn describe_broker(
@@ -346,56 +346,56 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::broker_tools::ListBrokersArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::broker_tools::ListBrokersOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn broker_diagnostics(
         &self,
         _args: BrokerDiagnosticsArgs,
     ) -> impl Future<Output = Result<QueryResult<BrokerDiagnosticsOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn broker_config_summary(
         &self,
         _args: BrokerConfigSummaryArgs,
     ) -> impl Future<Output = Result<QueryResult<BrokerConfigSummaryOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn broker_log_filter_state(
         &self,
         _args: BrokerLogFilterStateArgs,
     ) -> impl Future<Output = Result<QueryResult<BrokerLogFilterStateOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn proxy_drain_state(
         &self,
         _args: ProxyDrainStateArgs,
     ) -> impl Future<Output = Result<QueryResult<ProxyDrainStateOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn list_consumer_connections(
         &self,
         _args: ListConsumerConnectionsArgs,
     ) -> impl Future<Output = Result<QueryResult<ListConsumerConnectionsOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn list_producer_connections(
         &self,
         _args: ListProducerConnectionsArgs,
     ) -> impl Future<Output = Result<QueryResult<ListProducerConnectionsOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn message_metadata(
         &self,
         _args: MessageMetadataArgs,
     ) -> impl Future<Output = Result<QueryResult<MessageMetadataOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the ACL users of one cluster, without a password.
@@ -405,7 +405,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::security_tools::ListAclUsersArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::security_tools::ListAclUsersOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns what the master of one Broker holds for Lite Topics.
@@ -414,7 +414,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::broker_tools::GetLiteBrokerInfoArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::broker_tools::GetLiteBrokerInfoOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the trace records clients wrote about one message, reduced to what the caller may see.
@@ -423,7 +423,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::message_tools::QueryMessageTraceArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::message_tools::QueryMessageTraceOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the fixed metadata of the messages of a Topic that carry a key.
@@ -432,21 +432,21 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::message_tools::FindMessagesByKeyArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::message_tools::FindMessagesByKeyOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn topic_config_state(
         &self,
         _args: TopicConfigStateArgs,
     ) -> impl Future<Output = Result<QueryResult<TopicConfigStateOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn consumer_group_config_state(
         &self,
         _args: ConsumerGroupConfigStateArgs,
     ) -> impl Future<Output = Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn ha_status(
@@ -454,7 +454,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         _args: crate::tools::infrastructure_tools::GetHaStatusArgs,
     ) -> impl Future<Output = Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn controller_metadata(
@@ -463,7 +463,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
     ) -> impl Future<
         Output = Result<QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure>,
     > + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn nameserver_config_summary(
@@ -472,7 +472,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
     ) -> impl Future<
         Output = Result<QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure>,
     > + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn diagnose_consumer_lag(
@@ -485,7 +485,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         _args: crate::tools::diagnosis_tools::DiagnoseMessageDeliveryArgs,
     ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Checks the health of a cluster at a glance.
@@ -493,7 +493,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         _args: crate::tools::diagnosis_tools::GetClusterHealthArgs,
     ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Diagnoses the health of one Broker: its master and its replicas.
@@ -501,7 +501,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         _args: crate::tools::diagnosis_tools::DiagnoseBrokerHealthArgs,
     ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Diagnoses one Consumer Group across every Topic it consumes.
@@ -509,7 +509,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         _args: crate::tools::diagnosis_tools::DiagnoseConsumerGroupArgs,
     ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 }
 
@@ -870,7 +870,9 @@ where
                                 .into_iter()
                                 .find(|summary| summary.group == group)
                                 .ok_or_else(|| {
-                                    ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None))
+                                    ToolFailure::Operational(
+                                        crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
+                                    )
                                 })?;
                             Ok(completeness.wrap(summary))
                         })
@@ -1790,7 +1792,7 @@ where
         match session.probe_broker_runtime_target(&broker_name).await? {
             BrokerRuntimeTargetStatus::Available | BrokerRuntimeTargetStatus::SourceUnavailable => {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             BrokerRuntimeTargetStatus::NotFound => {}
@@ -1825,7 +1827,7 @@ fn completeness_for_error(source: QuerySource, logical_target: &str, error: &Too
         | ToolFailure::Rejected(crate::tools::executor::ToolRejection::NotFound { .. })
         | ToolFailure::Rejected(ToolRejection::CursorExpired)
         | ToolFailure::Rejected(ToolRejection::CursorInvalid) => (SourceFailureCode::NotFound, false),
-        ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+        ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(_))
         | ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled) => {
             (SourceFailureCode::SourceUnavailable, true)
         }
@@ -2206,7 +2208,7 @@ mod tests {
         async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure> {
             if self.source_down.load(Ordering::SeqCst) {
                 self.counters.refused_starts.fetch_add(1, Ordering::SeqCst);
-                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+                return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
             }
             self.counters.starts.fetch_add(1, Ordering::SeqCst);
             Ok(FakeSession {
@@ -2348,7 +2350,7 @@ mod tests {
             }
             if self.fail_topic_inventory {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             if self.oversized_inventories {
@@ -2485,7 +2487,7 @@ mod tests {
             }
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let queue = |topic: &str, lag: u64| tool::ConsumerProgressQueueRow {
@@ -2524,7 +2526,7 @@ mod tests {
             }
             if self.fail_topic_config {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             Ok(QueryPayload::complete(
@@ -2632,7 +2634,7 @@ mod tests {
             }
             if self.fail_group_enrichment {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let groups = groups.iter().map(|group| consumer_group(group)).collect::<Vec<_>>();
@@ -2730,7 +2732,7 @@ mod tests {
             }
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let output = BrokerDiagnosticsOutput {
@@ -2755,7 +2757,7 @@ mod tests {
             self.counters.broker_config_queries.fetch_add(1, Ordering::SeqCst);
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let output = BrokerConfigSummaryOutput {
@@ -2778,7 +2780,7 @@ mod tests {
             self.counters.broker_log_filter_queries.fetch_add(1, Ordering::SeqCst);
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let output = BrokerLogFilterStateOutput {
@@ -2802,7 +2804,7 @@ mod tests {
             self.counters.proxy_drain_queries.fetch_add(1, Ordering::SeqCst);
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let expected_endpoint = if self.cluster.name == "secondary" {
@@ -2847,7 +2849,7 @@ mod tests {
             }
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let result = SessionConnections {
@@ -2873,7 +2875,7 @@ mod tests {
             }
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let result = SessionConnections {
@@ -2895,7 +2897,7 @@ mod tests {
             }
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             if self.missing_message {
@@ -2931,7 +2933,7 @@ mod tests {
             }
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let output = TopicConfigStateOutput {
@@ -2965,7 +2967,7 @@ mod tests {
             }
             if self.fail_exact_read {
                 return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
+                    crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                 ));
             }
             let output = ConsumerGroupConfigStateOutput {
@@ -3331,7 +3333,7 @@ mod tests {
         assert!(failures.iter().all(|result| matches!(
             result,
             Err(ToolFailure::Operational(
-                crate::tools::executor::ToolExecutionError::Backend(_)
+                crate::tools::executor::ToolExecutionError::SourceUnavailable(_)
             ))
         )));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 5);
@@ -3755,7 +3757,7 @@ mod tests {
                 })
                 .await,
             Err(ToolFailure::Operational(
-                crate::tools::executor::ToolExecutionError::Backend(_)
+                crate::tools::executor::ToolExecutionError::SourceUnavailable(_)
             ))
         ));
         assert!(matches!(
@@ -3766,7 +3768,7 @@ mod tests {
                 })
                 .await,
             Err(ToolFailure::Operational(
-                crate::tools::executor::ToolExecutionError::Backend(_)
+                crate::tools::executor::ToolExecutionError::SourceUnavailable(_)
             ))
         ));
         assert!(matches!(
@@ -3778,7 +3780,7 @@ mod tests {
                 })
                 .await,
             Err(ToolFailure::Operational(
-                crate::tools::executor::ToolExecutionError::Backend(_)
+                crate::tools::executor::ToolExecutionError::SourceUnavailable(_)
             ))
         ));
         assert!(matches!(
@@ -3789,7 +3791,7 @@ mod tests {
                 })
                 .await,
             Err(ToolFailure::Operational(
-                crate::tools::executor::ToolExecutionError::Backend(_)
+                crate::tools::executor::ToolExecutionError::SourceUnavailable(_)
             ))
         ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 4);
@@ -4085,7 +4087,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(_))
         ));
         assert!(!error.to_string().contains("not found"));
     }
@@ -4130,7 +4132,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             tool_error,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(_))
         ));
         assert!(!tool_error.to_string().contains("not found"));
 
@@ -4496,7 +4498,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(_))
         ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
@@ -5065,7 +5067,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             error,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(_))
         ));
         assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 1);

@@ -47,6 +47,7 @@ impl LocalFileMessageStore {
         #[cfg(feature = "extended_timeline")]
         if let Some(engine) = self.extended_timeline_engine.as_ref() {
             let engine = engine.clone();
+            let shutdown = self.scheduled_task_shutdown.clone();
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
             let max_messages = self.message_store_config.timer_store_config.materialize_batch_messages;
             let max_bytes = self.message_store_config.timer_store_config.materialize_batch_bytes;
@@ -55,17 +56,29 @@ impl LocalFileMessageStore {
                 ScheduledExecutionPolicy::default(),
                 move || {
                     let engine = engine.clone();
+                    let shutdown = shutdown.clone();
                     async move {
-                        let budget = WorkBudget::try_new(
-                            max_messages,
-                            max_bytes,
-                            Instant::now() + Duration::from_millis(interval_ms.max(100).saturating_mul(4)),
-                        );
-                        let Some(budget) = budget else {
-                            return;
-                        };
-                        if let Err(error) = engine.enqueue_source(budget).await.map(|_| ()) {
-                            warn!("Extended Timeline materialization paused at its cleanup fence: {error}");
+                        // Keep materializing while batches come back full, so a backlog is not
+                        // capped at one batch per interval; the fixed delay restarts an idle run.
+                        let work_timeout = Duration::from_millis(interval_ms.max(100).saturating_mul(4));
+                        let slice_deadline = Instant::now() + work_timeout;
+                        loop {
+                            let Some(budget) =
+                                WorkBudget::try_new(max_messages, max_bytes, Instant::now() + work_timeout)
+                            else {
+                                return;
+                            };
+                            match engine.enqueue_source(budget).await {
+                                Ok(progress)
+                                    if progress.messages >= max_messages
+                                        && !shutdown.is_cancelled()
+                                        && Instant::now() < slice_deadline => {}
+                                Ok(_) => return,
+                                Err(error) => {
+                                    warn!("Extended Timeline materialization paused at its cleanup fence: {error}");
+                                    return;
+                                }
+                            }
                         }
                     }
                 },
@@ -512,6 +525,22 @@ impl LocalFileMessageStore {
             if let Some(timer_message_store) = self.timer_message_store.as_ref() {
                 result &= timer_message_store.load();
             }
+            if let Some(native_timer) = self.native_timer.as_ref() {
+                if let Err(error) = native_timer.load() {
+                    error!("load the native timer engine failed: {error}");
+                    result = false;
+                } else if let Some(start) = native_timer.replay_start() {
+                    self.replay_native_deliveries(&self.native_delivery_feed, start);
+                }
+            }
+            if let Some(native_shadow) = self.native_shadow.as_ref() {
+                if let Err(error) = native_shadow.load() {
+                    error!("load the native timer shadow failed: {error}");
+                    result = false;
+                } else if let Some(start) = native_shadow.replay_start() {
+                    self.replay_native_deliveries(&self.native_shadow_feed, start);
+                }
+            }
             #[cfg(feature = "extended_timeline")]
             if let Some(materializer) = self.extended_timeline_materializer.as_ref() {
                 if let Err(error) = materializer.refresh_cleanup_fence() {
@@ -576,13 +605,13 @@ impl LocalFileMessageStore {
         let start_result: Result<(), StoreError> = async {
             self.allocate_mapped_file_service.start();
 
-            self.index_service.start();
-
             #[cfg(feature = "tieredstore")]
             if let Some(tiered_store) = self.tiered_store.as_ref() {
                 tiered_store.start().await?;
             }
 
+            // Before Reput starts: a slave keeps the delivery tokens from the first message on.
+            self.sync_native_timer_role();
             self.reput_message_service
                 .set_reput_from_offset(self.commit_log.get_confirm_offset());
             self.ensure_root_dependencies_wired("start")?;
@@ -613,6 +642,12 @@ impl LocalFileMessageStore {
             }
             if let Some(timer_message_store) = self.timer_message_store.as_ref() {
                 timer_message_store.start();
+            }
+            if let Some(native_timer) = self.native_timer.as_ref() {
+                native_timer.start();
+            }
+            if let Some(native_shadow) = self.native_shadow.as_ref() {
+                native_shadow.start();
             }
             self.sync_timer_message_store_role();
             #[cfg(feature = "extended_timeline")]
@@ -662,6 +697,7 @@ impl LocalFileMessageStore {
 
     pub(super) async fn initialize_store(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
+        self.warn_deprecated_configuration();
         self.ensure_operational_root_lease(StoreOperation::Load)?;
         match self.lifecycle_state() {
             LocalStoreState::Created | LocalStoreState::Shutdown => {}
@@ -849,6 +885,12 @@ impl LocalFileMessageStore {
                 };
                 if persist_timer_storage {
                     timer_message_store.shutdown_storage_with_persistence();
+                }
+                for native_timer in self.native_timer.iter().chain(&self.native_shadow) {
+                    let _ = native_timer.stop_gracefully().await;
+                    if persist_timer_storage {
+                        native_timer.persist_at_shutdown(self.dispatch_behind_bytes() <= 0);
+                    }
                 }
             }
             self.flush_consume_queue_service.shutdown().await;

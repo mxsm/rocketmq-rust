@@ -113,6 +113,7 @@ use capability::SendMessagePolicy;
 use capability::SendMessageProcessorContext;
 use message_builder::clear_reserved_properties;
 use message_builder::enrich_parsed_send_message_request_properties;
+use message_builder::enrich_send_message_properties;
 use message_builder::recall_handle_topic_and_timestamp;
 use message_builder::should_create_uniq_key;
 use structured_store::append_message_with_control_reply;
@@ -246,6 +247,9 @@ where
     }
 
     fn observe_response(&self, observation: ResponseObservation) {
+        if !self.has_send_message_hook() {
+            return;
+        }
         let Some(observation) = observation.write_projection() else {
             return;
         };
@@ -397,10 +401,20 @@ where
             return BrokerResponseParts::from_command(response)?.into_response_action();
         }
 
-        let (send_message_context, mut request_properties) =
-            self.inner
-                .build_msg_context_at(&policy, inbound_peer, &mut request_header, request, parsed_properties);
-        self.inner.execute_send_message_hook_before(&send_message_context);
+        // The Broker registers no send hooks of its own. Without one, only the Broker-owned
+        // properties are added; no hook context is built and no after-reply record is kept.
+        let (send_message_context, mut request_properties) = if self.has_send_message_hook() {
+            let built =
+                self.inner
+                    .build_msg_context_at(&policy, inbound_peer, &mut request_header, request, parsed_properties);
+            self.inner.execute_send_message_hook_before(&built.0);
+            built
+        } else {
+            (
+                SendMessageContext::default(),
+                enrich_send_message_properties(parsed_properties, policy.region_id.clone(), policy.trace_on),
+            )
+        };
         clear_reserved_properties(&mut request_header, &mut request_properties);
 
         if request_header.is_batch() {
@@ -928,6 +942,9 @@ where
             (Some(response), _) => (response, false),
             (None, after_canonical_write) => (response, after_canonical_write),
         };
+        if !self.has_send_message_hook() {
+            return BrokerResponseParts::from_command(response)?.into_response_action();
+        }
         if after_canonical_write && !original_oneway {
             self.inner
                 .update_send_message_context_from_response(&response, &mut send_message_context);
@@ -951,6 +968,9 @@ where
             (Some(response), _) => (response, false),
             (None, after_canonical_write) => (response, after_canonical_write),
         };
+        if !self.has_send_message_hook() {
+            return (response, StoreHookCompletion::NoAfterHook);
+        }
         if after_canonical_write && !original_oneway {
             self.inner
                 .update_send_message_context_from_response(&response, &mut send_message_context);
@@ -1076,12 +1096,15 @@ where
             stats.inc_queue_put_size(topic, queue_id, append_result.wrote_bytes);
         }
 
-        stats.inc_topic_put_nums(topic, append_result.msg_num, 1);
-        stats.inc_topic_put_size(topic, append_result.wrote_bytes);
-        stats.inc_broker_put_nums(topic, append_result.msg_num);
         let latency_millis = begin_time_millis.elapsed().as_millis();
         let latency_ms_for_stats = latency_millis.min(i32::MAX as u128) as i32;
-        stats.inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
+        stats.record_put_success(
+            topic,
+            queue_id,
+            append_result.msg_num,
+            append_result.wrote_bytes,
+            latency_ms_for_stats,
+        );
 
         if let Some(metrics) = self.inner.context.broker_metrics_manager.as_ref() {
             let msg_num = u64::try_from(append_result.msg_num.max(0)).unwrap_or_default();
@@ -1268,13 +1291,8 @@ where
         policy: &SendMessagePolicy,
         message: &MessageExtBrokerInner,
     ) -> Option<CheetahString> {
-        let max_delay_sec = if policy.timer_store_mode == rocketmq_store_api::TimerStoreMode::ExtendedTimeline {
-            u64::from(policy.timer_maximum_horizon_days).saturating_mul(86_400)
-        } else {
-            policy.timer_max_delay_sec
-        };
         let (real_topic, timestamp) =
-            recall_handle_topic_and_timestamp(message, max_delay_sec, policy.timer_precision_ms)?;
+            recall_handle_topic_and_timestamp(message, policy.timer_route.max_delay_sec, policy.timer_precision_ms)?;
         if real_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return None;
         }
@@ -1935,7 +1953,7 @@ where
             msg_ext.msg_id.clone()
         };
         MessageAccessor::set_origin_message_id(&mut msg_inner, origin_msg_id);
-        msg_inner.properties_string = message_properties_to_string(msg_ext.get_properties());
+        msg_inner.properties_string = message_properties_to_string(msg_inner.get_properties());
 
         let inner_topic = msg_inner.get_topic().clone();
         let mut response = self.context.command_factory.create_success_response_command();

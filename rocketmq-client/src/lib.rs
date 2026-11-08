@@ -89,7 +89,6 @@ mod utils;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;
-pub use crate::base::MqClientAdminInner;
 pub use crate::client_error::ClientError;
 pub use crate::client_error::ClientResult;
 pub use crate::common::acl::AclConstants;

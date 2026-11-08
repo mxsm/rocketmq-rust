@@ -13,45 +13,60 @@
 
 //! Application services coordinating persistence, shell state, provider replacement, and health.
 
+pub(crate) mod audit;
+mod audit_outcomes;
+#[path = "services/local_storage.rs"]
+pub(crate) mod local_storage;
+pub(crate) mod sessions;
+mod sessions_history;
+#[path = "services/storage_authority.rs"]
+mod storage_authority;
+#[path = "services/storage_setup.rs"]
+pub(crate) mod storage_setup;
+
+#[path = "services/acl.rs"]
+pub(crate) mod acl;
 #[path = "services/brokers.rs"]
 pub mod brokers;
 #[path = "services/consumers.rs"]
 pub(crate) mod consumers;
 #[path = "services/dashboard.rs"]
 pub mod dashboard;
-#[path = "services/delivery03.rs"]
-pub(crate) mod delivery03;
+#[path = "services/dashboard_broker.rs"]
+pub(crate) mod dashboard_broker;
+#[path = "services/dlq.rs"]
+pub(crate) mod dlq;
+#[path = "services/messages.rs"]
+pub(crate) mod messages;
+#[path = "services/monitors.rs"]
+pub(crate) mod monitors;
 #[path = "services/topics.rs"]
 pub(crate) mod topics;
+#[path = "services/topology.rs"]
+pub(crate) mod topology;
 
-use std::{
-    fmt,
-    future::Future,
-    io,
-    path::{Path, PathBuf},
-    pin::Pin,
-    process::Command,
-    sync::Arc,
-};
+use std::{fmt, future::Future, io, path::Path, pin::Pin, process::Command, sync::Arc};
 
 use rocketmq_dashboard_common::{
-    AdminSessionStatus, AdminSessionSummary, ConnectionScope, CredentialSourceKind, EndpointHealth, HistoryRetention,
-    TransportSettings, add_endpoint, normalize_nameserver_address, normalize_proxy_address, remove_endpoint,
-    switch_endpoint,
+    AdminSessionStatus, AdminSessionSummary, AuditAction, ConnectionScope, CredentialSourceKind, EndpointHealth,
+    EnvironmentId, HistoryRetention, OperationActor, OperationContext, OperationResource, TransportSettings,
+    add_endpoint, normalize_nameserver_address, normalize_proxy_address, remove_endpoint, switch_endpoint,
 };
 use rocketmq_runtime::{ChildServiceContext, TaskKind};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+use crate::route::AppRoute;
 use crate::{
     infrastructure::{
         admin_provider::{GpuiAdminProvider, ProviderFailure},
         auth_state::DesktopAuthState,
         config_store::{DesktopConfig, DesktopConfigStore},
+        environment_store::{EnvironmentCatalog, EnvironmentChange},
         history_collector::{HistoryLifecycle, HistorySampler},
         history_store::HistoryStore,
         monitor_store::{MonitorLifecycle, MonitorStore},
     },
-    route::AppRoute,
     state::{UiError, UiErrorCode},
 };
 
@@ -73,6 +88,28 @@ impl Drop for CancelOnDrop {
 }
 
 impl RuntimeBridge {
+    /// Registration belongs to the application group. Dropping a GPUI receiver only stops delivery;
+    /// shutdown drains the admitted work before aborting it at the group's existing deadline.
+    async fn run_owned<T: Send + 'static>(
+        &self,
+        name: &'static str,
+        future: impl Future<Output = Result<T, UiError>> + Send + 'static,
+    ) -> Result<T, UiError> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        #[cfg(test)]
+        let completion = self.completion.clone();
+        self.context
+            .spawn(name, TaskKind::Other, async move {
+                let _ = sender.send(future.await);
+                #[cfg(test)]
+                if let Some(completion) = completion {
+                    let _ = completion.send(name);
+                }
+            })
+            .map_err(runtime_unavailable)?;
+        receiver.await.map_err(runtime_unavailable)?
+    }
+
     async fn run<T>(
         &self,
         name: &'static str,
@@ -131,6 +168,7 @@ pub struct StartupSnapshot {
     pub has_valid_session: bool,
 }
 
+#[cfg(test)]
 impl StartupSnapshot {
     /// Chooses Login or Dashboard without exposing a session value.
     pub const fn destination(&self) -> AppRoute {
@@ -146,6 +184,7 @@ impl StartupSnapshot {
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct SessionState {
     username: Option<String>,
+    generation: u128,
 }
 
 impl fmt::Debug for SessionState {
@@ -163,19 +202,25 @@ impl SessionState {
     pub fn restored() -> Self {
         Self {
             username: Some("Authenticated".into()),
+            generation: rand::random(),
         }
     }
 
     /// Creates a session for a validated environment-backed username.
+    #[cfg(test)]
     pub fn for_username(username: String) -> Self {
         Self {
             username: Some(username),
+            generation: rand::random(),
         }
     }
 
     /// Creates a signed-out marker.
     pub const fn signed_out() -> Self {
-        Self { username: None }
+        Self {
+            username: None,
+            generation: 0,
+        }
     }
 
     /// Returns whether protected navigation is admitted.
@@ -186,6 +231,14 @@ impl SessionState {
     /// Clears the complete marker.
     pub fn clear(&mut self) {
         self.username = None;
+        self.generation = 0;
+    }
+
+    pub(crate) fn from_local(session: &crate::infrastructure::auth_state::LocalSession) -> Self {
+        Self {
+            username: session.username().map(str::to_owned),
+            generation: session.generation(),
+        }
     }
 }
 
@@ -194,6 +247,10 @@ impl SessionState {
 pub struct GlobalConnectionState {
     /// Last persisted non-sensitive configuration.
     pub config: DesktopConfig,
+    /// Named persistent environments and the explicitly selected profile.
+    pub environments: Option<EnvironmentCatalog>,
+    /// Legacy observations excluded from all environment charts until explicitly assigned.
+    pub unassigned_history_points: usize,
     /// Current Admin session lifecycle status.
     pub session: AdminSessionSummary,
     /// Latest accepted health result.
@@ -221,6 +278,8 @@ impl Default for GlobalConnectionState {
     fn default() -> Self {
         Self {
             config: DesktopConfig::default(),
+            environments: None,
+            unassigned_history_points: 0,
             session: AdminSessionSummary {
                 revision: 0,
                 status: AdminSessionStatus::NotConfigured,
@@ -279,6 +338,15 @@ impl GlobalConnectionState {
 /// Typed configuration mutation. No write operation is replayed after it completes.
 #[derive(Clone, PartialEq, Eq)]
 pub enum ConfigMutation {
+    /// Saves the existing global History settings against the reviewed configuration revision.
+    SaveHistorySettings {
+        expected_revision: u64,
+        settings: local_storage::HistorySettings,
+    },
+    /// Creates and selects a distinct, initially empty environment profile.
+    CreateEnvironment(String),
+    /// Explicitly selects a persisted environment, independently of endpoint editing.
+    SwitchEnvironment(EnvironmentId),
     /// Adds a NameServer, selecting it only when the list was empty.
     AddNameServer(String),
     /// Selects an existing NameServer.
@@ -326,6 +394,9 @@ impl ConfigMutation {
 impl fmt::Debug for ConfigMutation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match self {
+            Self::SaveHistorySettings { .. } => "SaveHistorySettings",
+            Self::CreateEnvironment(_) => "CreateEnvironment",
+            Self::SwitchEnvironment(_) => "SwitchEnvironment",
             Self::AddNameServer(_) => "AddNameServer",
             Self::SwitchNameServer(_) => "SwitchNameServer",
             Self::RemoveNameServer { .. } => "RemoveNameServer",
@@ -488,6 +559,40 @@ impl ConnectionProvider for ProductFakeConnectionProvider {
 }
 
 trait ApplicationBackend: Send + Sync {
+    fn storage_setup_snapshot(&self) -> ServiceFuture<'_, Result<storage_setup::StorageSetupSnapshot, UiError>> {
+        Box::pin(std::future::ready(Err(storage_setup::unavailable())))
+    }
+    fn save_storage_engine(
+        &self,
+        _engine: rocketmq_dashboard_storage::StorageEngine,
+    ) -> ServiceFuture<'_, Result<(), UiError>> {
+        Box::pin(std::future::ready(Err(storage_setup::unavailable())))
+    }
+    fn complete_workspace_setup(
+        &self,
+        _action: storage_setup::WorkspaceSetupAction,
+    ) -> ServiceFuture<'_, Result<(), UiError>> {
+        Box::pin(std::future::ready(Err(storage_setup::unavailable())))
+    }
+    fn configuration_changes(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<Option<crate::infrastructure::config_store::NativeConfigurationChange>>>
+    {
+        None
+    }
+    fn refresh_authority_if_changed(
+        &self,
+        _progress: ConfigProgressSender,
+    ) -> ServiceFuture<'_, Result<Option<ConfigUpdate>, UiError>> {
+        Box::pin(std::future::ready(Ok(None)))
+    }
+    fn local_runtime_status(&self) -> ServiceFuture<'_, Result<local_storage::LocalRuntimeStatus, UiError>> {
+        Box::pin(std::future::ready(Err(UiError::new(
+            "Local storage status is unavailable for this backend.",
+            UiErrorCode::CapabilityUnavailable,
+            false,
+        ))))
+    }
     fn bootstrap(&self) -> ServiceFuture<'_, Result<StartupSnapshot, UiError>>;
     fn authenticate<'a>(
         &'a self,
@@ -499,10 +604,10 @@ trait ApplicationBackend: Send + Sync {
         &self,
         mutation: ConfigMutation,
         progress: ConfigProgressSender,
+        context: Option<OperationContext>,
     ) -> ServiceFuture<'_, Result<ConfigUpdate, UiError>>;
     fn check_all_nameservers(&self) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, UiError>>;
     fn connection_state(&self) -> GlobalConnectionState;
-    fn config_path(&self) -> Option<PathBuf>;
     fn open_config_location(&self) -> ServiceFuture<'_, Result<(), UiError>>;
 }
 
@@ -511,9 +616,16 @@ trait ApplicationBackend: Send + Sync {
 pub struct AppServices {
     backend: Arc<dyn ApplicationBackend>,
     runtime_bridge: Option<RuntimeBridge>,
-    delivery03: Arc<dyn delivery03::Delivery03Backend>,
+    audit: Option<Arc<audit::AuditService>>,
+    sessions: Option<Arc<sessions::SessionService>>,
+    monitors: Option<Arc<MonitorStore>>,
+    dashboard_broker: Arc<dyn dashboard_broker::DashboardBrokerOperations>,
     consumers: Arc<dyn consumers::ConsumerBackend>,
     topics: Arc<dyn topics::TopicBackend>,
+    messages: Arc<dyn messages::MessageBackend>,
+    acl: Arc<dyn acl::AclBackend>,
+    dlq: Arc<dyn dlq::DlqBackend>,
+    topology: Arc<dyn topology::TopologyBackend>,
 }
 
 impl AppServices {
@@ -527,12 +639,19 @@ impl AppServices {
         Self {
             backend: Arc::new(InjectedBackend { startup, config, auth }),
             runtime_bridge: None,
-            delivery03: delivery03::RealDelivery03Backend::new(
+            audit: None,
+            sessions: None,
+            monitors: None,
+            dashboard_broker: dashboard_broker::RealDashboardBrokerOperations::new(
                 dashboard::DashboardService::unavailable(),
                 brokers::BrokerService::unavailable(),
             ),
             consumers: consumers::RealConsumerBackend::unavailable(),
             topics: topics::RealTopicBackend::unavailable(),
+            messages: messages::RealMessageBackend::unavailable(),
+            acl: acl::RealAclBackend::unavailable(),
+            dlq: dlq::RealDlqBackend::unavailable(),
+            topology: topology::RealTopologyBackend::unavailable(),
         }
     }
 
@@ -566,11 +685,21 @@ impl AppServices {
         monitor_context: ChildServiceContext,
     ) -> Self {
         let host_context = runtime_context.clone();
-        let history_store = HistoryStore::new(store.path().with_file_name("history.json"), history_context.clone());
-        let monitor_store = MonitorStore::new(store.path().with_file_name("monitors.json"), monitor_context.clone());
+        let history_store = HistoryStore::with_config_store(
+            store.path().with_file_name("history.json"),
+            history_context.clone(),
+            Arc::clone(&store),
+        );
+        let monitor_store = MonitorStore::with_config_store(Arc::clone(&store));
         let dashboard = admin_provider
             .as_ref()
-            .map(|provider| dashboard::DashboardService::new(Arc::clone(provider), Arc::clone(&history_store)))
+            .map(|provider| {
+                dashboard::DashboardService::new(
+                    Arc::clone(provider),
+                    Arc::clone(&history_store),
+                    history_context.clone(),
+                )
+            })
             .unwrap_or_else(dashboard::DashboardService::unavailable);
         let brokers = admin_provider
             .as_ref()
@@ -580,16 +709,39 @@ impl AppServices {
             .as_ref()
             .map(|provider| consumers::RealConsumerBackend::new(Arc::clone(provider)))
             .unwrap_or_else(consumers::RealConsumerBackend::unavailable);
+        let messages = admin_provider
+            .as_ref()
+            .map(|provider| messages::RealMessageBackend::new(Arc::clone(provider)))
+            .unwrap_or_else(messages::RealMessageBackend::unavailable);
         let topics = admin_provider
+            .as_ref()
+            .cloned()
             .map(topics::RealTopicBackend::new)
             .unwrap_or_else(topics::RealTopicBackend::unavailable);
-        let history_sampler: Arc<dyn HistorySampler> = dashboard.clone();
-        let delivery03 = delivery03::RealDelivery03Backend::new(dashboard, brokers);
+        let acl = admin_provider
+            .as_ref()
+            .cloned()
+            .map(acl::RealAclBackend::new)
+            .unwrap_or_else(acl::RealAclBackend::unavailable);
+        let dlq = admin_provider
+            .as_ref()
+            .cloned()
+            .map(dlq::RealDlqBackend::new)
+            .unwrap_or_else(dlq::RealDlqBackend::unavailable);
+        let topology = admin_provider
+            .map(topology::RealTopologyBackend::new)
+            .unwrap_or_else(topology::RealTopologyBackend::unavailable);
+        let sessions = sessions::SessionService::new(Arc::clone(&store), Arc::clone(&auth), host_context.clone());
+        let history_sampler: Arc<dyn HistorySampler> =
+            sessions_history::ProtectedHistorySampler::new(Arc::clone(&sessions), dashboard.clone());
+        let dashboard_broker = dashboard_broker::RealDashboardBrokerOperations::new(dashboard, brokers);
+        let audit = audit::AuditService::new(Arc::clone(&store), Arc::clone(&auth));
         Self {
             backend: Arc::new(DesktopBackend {
                 store,
                 provider,
                 auth,
+                sessions: Arc::clone(&sessions),
                 state: parking_lot::RwLock::new(GlobalConnectionState::default()),
                 update_gate: tokio::sync::Mutex::new(()),
                 history_context,
@@ -597,7 +749,7 @@ impl AppServices {
                 host_context,
                 history_store,
                 history_sampler,
-                monitor_store,
+                monitor_store: Arc::clone(&monitor_store),
                 history_lifecycle: parking_lot::Mutex::new(None),
                 monitor_lifecycle: parking_lot::Mutex::new(None),
             }),
@@ -606,9 +758,16 @@ impl AppServices {
                 #[cfg(test)]
                 completion: None,
             }),
-            delivery03,
+            audit: Some(audit),
+            sessions: Some(sessions),
+            monitors: Some(monitor_store),
+            dashboard_broker,
             consumers,
             topics,
+            messages,
+            acl,
+            dlq,
+            topology,
         }
     }
 
@@ -646,35 +805,84 @@ impl AppServices {
             return self.backend.bootstrap().await;
         };
         let backend = Arc::clone(&self.backend);
+        let audit = self.audit.clone();
         runtime
-            .run("gpui-bootstrap", async move { backend.bootstrap().await })
-            .await
-    }
-
-    /// Authenticates without retaining the supplied password.
-    pub async fn authenticate(&self, username: &str, password: &str) -> Result<SessionState, UiError> {
-        let Some(runtime) = self.runtime_bridge.as_ref() else {
-            return self.backend.authenticate(username, password).await;
-        };
-        let backend = Arc::clone(&self.backend);
-        let username = username.to_owned();
-        let password = password.to_owned();
-        runtime
-            .run("gpui-authenticate", async move {
-                backend.authenticate(&username, &password).await
+            .run("gpui-bootstrap", async move {
+                let result = backend.bootstrap().await;
+                if result.is_ok()
+                    && let Some(audit) = audit
+                {
+                    audit.recover_pending().await;
+                }
+                result
             })
             .await
     }
 
-    /// Clears the in-memory local session.
-    pub async fn sign_out(&self) -> Result<(), UiError> {
-        let Some(runtime) = self.runtime_bridge.as_ref() else {
-            return self.backend.sign_out().await;
-        };
+    /// Captures the login lifetime now and holds supplied credentials only in its owned call.
+    pub fn authenticate(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> ServiceFuture<'static, Result<SessionState, UiError>> {
         let backend = Arc::clone(&self.backend);
-        runtime
-            .run("gpui-sign-out", async move { backend.sign_out().await })
-            .await
+        let operation = self.accept_operation(
+            self.connection_state().config.revision,
+            AuditAction::LocalLogin,
+            OperationResource::LocalSession,
+        );
+        let username = username.to_owned();
+        let password = password.to_owned();
+        let native = self.sessions.as_ref().map(|sessions| {
+            (
+                Arc::clone(sessions),
+                sessions.capture_login(self.connection_state().config.revision),
+            )
+        });
+        let services = self.clone();
+        Box::pin(async move {
+            services
+                .run_mutation("gpui-authenticate", operation?, async move {
+                    match native {
+                        Some((sessions, expected)) => sessions.authenticate(expected, &username, &password).await,
+                        None => backend.authenticate(&username, &password).await,
+                    }
+                })
+                .await
+        })
+    }
+
+    /// Revokes captured local access immediately; the returned application-owned work persists
+    /// revocation and its audit result without touching a later replacement login.
+    pub fn sign_out(&self) -> ServiceFuture<'static, Result<(), UiError>> {
+        let backend = Arc::clone(&self.backend);
+        let operation = self.accept_operation(
+            self.connection_state().config.revision,
+            AuditAction::LocalLogout,
+            OperationResource::LocalSession,
+        );
+        let native = self
+            .sessions
+            .as_ref()
+            .map(|sessions| (Arc::clone(sessions), sessions.end_local()));
+        let (operation, capture_failure) = match operation {
+            Ok(operation) => (operation, None),
+            Err(error) => (None, Some(error)),
+        };
+        let services = self.clone();
+        Box::pin(async move {
+            services
+                .run_owned_mutation("gpui-sign-out", operation, async move {
+                    match native {
+                        Some((sessions, captured)) => sessions.revoke_captured(captured).await,
+                        None => backend.sign_out().await,
+                    }?;
+                    // Ending access must not depend on constructing an Audit context from a
+                    // stale shell projection. Report that failure without inventing attribution.
+                    capture_failure.map_or(Ok(()), Err)
+                })
+                .await
+        })
     }
 
     /// Runs one mutation while publishing each observable ordering stage.
@@ -683,38 +891,47 @@ impl AppServices {
         mutation: ConfigMutation,
         progress: tokio::sync::mpsc::UnboundedSender<ConfigUpdated>,
     ) -> Result<ConfigUpdate, UiError> {
-        let Some(runtime) = self.runtime_bridge.as_ref() else {
-            return self.backend.mutate(mutation, progress).await;
-        };
         let backend = Arc::clone(&self.backend);
-        runtime
-            .run("gpui-config-mutation", async move {
-                backend.mutate(mutation, progress).await
-            })
-            .await
+        if mutation == ConfigMutation::Reload {
+            let work = async move { backend.mutate(mutation, progress, None).await };
+            return match &self.runtime_bridge {
+                Some(runtime) => runtime.run("gpui-config-reload", work).await,
+                None => work.await,
+            };
+        }
+        let operation = self.accept_operation(
+            self.connection_state().config.revision,
+            AuditAction::ConfigurationSaved,
+            OperationResource::Configuration,
+        )?;
+        let context = operation.as_ref().map(|operation| operation.context.clone());
+        if mutation == ConfigMutation::SetAuthEnabled(false) {
+            // Preserve the existing local Login Security recovery path. It can disable an
+            // unusable environment-backed login while retaining normal commit/audit ownership.
+            return self
+                .run_owned_mutation("gpui-config-mutation", operation, async move {
+                    backend.mutate(mutation, progress, context).await
+                })
+                .await;
+        }
+        self.run_mutation("gpui-config-mutation", operation, async move {
+            backend.mutate(mutation, progress, context).await
+        })
+        .await
     }
 
     /// Checks every configured NameServer without changing the selected endpoint.
     pub async fn check_all_nameservers(&self) -> Result<Vec<EndpointHealth>, UiError> {
-        let Some(runtime) = self.runtime_bridge.as_ref() else {
-            return self.backend.check_all_nameservers().await;
-        };
         let backend = Arc::clone(&self.backend);
-        runtime
-            .run("gpui-check-all-nameservers", async move {
-                backend.check_all_nameservers().await
-            })
-            .await
+        self.run_protected_query("gpui-check-all-nameservers", async move {
+            backend.check_all_nameservers().await
+        })
+        .await
     }
 
     /// Returns the current safe shell/config snapshot.
     pub fn connection_state(&self) -> GlobalConnectionState {
         self.backend.connection_state()
-    }
-
-    /// Returns the local configuration path when backed by the desktop store.
-    pub fn config_path(&self) -> Option<PathBuf> {
-        self.backend.config_path()
     }
 
     /// Opens the configuration location used by the startup error page.
@@ -746,6 +963,7 @@ struct DesktopBackend {
     store: Arc<DesktopConfigStore>,
     provider: Arc<dyn ConnectionProvider>,
     auth: Arc<DesktopAuthState>,
+    sessions: Arc<sessions::SessionService>,
     state: parking_lot::RwLock<GlobalConnectionState>,
     update_gate: tokio::sync::Mutex<()>,
     history_context: ChildServiceContext,
@@ -772,7 +990,8 @@ impl DesktopBackend {
             let existing = {
                 let mut lifecycle = self.history_lifecycle.lock();
                 if lifecycle.as_ref().is_some_and(|lifecycle| {
-                    lifecycle.matches_settings(foundations.history_interval_seconds, history_retention)
+                    lifecycle.is_running()
+                        && lifecycle.matches_settings(foundations.history_interval_seconds, history_retention)
                 }) {
                     None
                 } else {
@@ -821,7 +1040,8 @@ impl DesktopBackend {
         if foundations.monitor_enabled {
             let needs_start = self.monitor_lifecycle.lock().is_none();
             if needs_start {
-                self.monitor_store.list().await.map_err(config_ui_error)?;
+                let scope = self.store.environment_snapshot().map_err(config_ui_error)?;
+                self.monitor_store.snapshot(scope).await.map_err(config_ui_error)?;
                 let lifecycle = MonitorLifecycle::start(&self.monitor_context, true).map_err(config_ui_error)?;
                 if !lifecycle.is_started() {
                     return Err(UiError::new(
@@ -854,7 +1074,26 @@ impl DesktopBackend {
         route_transition: ConfigRouteTransition,
     ) -> Option<UiError> {
         // ConfigUpdated ordering: persisted shell summary, provider, invalidation/clear, read-only health.
-        self.state.write().persisted(config.clone());
+        let changed_context = {
+            let state = self.state.read();
+            let mut previous = state.config.connection_snapshot();
+            previous.revision = config.revision;
+            previous != config.connection_snapshot()
+                || state.config.auth.enabled != config.auth.enabled
+                || state.environments.as_ref().map(|catalog| &catalog.active_id)
+                    != self.store.environments().as_ref().map(|catalog| &catalog.active_id)
+        };
+        let revocation_warning = if changed_context && self.auth.session().is_authenticated() {
+            let captured = self.sessions.end_local();
+            self.sessions.revoke_captured(captured).await.err()
+        } else {
+            None
+        };
+        {
+            let mut state = self.state.write();
+            state.persisted(config.clone());
+            state.environments = self.store.environments();
+        }
         send_progress(
             progress,
             config.revision,
@@ -896,7 +1135,7 @@ impl DesktopBackend {
             ConfigUpdatePhase::HealthRefreshed,
             route_transition,
         );
-        warning
+        warning.or(revocation_warning)
     }
 
     async fn rollback_transport(
@@ -930,9 +1169,54 @@ impl DesktopBackend {
 }
 
 impl ApplicationBackend for DesktopBackend {
+    fn storage_setup_snapshot(&self) -> ServiceFuture<'_, Result<storage_setup::StorageSetupSnapshot, UiError>> {
+        Box::pin(async move {
+            Ok(storage_setup::StorageSetupSnapshot::from(
+                self.store.storage_setup_snapshot().await,
+            ))
+        })
+    }
+    fn save_storage_engine(
+        &self,
+        engine: rocketmq_dashboard_storage::StorageEngine,
+    ) -> ServiceFuture<'_, Result<(), UiError>> {
+        Box::pin(async move { self.store.save_storage_engine(engine).await.map_err(config_ui_error) })
+    }
+    fn complete_workspace_setup(
+        &self,
+        action: storage_setup::WorkspaceSetupAction,
+    ) -> ServiceFuture<'_, Result<(), UiError>> {
+        Box::pin(async move {
+            let _update = self.update_gate.lock().await;
+            self.store
+                .complete_workspace_setup(action)
+                .await
+                .map_err(config_ui_error)
+        })
+    }
+    fn configuration_changes(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<Option<crate::infrastructure::config_store::NativeConfigurationChange>>>
+    {
+        Some(self.store.configuration_changes())
+    }
+    fn refresh_authority_if_changed(
+        &self,
+        progress: ConfigProgressSender,
+    ) -> ServiceFuture<'_, Result<Option<ConfigUpdate>, UiError>> {
+        Box::pin(self.reload_peer_configuration(progress))
+    }
+    fn local_runtime_status(&self) -> ServiceFuture<'_, Result<local_storage::LocalRuntimeStatus, UiError>> {
+        Box::pin(self.inspect_local_runtime())
+    }
     fn bootstrap(&self) -> ServiceFuture<'_, Result<StartupSnapshot, UiError>> {
         Box::pin(async move {
             let config = self.store.load().await.map_err(config_ui_error)?;
+            let observations = self.history_store.observations().await.map_err(config_ui_error)?;
+            self.state.write().unassigned_history_points = observations
+                .iter()
+                .filter(|point| point.environment_id.is_none())
+                .count();
             self.auth.validate_startup(&config.auth).map_err(auth_ui_error)?;
             if self
                 .install_persisted(config.clone(), None, ConfigRouteTransition::None)
@@ -946,6 +1230,7 @@ impl ApplicationBackend for DesktopBackend {
                 );
             }
             self.reconcile_foundations(config.foundations).await?;
+            self.sessions.start()?;
             Ok(StartupSnapshot {
                 configuration_revision: config.revision,
                 login_required: config.auth.enabled,
@@ -959,29 +1244,23 @@ impl ApplicationBackend for DesktopBackend {
         username: &'a str,
         password: &'a str,
     ) -> ServiceFuture<'a, Result<SessionState, UiError>> {
-        Box::pin(async move {
-            self.auth.authenticate(username, password).map_or_else(
-                |error| Err(auth_ui_error(error)),
-                |session| {
-                    Ok(SessionState::for_username(
-                        session.username().unwrap_or_default().to_owned(),
-                    ))
-                },
-            )
-        })
+        Box::pin(self.sessions.authenticate(
+            self.sessions.capture_login(self.state.read().config.revision),
+            username,
+            password,
+        ))
     }
 
     fn sign_out(&self) -> ServiceFuture<'_, Result<(), UiError>> {
-        Box::pin(async move {
-            self.auth.sign_out();
-            Ok(())
-        })
+        let captured = self.sessions.end_local();
+        Box::pin(self.sessions.revoke_captured(captured))
     }
 
     fn mutate(
         &self,
         mutation: ConfigMutation,
         progress: ConfigProgressSender,
+        accepted_context: Option<OperationContext>,
     ) -> ServiceFuture<'_, Result<ConfigUpdate, UiError>> {
         Box::pin(async move {
             let _update = self.update_gate.lock().await;
@@ -1005,6 +1284,47 @@ impl ApplicationBackend for DesktopBackend {
                 });
             }
             let old = self.state.read().config.clone();
+            let context = if let Some(context) = accepted_context {
+                context
+            } else {
+                let actor = self
+                    .auth
+                    .session()
+                    .username()
+                    .map(|username| OperationActor::LocalOperator {
+                        username: username.to_owned(),
+                    })
+                    .unwrap_or(OperationActor::LocalDesktop);
+                self.store
+                    .operation_context(old.revision, actor, OperationResource::Configuration)
+                    .map_err(config_ui_error)?
+            };
+            let environment_change = match &mutation {
+                ConfigMutation::CreateEnvironment(name) => Some(EnvironmentChange::Create { name: name.clone() }),
+                ConfigMutation::SwitchEnvironment(id) => Some(EnvironmentChange::Select { id: id.clone() }),
+                _ => None,
+            };
+            if let Some(change) = environment_change {
+                let saved = self
+                    .store
+                    .change_environment(change, context)
+                    .await
+                    .map_err(config_ui_error)?;
+                let warning = self
+                    .install_persisted(saved.clone(), Some(&progress), ConfigRouteTransition::None)
+                    .await;
+                self.reconcile_foundations(saved.foundations).await?;
+                send_progress(
+                    Some(&progress),
+                    saved.revision,
+                    ConfigUpdatePhase::Completed,
+                    ConfigRouteTransition::None,
+                );
+                return Ok(ConfigUpdate {
+                    config: saved,
+                    connection_warning: warning,
+                });
+            }
             let mut next = old.clone();
             apply_mutation(&mut next, &mutation)?;
             let route_transition = mutation.route_transition(old.auth.enabled, next.auth.enabled);
@@ -1014,7 +1334,11 @@ impl ApplicationBackend for DesktopBackend {
             ) {
                 self.auth.validate_startup(&next.auth).map_err(auth_ui_error)?;
             }
-            let saved = self.store.save_next(next).await.map_err(config_ui_error)?;
+            let saved = self
+                .store
+                .save_next_with_context(next, context)
+                .await
+                .map_err(config_ui_error)?;
             let warning = self
                 .install_persisted(saved.clone(), Some(&progress), route_transition)
                 .await;
@@ -1025,7 +1349,8 @@ impl ApplicationBackend for DesktopBackend {
                 return self.rollback_transport(old, error, &progress).await;
             }
             if mutation == ConfigMutation::SetAuthEnabled(false) {
-                self.auth.sign_out();
+                let captured = self.sessions.end_local();
+                self.sessions.revoke_captured(captured).await?;
             }
             send_progress(
                 Some(&progress),
@@ -1063,10 +1388,6 @@ impl ApplicationBackend for DesktopBackend {
 
     fn connection_state(&self) -> GlobalConnectionState {
         self.state.read().clone()
-    }
-
-    fn config_path(&self) -> Option<PathBuf> {
-        Some(self.store.path().to_path_buf())
     }
 
     fn open_config_location(&self) -> ServiceFuture<'_, Result<(), UiError>> {
@@ -1152,6 +1473,20 @@ fn open_platform_location(path: &Path) -> io::Result<()> {
 
 fn apply_mutation(config: &mut DesktopConfig, mutation: &ConfigMutation) -> Result<(), UiError> {
     let result = match mutation {
+        ConfigMutation::SaveHistorySettings {
+            expected_revision,
+            settings,
+        } => {
+            if config.revision != *expected_revision {
+                return Err(UiError::new(
+                    "History settings changed after this draft was opened. Review the current settings, then explicitly keep the draft with the current revision or discard it.",
+                    UiErrorCode::Configuration,
+                    true,
+                ));
+            }
+            settings.validate()?.apply(&mut config.foundations);
+            Ok(())
+        }
         ConfigMutation::AddNameServer(address) => add_endpoint(
             &mut config.nameservers,
             &mut config.current_nameserver,
@@ -1227,7 +1562,7 @@ fn apply_mutation(config: &mut DesktopConfig, mutation: &ConfigMutation) -> Resu
             config.auth.credential_source = *source;
             Ok(())
         }
-        ConfigMutation::Reload => Ok(()),
+        ConfigMutation::Reload | ConfigMutation::CreateEnvironment(_) | ConfigMutation::SwitchEnvironment(_) => Ok(()),
     };
     result.map_err(|source| {
         UiError::caused_by(
@@ -1262,7 +1597,8 @@ fn auth_ui_error(rejection: crate::infrastructure::auth_state::AuthRejection) ->
 }
 
 fn config_ui_error(error: crate::infrastructure::config_store::ConfigStoreFailure) -> UiError {
-    config_ui_error_with_summary(error, "Unable to access local dashboard data.")
+    let summary = error.safe_summary();
+    config_ui_error_with_summary(error, summary)
 }
 
 fn config_ui_error_with_summary(
@@ -1345,6 +1681,7 @@ impl ApplicationBackend for InjectedBackend {
         &self,
         _mutation: ConfigMutation,
         _progress: ConfigProgressSender,
+        _context: Option<OperationContext>,
     ) -> ServiceFuture<'_, Result<ConfigUpdate, UiError>> {
         Box::pin(std::future::ready(Err(test_capability_unavailable())))
     }
@@ -1355,10 +1692,6 @@ impl ApplicationBackend for InjectedBackend {
 
     fn connection_state(&self) -> GlobalConnectionState {
         GlobalConnectionState::default()
-    }
-
-    fn config_path(&self) -> Option<PathBuf> {
-        None
     }
 
     fn open_config_location(&self) -> ServiceFuture<'_, Result<(), UiError>> {

@@ -46,7 +46,7 @@ use crate::core::query::AdminSourceFailure;
 use crate::core::AdminError;
 use crate::core::AdminFailure;
 use crate::core::AdminResult;
-use crate::topic_observation::backend_error;
+use crate::topic_observation::promote_to_admin_error;
 use crate::topic_observation::selected_cluster_route_masters;
 use crate::topic_observation::BrokerTarget;
 
@@ -131,11 +131,11 @@ async fn index_targets<S: MessageIndexSource>(source: &S, cluster: &str, topic: 
     let cluster_info = source
         .cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let route = source
         .topic_route(topic)
         .await
-        .map_err(|error| backend_error("examine_topic_route_info", error))?
+        .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
         .ok_or_else(|| AdminError::topic_not_found(topic))?;
     // The source only labels the targets that cannot be asked, and those are named, not labelled.
     let (targets, failures) =

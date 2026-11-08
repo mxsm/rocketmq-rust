@@ -44,7 +44,20 @@ subprocess. Server tool catalogs, middleware, configuration, and audit trails re
 Default query stdio:
 
 ```bash
-cargo run --locked -- --config conf/mcp.example.toml --transport stdio
+cargo run --locked
+```
+
+With no configuration argument or environment variable, the server uses built-in local-development settings:
+stdio, the `local-dev` cluster at `127.0.0.1:9876`, read-only queries and diagnostics, output sanitization,
+and audit records through stderr logging. Configuration and permissions are embedded, so the binary can
+start from any working directory without configuration files. It waits for MCP JSON-RPC requests on stdin;
+RocketMQ queries require a running local NameServer and Broker.
+
+Use `--config` or `ROCKETMQ_MCP_CONFIG` for custom settings; the argument takes precedence. Explicit configuration
+errors fail startup. For example:
+
+```bash
+cargo run --locked -- --config conf/mcp.example.toml
 ```
 
 Query HTTP without stdio:

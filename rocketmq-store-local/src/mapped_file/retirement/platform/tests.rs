@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::engine::advance;
-use super::engine::BackendFailure;
 use super::engine::EntryObservation;
 use super::engine::NamespaceIo;
+use super::engine::NamespaceIoFailure;
 use super::engine::NamespaceSnapshot;
 use super::types::NamespaceAbsenceProof;
 use super::types::NamespaceEntry;
@@ -97,8 +97,8 @@ impl ModelNamespace {
         }
     }
 
-    fn retryable(operation: NamespaceOperation) -> BackendFailure {
-        BackendFailure::retryable(operation, NamespaceFailureClass::SharingViolation, Some(32))
+    fn retryable(operation: NamespaceOperation) -> NamespaceIoFailure {
+        NamespaceIoFailure::retryable(operation, NamespaceFailureClass::SharingViolation, Some(32))
     }
 
     fn take_fault(&mut self, point: FaultPoint) -> bool {
@@ -116,7 +116,7 @@ impl NamespaceIo for ModelNamespace {
         &mut self,
         _expected_key: PhysicalFileKey,
         expected_length: u64,
-    ) -> Result<NamespaceSnapshot, BackendFailure> {
+    ) -> Result<NamespaceSnapshot, NamespaceIoFailure> {
         let observe_length = |entry, actual| match entry {
             EntryObservation::ExpectedFile if actual != expected_length => {
                 EntryObservation::ExpectedFileWrongLength(actual)
@@ -129,7 +129,7 @@ impl NamespaceIo for ModelNamespace {
         })
     }
 
-    fn rename_to_tombstone(&mut self) -> Result<(), BackendFailure> {
+    fn rename_to_tombstone(&mut self) -> Result<(), NamespaceIoFailure> {
         self.rename_calls += 1;
         if self.sharing_blocks_mutation || self.take_fault(FaultPoint::RenameBefore) {
             return Err(Self::retryable(NamespaceOperation::Rename));
@@ -142,7 +142,7 @@ impl NamespaceIo for ModelNamespace {
         Ok(())
     }
 
-    fn unlink(&mut self, entry: NamespaceEntry) -> Result<(), BackendFailure> {
+    fn unlink(&mut self, entry: NamespaceEntry) -> Result<(), NamespaceIoFailure> {
         self.unlink_calls += 1;
         if self.sharing_blocks_mutation || self.take_fault(FaultPoint::UnlinkBefore) {
             return Err(Self::retryable(NamespaceOperation::Unlink));
@@ -157,10 +157,10 @@ impl NamespaceIo for ModelNamespace {
         Ok(())
     }
 
-    fn sync_after_namespace(&mut self, _transition: NamespaceTransition) -> Result<(), BackendFailure> {
+    fn sync_after_namespace(&mut self, _transition: NamespaceTransition) -> Result<(), NamespaceIoFailure> {
         self.sync_calls += 1;
         if self.take_fault(FaultPoint::Sync) {
-            return Err(BackendFailure::retryable(
+            return Err(NamespaceIoFailure::retryable(
                 NamespaceOperation::SyncParentOrHandle,
                 NamespaceFailureClass::PermissionDenied,
                 Some(5),

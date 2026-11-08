@@ -325,21 +325,6 @@ where
             }
         }
 
-        for plugin in &self.context.plugins {
-            match plugin.upgrade() {
-                Some(plugin) => {
-                    if let Err(e) = plugin.sync_metadata_reverse(&broker_addr) {
-                        error!("Plugin reverse metadata sync failed, {}: {:?}", broker_addr, e);
-                        success = false;
-                    }
-                }
-                None => {
-                    error!("Broker plugin is unavailable during reverse metadata sync");
-                    success = false;
-                }
-            }
-        }
-
         success
     }
 

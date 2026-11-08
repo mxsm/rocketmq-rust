@@ -106,7 +106,7 @@ fn safety_comparison_detects_non_allowlisted_changes() {
 fn admin_failures_remain_operational_with_their_typed_source() {
     use std::error::Error;
 
-    let error = ExecutionAgentError::driver_source(rocketmq_admin_core::core::AdminError::backend(
+    let error = ExecutionAgentError::driver_source(rocketmq_admin_core::core::AdminError::operation_failed(
         "query_subscription_group_config_cas_state",
         "private RocketMQ failure",
     ));
@@ -124,10 +124,9 @@ fn admin_failures_remain_operational_with_their_typed_source() {
         crate::ExecutionAgentRequestFailure::Operational(_)
     ));
 
-    let startup_error = ExecutionAgentError::configuration_source(rocketmq_admin_core::core::AdminError::backend(
-        "build_and_start",
-        "private RocketMQ startup failure",
-    ));
+    let startup_error = ExecutionAgentError::configuration_source(
+        rocketmq_admin_core::core::AdminError::operation_failed("build_and_start", "private RocketMQ startup failure"),
+    );
     assert!(
         startup_error
             .source()

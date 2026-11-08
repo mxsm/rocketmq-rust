@@ -1787,18 +1787,32 @@ async fn cancellation_during_client_start_still_shuts_down_owned_client() {
     });
     let error = run_test_worker(client, factory, |executor, cancellation| async move {
         let command = executor.query_route(ResourceIdentity::new("", "TopicA"));
-        let cancel = async move {
-            start_entered.await.expect("Client start was entered");
-            cancellation.cancel();
-        };
-        let (result, ()) = tokio::join!(command, cancel);
-        result.expect_err("cancelled startup must not produce a route")
+        tokio::pin!(command);
+        tokio::select! {
+            result = &mut command => panic!("blocked Client startup completed unexpectedly: {result:?}"),
+            entered = start_entered => entered.expect("Client start was entered"),
+        }
+        cancellation.cancel();
+        // Keep the caller unpolled until the lane exits so the closed reply is observed before
+        // the executor's shutdown notification, independently of scheduler timing.
+        assert!(
+            executor
+                .lanes
+                .wait_for_lane_tasks(rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(1)))
+                .await,
+            "cancelled startup must retire its owned lane"
+        );
+        command.await.expect_err("cancelled startup must not produce a route")
     })
     .await;
-    assert!(matches!(error, ProxyError::Transport { .. }));
     assert_eq!(
         events.lock().expect("event log lock poisoned").as_slice(),
         ["client.start", "client.shutdown"]
+    );
+    assert_eq!(
+        error.descriptor(),
+        &rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE,
+        "unexpected startup cancellation error: {error:?}"
     );
 }
 
@@ -1834,7 +1848,11 @@ async fn cancellation_during_active_pull_cancels_the_command_and_shuts_down_clie
     })
     .await;
 
-    assert!(matches!(error, ProxyError::Transport { .. }));
+    assert_eq!(
+        error.descriptor(),
+        &rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE,
+        "unexpected pull cancellation error: {error:?}"
+    );
     assert_eq!(
         events.lock().expect("event log lock poisoned").as_slice(),
         ["client.start", "client.pull", "client.shutdown"]
@@ -1878,8 +1896,9 @@ async fn cancellation_during_producer_start_still_shuts_down_producer_before_cli
         result.expect_err("cancelled producer startup must not send")
     });
     let error = error.await;
-    assert!(
-        matches!(error, ProxyError::Transport { .. }),
+    assert_eq!(
+        error.descriptor(),
+        &rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE,
         "producer startup cancellation must surface as transport shutdown: {error:?}"
     );
     let events = events.lock().expect("event log lock poisoned");

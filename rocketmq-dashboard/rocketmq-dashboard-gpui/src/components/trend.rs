@@ -33,6 +33,13 @@ pub fn render(points: &[HistoryPoint], max_gap_ms: u64, foreground: Hsla, muted:
     }
     let points = points.to_vec();
     let (min_value, max_value) = value_bounds(&points);
+    let min_time = points.iter().map(|point| point.timestamp_epoch_ms).min().unwrap_or(0);
+    let max_time = points
+        .iter()
+        .map(|point| point.timestamp_epoch_ms)
+        .max()
+        .unwrap_or(min_time);
+    let unit = points[0].metric.unit();
     div()
         .w_full()
         .h(px(190.))
@@ -46,11 +53,13 @@ pub fn render(points: &[HistoryPoint], max_gap_ms: u64, foreground: Hsla, muted:
         .child(
             div()
                 .flex()
+                .flex_wrap()
+                .gap_2()
                 .justify_between()
                 .text_xs()
                 .text_color(muted)
-                .child(format!("{max_value:.2}"))
-                .child(format!("{min_value:.2}")),
+                .child(div().whitespace_nowrap().child(format!("{max_value:.2} {unit}")))
+                .child(div().whitespace_nowrap().child(format!("{min_value:.2} {unit}"))),
         )
         .child(
             canvas(
@@ -61,21 +70,22 @@ pub fn render(points: &[HistoryPoint], max_gap_ms: u64, foreground: Hsla, muted:
                 },
                 move |bounds, segments, window, _| {
                     let mut axes = PathBuilder::stroke(px(1.));
-                    axes.move_to(bounds.bottom_left());
-                    axes.line_to(bounds.origin);
+                    axes.move_to(bounds.origin);
+                    axes.line_to(bounds.bottom_left());
                     axes.line_to(bounds.bottom_right());
                     if let Ok(path) = axes.build() {
                         window.paint_path(path, border);
                     }
                     for segment in segments {
-                        if segment.len() < 2 {
-                            continue;
-                        }
                         let mut line = PathBuilder::stroke(px(2.));
+                        let single = segment.len() == 1;
                         for (index, projected) in segment.into_iter().enumerate() {
                             let chart_point = bounds.origin + point(px(projected.x), px(projected.y));
                             if index == 0 {
                                 line.move_to(chart_point);
+                                if single {
+                                    line.line_to(chart_point + point(px(2.), px(0.)));
+                                }
                             } else {
                                 line.line_to(chart_point);
                             }
@@ -88,6 +98,25 @@ pub fn render(points: &[HistoryPoint], max_gap_ms: u64, foreground: Hsla, muted:
             )
             .size_full(),
         )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .justify_between()
+                .text_xs()
+                .text_color(muted)
+                .child(div().whitespace_nowrap().child(axis_time(min_time)))
+                .child(div().whitespace_nowrap().child(axis_time(max_time))),
+        )
+}
+
+fn axis_time(timestamp: u64) -> String {
+    i64::try_from(timestamp)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|time| time.format("%H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "Unknown time".into())
 }
 
 fn value_bounds(points: &[HistoryPoint]) -> (f64, f64) {

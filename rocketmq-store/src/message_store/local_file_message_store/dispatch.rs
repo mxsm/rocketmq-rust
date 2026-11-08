@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::log_file::commit_log::reput_record_is_complete;
 
 pub(super) type MessageArrivingListenerHandle = Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>;
 
@@ -40,9 +41,22 @@ pub(super) struct ReputRuntimeContext {
     store_stats_service: Arc<StoreStatsService>,
     message_arrival: MessageArrivalCapability,
     long_polling_enable: bool,
+    timer_source_wake: Arc<TimerSourceWake>,
 }
 
 impl ReputRuntimeContext {
+    /// Wakes the timer source stages when the batch held a Timer topic record. Reput calls this
+    /// after every dispatcher has finished the batch, so the records are already in the Timer
+    /// consume queue.
+    fn wake_timer_sources(&self, dispatch_batch: &[DispatchRequest]) {
+        if dispatch_batch
+            .iter()
+            .any(|request| request.success && request.topic.as_str() == TIMER_TOPIC)
+        {
+            self.timer_source_wake.wake();
+        }
+    }
+
     pub(super) fn notify_message_arrive_for_multi_queue(&self, dispatch_request: &mut DispatchRequest) {
         let Some(message_arriving_listener) = self.message_arrival.snapshot() else {
             return;
@@ -293,7 +307,35 @@ impl LocalFileMessageStore {
             store_stats_service: self.store_stats_service.clone(),
             message_arrival: self.message_arrival.clone(),
             long_polling_enable: self.broker_config.long_polling_enable,
+            timer_source_wake: Arc::clone(&self.timer_source_wake),
         }
+    }
+
+    /// Reads the native timer's deliveries back from the CommitLog, from `start` to the confirm
+    /// offset, into `feed`, which lost them with the last run. A slave then follows the timers
+    /// they name, a master does not write those messages again, and a shadow still matches the
+    /// active engine's deliveries.
+    pub(super) fn replay_native_deliveries(&self, feed: &NativeDeliveryFeed, start: i64) {
+        let commit_log = self.commit_log.read_handle();
+        let end = commit_log.get_confirm_offset();
+        let mut offset = start.max(commit_log.get_min_offset());
+        if end.saturating_sub(offset) > NATIVE_REPLAY_MAX_BYTES {
+            offset = commit_log.roll_next_file(end - NATIVE_REPLAY_MAX_BYTES);
+            warn!(
+                start,
+                offset, "the native timer deliveries start too far back; reading only the latest ones"
+            );
+        }
+        let read_bytes = reput_read_max_bytes(self.message_store_config.as_ref());
+        let mut replayed = 0usize;
+        let stopped = commit_log.walk_records(offset, end, read_bytes, |request| {
+            feed.replay(request);
+            replayed += 1;
+        });
+        info!(
+            start,
+            stopped, end, replayed, "read the native timer deliveries back from the CommitLog"
+        );
     }
 
     pub(super) fn do_recheck_reput_offset_from_dispatchers(&self) {
@@ -313,6 +355,8 @@ impl LocalFileMessageStore {
                 "rechecked reputFromOffset from {} to {} using dispatch recovery offset {}",
                 previous_reput_from_offset, target_reput_from_offset, dispatch_recovery_offset
             );
+            // The reader may already have spent its start-up wake-up at the old offset.
+            self.reput_message_service.notify_handle().notify_dispatchable();
         }
     }
 
@@ -368,6 +412,12 @@ impl CommitLogDispatcherDefault {
             published,
             published_frontier: Arc::new(AtomicI64::new(-1)),
         }
+    }
+
+    /// The end of what every dispatcher has seen, -1 before the first dispatch.
+    #[inline]
+    pub(crate) fn published_frontier_handle(&self) -> Arc<AtomicI64> {
+        Arc::clone(&self.published_frontier)
     }
 
     #[inline]
@@ -544,16 +594,82 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
     }
 }
 
+/// How often the reader rechecks CommitLog data it has but may not dispatch yet.
+///
+/// The reader also wakes as soon as a put returns, a replica append lands or a confirm offset is
+/// published, since each of those notifies it. A SYNC_FLUSH put returns only after its flush, so
+/// concurrently flushed messages are dispatched without waiting for this timer, whose effective
+/// resolution is about 15.6 ms on Windows. The timer remains for confirm-offset changes that send
+/// no notification, such as a shrinking sync-state set.
+const UNCONFIRMED_RECHECK_INTERVAL: Duration = Duration::from_millis(1);
+
 #[derive(Clone)]
 pub(super) struct ReputNotifyHandle {
     new_message_notify: Arc<Notify>,
     pending_messages: Arc<AtomicI64>,
+    dispatch_progress_notify: Arc<Notify>,
+    inflight_dispatch_batches: Arc<AtomicU64>,
+    started: Arc<parking_lot::Mutex<Option<ReputMessageServiceInner>>>,
+    position: Arc<parking_lot::Mutex<Option<Arc<AtomicI64>>>>,
 }
 
 impl ReputNotifyHandle {
     pub(super) fn notify_new_message(&self) {
         self.pending_messages.fetch_add(1, Ordering::Relaxed);
         self.new_message_notify.notify_one();
+    }
+
+    /// Wakes the reader without counting a local message: replication or a confirm offset made
+    /// more CommitLog data dispatchable. The reader otherwise sleeps until the next local put,
+    /// whereas Java's reput service polls every millisecond.
+    pub(super) fn notify_dispatchable(&self) {
+        self.new_message_notify.notify_one();
+    }
+
+    /// Sends the reader back to `offset`, for a CommitLog that is losing what follows it. The
+    /// reader must be at rest and the confirm offset no higher than `offset`, so that it stays
+    /// there until new data comes.
+    pub(super) fn rewind_to(&self, offset: i64) {
+        if let Some(position) = self.position.lock().as_ref() {
+            position.fetch_min(offset, Ordering::AcqRel);
+        }
+    }
+
+    /// Waits until every dispatcher saw all that is dispatchable, or `timeout` passes, and says
+    /// which came first. A service that is not running has nothing to wait for.
+    pub(super) async fn wait_until_dispatched(&self, timeout: Duration) -> bool {
+        let Some(inner) = self.started.lock().clone() else {
+            return true;
+        };
+        wait_until_drained(
+            &inner,
+            &self.inflight_dispatch_batches,
+            &self.dispatch_progress_notify,
+            tokio::time::Instant::now() + timeout,
+        )
+        .await
+    }
+}
+
+/// Waits until the reader has nothing left to read and no batch is on its way to the dispatchers,
+/// or `deadline` passes, and says whether that happened.
+async fn wait_until_drained(
+    inner: &ReputMessageServiceInner,
+    inflight_batches: &AtomicU64,
+    progress: &Notify,
+    deadline: tokio::time::Instant,
+) -> bool {
+    let drained = || !inner.is_commit_log_available() && inflight_batches.load(Ordering::Acquire) == 0;
+    loop {
+        let notified = progress.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if drained() {
+            return true;
+        }
+        if tokio::time::timeout_at(deadline, notified).await.is_err() {
+            return drained();
+        }
     }
 }
 
@@ -566,6 +682,10 @@ pub(super) struct ReputMessageService {
     pub(super) reput_from_offset: Option<Arc<AtomicI64>>,
     pub(super) dispatch_tx: Option<tokio::sync::mpsc::Sender<ReputDispatchEvent>>,
     pub(super) inner: Option<ReputMessageServiceInner>,
+    /// `inner` while the service runs, for the handles given out before it started.
+    pub(super) started: Arc<parking_lot::Mutex<Option<ReputMessageServiceInner>>>,
+    /// `reput_from_offset`, for the handles given out before it was set.
+    pub(super) position: Arc<parking_lot::Mutex<Option<Arc<AtomicI64>>>>,
     pub(super) task_group: Option<rocketmq_runtime::TaskGroup>,
 }
 
@@ -577,11 +697,27 @@ pub(super) enum ReputDispatchEvent {
     },
 }
 
+/// Largest batch the reader dispatches itself when the dispatcher has nothing queued or running.
+/// Handing a small batch over costs a cross-task wake-up, which dominates put-to-consumable
+/// latency on a lightly loaded Broker. Larger batches still go through the channel, so reading the
+/// next chunk overlaps dispatching this one.
+const INLINE_DISPATCH_MAX_MESSAGES: usize = 16;
+
+impl ReputDispatchEvent {
+    fn dispatches_inline(&self) -> bool {
+        matches!(self, Self::Batch(batch) if batch.len() <= INLINE_DISPATCH_MAX_MESSAGES)
+    }
+}
+
 impl ReputMessageService {
     pub(super) fn notify_handle(&self) -> ReputNotifyHandle {
         ReputNotifyHandle {
             new_message_notify: Arc::clone(&self.new_message_notify),
             pending_messages: Arc::clone(&self.pending_messages),
+            dispatch_progress_notify: Arc::clone(&self.dispatch_progress_notify),
+            inflight_dispatch_batches: Arc::clone(&self.inflight_dispatch_batches),
+            started: Arc::clone(&self.started),
+            position: Arc::clone(&self.position),
         }
     }
 
@@ -595,6 +731,11 @@ impl ReputMessageService {
 
     pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
         self.reput_from_offset = Some(Arc::new(AtomicI64::new(reput_from_offset)));
+        self.publish_position();
+    }
+
+    fn publish_position(&self) {
+        self.position.lock().clone_from(&self.reput_from_offset);
     }
 
     /// Notify that new messages have arrived and need to be reput
@@ -621,6 +762,9 @@ impl ReputMessageService {
         let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<ReputDispatchEvent>(128);
         self.dispatch_tx = Some(dispatch_tx.clone());
         self.shutdown_token = CancellationToken::new();
+        self.reput_from_offset
+            .get_or_insert_with(|| Arc::new(AtomicI64::new(0)));
+        self.publish_position();
         let reput_from_offset = self
             .reput_from_offset
             .get_or_insert_with(|| Arc::new(AtomicI64::new(0)))
@@ -641,6 +785,7 @@ impl ReputMessageService {
             runtime_context: runtime_context.clone(),
         };
         self.inner = Some(inner.clone());
+        *self.started.lock() = Some(inner.clone());
 
         let shutdown = self.shutdown_token.clone();
         let new_message_notify = self.new_message_notify.clone();
@@ -662,19 +807,38 @@ impl ReputMessageService {
                                     dispatch_progress_notify.notify_waiters();
                                     tokio::select! {
                                         _ = shutdown_reader.cancelled() => return,
-                                        _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                        _ = new_message_notify.notified() => {}
+                                        _ = tokio::time::sleep(UNCONFIRMED_RECHECK_INTERVAL) => {}
                                     }
                                     continue;
                                 }
                                 break;
                             }
 
-                            // Read and parse messages, send to dispatch channel
+                            // Read and parse messages, send to dispatch channel. Counted across
+                            // the read: the offset moves before the batches exist.
+                            inflight_dispatch_batches.fetch_add(1, Ordering::AcqRel);
                             let events = inner.read_and_parse_events().await;
                             if !events.is_empty() {
                                 let mut channel_closed = false;
                                 for event in events {
-                                    inflight_dispatch_batches.fetch_add(1, Ordering::AcqRel);
+                                    // Only this reader adds work, and the dispatcher counts an event
+                                    // until it is done. So when the read slot is all that was in
+                                    // flight, nothing is queued or being dispatched, and dispatching
+                                    // here keeps the order.
+                                    let earlier_in_flight = inflight_dispatch_batches.fetch_add(1, Ordering::AcqRel);
+                                    if earlier_in_flight == 1 && event.dispatches_inline() {
+                                        dispatch_reput_event(
+                                            &inner.dispatch_pipeline,
+                                            &inner.runtime_context,
+                                            inner.notify_message_arrive_in_batch,
+                                            event,
+                                        )
+                                        .await;
+                                        inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
+                                        dispatch_progress_notify.notify_waiters();
+                                        continue;
+                                    }
                                     if dispatch_tx.send(event).await.is_err() {
                                         inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
                                         error!("Failed to send Reput dispatch event to channel, channel closed");
@@ -682,6 +846,7 @@ impl ReputMessageService {
                                         break;
                                     }
                                 }
+                                inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
                                 if channel_closed {
                                     break;
                                 }
@@ -695,12 +860,14 @@ impl ReputMessageService {
                                         .ok();
                                     dispatch_progress_notify.notify_waiters();
                             } else {
+                                    inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
                                     // No more messages available at this offset
                                     dispatch_progress_notify.notify_waiters();
                                     if inner.has_unconfirmed_commit_log() {
                                         tokio::select! {
                                             _ = shutdown_reader.cancelled() => return,
-                                            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                            _ = new_message_notify.notified() => {}
+                                            _ = tokio::time::sleep(UNCONFIRMED_RECHECK_INTERVAL) => {}
                                         }
                                         continue;
                                     }
@@ -724,6 +891,7 @@ impl ReputMessageService {
             self.shutdown_token.cancel();
             self.dispatch_tx.take();
             self.inner.take();
+            self.started.lock().take();
             error!("failed to spawn ReputMessageService reader: {error}");
             return;
         }
@@ -795,18 +963,13 @@ impl ReputMessageService {
         let Some(inner) = self.inner.as_ref() else {
             return self.inflight_dispatch_batches.load(Ordering::Acquire) == 0;
         };
-        let deadline = tokio::time::Instant::from_std(deadline.instant());
-        loop {
-            let progress = self.dispatch_progress_notify.notified();
-            tokio::pin!(progress);
-            progress.as_mut().enable();
-            if !inner.is_commit_log_available() && self.inflight_dispatch_batches.load(Ordering::Acquire) == 0 {
-                return true;
-            }
-            if tokio::time::timeout_at(deadline, progress).await.is_err() {
-                return !inner.is_commit_log_available() && self.inflight_dispatch_batches.load(Ordering::Acquire) == 0;
-            }
-        }
+        wait_until_drained(
+            inner,
+            &self.inflight_dispatch_batches,
+            &self.dispatch_progress_notify,
+            tokio::time::Instant::from_std(deadline.instant()),
+        )
+        .await
     }
 
     pub async fn run_once(
@@ -828,6 +991,7 @@ impl ReputMessageService {
         }
         if self.reput_from_offset.is_none() {
             self.reput_from_offset = Some(Arc::new(AtomicI64::new(0)));
+            self.publish_position();
         }
         if self.inner.is_none() {
             let reput_from_offset = self
@@ -887,6 +1051,7 @@ impl ReputMessageService {
             }
         }
         self.inner.take();
+        self.started.lock().take();
 
         info!("ReputMessageService shutdown complete");
     }
@@ -916,6 +1081,10 @@ pub(super) struct ReputMessageServiceInner {
     pub(super) runtime_context: ReputRuntimeContext,
 }
 
+/// What a start reads back of the CommitLog at most for the native timer. A slave further behind
+/// its master's deliveries than this writes the rest again if it is promoted.
+const NATIVE_REPLAY_MAX_BYTES: i64 = 1 << 30;
+
 const MIN_REPUT_READ_BYTES: usize = 1024 * 1024;
 const COMMIT_LOG_RECORD_OVERHEAD_BUDGET: i32 = 64 * 1024;
 
@@ -931,30 +1100,6 @@ pub(super) fn reput_read_max_bytes(config: &MessageStoreConfig) -> usize {
         .max(MIN_REPUT_READ_BYTES)
 }
 
-fn reput_record_is_complete(bytes: &Bytes) -> bool {
-    let Some(total_size) = bytes
-        .get(..4)
-        .and_then(|value| <[u8; 4]>::try_from(value).ok())
-        .map(i32::from_be_bytes)
-    else {
-        return false;
-    };
-    if total_size < 8 {
-        return true;
-    }
-    let Some(magic_code) = bytes
-        .get(4..8)
-        .and_then(|value| <[u8; 4]>::try_from(value).ok())
-        .map(i32::from_be_bytes)
-    else {
-        return false;
-    };
-    if magic_code == commit_log::BLANK_MAGIC_CODE {
-        return true;
-    }
-    usize::try_from(total_size).map_or(true, |total_size| total_size <= bytes.len())
-}
-
 async fn dispatch_reput_batch(
     dispatch_pipeline: &super::reput_pipeline::ReputDispatchPipeline,
     runtime_context: &ReputRuntimeContext,
@@ -967,6 +1112,7 @@ async fn dispatch_reput_batch(
     runtime_context
         .store_stats_service
         .record_reput_dispatch_batch(batch_size, started.elapsed());
+    runtime_context.wake_timer_sources(dispatch_batch);
 
     if !notify_message_arrive_in_batch {
         for req in dispatch_batch.iter_mut() {

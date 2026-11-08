@@ -7,6 +7,8 @@ import type {
   TopologyBrokerGroup,
   TopologyCluster,
   TopologyConsumer,
+  TopologyController,
+  TopologyLayerId,
   TopologyNameServer,
   TopologyProducer,
   TopologySnapshot,
@@ -28,7 +30,8 @@ export const SLOW_SOURCE_MS = 300;
 /** Most groups drawn per side, matching the cap of the aggregated endpoint. */
 export const MAX_GROUPS_PER_SIDE = 50;
 
-export const TOPOLOGY_SOURCES: readonly TopologySourceId[] = [
+/** The layers the list queries load; replication comes only from the aggregated endpoint. */
+export const TOPOLOGY_SOURCES: readonly TopologyLayerId[] = [
   'config',
   'nameservers',
   'brokers',
@@ -43,7 +46,8 @@ export const TOPOLOGY_SOURCE_LABELS: Record<TopologySourceId, string> = {
   brokers: 'Broker list',
   topics: 'Topic routes',
   producers: 'Producer inventory',
-  consumers: 'Consumer groups'
+  consumers: 'Consumer groups',
+  replication: 'Replication and Controllers'
 };
 
 /** Responses of the per-layer queries; `null` marks a layer whose query failed. */
@@ -205,6 +209,7 @@ export function buildTopologySnapshot(
     sources,
     nameServers: buildNameServers(layers.config, layers.nameservers),
     clusters: layers.brokers ? groupBrokers(layers.brokers) : [],
+    controllers: [],
     producers,
     consumers,
     totals: {
@@ -247,6 +252,28 @@ function mergeNameServers(
   return next;
 }
 
+/** The groups of `next` with the replication readings `previous` had for them. */
+function withReplicationOf(next: readonly TopologyCluster[], previous: readonly TopologyCluster[]): TopologyCluster[] {
+  const earlier = new Map(previous.flatMap((cluster) => cluster.brokers).map((group) => [group.brokerName, group]));
+  return next.map((cluster) => ({
+    ...cluster,
+    brokers: cluster.brokers.map((group) => {
+      const known = earlier.get(group.brokerName);
+      if (!known) return group;
+      const readings = new Map((known.replicas ?? []).map((replica) => [replica.brokerId, replica]));
+      return {
+        ...group,
+        election: known.election,
+        controllerAddresses: known.controllerAddresses,
+        inSyncSlaveCount: known.inSyncSlaveCount,
+        controllerState: known.controllerState,
+        // A fresh replica has no readings, so the earlier ones show through.
+        replicas: group.replicas?.map((replica) => ({ ...readings.get(replica.brokerId), ...replica }))
+      };
+    })
+  }));
+}
+
 /**
  * Keeps the last good data of every layer whose query failed this time, so one slow or failing
  * query does not wipe its part of the map. The source list still reports the failure.
@@ -266,11 +293,15 @@ export function carryForwardFailedLayers(next: TopologySnapshot, previous: Topol
     }));
   }
   const consumersFailed = failed.has('consumers');
+  // Replication is read only after the broker list, so a failed broker list keeps both.
+  const brokersFailed = failed.has('brokers');
+  const replicationFailed = !brokersFailed && failed.has('replication');
 
   return {
     ...next,
     nameServers: mergeNameServers(next.nameServers, previous.nameServers, failed.has('config'), failed.has('nameservers')),
-    clusters: failed.has('brokers') ? previous.clusters : next.clusters,
+    clusters: brokersFailed ? previous.clusters : replicationFailed ? withReplicationOf(next.clusters, previous.clusters) : next.clusters,
+    controllers: brokersFailed || replicationFailed ? previous.controllers : next.controllers,
     producers,
     consumers: consumersFailed ? previous.consumers : next.consumers,
     totals: {
@@ -509,6 +540,8 @@ export interface TopologyViewOptions {
 export interface TopologyView {
   clusters: TopologyCluster[];
   nameServers: TopologyNameServer[];
+  /** The Controllers of the groups in scope. */
+  controllers: TopologyController[];
   producers: TopologyProducer[];
   consumers: TopologyConsumer[];
   producersInScope: number;
@@ -525,10 +558,12 @@ export function selectTopologyView(snapshot: TopologySnapshot, options: Topology
   const producers = snapshot.producers.filter(inScope);
   const consumers = snapshot.consumers.filter(inScope);
   const limit = (requested: number) => Math.min(Math.max(requested, 0), MAX_GROUPS_PER_SIDE);
+  const named = new Set(clusters.flatMap((cluster) => cluster.brokers.flatMap((group) => group.controllerAddresses ?? [])));
 
   return {
     clusters,
     nameServers: snapshot.nameServers,
+    controllers: allClusters ? snapshot.controllers : snapshot.controllers.filter((controller) => named.has(controller.address)),
     producers: producers.slice(0, limit(options.producerLimit)),
     consumers: consumers.slice(0, limit(options.consumerLimit)),
     // With every cluster in scope the totals also count the groups the aggregated endpoint left out.
@@ -588,6 +623,13 @@ export function describeTopology(view: TopologyView): string {
   ];
   const unavailable = view.nameServers.filter((nameServer) => nameServer.status === 'unavailable').map((nameServer) => nameServer.address);
   if (unavailable.length > 0) parts.push(`NameServer unavailable: ${unavailable.join(', ')}`);
+  if (view.controllers.length > 0) {
+    const leader = view.controllers.find((controller) => controller.leader === true);
+    const count = `${view.controllers.length} ${view.controllers.length === 1 ? 'Controller' : 'Controllers'}`;
+    parts.push(`${count}, ${leader ? `leader ${leader.address}` : 'no leader known'}`);
+    const down = view.controllers.filter((controller) => controller.status === 'unavailable').map((controller) => controller.address);
+    if (down.length > 0) parts.push(`Controller unavailable: ${down.join(', ')}`);
+  }
   const withoutSlave = groups.filter((group) => group.masterAddress && group.slaveAddresses.length === 0).map((group) => group.brokerName);
   if (withoutSlave.length > 0) parts.push(`no slave registered: ${withoutSlave.join(', ')}`);
   const withoutMaster = groups.filter((group) => brokerTone(group) === 'danger').map((group) => group.brokerName);

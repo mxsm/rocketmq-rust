@@ -1181,7 +1181,7 @@ mod tests {
                 .expect("test request has one target");
             self.delete_targets.push(target.clone());
             if self.delete_failures.get(&target).copied().unwrap_or(false) {
-                return Err(AdminError::backend("delete", "planned failure"));
+                return Err(AdminError::operation_failed("delete", "planned failure"));
             }
             Ok(core_topic::TopicMutationSummary {
                 message: format!("deleted {target}"),
@@ -1479,7 +1479,7 @@ mod tests {
     async fn order_reconciliation_failure_is_a_structured_global_failure() {
         let catalog = catalog_with_targets(&["broker-a"]);
         let mut executor = RecordingExecutor {
-            reconcile_error: Some(AdminError::backend("order_reconcile", "unavailable")),
+            reconcile_error: Some(AdminError::operation_failed("order_reconcile", "unavailable")),
             ..RecordingExecutor::default()
         };
 

@@ -91,7 +91,7 @@ async fn preflight_proxy_drain_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     // A Proxy is no member of the topology. It is still validated first, so that no drain is
     // planned through a session whose view of the selected cluster is broken.
     master_targets_by_cluster_name(&cluster_info, &cluster)?;
@@ -155,7 +155,7 @@ async fn preflight_broker_log_filter_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let all_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
     let Some((_, broker_addr)) = select_metadata_targets(all_targets, Some(std::slice::from_ref(&broker_name)))?.pop()
     else {

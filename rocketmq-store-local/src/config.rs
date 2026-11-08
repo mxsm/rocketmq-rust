@@ -17,7 +17,7 @@ use std::fmt;
 use serde::Deserialize;
 use serde::Deserializer;
 
-pub mod backend;
+pub mod local_store;
 
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
 pub enum FlushDiskType {

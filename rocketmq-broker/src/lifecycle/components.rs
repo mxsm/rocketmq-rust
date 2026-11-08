@@ -66,6 +66,18 @@ impl StartupJournal {
     }
 }
 
+/// How far a Broker got in registering by the time it started.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokerRegistration {
+    /// Registered with the NameServers.
+    Registered,
+    /// In controller mode, isolated until a Controller assigns it a role. The heartbeat cycle
+    /// keeps trying the Controllers, and the Broker registers once it holds a role.
+    AwaitingController,
+    /// Not registered, and nothing will register it.
+    Unregistered,
+}
+
 /// Evidence required before the process lifecycle may publish readiness.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrokerReadiness {
@@ -74,7 +86,7 @@ pub struct BrokerReadiness {
     fast_listener: Option<SocketAddr>,
     processors_started: bool,
     security_ready: bool,
-    registration_ready: bool,
+    registration: BrokerRegistration,
 }
 
 impl BrokerReadiness {
@@ -84,7 +96,7 @@ impl BrokerReadiness {
         fast_listener: SocketAddr,
         processors_started: bool,
         security_ready: bool,
-        registration_ready: bool,
+        registration: BrokerRegistration,
     ) -> Self {
         Self {
             store_writable,
@@ -92,7 +104,7 @@ impl BrokerReadiness {
             fast_listener: Some(fast_listener),
             processors_started,
             security_ready,
-            registration_ready,
+            registration,
         }
     }
 
@@ -113,7 +125,7 @@ impl BrokerReadiness {
         if !self.security_ready {
             missing.push("security_ready");
         }
-        if !self.registration_ready {
+        if self.registration == BrokerRegistration::Unregistered {
             missing.push("registration_ready");
         }
         if missing.is_empty() {
@@ -148,9 +160,15 @@ impl BrokerReadiness {
         self.security_ready
     }
 
+    /// Whether the Broker registered with the NameServers while it started.
     #[must_use]
     pub fn registration_ready(&self) -> bool {
-        self.registration_ready
+        self.registration == BrokerRegistration::Registered
+    }
+
+    #[must_use]
+    pub fn registration(&self) -> BrokerRegistration {
+        self.registration
     }
 }
 
@@ -183,7 +201,7 @@ mod tests {
             fast_listener: None,
             processors_started: false,
             security_ready: false,
-            registration_ready: false,
+            registration: BrokerRegistration::Unregistered,
         };
 
         let error = readiness.validate().expect_err("incomplete readiness must fail closed");
@@ -199,5 +217,23 @@ mod tests {
                 "registration_ready"
             ]
         );
+    }
+
+    #[test]
+    fn a_broker_waiting_for_a_controller_is_ready_but_not_registered() {
+        let address: SocketAddr = "127.0.0.1:10911".parse().unwrap();
+        let readiness = BrokerReadiness::new(
+            true,
+            address,
+            address,
+            true,
+            true,
+            BrokerRegistration::AwaitingController,
+        )
+        .validate()
+        .expect("waiting for a Controller is a started Broker");
+
+        assert!(!readiness.registration_ready());
+        assert_eq!(readiness.registration(), BrokerRegistration::AwaitingController);
     }
 }

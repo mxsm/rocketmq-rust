@@ -28,7 +28,6 @@ pub struct PopRequest {
     consumer_group: CheetahString,
     message_queue: MessageQueue,
     pop_process_queue: PopProcessQueue,
-    locked_first: bool,
     init_mode: i32,
 }
 
@@ -46,19 +45,8 @@ impl PopRequest {
             consumer_group,
             message_queue,
             pop_process_queue,
-            locked_first: false,
             init_mode,
         }
-    }
-
-    #[inline]
-    pub fn is_locked_first(&self) -> bool {
-        self.locked_first
-    }
-
-    #[inline]
-    pub fn set_locked_first(&mut self, locked_first: bool) {
-        self.locked_first = locked_first;
     }
 
     #[inline]
@@ -67,28 +55,8 @@ impl PopRequest {
     }
 
     #[inline]
-    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
-        self.consumer_group = consumer_group;
-    }
-
-    #[inline]
     pub fn get_message_queue(&self) -> &MessageQueue {
         &self.message_queue
-    }
-
-    #[inline]
-    pub fn set_message_queue(&mut self, message_queue: MessageQueue) {
-        self.message_queue = message_queue;
-    }
-
-    #[inline]
-    pub fn get_topic(&self) -> &str {
-        &self.topic
-    }
-
-    #[inline]
-    pub fn set_topic(&mut self, topic: CheetahString) {
-        self.topic = topic;
     }
 
     #[inline]
@@ -97,18 +65,8 @@ impl PopRequest {
     }
 
     #[inline]
-    pub(crate) fn set_pop_process_queue(&mut self, pop_process_queue: PopProcessQueue) {
-        self.pop_process_queue = pop_process_queue;
-    }
-
-    #[inline]
     pub fn get_init_mode(&self) -> i32 {
         self.init_mode
-    }
-
-    #[inline]
-    pub fn set_init_mode(&mut self, init_mode: i32) {
-        self.init_mode = init_mode;
     }
 }
 

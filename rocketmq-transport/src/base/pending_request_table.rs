@@ -32,11 +32,13 @@ use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::HeaderEncodeCapability;
 
 use crate::deadline::RequestDeadline;
 use crate::error_helpers::configuration_invalid_caused_by;
 use crate::error_helpers::connection_failed_without_source;
 use crate::error_helpers::TransportStage;
+use crate::write_result::WriterFailure;
 
 static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -47,6 +49,34 @@ static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 /// header-heavy requests cannot bypass byte admission with an empty body.
 pub(crate) fn materialize_and_estimate_remoting_command_retained_bytes(command: &mut RemotingCommand) -> usize {
     command.materialize_custom_header_to_ext_fields();
+    retained_bytes_of(command)
+}
+
+/// Estimates the retained bytes of a request that is encoded to a connection.
+///
+/// A typed header with a direct encoder is counted through its encoded-length hint and stays
+/// unmaterialized, so the frame encoder can write it without first building a field map. Other
+/// headers are materialized here, as the encoder would materialize them anyway. Requests handed
+/// to an in-process receiver must use [`materialize_and_estimate_remoting_command_retained_bytes`]
+/// instead, because that receiver decodes headers from the extension fields.
+pub(crate) fn estimate_wire_remoting_command_retained_bytes(command: &mut RemotingCommand) -> usize {
+    let typed_header_bytes = match command.command_custom_header_ref() {
+        Some(header)
+            if header.supports_direct_json_fields()
+                || header.encode_capability() == HeaderEncodeCapability::DirectBinary =>
+        {
+            header.encoded_len_hint()
+        }
+        Some(_) => {
+            command.materialize_custom_header_to_ext_fields();
+            0
+        }
+        None => 0,
+    };
+    retained_bytes_of(command).saturating_add(typed_header_bytes)
+}
+
+fn retained_bytes_of(command: &RemotingCommand) -> usize {
     let remark_bytes = command.remark().map_or(0, cheetah_string::CheetahString::len);
     let ext_field_bytes = command.ext_fields().map_or(0, |fields| {
         fields
@@ -193,6 +223,34 @@ pub(crate) enum PendingRequestCompletion {
     Cancelled,
     SessionClosed,
     OperationalFailure(SharedError),
+    /// The session writer did not write the request; its caller classifies the failure as if it
+    /// had waited for the write.
+    WriteFailed(WriterFailure),
+}
+
+impl PendingRequestCompletion {
+    /// The error for callers that never hand a request to the writer through
+    /// [`PendingRequestWriteSink`] and so do not expect [`Self::WriteFailed`].
+    pub(crate) fn write_failure_error(failure: WriterFailure) -> SharedError {
+        failure
+            .into_shared_error()
+            .unwrap_or_else(|_| connection_failed_without_source(TransportStage::Closed))
+    }
+}
+
+/// Lets the session writer fail a pending request it could not write, so the request's caller
+/// waits only for the response: a successful write reports nothing and wakes nobody.
+pub(crate) struct PendingRequestWriteSink {
+    table: PendingRequestTable,
+    token: PendingRequestToken,
+}
+
+impl PendingRequestWriteSink {
+    /// Completes the request with `failure` unless it already completed.
+    pub(crate) fn fail(self, failure: WriterFailure) {
+        self.table
+            .complete_token(self.token, PendingRequestCompletion::WriteFailed(failure));
+    }
 }
 
 /// What became of a response that arrived for one pending-request owner.
@@ -645,6 +703,14 @@ impl PendingRequestGuard {
         self.token.expect("active pending request guard must have a token")
     }
 
+    /// A sink through which the session writer fails this request if it cannot write it.
+    pub(crate) fn write_sink(&self) -> PendingRequestWriteSink {
+        PendingRequestWriteSink {
+            table: self.table.clone(),
+            token: self.token(),
+        }
+    }
+
     #[cfg(test)]
     pub fn deadline(&self) -> RequestDeadline {
         self.deadline
@@ -717,6 +783,58 @@ mod owner_epoch_tests {
 
         assert!(estimate >= std::mem::size_of::<RemotingCommand>() + 1024);
         assert!(estimate > std::mem::size_of::<RemotingCommand>() + 1024 + "resource-budget".len());
+    }
+
+    #[test]
+    fn wire_estimate_counts_a_direct_header_without_materializing_it() {
+        use rocketmq_protocol::code::request_code::RequestCode;
+        use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+
+        let header = SendMessageRequestHeader {
+            producer_group: CheetahString::from_static_str("wire-estimate-group"),
+            topic: CheetahString::from_static_str("wire-estimate-topic"),
+            ..Default::default()
+        };
+        let header_hint = rocketmq_protocol::protocol::CommandCustomHeader::encoded_len_hint(&header);
+        let mut command =
+            RemotingCommand::create_request_command(RequestCode::SendMessage, header).set_body(vec![1_u8; 512]);
+
+        let estimate = estimate_wire_remoting_command_retained_bytes(&mut command);
+
+        assert!(header_hint > "wire-estimate-topic".len());
+        assert!(
+            command.ext_fields().is_none(),
+            "the typed header must stay unmaterialized"
+        );
+        assert_eq!(estimate, std::mem::size_of::<RemotingCommand>() + 512 + header_hint);
+    }
+
+    #[test]
+    fn wire_estimate_materializes_a_map_only_header() {
+        #[derive(Debug)]
+        struct MapOnlyHeader;
+
+        impl rocketmq_protocol::protocol::CommandCustomHeader for MapOnlyHeader {
+            fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
+                Some(HashMap::from([(
+                    CheetahString::from_static_str("mapOnly"),
+                    CheetahString::from_static_str("value"),
+                )]))
+            }
+        }
+
+        let mut command = RemotingCommand::create_request_command(7, MapOnlyHeader);
+
+        let estimate = estimate_wire_remoting_command_retained_bytes(&mut command);
+
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get(&CheetahString::from_static_str("mapOnly")))
+                .map(CheetahString::as_str),
+            Some("value")
+        );
+        assert!(estimate > std::mem::size_of::<RemotingCommand>() + "mapOnlyvalue".len());
     }
 
     #[test]

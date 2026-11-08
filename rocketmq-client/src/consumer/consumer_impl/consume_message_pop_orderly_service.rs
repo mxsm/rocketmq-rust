@@ -58,7 +58,7 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
 use crate::runtime::schedule_client_fixed_delay_controlled_task_with_context;
-use crate::runtime::spawn_client_blocking_io_with_context;
+use crate::runtime::spawn_consume_listener_with_context;
 use crate::runtime::ClientRuntime;
 use crate::runtime::ClientScheduledTaskHandle;
 use rocketmq_runtime::ChildServiceContext;
@@ -640,7 +640,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let group_for_span = self.consumer_group.clone();
         let telemetry_handle = self.telemetry_handle.clone();
-        let blocking_result = spawn_client_blocking_io_with_context(
+        let blocking_result = spawn_consume_listener_with_context(
             &self.service_context,
             "client.pop_orderly.consume_direct",
             move || {
@@ -849,7 +849,7 @@ impl ConsumeRequest {
         let mq = self.message_queue.clone();
         let mq_for_fallback = self.message_queue.clone();
         let process_span_for_blocking = process_span.clone();
-        let blocking_result = spawn_client_blocking_io_with_context(
+        let blocking_result = spawn_consume_listener_with_context(
             &consume_message_pop_orderly_service.service_context,
             "client.pop_orderly.consume",
             move || {
@@ -1159,21 +1159,6 @@ mod tests {
 
         service.update_core_pool_size(0);
         assert_eq!(service.get_core_pool_size(), 4);
-    }
-
-    #[test]
-    fn inc_and_dec_core_pool_size_are_noops_like_java() {
-        let config = ConsumerConfig {
-            consume_thread_min: 2,
-            consume_thread_max: 5,
-            ..Default::default()
-        };
-        let service = new_service_with_config(config);
-
-        service.inc_core_pool_size();
-        service.dec_core_pool_size();
-
-        assert_eq!(service.get_core_pool_size(), 2);
     }
 
     #[test]

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::*;
-
 use crate::config::timer_store_config::ValidatedTimerStoreConfig;
 #[cfg(feature = "tieredstore")]
 use rocketmq_tieredstore::provider::BuiltinTieredStoreProviderFactory;
@@ -300,8 +299,8 @@ impl LocalFileMessageStore {
             None
         };
         let runtime_scope = StoreRuntimeScope::new(service_context.clone());
-        let local_backend_config = message_store_config.normalized_local_backend_config();
-        let cleanup_policy = LocalCleanupPolicy::new(local_backend_config.cleanup);
+        let local_store_config = message_store_config.normalized_local_store_config();
+        let cleanup_policy = LocalCleanupPolicy::new(local_store_config.cleanup);
         let (delay_level_table, max_delay_level) = parse_delay_level(message_store_config.message_delay_level.as_str());
         let delay_level_table = Arc::new(delay_level_table);
         let running_flags = Arc::new(RunningFlags::new());
@@ -352,12 +351,26 @@ impl LocalFileMessageStore {
             Vec::new()
         };
         #[cfg(feature = "extended_timeline")]
-        let extended_timeline_completion_wake = Arc::new(TimelineCompletionWake::default());
+        let extended_timeline_completion_feed = Arc::new(TimelineCompletionFeed::default());
         #[cfg(feature = "extended_timeline")]
         let dispatcher_vec = {
             let mut dispatcher_vec = dispatcher_vec;
             if message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
-                dispatcher_vec.push(extended_timeline_completion_wake.clone());
+                dispatcher_vec.push(extended_timeline_completion_feed.clone());
+            }
+            dispatcher_vec
+        };
+        // Reput hands the native engine its master's deliveries while this Broker is a slave.
+        let native_delivery_feed = Arc::new(NativeDeliveryFeed::default());
+        // A native engine in shadow compares itself with the active engine's deliveries.
+        let native_shadow_feed = Arc::new(NativeDeliveryFeed::of_other_engines());
+        let dispatcher_vec = {
+            let mut dispatcher_vec = dispatcher_vec;
+            if NativeServiceRole::of(message_store_config.as_ref()).is_some() {
+                dispatcher_vec.push(native_delivery_feed.clone());
+            }
+            if NativeServiceRole::shadow_of(message_store_config.as_ref()).is_some() {
+                dispatcher_vec.push(native_shadow_feed.clone());
             }
             dispatcher_vec
         };
@@ -472,6 +485,22 @@ impl LocalFileMessageStore {
             minimum_pinned_wal_segment
         };
 
+        let native_timer_enabled = NativeServiceRole::of(message_store_config.as_ref()).is_some();
+        let native_timer_cleanup_pin = Arc::new(AtomicI64::new(if native_timer_enabled { 0 } else { -1 }));
+        let minimum_pinned_wal_segment = if native_timer_enabled {
+            let existing_pin = minimum_pinned_wal_segment.clone();
+            let native_pin = Arc::clone(&native_timer_cleanup_pin);
+            Some(Arc::new(move || {
+                let native_offset = u64::try_from(native_pin.load(Ordering::Acquire)).ok();
+                match (existing_pin.as_ref().and_then(|pin| pin()), native_offset) {
+                    (Some(existing), Some(native)) => Some(existing.min(native)),
+                    (existing, native) => existing.or(native),
+                }
+            }) as Arc<CommitLogWalPin>)
+        } else {
+            minimum_pinned_wal_segment
+        };
+
         ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
         ensure_dir_ok(Self::get_store_path_logic(&message_store_config).as_str());
@@ -489,7 +518,7 @@ impl LocalFileMessageStore {
             telemetry,
             message_store_config: message_store_config.clone(),
             store_runtime_state,
-            composition: LocalStoreComposition::new(local_backend_config),
+            composition: LocalStoreComposition::new(local_store_config),
             broker_config,
             put_message_hook_list: HookRegistry::new(),
             topic_config_table,
@@ -522,6 +551,8 @@ impl LocalFileMessageStore {
                 reput_from_offset: None,
                 dispatch_tx: None,
                 inner: None,
+                started: Arc::new(parking_lot::Mutex::new(None)),
+                position: Arc::new(parking_lot::Mutex::new(None)),
                 task_group: None,
             },
             background_index_rebuild_service: BackgroundIndexRebuildService::new(),
@@ -547,6 +578,12 @@ impl LocalFileMessageStore {
             store_stats_service,
             compaction_store,
             timer_message_store: None,
+            timer_source_wake: Arc::new(TimerSourceWake::default()),
+            native_timer: None,
+            native_timer_cleanup_pin,
+            native_delivery_feed,
+            native_shadow: None,
+            native_shadow_feed,
             #[cfg(feature = "extended_timeline")]
             extended_timeline_cleanup_pin,
             #[cfg(feature = "extended_timeline")]
@@ -558,7 +595,7 @@ impl LocalFileMessageStore {
             #[cfg(feature = "extended_timeline")]
             extended_timeline_recall_service: None,
             #[cfg(feature = "extended_timeline")]
-            extended_timeline_completion_wake,
+            extended_timeline_completion_feed,
             #[cfg(feature = "extended_timeline")]
             extended_timeline_completion_reconciler: None,
             #[cfg(feature = "extended_timeline")]
@@ -701,6 +738,12 @@ impl LocalFileMessageStore {
             state_machine_version: self.state_machine_version.clone(),
             controller_epoch_start_offset: self.controller_epoch_start_offset.clone(),
             commit_log: self.commit_log.replica_handle(),
+            consume_queue_store: self.consume_queue_store.clone(),
+            reput_notify: self.reput_message_service.notify_handle(),
+            dispatch_frontier: self.dispatcher.published_frontier_handle(),
+            native_timer: self.native_timer.clone(),
+            native_shadow: self.native_shadow.clone(),
+            runtime_scope: self.runtime_scope.clone(),
         }
     }
 
@@ -742,6 +785,7 @@ impl LocalFileMessageStore {
             self.consume_queue_lookup_handle(),
             self.commit_log.read_handle(),
             self.timer_message_write_handle(),
+            Arc::clone(&self.timer_source_wake),
         )
     }
 
@@ -832,7 +876,7 @@ impl LocalFileMessageStore {
                 let completion = Arc::new(TimelineCompletionReconciler::new(
                     Arc::clone(&timeline),
                     self.commit_log.read_handle(),
-                    Arc::clone(&self.extended_timeline_completion_wake),
+                    Arc::clone(&self.extended_timeline_completion_feed),
                 ));
                 let timer_config = &self.message_store_config.timer_store_config;
                 let delivery = TimelineDeliveryCoordinator::new(
@@ -920,6 +964,48 @@ impl LocalFileMessageStore {
             ));
             self.set_timer_message_store(timer_message_store);
         }
+        let native_role = NativeServiceRole::of(self.message_store_config.as_ref());
+        if let (true, Some(native_role), None) = (
+            self.message_store_config.is_timer_wheel_enable(),
+            native_role,
+            self.native_timer.as_ref(),
+        ) {
+            let native_timer = NativeTimerService::open(
+                self.message_store_config.as_ref(),
+                self.timer_store_context(),
+                self.runtime_scope.clone(),
+                Arc::clone(&self.native_timer_cleanup_pin),
+                native_role,
+                Arc::clone(&self.native_delivery_feed),
+                self.dispatcher.published_frontier_handle(),
+                self.telemetry.timer().clone(),
+            )
+            .map_err(|error| {
+                store_read_error(StoreOperation::Load, "failed to open the native timer engine").with_source(error)
+            })?;
+            self.native_timer = Some(Arc::new(native_timer));
+        }
+        if let (true, Some(shadow_role), None) = (
+            self.message_store_config.is_timer_wheel_enable(),
+            NativeServiceRole::shadow_of(self.message_store_config.as_ref()),
+            self.native_shadow.as_ref(),
+        ) {
+            // Its own cleanup pin, which nothing reads: a shadow never holds the CommitLog back.
+            let native_shadow = NativeTimerService::open(
+                self.message_store_config.as_ref(),
+                self.timer_store_context(),
+                self.runtime_scope.clone(),
+                Arc::new(AtomicI64::new(-1)),
+                shadow_role,
+                Arc::clone(&self.native_shadow_feed),
+                self.dispatcher.published_frontier_handle(),
+                self.telemetry.timer().clone(),
+            )
+            .map_err(|error| {
+                store_read_error(StoreOperation::Load, "failed to open the native timer shadow").with_source(error)
+            })?;
+            self.native_shadow = Some(Arc::new(native_shadow));
+        }
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
             && !self.message_store_config.duplication_enable
         {
@@ -963,6 +1049,18 @@ impl LocalFileMessageStore {
         self.max_delay_level
     }
 
+    /// The native timer engine, run under `timerStoreMode = native`.
+    #[inline]
+    pub(crate) fn native_timer(&self) -> Option<&Arc<NativeTimerService>> {
+        self.native_timer.as_ref()
+    }
+
+    /// The native timer engine running in shadow beside another mode.
+    #[inline]
+    pub(crate) fn native_shadow(&self) -> Option<&Arc<NativeTimerService>> {
+        self.native_shadow.as_ref()
+    }
+
     pub(super) fn enabled_rocksdb_specific_options(message_store_config: &MessageStoreConfig) -> Vec<&'static str> {
         let mut enabled = Vec::new();
         if message_store_config.clean_rocksdb_dirty_cq_interval_min > 0 {
@@ -984,6 +1082,22 @@ impl LocalFileMessageStore {
             enabled.push("trans_rocksdb_enable");
         }
         enabled
+    }
+
+    /// Warns about configuration that is still accepted but will be removed.
+    pub(super) fn warn_deprecated_configuration(&self) {
+        if self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+            warn!(
+                "timerStoreMode = extended_timeline is deprecated and will be removed; stop the Broker and move its \
+                 timers to the native engine with `rocketmq-cli-rust migrate-extended-timers`"
+            );
+        }
+        if self.message_store_config.timer_extended_shadow_enable {
+            warn!(
+                "timerExtendedShadowEnable is deprecated with the Extended Timeline and will be removed; compare the \
+                 native engine in shadow with timerNative.shadowEnable instead"
+            );
+        }
     }
 
     pub(super) fn validate_supported_configuration(&self) -> Result<(), StoreError> {
@@ -1015,6 +1129,38 @@ impl LocalFileMessageStore {
                     ),
                 ));
             }
+        }
+        if NativeServiceRole::shadow_of(self.message_store_config.as_ref()).is_some()
+            && !self.message_store_config.is_timer_wheel_enable()
+        {
+            return Err(store_config_error(
+                StoreOperation::Load,
+                "the native timer shadow requires timer_wheel_enable=true".to_string(),
+            ));
+        }
+        if self.message_store_config.timer_native.shadow_enable
+            && self.message_store_config.timer_store_mode == TimerStoreMode::Native
+        {
+            warn!("timerNative.shadowEnable does nothing under timerStoreMode = native");
+        }
+        match NativeServiceRole::of(self.message_store_config.as_ref()) {
+            Some(_) if !self.message_store_config.is_timer_wheel_enable() => {
+                return Err(store_config_error(
+                    StoreOperation::Load,
+                    "the native timer engine requires timer_wheel_enable=true, also while it drains the timers it admitted"
+                        .to_string(),
+                ));
+            }
+            Some(NativeServiceRole::Draining)
+                if self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline =>
+            {
+                return Err(store_unsupported_error(
+                    StoreOperation::Load,
+                    "the store holds native timers, which cannot drain beside the Extended Timeline; keep timer_store_mode=native or java_compat until they are delivered"
+                        .to_string(),
+                ));
+            }
+            _ => {}
         }
         if self.message_store_config.timer_rocksdb_enable && !self.message_store_config.is_enable_rocksdb_store() {
             return Err(store_unsupported_error(
@@ -1130,14 +1276,25 @@ impl LocalFileMessageStore {
     }
 
     pub(super) fn should_run_timer_dequeue(&self) -> bool {
+        // Under `native`, the Java-compatible engine still delivers the timers it admitted before.
         self.message_store_config.is_timer_wheel_enable()
-            && self.message_store_config.timer_store_mode == TimerStoreMode::JavaCompat
+            && matches!(
+                self.message_store_config.timer_store_mode,
+                TimerStoreMode::JavaCompat | TimerStoreMode::Native
+            )
             && self.store_runtime_state.broker_role() != BrokerRole::Slave
     }
 
     pub(super) fn sync_timer_message_store_role(&self) {
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
             timer_message_store.set_should_running_dequeue(self.should_run_timer_dequeue());
+        }
+        self.sync_native_timer_role();
+    }
+
+    pub(super) fn sync_native_timer_role(&self) {
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            native_timer.set_delivering(self.store_runtime_state.broker_role() != BrokerRole::Slave);
         }
     }
 
@@ -1286,6 +1443,17 @@ impl LocalFileMessageStore {
     #[cfg(all(test, feature = "extended_timeline"))]
     pub(crate) fn extended_timeline_engine_for_test(&self) -> Option<ExtendedTimelineEngine> {
         self.extended_timeline_engine.clone()
+    }
+
+    #[cfg(all(test, feature = "extended_timeline"))]
+    pub(crate) fn extended_timeline_completion_for_test(&self) -> Option<Arc<TimelineCompletionReconciler>> {
+        self.extended_timeline_completion_reconciler.clone()
+    }
+
+    /// The internal write path timer delivery uses, which accepts reserved timer properties.
+    #[cfg(all(test, feature = "extended_timeline"))]
+    pub(crate) fn timer_message_write_handle_for_test(&self) -> TimerMessageWriteHandle {
+        self.timer_message_write_handle()
     }
 
     pub(super) fn refresh_controller_confirm_offset_after_role_change(&self) {

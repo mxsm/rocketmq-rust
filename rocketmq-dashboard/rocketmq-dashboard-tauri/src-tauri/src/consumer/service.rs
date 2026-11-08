@@ -643,6 +643,8 @@ mod tests {
                 broker_name: "broker".into(),
                 broker_address: "localhost:10911".into(),
             }],
+            target_observation: WorkspaceObservationState::Complete,
+            group_observation: WorkspaceObservationState::Partial,
             observation: WorkspaceObservationState::Partial,
             failures: vec![WorkspaceTargetFailure {
                 target: "broker".into(),

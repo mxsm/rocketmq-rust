@@ -34,8 +34,8 @@ fn broker_response_code(error: &ClientError) -> Option<ResponseCode> {
     error.broker_response_code().map(ResponseCode::from)
 }
 
-#[trait_variant::make(PullCallback: Send)]
-pub trait PullCallbackLocal: Sync {
+#[trait_variant::make(Send)]
+pub trait PullCallback: Sync {
     async fn on_success(&mut self, pull_result: PullResultExt);
     fn on_exception(&mut self, e: ClientError);
 }

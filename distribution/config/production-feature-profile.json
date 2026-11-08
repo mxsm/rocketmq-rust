@@ -39,9 +39,11 @@
         "otlp-metrics",
         "otlp-traces",
         "otlp-logs",
-        "tls"
+        "tls",
+        "allocator-mimalloc"
       ],
       "resolved_features": [
+        "allocator-mimalloc",
         "default",
         "local_file_store",
         "otel-logs",
@@ -62,9 +64,11 @@
         "observability",
         "otlp-metrics",
         "otlp-traces",
-        "otlp-logs"
+        "otlp-logs",
+        "allocator-mimalloc"
       ],
       "resolved_features": [
+        "allocator-mimalloc",
         "default",
         "observability",
         "otel-logs",
@@ -84,9 +88,11 @@
       "features": [
         "metrics-otlp",
         "otlp-traces",
-        "otlp-logs"
+        "otlp-logs",
+        "allocator-mimalloc"
       ],
       "resolved_features": [
+        "allocator-mimalloc",
         "default",
         "metrics",
         "metrics-otlp",
@@ -105,9 +111,11 @@
       "features": [
         "otlp-metrics",
         "otlp-traces",
-        "otlp-logs"
+        "otlp-logs",
+        "allocator-mimalloc"
       ],
       "resolved_features": [
+        "allocator-mimalloc",
         "cluster-mode",
         "default",
         "local-mode",

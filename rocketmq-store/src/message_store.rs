@@ -38,12 +38,13 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
@@ -414,6 +415,17 @@ macro_rules! message_store_methods {
         delegate_store!(self, recall_extended_timer(request))
     }
 
+    fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, StoreError> {
+        delegate_store!(self, register_native_timer_recall(registration))
+    }
+
+    fn withdraw_native_timer_recall(&self, registration: &TimerRecallRegistration) {
+        delegate_store!(self, withdraw_native_timer_recall(registration))
+    }
+
     fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
         delegate_store!(self, get_timer_message_store())
     }
@@ -675,7 +687,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, increase_offset(msg, message_num));
     }
 
-    fn get_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
+    fn get_master_store_in_process<M: MessageStoreEngine + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
         match self {
             Self::LocalFileStore(store) => store.get_master_store_in_process::<M>(),
             #[cfg(feature = "rocksdb_store")]
@@ -683,7 +695,7 @@ macro_rules! message_store_methods {
         }
     }
 
-    fn set_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
+    fn set_master_store_in_process<M: MessageStoreEngine + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
         match self {
             Self::LocalFileStore(store) => store.set_master_store_in_process(master_store_in_process),
             #[cfg(feature = "rocksdb_store")]
@@ -853,6 +865,6 @@ macro_rules! message_store_methods {
     };
 }
 
-impl BackendOps for MessageStore {
+impl MessageStoreEngine for MessageStore {
     message_store_methods!();
 }

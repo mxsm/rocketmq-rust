@@ -14,7 +14,10 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
+use parking_lot::Mutex;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
@@ -26,6 +29,7 @@ use crate::config::timer_store_config::TimerStoreConfig;
 use crate::timer::role::TimerRoleState;
 
 const RECORD_OVERHEAD_RESERVE: u64 = 1_024;
+const DISK_SPACE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Bytes-aware, fail-closed admission view over durable Timeline usage.
 pub(crate) struct TimelineAdmissionController {
@@ -35,6 +39,47 @@ pub(crate) struct TimelineAdmissionController {
     timeline: Arc<RocksDbTimelineIndex>,
     materializer: Arc<ShadowTimelineMaterializer>,
     role: Arc<TimerRoleState>,
+    disk_space: DiskSpaceCache,
+}
+
+/// Filesystem space read at most once per [`DISK_SPACE_REFRESH_INTERVAL`].
+///
+/// Querying it for every message costs two system calls, which take milliseconds on Windows.
+/// Writes between two refreshes are far below the configured minimum free space.
+#[derive(Debug, Default)]
+struct DiskSpaceCache {
+    snapshot: Mutex<Option<DiskSpaceSnapshot>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DiskSpaceSnapshot {
+    observed_at: Instant,
+    available_bytes: u64,
+    total_bytes: u64,
+}
+
+impl DiskSpaceCache {
+    /// Returns `(available, total)` bytes, calling `query` only when the cached values are older
+    /// than the refresh interval. A failed query is returned and not cached.
+    fn get_or_refresh(
+        &self,
+        now: Instant,
+        query: impl FnOnce() -> std::io::Result<(u64, u64)>,
+    ) -> std::io::Result<(u64, u64)> {
+        let mut snapshot = self.snapshot.lock();
+        if let Some(cached) = *snapshot {
+            if now.saturating_duration_since(cached.observed_at) < DISK_SPACE_REFRESH_INTERVAL {
+                return Ok((cached.available_bytes, cached.total_bytes));
+            }
+        }
+        let (available_bytes, total_bytes) = query()?;
+        *snapshot = Some(DiskSpaceSnapshot {
+            observed_at: now,
+            available_bytes,
+            total_bytes,
+        });
+        Ok((available_bytes, total_bytes))
+    }
 }
 
 impl TimelineAdmissionController {
@@ -53,6 +98,7 @@ impl TimelineAdmissionController {
             timeline,
             materializer,
             role,
+            disk_space: DiskSpaceCache::default(),
         }
     }
 
@@ -97,21 +143,20 @@ impl TimelineAdmissionController {
             return Ok(TimelineAdmissionDecision::RecordTooLarge);
         }
 
-        let metrics = self.materializer.metrics();
-        if metrics.materialization_lag > self.config.materialization_lag_reject_messages {
+        let backlog = self.materializer.source_backlog();
+        if backlog.messages > self.config.materialization_lag_reject_messages {
             return Ok(TimelineAdmissionDecision::MaterializationLag);
         }
-        // Unmaterialized source sizes are not yet in PayloadStore. Charging every one at the
-        // configured record ceiling is intentionally conservative and prevents admission races.
-        let unmaterialized_bytes = metrics
-            .materialization_lag
-            .saturating_mul(self.config.payload_record_bytes as u64);
-        let pending_messages = metrics
-            .payload_records
-            .saturating_add(metrics.materialization_lag)
-            .saturating_add(1);
-        let pending_bytes = metrics
-            .payload_live_bytes
+        // Unmaterialized sources are not in PayloadStore yet. Each one is charged its CommitLog
+        // record, which its payload frame copies, plus the reserve that covers the payload
+        // header and topic.
+        let unmaterialized_bytes = backlog
+            .bytes
+            .saturating_add(backlog.messages.saturating_mul(RECORD_OVERHEAD_RESERVE));
+        let payload = self.materializer.payload_store().metrics();
+        let pending_messages = payload.record_count.saturating_add(backlog.messages).saturating_add(1);
+        let pending_bytes = payload
+            .live_bytes
             .saturating_add(unmaterialized_bytes)
             .saturating_add(encoded_bytes);
         if pending_messages > self.config.max_pending_messages || pending_bytes > self.config.max_pending_bytes {
@@ -138,7 +183,7 @@ impl TimelineAdmissionController {
         {
             return Ok(TimelineAdmissionDecision::TenantQuota);
         }
-        if bucket.0.saturating_add(metrics.materialization_lag).saturating_add(1) > self.config.max_bucket_messages
+        if bucket.0.saturating_add(backlog.messages).saturating_add(1) > self.config.max_bucket_messages
             || bucket
                 .1
                 .saturating_add(unmaterialized_bytes)
@@ -148,8 +193,15 @@ impl TimelineAdmissionController {
             return Ok(TimelineAdmissionDecision::HotBucket);
         }
 
-        let free = fs2::available_space(&self.store_root).map_err(admission_io_error)?;
-        let total = fs2::total_space(&self.store_root).map_err(admission_io_error)?;
+        let (free, total) = self
+            .disk_space
+            .get_or_refresh(Instant::now(), || {
+                Ok((
+                    fs2::available_space(&self.store_root)?,
+                    fs2::total_space(&self.store_root)?,
+                ))
+            })
+            .map_err(admission_io_error)?;
         let minimum_ratio_bytes = total
             .saturating_mul(u64::from(self.config.minimum_free_ratio_basis_points))
             .div_ceil(10_000);
@@ -246,4 +298,48 @@ pub enum TimelineAdmissionDecision {
     HotBucket,
     /// Filesystem headroom is insufficient.
     DiskHeadroom,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use super::DiskSpaceCache;
+
+    #[test]
+    fn disk_space_is_queried_at_most_once_per_refresh_interval() {
+        let cache = DiskSpaceCache::default();
+        let queries = Cell::new(0);
+        let query = || {
+            queries.set(queries.get() + 1);
+            Ok((10, 100))
+        };
+        let start = Instant::now();
+
+        assert_eq!(cache.get_or_refresh(start, query).expect("query"), (10, 100));
+        assert_eq!(
+            cache
+                .get_or_refresh(start + Duration::from_millis(999), query)
+                .expect("cached"),
+            (10, 100)
+        );
+        assert_eq!(queries.get(), 1);
+        cache
+            .get_or_refresh(start + Duration::from_secs(1), query)
+            .expect("refresh");
+        assert_eq!(queries.get(), 2);
+    }
+
+    #[test]
+    fn failed_disk_space_query_is_not_cached() {
+        let cache = DiskSpaceCache::default();
+        let start = Instant::now();
+
+        assert!(cache
+            .get_or_refresh(start, || Err(std::io::Error::other("unavailable")))
+            .is_err());
+        assert_eq!(cache.get_or_refresh(start, || Ok((1, 2))).expect("query"), (1, 2));
+    }
 }

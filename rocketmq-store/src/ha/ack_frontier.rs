@@ -28,14 +28,22 @@ use crate::ha::ha_service::HAAckedReplicaSnapshot;
 
 /// One immutable view of authority, membership, and durable progress used to resolve a batch of
 /// group-transfer requests.
+///
+/// Replica counts accept acknowledgements from every connected replica, while all-ack writes wait
+/// only for the configured sync state set, as Java's `GroupTransferService` does: a connected replica
+/// that is not in the set yet must not hold such writes back.
 pub(crate) enum AckFrontier {
     Ready {
         authority: WriteAuthority,
         local_durable_watermark: i64,
         replica_acks: Vec<ReplicaAck>,
         replica_frontiers: BTreeMap<i64, i64>,
+        /// Configured members plus connected replicas, for replica counts.
         sync_state_set: SyncStateSet,
         members: HashSet<i64>,
+        /// The configured sync state set, or `members` without one, for all-ack writes. Every
+        /// member of it is also in `members`.
+        in_sync_set: SyncStateSet,
     },
     Rejected(HaRejectReason),
 }
@@ -51,6 +59,7 @@ impl AckFrontier {
         let Some(authority) = authority else {
             return Self::Rejected(HaRejectReason::AuthorityMismatch);
         };
+        let in_sync_configured = configured_sync_state_set.clone();
         let mut members = configured_sync_state_set.unwrap_or_else(|| HashSet::from([authority.broker_id()]));
         let mut replica_frontiers = BTreeMap::<i64, i64>::new();
         for (index, snapshot) in snapshots.iter().enumerate() {
@@ -79,6 +88,12 @@ impl AckFrontier {
         let Ok(sync_state_set) = SyncStateSet::try_new(members.iter().copied()) else {
             return Self::Rejected(HaRejectReason::AuthorityMismatch);
         };
+        // Replicas report their own ids, so the check above already rejected a configured set
+        // without the master; `decide` also requires the master in the set it acknowledges with.
+        let in_sync_members = in_sync_configured.unwrap_or_else(|| members.clone());
+        let Ok(in_sync_set) = SyncStateSet::try_new(in_sync_members) else {
+            return Self::Rejected(HaRejectReason::AuthorityMismatch);
+        };
         let replica_acks = replica_frontiers
             .iter()
             .filter_map(|(broker_id, offset)| ReplicaAck::try_new(*broker_id, *offset).ok())
@@ -91,6 +106,7 @@ impl AckFrontier {
             replica_frontiers,
             sync_state_set,
             members,
+            in_sync_set,
         }
     }
 
@@ -106,8 +122,15 @@ impl AckFrontier {
                 local_durable_watermark,
                 replica_acks,
                 sync_state_set,
+                in_sync_set,
                 ..
-            } => (authority, local_durable_watermark, replica_acks, sync_state_set),
+            } => {
+                let sync_state_set = match policy {
+                    AckPolicy::AllInSyncSet => in_sync_set,
+                    AckPolicy::LocalDurable | AckPolicy::ReplicaCount(_) => sync_state_set,
+                };
+                (authority, local_durable_watermark, replica_acks, sync_state_set)
+            }
             Self::Rejected(reason) => return ReplicationDecision::Reject(*reason),
         };
         let requested_authority = requested_authority.unwrap_or(*authority);
@@ -142,6 +165,7 @@ impl AckFrontier {
             local_durable_watermark,
             replica_frontiers,
             members,
+            in_sync_set,
             ..
         } = self
         else {
@@ -165,7 +189,7 @@ impl AckFrontier {
             }
             AckPolicy::AllInSyncSet => members
                 .iter()
-                .filter(|broker_id| **broker_id != authority.broker_id())
+                .filter(|broker_id| **broker_id != authority.broker_id() && in_sync_set.contains(**broker_id))
                 .map(|broker_id| replica_frontiers.get(broker_id).copied().unwrap_or(-1))
                 .min()
                 .unwrap_or(*local_durable_watermark),
@@ -250,6 +274,42 @@ mod tests {
         assert!(matches!(
             frontier.decide(Some(authority(3)), AckPolicy::AllInSyncSet, 121),
             ReplicationDecision::Wait { .. }
+        ));
+    }
+
+    #[test]
+    fn all_in_sync_waits_only_for_members_of_the_configured_set() {
+        let frontier = AckFrontier::from_snapshots(
+            Some(authority(3)),
+            Some(HashSet::from([0, 1])),
+            200,
+            &[
+                HAAckedReplicaSnapshot {
+                    slave_broker_id: Some(1),
+                    slave_ack_offset: 180,
+                },
+                // Connected, but not in the sync state set yet.
+                HAAckedReplicaSnapshot {
+                    slave_broker_id: Some(2),
+                    slave_ack_offset: 50,
+                },
+            ],
+            true,
+        );
+
+        assert!(matches!(
+            frontier.decide(Some(authority(3)), AckPolicy::AllInSyncSet, 180),
+            ReplicationDecision::Acknowledge(_)
+        ));
+        assert!(matches!(
+            frontier.decide(Some(authority(3)), AckPolicy::AllInSyncSet, 181),
+            ReplicationDecision::Wait { .. }
+        ));
+        // Replica counts still accept the connected replica outside the set.
+        let three_replicas = AckPolicy::ReplicaCount(ReplicaCount::try_new(3).expect("three replicas"));
+        assert!(matches!(
+            frontier.decide(Some(authority(3)), three_replicas, 50),
+            ReplicationDecision::Acknowledge(_)
         ));
     }
 

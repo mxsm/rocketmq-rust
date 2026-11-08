@@ -35,7 +35,7 @@ async fn resolved_target_dials_the_socket_without_losing_logical_authority() {
     let connected = connect_target_with_config_options_and_telemetry(
         &target,
         &TlsConfig::default(),
-        FrameLimits::legacy_compatibility(),
+        FrameLimits::java_compatibility(),
         SocketOptions::default(),
         RequestDeadline::after(Duration::from_secs(1)),
         TransportTelemetry::noop(),
@@ -58,7 +58,7 @@ async fn legacy_address_wrapper_retains_the_existing_dialing_contract() {
     let connected = connect_with_config_and_telemetry(
         &socket_addr.to_string(),
         &TlsConfig::default(),
-        FrameLimits::legacy_compatibility(),
+        FrameLimits::java_compatibility(),
         RequestDeadline::after(Duration::from_secs(1)),
         TransportTelemetry::noop(),
     )

@@ -22,10 +22,11 @@ use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_local::ha::epoch::EpochLog;
 pub(crate) use rocketmq_store_local::ha::replication::HAAckedReplicaSnapshot;
 
-#[trait_variant::make(HAService: Send)]
-pub trait RocketHAService: Sync {
+#[trait_variant::make(Send)]
+pub trait HAService: Sync {
     /// Starts the HA service.
     ///
     /// # Errors
@@ -36,6 +37,24 @@ pub trait RocketHAService: Sync {
 
     /// Shutdown the HA service
     async fn shutdown(&self);
+
+    /// The master terms this store's CommitLog went through, oldest first. Empty outside
+    /// controller mode.
+    fn epoch_log(&self) -> EpochLog;
+
+    /// Prepares this replica to follow a new master: cuts off what the master's log does not hold
+    /// and takes over its terms. Replication from the old master stops first.
+    ///
+    /// # Parameters
+    /// * `master` - The master's terms
+    /// * `master_end` - The end of the master's CommitLog
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the logs share no known point, when Reput does not come to
+    /// rest for the cut, or when the log, what was dispatched from it, or the terms cannot be
+    /// written. Until a later join succeeds, the client stays off any master.
+    async fn join_master(&self, master: &EpochLog, master_end: i64) -> Result<(), StoreError>;
 
     /// Changes this node to master state.
     ///

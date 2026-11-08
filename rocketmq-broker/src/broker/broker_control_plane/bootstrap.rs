@@ -540,7 +540,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     {
                         Ok(true) => {}
                         Ok(false) => warn!("Controller replica-info role transition was rejected"),
-                        Err(_) => warn!("apply controller replica info failed"),
+                        Err(error) => warn!(%error, "apply controller replica info failed"),
                     }
                 } else {
                     self.bootstrap_controller_mode().await;

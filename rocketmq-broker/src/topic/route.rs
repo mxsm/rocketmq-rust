@@ -13,11 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashSet;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mix_all;
@@ -25,28 +21,18 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_transport::api::ClientMetadata;
 use tracing::warn;
 
-/// Broker-owned publish route containing only queue projection and selection state.
+/// Broker-owned publish route containing the writable message queue projection.
 ///
 /// Client producer cache state intentionally remains in `TopicPublishInfo`; the Broker keeps this
 /// smaller owner-local projection for failover and lite sharding.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct BrokerPublishRoute {
     message_queues: Vec<MessageQueue>,
-    next_queue: Arc<AtomicUsize>,
-}
-
-impl Default for BrokerPublishRoute {
-    fn default() -> Self {
-        Self::from_queues(Vec::new())
-    }
 }
 
 impl BrokerPublishRoute {
     pub(crate) fn from_queues(message_queues: Vec<MessageQueue>) -> Self {
-        Self {
-            message_queues,
-            next_queue: Arc::new(AtomicUsize::new(rand::random::<u32>() as usize)),
-        }
+        Self { message_queues }
     }
 
     pub(crate) fn from_topic_route_data(topic: &str, route: &mut TopicRouteData) -> Self {
@@ -117,28 +103,6 @@ impl BrokerPublishRoute {
     pub(crate) fn message_queues(&self) -> &[MessageQueue] {
         &self.message_queues
     }
-
-    pub(crate) fn select_one_queue(&self) -> Option<MessageQueue> {
-        let queue_count = self.message_queues.len();
-        if queue_count == 0 {
-            return None;
-        }
-        let index = self.next_queue.fetch_add(1, Ordering::Relaxed) % queue_count;
-        self.message_queues.get(index).cloned()
-    }
-
-    pub(crate) fn select_one_queue_avoiding(&self, last_broker_name: Option<&CheetahString>) -> Option<MessageQueue> {
-        let Some(last_broker_name) = last_broker_name else {
-            return self.select_one_queue();
-        };
-        for _ in 0..self.message_queues.len() {
-            let queue = self.select_one_queue()?;
-            if queue.broker_name() != last_broker_name {
-                return Some(queue);
-            }
-        }
-        self.select_one_queue()
-    }
 }
 
 pub(crate) fn topic_route_to_subscribe_queues(topic: &str, route: &TopicRouteData) -> HashSet<MessageQueue> {
@@ -200,20 +164,6 @@ mod tests {
 
         assert_eq!(3, projected.message_queues().len());
         assert!(projected.is_usable());
-    }
-
-    #[test]
-    fn broker_avoidance_prefers_a_different_broker() {
-        let route = BrokerPublishRoute::from_queues(vec![
-            MessageQueue::from_parts("topic-a", "broker-a", 0),
-            MessageQueue::from_parts("topic-a", "broker-b", 1),
-        ]);
-
-        let selected = route
-            .select_one_queue_avoiding(Some(&CheetahString::from_static_str("broker-a")))
-            .expect("a queue should be selected");
-
-        assert_eq!("broker-b", selected.broker_name().as_str());
     }
 
     #[test]

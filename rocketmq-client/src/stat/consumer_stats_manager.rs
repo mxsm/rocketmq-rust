@@ -22,7 +22,9 @@ use std::time::Instant;
 use crate::runtime::spawn_client_tracked_task_with_context;
 use crate::runtime::ClientTrackedTaskHandle;
 use parking_lot::Mutex;
+use rocketmq_observability::stats::push_topic_group_key;
 use rocketmq_observability::stats::stats_item_set::StatsItemSet;
+use rocketmq_observability::stats::with_stats_key;
 use rocketmq_protocol::protocol::body::consume_status::ConsumeStatus;
 use rocketmq_runtime::ChildServiceContext;
 use serde::Serialize;
@@ -259,26 +261,34 @@ impl ConsumerStatsManager {
 
     /// Records a single pull response-time observation in milliseconds.
     pub fn inc_pull_rt(&self, group: &str, topic: &str, rt: u64) {
-        self.topic_and_group_pull_rt
-            .add_rt_value(&stats_key(topic, group), rt as i64, 1);
+        with_stats_key(
+            |key| push_topic_group_key(key, topic, group),
+            |key| self.topic_and_group_pull_rt.add_rt_value(key, rt as i64, 1),
+        );
     }
 
     /// Records `msgs` messages successfully pulled in one batch.
     pub fn inc_pull_tps(&self, group: &str, topic: &str, msgs: u64) {
-        self.topic_and_group_pull_tps
-            .add_value(&stats_key(topic, group), msgs as i64, 1);
+        with_stats_key(
+            |key| push_topic_group_key(key, topic, group),
+            |key| self.topic_and_group_pull_tps.add_value(key, msgs as i64, 1),
+        );
     }
 
     /// Records a single consume response-time observation in milliseconds.
     pub fn inc_consume_rt(&self, group: &str, topic: &str, rt: u64) {
-        self.topic_and_group_consume_rt
-            .add_rt_value(&stats_key(topic, group), rt as i64, 1);
+        with_stats_key(
+            |key| push_topic_group_key(key, topic, group),
+            |key| self.topic_and_group_consume_rt.add_rt_value(key, rt as i64, 1),
+        );
     }
 
     /// Records `msgs` messages consumed successfully in one batch.
     pub fn inc_consume_ok_tps(&self, group: &str, topic: &str, msgs: u64) {
-        self.topic_and_group_consume_ok_tps
-            .add_value(&stats_key(topic, group), msgs as i64, 1);
+        with_stats_key(
+            |key| push_topic_group_key(key, topic, group),
+            |key| self.topic_and_group_consume_ok_tps.add_value(key, msgs as i64, 1),
+        );
     }
 
     /// Java-compatible acronym spelling for `incConsumeOKTPS`.
@@ -289,8 +299,10 @@ impl ConsumerStatsManager {
 
     /// Records `msgs` messages that failed consumption in one batch.
     pub fn inc_consume_failed_tps(&self, group: &str, topic: &str, msgs: u64) {
-        self.topic_and_group_consume_failed_tps
-            .add_value(&stats_key(topic, group), msgs as i64, 1);
+        with_stats_key(
+            |key| push_topic_group_key(key, topic, group),
+            |key| self.topic_and_group_consume_failed_tps.add_value(key, msgs as i64, 1),
+        );
     }
 
     /// Returns a point-in-time [`ConsumeStatus`] snapshot for the given

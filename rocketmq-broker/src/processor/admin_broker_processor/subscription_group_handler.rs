@@ -111,13 +111,6 @@ impl SubscriptionGroupHandler {
             execution_time
         );
 
-        // todo
-        // InvocationStatus status =
-        // response.getCode() == ResponseCode.SUCCESS ? InvocationStatus.SUCCESS :
-        // InvocationStatus.FAILURE; Attributes attributes =
-        // BrokerMetricsManager.newAttributesBuilder()     .put(LABEL_INVOCATION_STATUS,
-        // status.getName())     .build();
-        // BrokerMetricsManager.consumerGroupCreateExecuteTime.record(executionTime, attributes);
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
 

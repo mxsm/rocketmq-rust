@@ -12,12 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bytes::Bytes;
-use crc::Crc;
-use crc::CRC_32_ISO_HDLC;
+//! CRC-32 checksums compatible with RocketMQ Java `UtilAll.crc32`.
+//!
+//! The checksum is CRC-32/ISO-HDLC (the IEEE polynomial used by `java.util.zip.CRC32`),
+//! masked with `0x7FFF_FFFF` exactly as Java casts it to a non-negative `int`. Message bodies
+//! are checksummed on every CommitLog append, so the implementation uses `crc32fast`, which
+//! selects a carry-less-multiply or ARMv8 CRC kernel at runtime and falls back to a table
+//! implementation on other CPUs. Every path produces identical, persisted values.
 
-/// CRC32 instance using ISO HDLC standard
-const CRC32_ALGO: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+use bytes::Bytes;
+
+/// Mask applied by Java `UtilAll.crc32` to keep the stored checksum non-negative.
+const JAVA_POSITIVE_MASK: u32 = 0x7FFF_FFFF;
+
+#[inline]
+fn masked(checksum: u32) -> u32 {
+    checksum & JAVA_POSITIVE_MASK
+}
 
 /// Calculate CRC32 checksum for the entire byte array.
 ///
@@ -84,9 +95,7 @@ pub fn crc32_range(array: &[u8], offset: usize, length: usize) -> u32 {
         return 0;
     }
 
-    let mut digest = CRC32_ALGO.digest();
-    digest.update(&array[offset..offset + length]);
-    digest.finalize() & 0x7FFFFFFF
+    masked(crc32fast::hash(&array[offset..offset + length]))
 }
 
 /// Calculate CRC32 checksum for Bytes.
@@ -112,11 +121,7 @@ pub fn crc32_range(array: &[u8], offset: usize, length: usize) -> u32 {
 #[inline]
 pub fn crc32_bytes(buf: Option<&Bytes>) -> u32 {
     match buf {
-        Some(data) if !data.is_empty() => {
-            let mut digest = CRC32_ALGO.digest();
-            digest.update(data);
-            digest.finalize() & 0x7FFFFFFF
-        }
+        Some(data) if !data.is_empty() => masked(crc32fast::hash(data)),
         _ => 0,
     }
 }
@@ -164,9 +169,7 @@ pub fn crc32_bytebuffer(byte_buffer: &[u8]) -> u32 {
         return 0;
     }
 
-    let mut digest = CRC32_ALGO.digest();
-    digest.update(byte_buffer);
-    digest.finalize() & 0x7FFFFFFF
+    masked(crc32fast::hash(byte_buffer))
 }
 
 /// Calculate CRC32 checksum for multiple byte buffers.
@@ -194,16 +197,80 @@ pub fn crc32_bytebuffers(byte_buffers: &[Vec<u8>]) -> u32 {
         return 0;
     }
 
-    let mut digest = CRC32_ALGO.digest();
+    let mut hasher = crc32fast::Hasher::new();
     for buffer in byte_buffers {
-        digest.update(buffer.as_slice());
+        hasher.update(buffer.as_slice());
     }
-    digest.finalize() & 0x7FFFFFFF
+    masked(hasher.finalize())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bit-at-a-time CRC-32/ISO-HDLC, the definition `java.util.zip.CRC32` implements.
+    fn reference_crc32(data: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in data {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
+        }
+        !crc & JAVA_POSITIVE_MASK
+    }
+
+    fn patterned(len: usize) -> Vec<u8> {
+        let mut state = 0x9E37_79B9_u32;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect()
+    }
+
+    // ========== Persisted-format compatibility ==========
+
+    #[test]
+    fn crc32_matches_java_check_values() {
+        // CRC-32/ISO-HDLC check value 0xCBF43926 and the classic pangram 0x414FA339, both
+        // masked like Java `UtilAll.crc32` before they are written to the CommitLog.
+        assert_eq!(crc32(b"123456789"), 0x4BF4_3926);
+        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414F_A339);
+        assert_eq!(crc32(&[0xFF; 32]), reference_crc32(&[0xFF; 32]));
+    }
+
+    #[test]
+    fn crc32_matches_reference_across_kernel_boundaries() {
+        // Lengths around the 16/64/128-byte folding widths and a full 1 MiB body exercise
+        // every accelerated tail path against the bit-level definition.
+        let data = patterned(1 << 20);
+        let mut lengths: Vec<usize> = (0..=257).collect();
+        lengths.extend([1023, 1024, 1025, 4095, 4096, 4097, 65_536, 1 << 20]);
+        for len in lengths {
+            let expected = if len == 0 { 0 } else { reference_crc32(&data[..len]) };
+            assert_eq!(crc32(&data[..len]), expected, "length {len}");
+        }
+        for offset in [1, 3, 7, 15, 63] {
+            assert_eq!(
+                crc32_range(&data, offset, 4096),
+                reference_crc32(&data[offset..offset + 4096]),
+                "offset {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn chunked_checksum_matches_contiguous_reference() {
+        let data = patterned(10_000);
+        let buffers: Vec<Vec<u8>> = data.chunks(333).map(<[u8]>::to_vec).collect();
+        assert_eq!(crc32_bytebuffers(&buffers), reference_crc32(&data));
+        assert_eq!(crc32_bytes(Some(&Bytes::from(data.clone()))), reference_crc32(&data));
+    }
 
     // ========== crc32() tests ==========
 

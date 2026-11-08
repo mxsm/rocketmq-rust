@@ -44,7 +44,6 @@ use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
-use crate::plugin::broker_attached_plugin::BrokerAttachedPlugin;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::topic::manager::topic_config_coordinator::topic_config_command_result;
@@ -248,23 +247,17 @@ pub(crate) struct BrokerSpecialServiceCapability<MS: BrokerReplicationStore> {
     timer: Option<Weak<TimerMessageStore>>,
     transaction_check: Option<Weak<TransactionalMessageCheckService<MS>>>,
     ack: Option<Weak<AckMessageProcessor<MS>>>,
-    plugins: Vec<Weak<dyn BrokerAttachedPlugin>>,
     schedule_started: Arc<AtomicBool>,
     transaction_check_started: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
 }
 
 impl<MS: BrokerReplicationStore> BrokerSpecialServiceCapability<MS> {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the composition root lists each role-sensitive service capability explicitly"
-    )]
     pub(crate) fn new(
         schedule: &Arc<ScheduleMessageService<MS>>,
         timer: Option<&Arc<TimerMessageStore>>,
         transaction_check: Option<&Arc<TransactionalMessageCheckService<MS>>>,
         ack: Option<&Arc<AckMessageProcessor<MS>>>,
-        plugins: &[Arc<dyn BrokerAttachedPlugin>],
         schedule_started: Arc<AtomicBool>,
         transaction_check_started: Arc<AtomicBool>,
         shutdown: Arc<AtomicBool>,
@@ -274,7 +267,6 @@ impl<MS: BrokerReplicationStore> BrokerSpecialServiceCapability<MS> {
             timer: timer.map(Arc::downgrade),
             transaction_check: transaction_check.map(Arc::downgrade),
             ack: ack.map(Arc::downgrade),
-            plugins: plugins.iter().map(Arc::downgrade).collect(),
             schedule_started,
             transaction_check_started,
             shutdown,
@@ -301,13 +293,6 @@ impl<MS: BrokerReplicationStore> BrokerSpecialServiceCapability<MS> {
                 timer.set_should_running_dequeue(should_start);
             }
             self.schedule_started.store(should_start, Ordering::Release);
-        }
-
-        for plugin in &self.plugins {
-            plugin
-                .upgrade()
-                .ok_or_else(|| pre_online_unavailable("broker plugin"))?
-                .status_changed(should_start);
         }
 
         if self.transaction_check_started.load(Ordering::Acquire) != should_start {
@@ -340,7 +325,6 @@ impl<MS: BrokerReplicationStore> Clone for BrokerSpecialServiceCapability<MS> {
             timer: self.timer.as_ref().map(Weak::clone),
             transaction_check: self.transaction_check.as_ref().map(Weak::clone),
             ack: self.ack.as_ref().map(Weak::clone),
-            plugins: self.plugins.iter().map(Weak::clone).collect(),
             schedule_started: Arc::clone(&self.schedule_started),
             transaction_check_started: Arc::clone(&self.transaction_check_started),
             shutdown: Arc::clone(&self.shutdown),
@@ -581,7 +565,6 @@ pub(crate) struct BrokerPreOnlineContext<MS: BrokerReplicationStore> {
     consumer_offsets: Weak<ConsumerOffsetManager<MS>>,
     schedule: Weak<ScheduleMessageService<MS>>,
     timer: Option<Weak<TimerMessageStore>>,
-    plugins: Vec<Weak<dyn BrokerAttachedPlugin>>,
     transition: BrokerOnlineTransitionCapability<MS>,
     metadata_io: Option<MetadataIoActor>,
     blocking: BlockingExecutor,
@@ -600,7 +583,6 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
         consumer_offsets: &Arc<ConsumerOffsetManager<MS>>,
         schedule: &Arc<ScheduleMessageService<MS>>,
         timer: Option<&Arc<TimerMessageStore>>,
-        plugins: &[Arc<dyn BrokerAttachedPlugin>],
         transition: BrokerOnlineTransitionCapability<MS>,
         metadata_io: Option<MetadataIoActor>,
         blocking: BlockingExecutor,
@@ -613,7 +595,6 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
             consumer_offsets: Arc::downgrade(consumer_offsets),
             schedule: Arc::downgrade(schedule),
             timer: timer.map(Arc::downgrade),
-            plugins: plugins.iter().map(Arc::downgrade).collect(),
             transition,
             metadata_io,
             blocking,

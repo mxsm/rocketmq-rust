@@ -18,33 +18,33 @@ use crate::mapped_file::retirement::writer::model_io::ModelLedgerIo;
 
 #[test]
 fn initial_executor_runs_every_durability_boundary_in_frozen_order() {
-    let mut backend = ModelInitialBootstrapBackend::new(inventory(&bootstrap_snapshot()));
-    let completed = execute_initial_bootstrap(foundation(&store_meta()), &mut backend)
+    let mut bootstrap_operations = ModelInitialBootstrapOperations::new(inventory(&bootstrap_snapshot()));
+    let completed = execute_initial_bootstrap(foundation(&store_meta()), &mut bootstrap_operations)
         .expect("canonical initial bootstrap completes");
 
     assert_eq!(completed.store_uuid, store_uuid());
     assert_eq!(completed.witness_sequence, 3);
-    assert_eq!(backend.executed_action_count(), 41);
-    backend.assert_frozen_order();
+    assert_eq!(bootstrap_operations.executed_action_count(), 41);
+    bootstrap_operations.assert_frozen_order();
 }
 
 #[test]
 fn every_executor_boundary_failure_requires_reinspection_and_resumes_exactly_once() {
-    let action_count = ModelInitialBootstrapBackend::expected_action_count();
+    let action_count = ModelInitialBootstrapOperations::expected_action_count();
     for failure_index in 0..action_count {
-        let mut backend = ModelInitialBootstrapBackend::new(inventory(&bootstrap_snapshot()));
-        backend.fail_after_action(failure_index);
+        let mut bootstrap_operations = ModelInitialBootstrapOperations::new(inventory(&bootstrap_snapshot()));
+        bootstrap_operations.fail_after_action(failure_index);
 
-        execute_initial_bootstrap(foundation(&store_meta()), &mut backend)
+        execute_initial_bootstrap(foundation(&store_meta()), &mut bootstrap_operations)
             .expect_err("injected boundary must stop the current executor run");
-        let actions_after_failure = backend.executed_action_count();
-        backend.clear_failure();
-        let completed = execute_initial_bootstrap(foundation(&store_meta()), &mut backend)
+        let actions_after_failure = bootstrap_operations.executed_action_count();
+        bootstrap_operations.clear_failure();
+        let completed = execute_initial_bootstrap(foundation(&store_meta()), &mut bootstrap_operations)
             .expect("reinspection resumes the exact durable frontier");
 
         assert_eq!(completed.witness_sequence, 3);
-        assert!(backend.executed_action_count() >= actions_after_failure);
-        backend.assert_each_action_at_most_once();
+        assert!(bootstrap_operations.executed_action_count() >= actions_after_failure);
+        bootstrap_operations.assert_each_action_at_most_once();
     }
 }
 

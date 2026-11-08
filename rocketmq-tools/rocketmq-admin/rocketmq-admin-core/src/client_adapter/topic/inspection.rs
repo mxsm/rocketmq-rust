@@ -26,10 +26,10 @@ impl TopicInspectionAdmin for AdminSession {
             self.ensure_open()?;
             let topic_list = rocketmq_client_rust::MQAdminReadExt::fetch_all_topic_list(&self.inner)
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let cluster_info = rocketmq_client_rust::MQAdminReadExt::examine_broker_cluster_info(&self.inner)
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let targets = cluster_targets_from_cluster_info(&cluster_info);
             let broker_targets = broker_targets_from_cluster_info(&cluster_info);
             let mut failures = Vec::new();
@@ -162,7 +162,7 @@ impl TopicInspectionAdmin for AdminSession {
             )
             .await
             .map(|route| route.map(map_topic_route))
-            .map_err(|error| backend_error("examine_topic_route_info", error))
+            .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))
         })
     }
 
@@ -267,7 +267,7 @@ impl TopicInspectionAdmin for AdminSession {
                 CheetahString::from(topic),
             )
             .await
-            .map_err(|error| backend_error("query_topic_consume_by_who", error))?;
+            .map_err(|source| promote_to_admin_error("query_topic_consume_by_who", source))?;
             let mut group_names = groups
                 .group_list
                 .into_iter()
@@ -398,7 +398,7 @@ fn ensure_some_detailed_success(
     failures: &[TopicInspectionFailure],
 ) -> AdminResult<()> {
     if successful_target_count == 0 && !failures.is_empty() {
-        Err(AdminError::backend(
+        Err(AdminError::operation_failed(
             operation,
             "every authoritative Topic target failed",
         ))

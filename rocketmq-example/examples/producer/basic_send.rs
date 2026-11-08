@@ -33,7 +33,7 @@ pub const TOPIC: &str = "BasicSendTestTopic";
 pub const TAG: &str = "BasicTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

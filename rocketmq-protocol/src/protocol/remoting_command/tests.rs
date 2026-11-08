@@ -835,12 +835,119 @@ fn json_raw_fallback_and_mutation_materialize_the_compatibility_map() {
 }
 
 #[test]
-fn json_envelope_rejects_non_string_extension_field_values() {
-    for value in ["7", "true", "null", "{}", "[]"] {
+fn json_envelope_accepts_scalar_fields_and_omits_nulls() {
+    for value in ["{}", "[]"] {
         let mut header = json_header_with_ext_fields(&format!(r#"{{"value":{value}}}"#));
         let header_length = header.len();
 
         assert!(RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON).is_err());
+    }
+
+    for (value, expected) in [
+        ("7", Some("7")),
+        ("null", None),
+        ("true", Some("true")),
+        (r#""""#, Some("")),
+    ] {
+        let mut header = json_header_with_ext_fields(&format!(r#"{{"value":{value}}}"#));
+        let header_length = header.len();
+        let cmd = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .expect("scalar extension fields should decode");
+        assert_eq!(
+            cmd.expect("command should decode")
+                .ext_fields()
+                .and_then(|f| f.get("value"))
+                .map(CheetahString::as_str),
+            expected
+        );
+    }
+}
+
+#[test]
+fn json_null_optional_fields_preserve_defaults_on_raw_and_map_paths() {
+    use crate::protocol::command_custom_header::FromMap;
+    use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+
+    let mut header = json_header_with_ext_fields(
+        r#"{"topic":"Test","acceptStandardJsonOnly":null,"bname":null,"nsd":null,"after":"retained"}"#,
+    );
+    let header_length = header.len();
+    let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+        .unwrap()
+        .unwrap();
+    assert!(command.ext_fields.is_json_raw());
+    assert!(!command.ext_fields.has_materialized_map());
+
+    let standard = command
+        .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+        .unwrap();
+    let fast = command
+        .decode_command_custom_header_fast::<GetRouteInfoRequestHeader>()
+        .unwrap();
+    assert!(!command.ext_fields.has_materialized_map());
+
+    let fields = command.ext_fields().unwrap();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields.get("after").map(CheetahString::as_str), Some("retained"));
+    let materialized = <GetRouteInfoRequestHeader as FromMap>::from(fields).unwrap();
+    for decoded in [standard, fast, materialized] {
+        assert_eq!(decoded.topic, "Test");
+        assert_eq!(decoded.accept_standard_json_only, None);
+        let rpc = decoded.topic_request_header.unwrap().rpc_request_header.unwrap();
+        assert_eq!(rpc.broker_name, None);
+        assert_eq!(rpc.namespaced, None);
+    }
+}
+
+#[test]
+fn json_empty_strings_remain_distinct_from_null_fields() {
+    use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+
+    let mut header = json_header_with_ext_fields(r#"{"topic":"Test","bname":"","unused":null}"#);
+    let header_length = header.len();
+    let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+        .unwrap()
+        .unwrap();
+    let decoded = command
+        .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+        .unwrap();
+    assert_eq!(
+        decoded
+            .topic_request_header
+            .unwrap()
+            .get_broker_name()
+            .map(CheetahString::as_str),
+        Some("")
+    );
+    let fields = command.ext_fields().unwrap();
+    assert_eq!(fields.get("bname").map(CheetahString::as_str), Some(""));
+    assert!(!fields.contains_key("unused"));
+}
+
+#[test]
+fn json_null_fields_preserve_alias_precedence_on_raw_and_map_paths() {
+    use crate::protocol::command_custom_header::FromMap;
+    use crate::rpc::rpc_request_header::RpcRequestHeader;
+
+    for (fields, expected) in [
+        (r#"{"bname":"stale","brokerName":"legacy","bname":null}"#, "legacy"),
+        (r#"{"bname":null,"brokerName":"legacy"}"#, "legacy"),
+        (
+            r#"{"brokerName":"legacy","bname":null,"bname":"canonical"}"#,
+            "canonical",
+        ),
+    ] {
+        let mut header = json_header_with_ext_fields(fields);
+        let header_length = header.len();
+        let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+        let raw = command.decode_command_custom_header::<RpcRequestHeader>().unwrap();
+        assert!(!command.ext_fields.has_materialized_map());
+        let materialized = <RpcRequestHeader as FromMap>::from(command.ext_fields().unwrap()).unwrap();
+        for decoded in [raw, materialized] {
+            assert_eq!(decoded.broker_name.as_deref(), Some(expected), "{fields}");
+        }
     }
 }
 
@@ -1222,5 +1329,91 @@ fn legacy_header_and_fast_facades_map_typed_failures_without_mutation() {
         let mut legacy_fast = command.clone();
         legacy_fast.fast_header_encode(&mut destination);
         assert_eq!(destination.as_ref(), b"prefix");
+    }
+}
+
+mod direct_extra_fields {
+    use super::*;
+    use crate::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+    use crate::protocol::EncodedFrame;
+
+    fn decode_wire(command: RemotingCommand) -> RemotingCommand {
+        let wire = EncodedFrame::from_command(command)
+            .expect("command should encode")
+            .into_bytes();
+        RemotingCommand::decode(&mut BytesMut::from(wire.as_ref()))
+            .expect("encoded command should decode")
+            .expect("encoded command should be one complete frame")
+    }
+
+    fn send_response(serialize_type: SerializeType, dynamic: &[(&'static str, &'static str)]) -> RemotingCommand {
+        let mut response = RemotingCommand::create_response_command_with_code(0)
+            .set_opaque(42)
+            .set_serialize_type(serialize_type);
+        response.set_command_custom_header_ref(SendMessageResponseHeader::new(
+            CheetahString::from_static_str("C0A8000100002A9F0000000000000F00"),
+            3,
+            123_456,
+            Some(CheetahString::from_static_str("tx-1")),
+            None,
+            None,
+        ));
+        for (key, value) in dynamic {
+            response.add_ext_field(*key, CheetahString::from_static_str(value));
+        }
+        response
+    }
+
+    fn decoded_fields(command: RemotingCommand) -> HashMap<CheetahString, CheetahString> {
+        decode_wire(command)
+            .ext_fields()
+            .cloned()
+            .expect("decoded command should carry extension fields")
+    }
+
+    fn materialized(mut command: RemotingCommand) -> RemotingCommand {
+        command.materialize_custom_header_to_ext_fields();
+        command
+    }
+
+    #[test]
+    fn direct_header_with_dynamic_fields_matches_the_materialized_encoding() {
+        let dynamic = [("MSG_REGION", "DefaultRegion"), ("TRACE_ON", "true")];
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let direct = decoded_fields(send_response(serialize_type, &dynamic));
+            let expected = decoded_fields(materialized(send_response(serialize_type, &dynamic)));
+
+            assert_eq!(direct, expected, "{serialize_type:?}");
+            assert_eq!(
+                direct.get("MSG_REGION").map(CheetahString::as_str),
+                Some("DefaultRegion")
+            );
+            assert_eq!(direct.get("queueId").map(CheetahString::as_str), Some("3"));
+            let header = decode_wire(send_response(serialize_type, &dynamic))
+                .decode_command_custom_header_fast::<SendMessageResponseHeader>()
+                .expect("typed response header should decode");
+            assert_eq!(header.queue_offset(), 123_456);
+            assert_eq!(header.transaction_id(), Some("tx-1"));
+        }
+    }
+
+    #[test]
+    fn dynamic_field_that_names_a_header_field_keeps_the_merge_rules() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            // Same value as the typed field: the merge accepts it, the direct writer must not see it.
+            let dynamic = [("queueId", "3"), ("MSG_REGION", "DefaultRegion")];
+            let command = send_response(serialize_type, &dynamic);
+            let header = command.command_custom_header_ref().expect("typed header");
+            assert!(
+                command.direct_header_extra_fields(header).is_none(),
+                "a key owned by the header must take the materializing encoder"
+            );
+
+            assert_eq!(
+                decoded_fields(send_response(serialize_type, &dynamic)),
+                decoded_fields(materialized(send_response(serialize_type, &dynamic))),
+                "{serialize_type:?}"
+            );
+        }
     }
 }

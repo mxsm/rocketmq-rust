@@ -65,6 +65,10 @@ fn service_context() -> ChildServiceContext {
 }
 
 fn new_formal_store(root: &TempDir) -> LocalFileMessageStore {
+    new_formal_store_with_scheduler_interval(root, 10)
+}
+
+fn new_formal_store_with_scheduler_interval(root: &TempDir, scheduler_interval_ms: u64) -> LocalFileMessageStore {
     let mut config = MessageStoreConfig {
         store_path_root_dir: root.path().to_string_lossy().into_owned().into(),
         read_uncommitted: true,
@@ -79,7 +83,7 @@ fn new_formal_store(root: &TempDir) -> LocalFileMessageStore {
         mapped_file_size_consume_queue: 200,
         ..MessageStoreConfig::default()
     };
-    config.timer_store_config.scheduler_interval_ms = 10;
+    config.timer_store_config.scheduler_interval_ms = scheduler_interval_ms;
     config.timer_store_config.materialize_batch_messages = 8;
     config.timer_store_config.due_scan_messages = 8;
     config.timer_store_config.minimum_free_bytes = 1;
@@ -243,6 +247,36 @@ async fn timer_delivery_is_not_early_and_preserves_the_admission_token() {
         .get("timerExtendedRoleEpoch")
         .and_then(|value| value.parse::<u64>().ok())
         .is_some_and(|epoch| epoch >= 11));
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
+async fn admission_charges_unmaterialized_sources_their_commit_log_size() {
+    let root = TempDir::new().expect("temporary store root");
+    // With a one-minute interval the materializer runs only at start-up, so the whole burst
+    // stays unmaterialized while it is admitted.
+    let mut store = new_formal_store_with_scheduler_interval(&root, 60_000);
+    store.init().await.expect("initialize formal store");
+    assert!(store.load().await, "load formal store");
+    store.start().await.expect("start formal store");
+
+    let deliver_at_ms = current_millis() as i64 + 600_000;
+    for sent in 0..1_100 {
+        let result = store.put_message(canonical_timer(deliver_at_ms)).await;
+        assert!(
+            result.is_ok(),
+            "message {sent} was rejected with {:?}",
+            result.put_message_status()
+        );
+        store.reput_once().await;
+    }
+    let lag = store
+        .get_runtime_info()
+        .get("timerExtendedMaterializationLag")
+        .and_then(|lag| lag.parse::<u64>().ok())
+        .expect("materialization lag metric");
+    assert!(lag >= 1_024, "the burst must stay unmaterialized, lag={lag}");
 
     store.shutdown().await;
 }

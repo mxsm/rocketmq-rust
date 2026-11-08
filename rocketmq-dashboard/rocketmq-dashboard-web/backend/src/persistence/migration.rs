@@ -417,8 +417,8 @@ fn map_query_error(error: sqlx::Error) -> PersistenceError {
 #[cfg(test)]
 mod tests {
     use super::{
-        MYSQL_MIGRATION_LOCK, SQLITE_INITIAL, migrate_mysql, migrate_postgres, migrate_sqlite, migration_section,
-        statements,
+        MYSQL_MIGRATION_LOCK, POSTGRES_INITIAL, SQLITE_INITIAL, migrate_mysql, migrate_postgres, migrate_sqlite,
+        migration_section, statements,
     };
     use crate::persistence::error::PersistenceError;
     use sqlx::SqlitePool;
@@ -796,6 +796,111 @@ mod tests {
         let (first, second) = tokio::join!(migrate_postgres(&pool), migrate_postgres(&pool));
         assert_eq!(first.expect("first PostgreSQL migration"), 4);
         assert_eq!(second.expect("second PostgreSQL migration"), 4);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires docker-compose.storage-test.yml"]
+    async fn postgres_interrupted_migration_rolls_back_and_reopens() {
+        let url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL")
+            .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL must be set by the storage test runner");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .expect("connect PostgreSQL storage test database");
+        // Isolate the legacy schema so this failure/recovery case never edits
+        // the shared contract tables or their migration markers.
+        let schema = format!("governance_{}", uuid::Uuid::now_v7().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&pool)
+            .await
+            .expect("create isolated migration schema");
+        sqlx::query(&format!("SET search_path TO {schema}"))
+            .execute(&pool)
+            .await
+            .expect("select isolated migration schema");
+        for statement in statements(migration_section(POSTGRES_INITIAL, 1).expect("initial PostgreSQL schema")) {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("apply preceding schema version");
+        }
+        sqlx::query(
+            "INSERT INTO dashboard_environment \
+             (environment_id, name, use_vip_channel, use_tls, revision, created_at_ms, updated_at_ms) \
+             VALUES ('migration-owner', 'Migration owner', FALSE, FALSE, 7, 10, 20)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed legacy environment");
+        for (id, address) in [("first", "127.0.0.1:8001"), ("second", "127.0.0.1:8002")] {
+            sqlx::query(
+                "INSERT INTO dashboard_endpoint \
+                 (endpoint_id, environment_id, endpoint_type, address, is_active, sort_order, created_at_ms, updated_at_ms) \
+                 VALUES ($1, 'migration-owner', 'proxy', $2, TRUE, 0, 10, 20)",
+            )
+            .bind(id)
+            .bind(address)
+            .execute(&pool)
+            .await
+            .expect("seed conflicting preceding-version endpoints");
+        }
+
+        // The real phase-two UNIQUE INDEX fails after both column DDLs and the
+        // role backfill. The transaction must publish none of those changes.
+        assert!(matches!(
+            migrate_postgres(&pool).await,
+            Err(PersistenceError::MigrationFailed)
+        ));
+        let version: i64 = sqlx::query_scalar("SELECT MAX(version) FROM dashboard_schema_migration")
+            .fetch_one(&pool)
+            .await
+            .expect("read rolled-back migration version");
+        assert_eq!(version, 1);
+        let added_columns: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM information_schema.columns \
+             WHERE table_schema = $1 AND table_name = 'dashboard_endpoint' \
+             AND column_name IN ('role', 'is_enabled')",
+        )
+        .bind(&schema)
+        .fetch_one(&pool)
+        .await
+        .expect("inspect rolled-back DDL");
+        assert_eq!(added_columns, 0);
+        let environment: (String, i64, i64, i64) = sqlx::query_as(
+            "SELECT name, revision, created_at_ms, updated_at_ms \
+             FROM dashboard_environment WHERE environment_id = 'migration-owner'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read unchanged preceding-version environment");
+        assert_eq!(environment, ("Migration owner".to_string(), 7, 10, 20));
+        let endpoint_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_endpoint")
+            .fetch_one(&pool)
+            .await
+            .expect("read preserved preceding-version endpoints");
+        assert_eq!(endpoint_count, 2);
+
+        sqlx::query("DELETE FROM dashboard_endpoint WHERE endpoint_id = 'second'")
+            .execute(&pool)
+            .await
+            .expect("repair only the conflicting test endpoint");
+        assert_eq!(migrate_postgres(&pool).await.expect("recover interrupted migration"), 4);
+        assert_eq!(migrate_postgres(&pool).await.expect("reopen recovered schema"), 4);
+        let role: String = sqlx::query_scalar("SELECT role FROM dashboard_endpoint WHERE endpoint_id = 'first'")
+            .fetch_one(&pool)
+            .await
+            .expect("read recovered endpoint backfill");
+        assert_eq!(role, "primary");
+        sqlx::query("SET search_path TO public")
+            .execute(&pool)
+            .await
+            .expect("restore default schema");
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&pool)
+            .await
+            .expect("remove isolated test schema");
+        pool.close().await;
     }
 
     #[tokio::test]

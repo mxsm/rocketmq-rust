@@ -17,6 +17,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use super::{ConsumerConfigEntries, ConsumerConfigPatch};
 use crate::ConnectionScope;
 
 pub const CONSUMER_PAGE_SIZE: usize = 10;
@@ -32,7 +33,7 @@ impl ConsumerIdentity {
             || value.len() > 255
             || value
                 .chars()
-                .any(|character| character.is_control() || matches!(character, '/' | '?' | '#' | '\\'))
+                .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '%' | '|' | '_' | '-')))
         {
             return Err(ConsumerValidationError::InvalidGroup);
         }
@@ -273,6 +274,29 @@ impl fmt::Debug for ConsumerGroupObservation {
     }
 }
 
+/// The Consumer workspace may explicitly read Broker Direct without changing global connection settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConsumerQueryScope {
+    #[default]
+    Configured,
+    BrokerDirect,
+}
+
+impl ConsumerQueryScope {
+    #[must_use]
+    pub fn description(self, snapshot: &crate::ConnectionSnapshot) -> String {
+        match (self, snapshot.scope) {
+            (Self::Configured, ConnectionScope::Proxy) => {
+                format!("Proxy · {}", snapshot.proxy.as_deref().unwrap_or("no Proxy selected"))
+            }
+            (Self::Configured, ConnectionScope::NameServer) | (Self::BrokerDirect, _) => format!(
+                "Broker Direct · NameServer {}",
+                snapshot.nameserver.as_deref().unwrap_or("not selected")
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapabilityAvailability {
     Available,
@@ -320,12 +344,26 @@ impl ConsumerCapabilities {
             },
         }
     }
+    /// Enables only Direct reads after real Broker targets have been observed through the selected NameServer.
+    #[must_use]
+    pub fn with_direct_read_evidence(mut self, has_evidence: bool) -> Self {
+        if has_evidence {
+            self.configuration = CapabilityAvailability::Available;
+            self.diagnostics = CapabilityAvailability::Available;
+        }
+        self
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConsumerInventory {
     pub groups: Vec<ConsumerGroupObservation>,
     pub targets: Vec<ConsumerTargetIdentity>,
+    /// Authoritative Broker target discovery, independent of Group read quality.
+    /// Creation still requires exact selected-target Group absence preflight.
+    pub target_observation: ConsumerObservationState,
+    /// Authoritative Group membership catalog, independent of Clients/Progress reads.
+    pub group_observation: ConsumerObservationState,
     pub observation: ConsumerObservationState,
     pub failures: Vec<ConsumerTargetFailure>,
     pub capabilities: ConsumerCapabilities,
@@ -337,6 +375,8 @@ impl fmt::Debug for ConsumerInventory {
             .debug_struct("ConsumerInventory")
             .field("group_count", &self.groups.len())
             .field("target_count", &self.targets.len())
+            .field("target_observation", &self.target_observation)
+            .field("group_observation", &self.group_observation)
             .field("observation", &self.observation)
             .field("failure_count", &self.failures.len())
             .field("capabilities", &self.capabilities)
@@ -601,18 +641,12 @@ impl fmt::Debug for ConsumerConfigIdentity {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ConsumerConfigEntries {
-    pub retry_max_times: u32,
-    pub retry_queue_nums: u32,
-    pub consume_timeout_minutes: u32,
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConsumerConfigSnapshot {
     pub identity: ConsumerConfigIdentity,
     pub generation: u64,
     pub entries: ConsumerConfigEntries,
+    pub read_only: super::ConsumerConfigReadOnly,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -644,30 +678,6 @@ impl fmt::Debug for ConsumerConfigSnapshot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ConsumerConfigPatch {
-    pub retry_max_times: Option<u32>,
-    pub retry_queue_nums: Option<u32>,
-    pub consume_timeout_minutes: Option<u32>,
-}
-
-impl ConsumerConfigPatch {
-    pub fn validate(self) -> Result<Self, ConsumerValidationError> {
-        if self.retry_max_times.is_none() && self.retry_queue_nums.is_none() && self.consume_timeout_minutes.is_none() {
-            return Err(ConsumerValidationError::EmptyPatch);
-        }
-        if self.retry_max_times.is_some_and(|value| !(1..=16).contains(&value))
-            || self.retry_queue_nums.is_some_and(|value| !(1..=8).contains(&value))
-            || self
-                .consume_timeout_minutes
-                .is_some_and(|value| !(1..=1_440).contains(&value))
-        {
-            return Err(ConsumerValidationError::InvalidConfigValue);
-        }
-        Ok(self)
-    }
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConsumerConfigPatchCommand {
     pub snapshot: ConsumerConfigSnapshot,
@@ -693,6 +703,13 @@ pub enum ConsumerConfigPatchOutcome {
         expected_generation: u64,
         actual_generation: u64,
     },
+    PersistenceIncomplete {
+        /// Whether this command was confirmed applied in memory, independently of durability.
+        applied: bool,
+        previous_generation: u64,
+        generation: u64,
+        persistence: super::ConsumerConfigPersistence,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -715,6 +732,59 @@ pub struct ConsumerTargetOutcome {
     pub applied: bool,
     pub failure: Option<ConsumerFailureCode>,
     pub retryable: bool,
+}
+
+impl ConsumerTargetOutcome {
+    /// Whether an unconfirmed remote mutation may have executed. Preflight failures
+    /// describe rejected admission and do not imply an uncertain write.
+    #[must_use]
+    pub const fn is_unconfirmed(&self) -> bool {
+        if self.applied {
+            return false;
+        }
+        match self.stage {
+            ConsumerFailureStage::Mutation | ConsumerFailureStage::Cleanup => match self.failure {
+                None | Some(ConsumerFailureCode::Unavailable) => true,
+                Some(
+                    ConsumerFailureCode::NotFound
+                    | ConsumerFailureCode::Unsupported
+                    | ConsumerFailureCode::Conflict
+                    | ConsumerFailureCode::InvalidData
+                    | ConsumerFailureCode::Authorization
+                    | ConsumerFailureCode::NotApplied,
+                ) => false,
+            },
+            ConsumerFailureStage::Inventory
+            | ConsumerFailureStage::Clients
+            | ConsumerFailureStage::Progress
+            | ConsumerFailureStage::Configuration
+            | ConsumerFailureStage::ConnectionObservation
+            | ConsumerFailureStage::PreflightAborted
+            | ConsumerFailureStage::Reload => false,
+        }
+    }
+}
+
+/// Counts one kind of Consumer workflow result without mixing its reporting unit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConsumerStepCounts {
+    pub applied: usize,
+    pub not_applied: usize,
+    pub unconfirmed: usize,
+}
+
+impl ConsumerStepCounts {
+    #[must_use]
+    pub const fn total(self) -> usize {
+        self.applied + self.not_applied + self.unconfirmed
+    }
+}
+
+/// Broker/group mutation targets and internal-topic cleanup steps have separate units.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConsumerMutationCounts {
+    pub broker_targets: ConsumerStepCounts,
+    pub cleanup_steps: ConsumerStepCounts,
 }
 
 impl fmt::Debug for ConsumerTargetOutcome {
@@ -740,18 +810,64 @@ pub struct ConsumerPartialOutcome {
 
 impl ConsumerPartialOutcome {
     #[must_use]
+    pub fn counts(&self) -> ConsumerMutationCounts {
+        let mut counts = ConsumerMutationCounts::default();
+        for target in &self.targets {
+            let step = match target.stage {
+                ConsumerFailureStage::Cleanup => &mut counts.cleanup_steps,
+                ConsumerFailureStage::Inventory
+                | ConsumerFailureStage::Clients
+                | ConsumerFailureStage::Progress
+                | ConsumerFailureStage::Configuration
+                | ConsumerFailureStage::ConnectionObservation
+                | ConsumerFailureStage::PreflightAborted
+                | ConsumerFailureStage::Mutation
+                | ConsumerFailureStage::Reload => &mut counts.broker_targets,
+            };
+            if target.applied {
+                step.applied += 1;
+            } else if target.is_unconfirmed() {
+                step.unconfirmed += 1;
+            } else {
+                step.not_applied += 1;
+            }
+        }
+        counts
+    }
+
+    /// Number of Broker/group targets, excluding internal-topic cleanup steps.
+    #[must_use]
+    pub fn target_count(&self) -> usize {
+        self.counts().broker_targets.total()
+    }
+
+    /// Confirmed Broker/group mutations, excluding cleanup effects.
+    #[must_use]
     pub fn applied_count(&self) -> usize {
-        self.targets.iter().filter(|target| target.applied).count()
+        self.counts().broker_targets.applied
+    }
+
+    /// Broker/group targets without confirmed application; cleanup results remain separate.
+    #[must_use]
+    pub fn failed_count(&self) -> usize {
+        let counts = self.counts().broker_targets;
+        counts.not_applied + counts.unconfirmed
+    }
+
+    /// Preserves any confirmed workflow effect when deciding whether to reload.
+    #[must_use]
+    pub fn has_applied_effects(&self) -> bool {
+        self.targets.iter().any(|target| target.applied)
     }
 
     #[must_use]
-    pub fn failed_count(&self) -> usize {
-        self.targets.len().saturating_sub(self.applied_count())
+    pub fn has_unconfirmed_effects(&self) -> bool {
+        self.targets.iter().any(ConsumerTargetOutcome::is_unconfirmed)
     }
 
     #[must_use]
     pub fn is_complete_success(&self) -> bool {
-        !self.targets.is_empty() && self.failed_count() == 0 && !self.reload_failed
+        !self.targets.is_empty() && self.targets.iter().all(|target| target.applied) && !self.reload_failed
     }
 }
 
@@ -761,8 +877,9 @@ impl fmt::Debug for ConsumerPartialOutcome {
             .debug_struct("ConsumerPartialOutcome")
             .field("kind", &self.kind)
             .field("guarantee", &self.guarantee)
-            .field("target_count", &self.targets.len())
+            .field("target_count", &self.target_count())
             .field("applied_count", &self.applied_count())
+            .field("cleanup_steps", &self.counts().cleanup_steps)
             .field("reload_failed", &self.reload_failed)
             .finish()
     }
@@ -838,14 +955,7 @@ fn require_authorized(authorization: ConsumerAclClassification) -> Result<(), Co
 }
 
 fn validate_entries(entries: ConsumerConfigEntries) -> Result<(), ConsumerValidationError> {
-    if !(1..=16).contains(&entries.retry_max_times)
-        || !(1..=8).contains(&entries.retry_queue_nums)
-        || !(1..=1_440).contains(&entries.consume_timeout_minutes)
-    {
-        Err(ConsumerValidationError::InvalidConfigValue)
-    } else {
-        Ok(())
-    }
+    entries.validate().map(|_| ())
 }
 
 fn canonical_targets(mut targets: Vec<ConsumerTargetIdentity>) -> Vec<ConsumerTargetIdentity> {
@@ -893,7 +1003,21 @@ impl fmt::Debug for ConsumerDiagnosticRequest {
 }
 
 #[derive(PartialEq, Eq)]
+pub struct ConsumerProcessQueue {
+    pub topic: String,
+    pub broker_name: String,
+    pub queue_id: i32,
+    pub cached_message_count: i64,
+    pub cached_message_size_in_mib: i64,
+    pub commit_offset: i64,
+    pub dropped: bool,
+    pub last_consume_timestamp: i64,
+}
+
+#[derive(PartialEq, Eq)]
 pub struct ConsumerDiagnosticPayload {
+    subscriptions: Vec<ConsumerSubscription>,
+    process_queues: Vec<ConsumerProcessQueue>,
     properties: Vec<(String, String)>,
     text: Option<String>,
     truncated: bool,
@@ -903,6 +1027,8 @@ impl ConsumerDiagnosticPayload {
     #[must_use]
     pub fn new(properties: Vec<(String, String)>, text: Option<String>, truncated: bool) -> Self {
         Self {
+            subscriptions: Vec::new(),
+            process_queues: Vec::new(),
             properties,
             text,
             truncated,
@@ -924,7 +1050,36 @@ impl ConsumerDiagnosticPayload {
         self.truncated
     }
 
+    #[must_use]
+    pub fn with_running_details(
+        mut self,
+        subscriptions: Vec<ConsumerSubscription>,
+        process_queues: Vec<ConsumerProcessQueue>,
+    ) -> Self {
+        self.subscriptions = subscriptions;
+        self.process_queues = process_queues;
+        self
+    }
+
+    pub fn subscriptions(&self) -> &[ConsumerSubscription] {
+        &self.subscriptions
+    }
+    pub fn process_queues(&self) -> &[ConsumerProcessQueue] {
+        &self.process_queues
+    }
+
     pub fn clear(&mut self) {
+        for subscription in &mut self.subscriptions {
+            scrub_diagnostic_string(&mut subscription.topic);
+            scrub_diagnostic_string(&mut subscription.expression);
+            scrub_diagnostic_string(&mut subscription.expression_type);
+        }
+        self.subscriptions.clear();
+        for queue in &mut self.process_queues {
+            scrub_diagnostic_string(&mut queue.topic);
+            scrub_diagnostic_string(&mut queue.broker_name);
+        }
+        self.process_queues.clear();
         for (key, value) in &mut self.properties {
             scrub_diagnostic_string(key);
             scrub_diagnostic_string(value);
@@ -1112,7 +1267,7 @@ mod tests {
     }
 
     #[test]
-    fn cas_snapshot_carries_identity_generation_and_only_three_editable_entries() {
+    fn cas_snapshot_carries_identity_generation_and_explicit_editable_fields() {
         let snapshot = ConsumerConfigSnapshot {
             identity: ConsumerConfigIdentity {
                 group: ConsumerIdentity::parse("orders").expect("group"),
@@ -1123,7 +1278,9 @@ mod tests {
                 retry_max_times: 16,
                 retry_queue_nums: 1,
                 consume_timeout_minutes: 15,
+                ..ConsumerConfigEntries::default()
             },
+            read_only: Default::default(),
         };
         let command = ConsumerConfigPatchCommand {
             snapshot,
@@ -1131,6 +1288,7 @@ mod tests {
                 retry_max_times: Some(8),
                 retry_queue_nums: None,
                 consume_timeout_minutes: Some(30),
+                ..ConsumerConfigPatch::default()
             }
             .validate()
             .expect("patch"),
@@ -1167,6 +1325,61 @@ mod tests {
         assert!(payload.properties().is_empty());
         assert_eq!(payload.text(), None);
         assert!(!payload.truncated());
+    }
+
+    #[test]
+    fn consumer_broker_counts_do_not_include_cleanup_and_preserve_step_uncertainty() {
+        let step = |target: &str, stage, applied, failure| ConsumerTargetOutcome {
+            target: target.into(),
+            stage,
+            applied,
+            failure,
+            retryable: !applied,
+        };
+        let mut outcome = ConsumerPartialOutcome {
+            group: ConsumerIdentity::parse("orders").unwrap(),
+            kind: ConsumerMutationKind::Delete,
+            guarantee: ConsumerMutationGuarantee::PreflightBestEffort,
+            targets: vec![
+                step("broker-a", ConsumerFailureStage::Mutation, true, None),
+                step("retry-topic", ConsumerFailureStage::Cleanup, true, None),
+                step("dlq-topic", ConsumerFailureStage::Cleanup, true, None),
+            ],
+            reload_failed: false,
+        };
+        assert_eq!(outcome.target_count(), 1);
+        assert_eq!(outcome.applied_count(), 1);
+        assert_eq!(
+            outcome.counts().cleanup_steps,
+            ConsumerStepCounts {
+                applied: 2,
+                ..Default::default()
+            }
+        );
+        assert!(outcome.is_complete_success());
+        outcome.targets[2].applied = false;
+        outcome.targets[2].failure = Some(ConsumerFailureCode::NotApplied);
+        assert_eq!(outcome.failed_count(), 0);
+        assert_eq!(outcome.counts().cleanup_steps.not_applied, 1);
+        assert!(!outcome.is_complete_success());
+        outcome.targets[2].failure = Some(ConsumerFailureCode::Unavailable);
+        assert_eq!(outcome.counts().cleanup_steps.unconfirmed, 1);
+        assert_eq!(outcome.counts().broker_targets.unconfirmed, 0);
+        assert_eq!(outcome.targets.len(), 3);
+        let preflight = step(
+            "broker-a",
+            ConsumerFailureStage::ConnectionObservation,
+            false,
+            Some(ConsumerFailureCode::Unavailable),
+        );
+        assert!(!preflight.is_unconfirmed());
+        let uncertain = step(
+            "broker-a",
+            ConsumerFailureStage::Mutation,
+            false,
+            Some(ConsumerFailureCode::Unavailable),
+        );
+        assert!(uncertain.is_unconfirmed());
     }
 
     #[test]

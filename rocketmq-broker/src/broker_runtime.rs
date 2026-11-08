@@ -135,6 +135,7 @@ use crate::hook::schedule_message_hook::ScheduleMessageHook;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::lifecycle::BrokerComponent;
 use crate::lifecycle::BrokerReadiness;
+use crate::lifecycle::BrokerRegistration;
 use crate::lifecycle::BrokerStartupError;
 use crate::lifecycle::StartupJournal;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -147,7 +148,6 @@ use crate::offset::manager::broadcast_offset_manager::SCAN_INTERVAL;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
-use crate::plugin::broker_attached_plugin::BrokerAttachedPlugin;
 use crate::processor::ack_message_processor::AckMessageOffsetCapability;
 use crate::processor::ack_message_processor::AckMessageOrderCapability;
 use crate::processor::ack_message_processor::AckMessagePolicy;
@@ -341,6 +341,21 @@ const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const BROKER_OUTER_API_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const BROKER_BASIC_SERVICE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(35);
 const REMOTING_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Builds a large lifecycle future directly in a heap allocation.
+///
+/// Unoptimized builds give every temporary its own stack slot, so an `async fn` that builds a
+/// large future keeps a copy of it in its poll frame while the future runs, even when it boxes
+/// the result itself. Calling `make` here leaves only the box pointer in the caller's frame.
+/// Broker startup, rollback and shutdown are polled on the process main thread, whose 1 MiB
+/// stack on Windows the runtime cannot size, and each of those frames is live at once.
+fn heap_future<F, Fut>(make: F) -> std::pin::Pin<Box<Fut>>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future,
+{
+    Box::pin(make())
+}
 
 async fn await_shutdown_deadline<T, F>(deadline: ShutdownDeadline, future: F) -> Result<T, Duration>
 where
@@ -548,9 +563,9 @@ struct BrokerRocksDbConfigManagers {
 #[cfg(feature = "rocksdb_store")]
 impl BrokerRocksDbConfigManagers {
     fn close_all(self) {
-        let mut closed = HashSet::new();
+        let mut closed_store_ids = HashSet::new();
         for manager in [self.topic, self.consumer_offset, self.subscription_group] {
-            if closed.insert(manager.backend_identity()) {
+            if closed_store_ids.insert(manager.store_instance_id()) {
                 manager.close();
             }
         }
@@ -786,7 +801,6 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
     metadata_io: Option<Result<MetadataIoActor, RuntimeError>>,
-    broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
     slave_master_addr: Arc<SlaveMasterAddress>,

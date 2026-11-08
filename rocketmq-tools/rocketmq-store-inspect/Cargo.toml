@@ -30,7 +30,7 @@ rust-version.workspace = true
 [dependencies]
 rocketmq-error         = { workspace = true }
 rocketmq-model         = { workspace = true }
-rocketmq-store         = { workspace = true }
+rocketmq-store         = { workspace = true, features = ["extended_timeline"] }
 rocketmq-store-rocksdb = { workspace = true }
 
 

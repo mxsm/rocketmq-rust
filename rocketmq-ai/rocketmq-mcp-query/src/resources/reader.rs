@@ -287,7 +287,7 @@ fn resource_error(error: ToolFailure) -> ErrorData {
                 Some(json!({ "code": "resource_rate_limited", "retryable": true })),
             )
         }
-        ToolFailure::Operational(ToolExecutionError::Backend(_)) => ErrorData::internal_error(
+        ToolFailure::Operational(ToolExecutionError::SourceUnavailable(_)) => ErrorData::internal_error(
             "live RocketMQ resource query failed",
             Some(json!({ "code": "source_unavailable", "retryable": true })),
         ),
@@ -712,21 +712,21 @@ mod tests {
     }
 
     #[test]
-    fn resource_errors_distinguish_permission_timeout_and_backend_failure() {
+    fn resource_errors_distinguish_permission_timeout_and_source_unavailable() {
         let permission = resource_error(ToolFailure::Rejected(
             crate::tools::executor::ToolRejection::PermissionDenied,
         ));
         let timeout = resource_error(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut {
             timeout_ms: 5000,
         }));
-        let backend = resource_error(ToolFailure::Operational(
-            crate::tools::executor::ToolExecutionError::Backend(None),
+        let source_unavailable = resource_error(ToolFailure::Operational(
+            crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
         ));
 
         assert_eq!(permission.data.as_ref().unwrap()["code"], "permission_denied");
         assert_eq!(timeout.data.as_ref().unwrap()["code"], "resource_query_timeout");
-        assert_eq!(backend.data.as_ref().unwrap()["code"], "source_unavailable");
-        assert!(!backend.message.contains("secret_key"));
+        assert_eq!(source_unavailable.data.as_ref().unwrap()["code"], "source_unavailable");
+        assert!(!source_unavailable.message.contains("secret_key"));
         let wire = format!("{} {}", permission.message, permission.data.as_ref().unwrap());
         assert!(!wire.contains("token=secret"));
         assert!(!wire.contains("127.0.0.1"));

@@ -1084,7 +1084,7 @@ pub trait ConsumerAdmin: Send {
         _request: &'a ListConsumerGroupsRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ConsumerGroupInventoryResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "list_consumer_group_inventory_with_evidence",
                 "cheap consumer group inventory is not implemented by this adapter",
             ))
@@ -1101,7 +1101,7 @@ pub trait ConsumerAdmin: Send {
         _request: &'a ExactConsumerGroupEnrichmentRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "enrich_consumer_groups_exact_with_evidence",
                 "bounded exact consumer group enrichment is not implemented by this adapter",
             ))
@@ -1163,7 +1163,7 @@ pub trait ConsumerQueryAdmin: Send {
         _request: &'a QuerySubscriptionGroupConfigCasRequest,
     ) -> AdminFuture<'a, SubscriptionGroupConfigCasState> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_subscription_group_config_cas_state",
                 "Subscription Group config CAS state is not implemented by this adapter",
             ))
@@ -1195,7 +1195,7 @@ pub trait ConsumerQueryAdmin: Send {
         _request: &'a ListConsumerGroupsRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ConsumerGroupInventoryResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "list_consumer_group_inventory_with_evidence",
                 "cheap consumer group inventory is not implemented by this adapter",
             ))
@@ -1211,7 +1211,7 @@ pub trait ConsumerQueryAdmin: Send {
         _request: &'a ExactConsumerGroupEnrichmentRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "enrich_consumer_groups_exact_with_evidence",
                 "bounded exact consumer group enrichment is not implemented by this adapter",
             ))
@@ -1289,7 +1289,7 @@ pub trait ConsumerMutationAdmin: Send {
         _request: &'a PatchSubscriptionGroupConfigRequest,
     ) -> AdminFuture<'a, SubscriptionGroupConfigPatchResult> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "patch_subscription_group_config_if_version",
                 "Subscription Group config CAS is not implemented by this adapter",
             ))
@@ -1500,7 +1500,7 @@ mod tests {
 
     fn unused_admin_future<'a, T>() -> AdminFuture<'a, T> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "compile_only_consumer_admin",
                 "compile-only consumer admin fake must not be called",
             ))
@@ -1583,7 +1583,7 @@ mod tests {
             ConsumerAdmin::list_consumer_group_inventory_with_evidence(&mut admin, &ListConsumerGroupsRequest)
                 .await
                 .unwrap_err();
-        assert_eq!(inventory.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(inventory.failure(), crate::core::AdminFailure::OperationFailed);
         assert_eq!(
             inventory.operation(),
             Some("list_consumer_group_inventory_with_evidence")
@@ -1593,7 +1593,7 @@ mod tests {
         let enrichment = ConsumerQueryAdmin::enrich_consumer_groups_exact_with_evidence(&mut admin, &exact)
             .await
             .unwrap_err();
-        assert_eq!(enrichment.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(enrichment.failure(), crate::core::AdminFailure::OperationFailed);
         assert_eq!(
             enrichment.operation(),
             Some("enrich_consumer_groups_exact_with_evidence")

@@ -15,6 +15,7 @@
 //! Bounded FIFO admission and micro-batch draining for CommitLog append requests.
 
 use std::fmt;
+use std::time::Duration;
 
 use rocketmq_runtime::resource_budget::BudgetLimit;
 use rocketmq_runtime::resource_budget::BudgetedItem;
@@ -29,6 +30,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::micro_batch::MicroBatch;
 use super::micro_batch::MicroBatchPolicy;
+
+/// Tick of Tokio's timer wheel. A timer armed for less than this fires on the next millisecond
+/// tick, which turns a sub-millisecond batch wait into a 1–2 ms stall per partial batch.
+const RUNTIME_TIMER_RESOLUTION: Duration = Duration::from_millis(1);
 
 /// Bounded queue capacities and drain policy for one CommitLog sequencer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +160,9 @@ impl<T> AppendSequencerReceiver<T> {
     /// Cancellation closes admission, then preserves and drains already admitted requests. The
     /// queue receive branch is biased ahead of cancellation and deadline branches so an item is
     /// never popped by a losing `select!` branch.
+    ///
+    /// A wait shorter than one millisecond yields to the runtime between queue checks instead of
+    /// arming a timer, so it lasts as long as configured rather than until the next timer tick.
     pub async fn next_batch(&mut self, cancellation: &CancellationToken) -> Option<MicroBatch<T>> {
         let first = if let Some(item) = self.carry.take() {
             Some(item)
@@ -176,7 +184,9 @@ impl<T> AppendSequencerReceiver<T> {
             return Some(MicroBatch::new(items, retained_bytes));
         }
 
-        let deadline = tokio::time::Instant::now() + self.policy.max_wait();
+        let max_wait = self.policy.max_wait();
+        let started = std::time::Instant::now();
+        let deadline = tokio::time::Instant::now() + max_wait;
         loop {
             if items.len() >= self.policy.max_items() {
                 break;
@@ -187,8 +197,18 @@ impl<T> AppendSequencerReceiver<T> {
                 }
                 continue;
             }
-            if self.queue.is_closed() || self.policy.max_wait().is_zero() {
+            if self.queue.is_closed() || max_wait.is_zero() {
                 break;
+            }
+            if max_wait < RUNTIME_TIMER_RESOLUTION {
+                if cancellation.is_cancelled() {
+                    self.queue.close();
+                } else if started.elapsed() >= max_wait {
+                    break;
+                } else {
+                    tokio::task::yield_now().await;
+                }
+                continue;
             }
 
             enum MicroBatchWaitEvent<T> {
@@ -363,6 +383,42 @@ mod tests {
 
         assert_eq!(batch.len(), 1);
         assert_eq!(batch.retained_bytes(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sub_millisecond_wait_does_not_stall_until_a_timer_tick() {
+        let policy = MicroBatchPolicy::try_new(4, 1024, Duration::from_micros(50)).expect("policy");
+        let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
+        assert!(matches!(sender.try_submit("first", 1), AppendAdmissionResult::Accepted));
+        let cancellation = CancellationToken::new();
+        let started = tokio::time::Instant::now();
+
+        let batch = receiver.next_batch(&cancellation).await.expect("partial batch");
+
+        assert_eq!(batch.len(), 1);
+        // The paused clock only advances when the drain parks on a timer, which rounds up to the
+        // next millisecond.
+        assert_eq!(tokio::time::Instant::now(), started);
+    }
+
+    #[tokio::test]
+    async fn sub_millisecond_wait_collects_requests_submitted_while_waiting() {
+        let policy = MicroBatchPolicy::try_new(4, 1024, Duration::from_micros(900)).expect("policy");
+        let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
+        assert!(matches!(sender.try_submit(1, 1), AppendAdmissionResult::Accepted));
+        let cancellation = CancellationToken::new();
+        let late_sender = sender.clone();
+        let late = tokio::spawn(async move { matches!(late_sender.try_submit(2, 1), AppendAdmissionResult::Accepted) });
+
+        let batch = receiver.next_batch(&cancellation).await.expect("batch");
+        let items = batch
+            .into_budgeted_items()
+            .into_iter()
+            .map(BudgetedItem::into_item)
+            .collect::<Vec<_>>();
+
+        assert!(late.await.expect("late submitter"));
+        assert_eq!(items, vec![1, 2]);
     }
 
     #[tokio::test]

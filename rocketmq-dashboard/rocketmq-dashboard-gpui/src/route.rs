@@ -83,13 +83,15 @@ pub enum ConsumerTab {
     OffsetActions,
 }
 
-/// Every route exposed by Delivery 01.
+/// Every navigation destination, including pages that are not yet available.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AppRoute {
     /// Authentication form.
     Login,
     /// Dashboard landing page.
     Dashboard,
+    /// Layered read-only topology and replication observations.
+    Topology,
     /// Broker list.
     Brokers,
     /// A broker detail page.
@@ -114,13 +116,63 @@ pub enum AppRoute {
     Acl,
     /// Monitoring rules.
     Monitors,
+    /// Operations recorded by this desktop.
+    Audit,
+    /// Persistent native operator sessions in the selected desktop storage.
+    Sessions,
     /// Operations settings.
     OpsSettings,
     /// Proxy settings.
     Proxy,
 }
 
+/// The implemented native page backing a route.
+///
+/// This is the shell's single capability registry. A navigation destination alone does not imply
+/// that its queries or operations are implemented.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageCapability {
+    Acl,
+    Login,
+    Dashboard,
+    Topology,
+    Brokers,
+    Topics,
+    Consumers,
+    Producers,
+    Messages,
+    MessageTrace,
+    Monitors,
+    DlqMessages,
+    Audit,
+    Sessions,
+    OpsSettings,
+    Proxy,
+}
+
 impl AppRoute {
+    /// Selects only pages backed by the current production implementation.
+    pub(crate) const fn page_capability(&self) -> PageCapability {
+        match self {
+            Self::Login => PageCapability::Login,
+            Self::Dashboard => PageCapability::Dashboard,
+            Self::Topology => PageCapability::Topology,
+            Self::Brokers | Self::BrokerDetail { .. } => PageCapability::Brokers,
+            Self::Topics | Self::TopicDetail { .. } => PageCapability::Topics,
+            Self::Consumers | Self::ConsumerDetail { .. } => PageCapability::Consumers,
+            Self::Producers => PageCapability::Producers,
+            Self::Monitors => PageCapability::Monitors,
+            Self::Audit => PageCapability::Audit,
+            Self::Sessions => PageCapability::Sessions,
+            Self::OpsSettings => PageCapability::OpsSettings,
+            Self::Proxy => PageCapability::Proxy,
+            Self::Messages => PageCapability::Messages,
+            Self::DlqMessages => PageCapability::DlqMessages,
+            Self::MessageTrace => PageCapability::MessageTrace,
+            Self::Acl => PageCapability::Acl,
+        }
+    }
+
     /// Parses a path. Compatibility aliases are accepted only at this boundary.
     pub fn parse(path: &str) -> Result<Self, RouteRejection> {
         let path = path.split_once('?').map_or(path, |(path, _)| path);
@@ -130,6 +182,7 @@ impl AppRoute {
             [] => Ok(Self::Dashboard),
             ["login"] => Ok(Self::Login),
             ["dashboard"] => Ok(Self::Dashboard),
+            ["topology"] => Ok(Self::Topology),
             ["nameservers"] => Ok(Self::OpsSettings),
             ["brokers"] => Ok(Self::Brokers),
             ["brokers", broker, tab] => Ok(Self::BrokerDetail {
@@ -152,6 +205,8 @@ impl AppRoute {
             ["message-trace"] => Ok(Self::MessageTrace),
             ["acl"] => Ok(Self::Acl),
             ["monitors"] => Ok(Self::Monitors),
+            ["audit"] => Ok(Self::Audit),
+            ["sessions"] => Ok(Self::Sessions),
             ["ops-settings"] => Ok(Self::OpsSettings),
             ["proxy"] => Ok(Self::Proxy),
             // Legacy input compatibility is intentionally confined to parsing.
@@ -167,6 +222,7 @@ impl AppRoute {
         match self {
             Self::Login => "/login".to_owned(),
             Self::Dashboard => "/dashboard".to_owned(),
+            Self::Topology => "/topology".to_owned(),
             Self::Brokers => "/brokers".to_owned(),
             Self::BrokerDetail { broker, tab } => {
                 format!("/brokers/{}/{tab}", broker.as_str())
@@ -181,6 +237,8 @@ impl AppRoute {
             Self::MessageTrace => "/message-trace".to_owned(),
             Self::Acl => "/acl".to_owned(),
             Self::Monitors => "/monitors".to_owned(),
+            Self::Audit => "/audit".to_owned(),
+            Self::Sessions => "/sessions".to_owned(),
             Self::OpsSettings => "/ops-settings".to_owned(),
             Self::Proxy => "/proxy".to_owned(),
         }
@@ -191,6 +249,7 @@ impl AppRoute {
         match self {
             Self::Login => "Sign in",
             Self::Dashboard => "Dashboard",
+            Self::Topology => "Topology",
             Self::Brokers | Self::BrokerDetail { .. } => "Brokers",
             Self::Topics | Self::TopicDetail { .. } => "Topics",
             Self::Consumers | Self::ConsumerDetail { .. } => "Consumers",
@@ -199,7 +258,9 @@ impl AppRoute {
             Self::DlqMessages => "DLQ Messages",
             Self::MessageTrace => "Message Trace",
             Self::Acl => "Access Control",
-            Self::Monitors => "Monitors",
+            Self::Monitors => "Monitor rules",
+            Self::Audit => "Audit",
+            Self::Sessions => "Sessions",
             Self::OpsSettings => "Operations Settings",
             Self::Proxy => "Proxy",
         }
@@ -375,6 +436,7 @@ mod tests {
         let routes = [
             AppRoute::Login,
             AppRoute::Dashboard,
+            AppRoute::Topology,
             AppRoute::Brokers,
             AppRoute::BrokerDetail {
                 broker: RouteKey::parse("broker-a").expect("valid broker key"),
@@ -396,6 +458,8 @@ mod tests {
             AppRoute::MessageTrace,
             AppRoute::Acl,
             AppRoute::Monitors,
+            AppRoute::Audit,
+            AppRoute::Sessions,
             AppRoute::OpsSettings,
             AppRoute::Proxy,
         ];

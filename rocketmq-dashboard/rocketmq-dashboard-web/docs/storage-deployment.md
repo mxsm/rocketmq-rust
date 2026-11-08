@@ -35,6 +35,13 @@ is managed by the platform team, independently backed up, and reachable only
 through the required network policy. Use a load balancer only with the MySQL or
 PostgreSQL profiles.
 
+The native Dashboard's [optional local governance fixture](../../rocketmq-dashboard-gpui/deploy/dev/README.governance.md)
+reuses this Backend image and provides isolated local databases for development.
+Server Sessions, Audit, and storage status belong to the selected Backend;
+native connection profiles, History, Monitor rules, and local Audit keep their
+desktop ownership. This deployment choice does not add SQL drivers to GPUI or
+automatically synchronize Direct Broker operations into server Audit.
+
 The image runs as an unprivileged user, drops Linux capabilities, and provides
 `/api/health/live` as its container health check. Terminate TLS at the approved
 edge or configure the platform ingress; do not expose a dashboard port directly

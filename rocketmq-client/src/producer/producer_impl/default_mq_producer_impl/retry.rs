@@ -21,7 +21,7 @@ impl DefaultMQProducerImpl {
         &self,
         msg: &mut T,
         topic: &CheetahString,
-        topic_publish_info: &TopicPublishInfo,
+        topic_publish_info: &TopicPublishInfoSnapshot,
         send_callback: Option<ArcSendCallback>,
         ctx: SendContext,
         runtime: &ProducerRuntimeSnapshot,
@@ -32,7 +32,7 @@ impl DefaultMQProducerImpl {
         let max_attempts = Self::get_retry_times(runtime, ctx.communication_mode);
         let mut retry_state = RetryState::new(max_attempts);
         let mut last_broker_name: Option<CheetahString> = None;
-        let mut current_publish_info = topic_publish_info.clone();
+        let mut current_publish_info = Arc::clone(topic_publish_info);
         let mut queued_retry_queue: Option<MessageQueue> = None;
 
         for attempt_index in 0..max_attempts {

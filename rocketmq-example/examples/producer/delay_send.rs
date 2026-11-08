@@ -27,7 +27,7 @@ pub const TOPIC: &str = "DelaySendTestTopic";
 pub const TAG: &str = "DelayTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

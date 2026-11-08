@@ -251,15 +251,21 @@ impl TopicDetail {
                     .targets
                     .iter()
                     .enumerate()
-                    .map(|(index, target)| self.render_config_target(index, target, cx)),
+                    .map(|(index, target)| self.render_config_target(index, target, &config.targets, cx)),
             )
             .child(render_completeness(config.completeness, &config.failures, cx))
     }
 
-    fn render_config_target(&self, index: usize, target: &TopicConfigTargetView, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_config_target(
+        &self,
+        index: usize,
+        target: &TopicConfigTargetView,
+        all_targets: &[TopicConfigTargetView],
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let theme = cx.theme();
-        let intent_target = target.target.clone();
-        let expected_version = target.version;
+        let intent_target = target.clone();
+        let intent_targets = all_targets.to_vec();
         let read_queue_count = target.read_queue_count;
         let write_queue_count = target.write_queue_count;
         let delete_topic = self.store.selected.item.identity.clone();
@@ -287,22 +293,23 @@ impl TopicDetail {
                 message_type_label(target.message_type),
                 target.version
             ))
+            .when(target.editable_values().is_none(), |this| {
+                this.child("Editing unavailable: the permission or message contract is outside the supported supervised fields.")
+            })
             .child(
                 div()
                     .flex()
                     .gap_2()
                     .child(
                         Button::new(("edit-topic-config-target", index))
-                            .label("Edit queue counts")
+                            .label("Edit Topic")
                             .outline()
-                            .disabled(!mutable)
+                            .disabled(!mutable || target.editable_values().is_none())
                             .debug_selector(move || format!("topic-config-edit-{index}"))
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 cx.emit(TopicDetailIntent::EditTarget {
                                     target: intent_target.clone(),
-                                    expected_version,
-                                    read_queue_count,
-                                    write_queue_count,
+                                    targets: intent_targets.clone(),
                                 });
                             })),
                     )
@@ -586,6 +593,7 @@ const fn failure_code_label(code: TopicFailureCode) -> &'static str {
         TopicFailureCode::InvalidData => "invalid_data",
         TopicFailureCode::Unavailable => "unavailable",
         TopicFailureCode::Conflict => "conflict",
+        TopicFailureCode::Unconfirmed => "outcome unknown; refresh before retrying",
     }
 }
 

@@ -125,11 +125,11 @@ impl BrokerRuntime {
         let opened = match StoreFactory::open(factory_config, service_context.component("broker.store")) {
             Ok(opened) => opened,
             Err(error) => {
-                error!(backend = ?message_store_config.store_type, %error, "Initialize message store failed");
+                error!(store_type = ?message_store_config.store_type, %error, "Initialize message store failed");
                 return false;
             }
         };
-        info!(backend = ?opened.backend(), "Use configured message store");
+        info!(store_type = ?opened.store_type(), "Use configured message store");
         let (message_store, timer_message_store) = opened.into_parts();
         if !message_store.install_message_index_runtime(Arc::new(self.composition.state.config_state.clone())) {
             error!("configured message store has no message-index dispatcher");

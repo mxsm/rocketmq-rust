@@ -39,6 +39,7 @@ impl ConsumerLoadRequest {
             scope: ConsumerRequestScope {
                 revision: resource.revision(),
                 epoch: resource.epoch(),
+                query_scope: Default::default(),
             },
             resource,
         }
@@ -343,6 +344,8 @@ mod tests {
         ConsumerInventory {
             groups: (0..count).map(group).collect(),
             targets: Vec::new(),
+            target_observation: ConsumerObservationState::Unknown,
+            group_observation: ConsumerObservationState::Complete,
             observation: ConsumerObservationState::Complete,
             failures: Vec::new(),
             capabilities: ConsumerCapabilities::for_scope(ConnectionScope::NameServer),

@@ -27,7 +27,9 @@ use super::BrokerInspector;
 use crate::{
     features::inspector_store::ConfigSubmissionState,
     route::BrokerTab,
-    services::{AppServices, brokers::BrokerConfigMutationResult, delivery03::test_support::FakeDelivery03Backend},
+    services::{
+        AppServices, brokers::BrokerConfigMutationResult, dashboard_broker::test_support::FakeDashboardBrokerOperations,
+    },
     state::{Loadable, UiError, UiErrorCode},
 };
 
@@ -97,12 +99,12 @@ fn click_debug(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 #[gpui::test]
 fn tabs_are_lazy_and_runtime_and_config_refresh_locally(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     fake.queue_inventory(Ok(vec![inventory_item()]));
     fake.queue_runtime(Ok(vec![RuntimeEntry::new("brokerVersion".into(), "5.3.2".into())]));
     fake.queue_runtime(Ok(vec![RuntimeEntry::new("brokerVersion".into(), "5.3.3".into())]));
     fake.queue_config(Ok(config(7, "ASYNC_FLUSH")));
-    let services = AppServices::default().with_delivery03_backend(fake.clone());
+    let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
     let capture = Rc::new(RefCell::new(None));
     let capture_view = capture.clone();
     let (_root, cx) = cx.add_window_view(move |window, cx| {
@@ -159,10 +161,10 @@ fn revision_change_blocks_writes_until_inventory_revalidation_and_authoritative_
     cx: &mut gpui::TestAppContext,
 ) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     fake.queue_inventory(Ok(vec![inventory_item()]));
     fake.queue_config(Ok(config(7, "ASYNC_FLUSH")));
-    let services = AppServices::default().with_delivery03_backend(fake.clone());
+    let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
     let capture = Rc::new(RefCell::new(None));
     let capture_view = capture.clone();
     let (_root, cx) = cx.add_window_view(move |window, cx| {
@@ -231,12 +233,12 @@ fn revision_change_blocks_writes_until_inventory_revalidation_and_authoritative_
 #[gpui::test]
 fn validated_new_revision_reloads_the_active_overview_resource(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     fake.queue_inventory(Ok(vec![inventory_item()]));
     let mut revised = inventory_item();
     revised.version = Observed::Observed("5.4.0".into());
     fake.queue_inventory(Ok(vec![revised]));
-    let services = AppServices::default().with_delivery03_backend(fake.clone());
+    let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
     let capture = Rc::new(RefCell::new(None));
     let capture_view = capture.clone();
     let (_root, cx) = cx.add_window_view(move |window, cx| {
@@ -271,7 +273,7 @@ fn validated_new_revision_reloads_the_active_overview_resource(cx: &mut gpui::Te
 #[gpui::test]
 fn conflict_and_failure_keep_the_edit_draft_open_for_recovery(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     fake.queue_inventory(Ok(vec![inventory_item()]));
     fake.queue_config(Ok(config(7, "ASYNC_FLUSH")));
     fake.queue_patch(Ok(BrokerConfigMutationResult::GenerationConflict {
@@ -283,7 +285,7 @@ fn conflict_and_failure_keep_the_edit_draft_open_for_recovery(cx: &mut gpui::Tes
         UiErrorCode::Connection,
         true,
     )));
-    let services = AppServices::default().with_delivery03_backend(fake.clone());
+    let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
     let capture = Rc::new(RefCell::new(None));
     let capture_view = capture.clone();
     let (_root, cx) = cx.add_window_view(move |window, cx| {
@@ -338,7 +340,7 @@ fn conflict_and_failure_keep_the_edit_draft_open_for_recovery(cx: &mut gpui::Tes
 #[gpui::test]
 fn successful_edit_uses_authoritative_reload_truth_instead_of_merging_the_patch(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     fake.queue_inventory(Ok(vec![inventory_item()]));
     fake.queue_config(Ok(config(7, "ASYNC_FLUSH")));
     fake.queue_patch(Ok(BrokerConfigMutationResult::Applied {
@@ -346,7 +348,7 @@ fn successful_edit_uses_authoritative_reload_truth_instead_of_merging_the_patch(
         snapshot: config(8, "SYNC_FLUSH_SERVER_NORMALIZED"),
         invalidations: Vec::new(),
     }));
-    let services = AppServices::default().with_delivery03_backend(fake.clone());
+    let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
     let capture = Rc::new(RefCell::new(None));
     let capture_view = capture.clone();
     let (_root, cx) = cx.add_window_view(move |window, cx| {
@@ -394,7 +396,7 @@ fn successful_edit_uses_authoritative_reload_truth_instead_of_merging_the_patch(
 #[gpui::test]
 fn official_editor_reconciles_conflict_reload_keys_and_retries_with_the_new_generation(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     fake.queue_inventory(Ok(vec![inventory_item()]));
     fake.queue_config(Ok(config_entries(
         7,
@@ -427,7 +429,7 @@ fn official_editor_reconciles_conflict_reload_keys_and_retries_with_the_new_gene
         ),
         invalidations: Vec::new(),
     }));
-    let services = AppServices::default().with_delivery03_backend(fake.clone());
+    let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
     let capture = Rc::new(RefCell::new(None));
     let capture_view = capture.clone();
     let (root, cx) = cx.add_window_view(move |window, cx| {

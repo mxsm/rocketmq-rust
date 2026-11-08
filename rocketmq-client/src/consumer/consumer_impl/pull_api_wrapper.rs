@@ -125,6 +125,11 @@ impl PullAPIWrapper {
 
     #[inline]
     pub fn update_pull_from_which_node(&self, mq: &MessageQueue, broker_id: u64) {
+        // Every pull updates its queue's entry; a read lock and no key clone cover the usual case.
+        if let Some(node) = self.pull_from_which_node_table.get(mq) {
+            node.store(broker_id, std::sync::atomic::Ordering::Release);
+            return;
+        }
         self.pull_from_which_node_table
             .entry(mq.clone())
             .and_modify(|v| v.store(broker_id, std::sync::atomic::Ordering::Release))
@@ -488,50 +493,6 @@ impl PullAPIWrapper {
         } else {
             Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name(),)))
         }
-    }
-
-    /// Overload of [`pull_kernel_impl`] without `max_size_in_bytes`; defaults to [`i32::MAX`],
-    /// matching Java's second `pullKernelImpl` overload.
-    ///
-    /// [`pull_kernel_impl`]: PullAPIWrapper::pull_kernel_impl
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "existing pull convenience signature is tracked by the lint debt registry"
-    )]
-    pub async fn pull_kernel_impl_default_size<PCB>(
-        &self,
-        mq: &MessageQueue,
-        sub_expression: CheetahString,
-        expression_type: CheetahString,
-        sub_version: i64,
-        offset: i64,
-        max_nums: i32,
-        sys_flag: i32,
-        commit_offset: i64,
-        broker_suspend_max_time_millis: u64,
-        timeout_millis: u64,
-        communication_mode: CommunicationMode,
-        pull_callback: PCB,
-    ) -> crate::ClientResult<Option<PullResultExt>>
-    where
-        PCB: PullCallback + 'static,
-    {
-        self.pull_kernel_impl(
-            mq,
-            sub_expression,
-            expression_type,
-            sub_version,
-            offset,
-            max_nums,
-            i32::MAX,
-            sys_flag,
-            commit_offset,
-            broker_suspend_max_time_millis,
-            timeout_millis,
-            communication_mode,
-            pull_callback,
-        )
-        .await
     }
 
     /// Returns whether broker selection is driven by the user-configured

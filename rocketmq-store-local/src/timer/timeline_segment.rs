@@ -145,6 +145,7 @@ impl TimelineSegmentRecord {
         output[92] = match self.owner_engine {
             TimerEngineId::JavaCompat => 0,
             TimerEngineId::ExtendedTimeline => 1,
+            TimerEngineId::Native => 2,
         };
         output[93] = u8::from(self.shadow_only);
         let checksum = crc32c(&output[..RUN_RECORD_SIZE - 4]);
@@ -161,6 +162,7 @@ impl TimelineSegmentRecord {
         let owner_engine = match bytes[92] {
             0 => TimerEngineId::JavaCompat,
             1 => TimerEngineId::ExtendedTimeline,
+            2 => TimerEngineId::Native,
             value => return Err(TimelineSegmentFailure::InvalidOwner(value)),
         };
         if bytes[93] > 1 {

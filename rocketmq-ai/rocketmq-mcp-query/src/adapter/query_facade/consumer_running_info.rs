@@ -104,7 +104,7 @@ where
                                 // read, may hold the client: only a complete list proves it gone.
                                 let inconclusive = connections.partial || connections.data.truncated;
                                 return Err(if inconclusive {
-                                    ToolFailure::Operational(ToolExecutionError::Backend(None))
+                                    ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))
                                 } else {
                                     ToolFailure::not_found(NotFoundEntity::Client)
                                 });

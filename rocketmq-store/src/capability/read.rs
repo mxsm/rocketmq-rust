@@ -204,11 +204,11 @@ pub trait BrokerReadStore: MessageStoreAccess {
     }
 
     fn get_max_phy_offset(&self) -> i64 {
-        BackendOps::get_max_phy_offset(self.message_store())
+        MessageStoreEngine::get_max_phy_offset(self.message_store())
     }
 
     fn get_min_phy_offset(&self) -> i64 {
-        BackendOps::get_min_phy_offset(self.message_store())
+        MessageStoreEngine::get_min_phy_offset(self.message_store())
     }
 
     fn get_earliest_message_time(&self, topic: &CheetahString, queue_id: i32) -> i64 {
@@ -242,7 +242,7 @@ pub trait BrokerReadStore: MessageStoreAccess {
     }
 
     fn now(&self) -> u64 {
-        BackendOps::now(self.message_store())
+        MessageStoreEngine::now(self.message_store())
     }
 
     fn check_in_mem_by_consume_offset(
@@ -266,111 +266,111 @@ pub trait BrokerReadStore: MessageStoreAccess {
     }
 
     fn dispatch_behind_bytes(&self) -> i64 {
-        BackendOps::dispatch_behind_bytes(self.message_store())
+        MessageStoreEngine::dispatch_behind_bytes(self.message_store())
     }
 
     fn get_flushed_where(&self) -> i64 {
-        BackendOps::get_flushed_where(self.message_store())
+        MessageStoreEngine::get_flushed_where(self.message_store())
     }
 
     fn get_confirm_offset(&self) -> i64 {
-        BackendOps::get_confirm_offset(self.message_store())
+        MessageStoreEngine::get_confirm_offset(self.message_store())
     }
 
     fn is_os_page_cache_busy(&self) -> bool {
-        BackendOps::is_os_page_cache_busy(self.message_store())
+        MessageStoreEngine::is_os_page_cache_busy(self.message_store())
     }
 
     fn put_message_preflight(&self) -> PutMessagePreflight {
-        BackendOps::put_message_preflight(self.message_store())
+        MessageStoreEngine::put_message_preflight(self.message_store())
     }
 
     fn health_snapshot(&self) -> StoreHealthSnapshot {
-        BackendOps::health_snapshot(self.message_store())
+        MessageStoreEngine::health_snapshot(self.message_store())
     }
 
     fn lock_time_millis(&self) -> i64 {
-        BackendOps::lock_time_millis(self.message_store())
+        MessageStoreEngine::lock_time_millis(self.message_store())
     }
 
     fn is_transient_store_pool_deficient(&self) -> bool {
-        BackendOps::is_transient_store_pool_deficient(self.message_store())
+        MessageStoreEngine::is_transient_store_pool_deficient(self.message_store())
     }
 
     fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
-        BackendOps::get_consume_queue(self.message_store(), topic, queue_id)
+        MessageStoreEngine::get_consume_queue(self.message_store(), topic, queue_id)
     }
 
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
-        BackendOps::find_consume_queue(self.message_store(), topic, queue_id)
+        MessageStoreEngine::find_consume_queue(self.message_store(), topic, queue_id)
     }
 
     fn get_broker_stats_manager(&self) -> Option<&Arc<BrokerStatsManager>> {
-        BackendOps::get_broker_stats_manager(self.message_store())
+        MessageStoreEngine::get_broker_stats_manager(self.message_store())
     }
 
     fn current_broker_role(&self) -> BrokerRole {
-        BackendOps::current_broker_role(self.message_store())
+        MessageStoreEngine::current_broker_role(self.message_store())
     }
 
     fn data_read_ahead_enabled(&self) -> bool {
-        BackendOps::data_read_ahead_enabled(self.message_store())
+        MessageStoreEngine::data_read_ahead_enabled(self.message_store())
     }
 
     fn get_store_checkpoint(&self) -> &StoreCheckpoint {
-        BackendOps::get_store_checkpoint(self.message_store())
+        MessageStoreEngine::get_store_checkpoint(self.message_store())
     }
 
     fn get_running_flags(&self) -> &RunningFlags {
-        BackendOps::get_running_flags(self.message_store())
+        MessageStoreEngine::get_running_flags(self.message_store())
     }
 
     fn is_sync_disk_flush(&self) -> bool {
-        BackendOps::is_sync_disk_flush(self.message_store())
+        MessageStoreEngine::is_sync_disk_flush(self.message_store())
     }
 
     fn is_sync_master(&self) -> bool {
-        BackendOps::is_sync_master(self.message_store())
+        MessageStoreEngine::is_sync_master(self.message_store())
     }
 
     fn get_data(&self, offset: i64, size: i32, byte_buffer: &mut BytesMut) -> bool {
-        BackendOps::get_data(self.message_store(), offset, size, byte_buffer)
+        MessageStoreEngine::get_data(self.message_store(), offset, size, byte_buffer)
     }
 
     fn get_master_flushed_offset(&self) -> i64 {
-        BackendOps::get_master_flushed_offset(self.message_store())
+        MessageStoreEngine::get_master_flushed_offset(self.message_store())
     }
 
     fn get_broker_init_max_offset(&self) -> i64 {
-        BackendOps::get_broker_init_max_offset(self.message_store())
+        MessageStoreEngine::get_broker_init_max_offset(self.message_store())
     }
 
     fn get_state_machine_version(&self) -> i64 {
-        BackendOps::get_state_machine_version(self.message_store())
+        MessageStoreEngine::get_state_machine_version(self.message_store())
     }
 
     fn state_machine_version_view(&self) -> StateMachineVersionView {
-        BackendOps::state_machine_version_view(self.message_store())
+        MessageStoreEngine::state_machine_version_view(self.message_store())
     }
 
     fn remain_transient_store_buffer_numbs(&self) -> i32 {
-        BackendOps::remain_transient_store_buffer_numbs(self.message_store())
+        MessageStoreEngine::remain_transient_store_buffer_numbs(self.message_store())
     }
 
     fn remain_how_many_data_to_commit(&self) -> i64 {
-        BackendOps::remain_how_many_data_to_commit(self.message_store())
+        MessageStoreEngine::remain_how_many_data_to_commit(self.message_store())
     }
 
     fn remain_how_many_data_to_flush(&self) -> i64 {
-        BackendOps::remain_how_many_data_to_flush(self.message_store())
+        MessageStoreEngine::remain_how_many_data_to_flush(self.message_store())
     }
 
     fn is_shutdown(&self) -> bool {
-        BackendOps::is_shutdown(self.message_store())
+        MessageStoreEngine::is_shutdown(self.message_store())
     }
 
     fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
-        BackendOps::get_timer_message_store(self.message_store())
+        MessageStoreEngine::get_timer_message_store(self.message_store())
     }
 }
 
@@ -413,7 +413,7 @@ mod tests {
         store.wire_owned_root_dependencies().unwrap();
         let topic = CheetahString::from_static_str("%LMQ%parent%child");
         assert_eq!(read_lmq(&store, &topic), (0, false, Vec::new()));
-        let queue_store = BackendOps::get_queue_store(&store)
+        let queue_store = MessageStoreEngine::get_queue_store(&store)
             .downcast_ref::<crate::queue::local_file_consume_queue_store::ConsumeQueueStore>()
             .unwrap();
         queue_store.increase_lmq_offset(&format!("{topic}-0"), 7);

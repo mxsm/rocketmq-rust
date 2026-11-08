@@ -21,14 +21,17 @@ use std::sync::LazyLock;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all;
+use rocketmq_store_api::TimerAdmissionRoute;
+use rocketmq_store_api::TimerFileFormat;
 use rocketmq_store_api::TimerStoreMode;
-use rocketmq_store_local::config::backend::LocalBackendConfig;
-use rocketmq_store_local::config::backend::LocalCleanupConfig;
-use rocketmq_store_local::config::backend::LocalQueryConfig;
-use rocketmq_store_local::config::backend::LocalRecoveryConfig;
-use rocketmq_store_local::config::backend::LocalReputConfig;
+use rocketmq_store_local::config::local_store::LocalCleanupConfig;
+use rocketmq_store_local::config::local_store::LocalQueryConfig;
+use rocketmq_store_local::config::local_store::LocalRecoveryConfig;
+use rocketmq_store_local::config::local_store::LocalReputConfig;
+use rocketmq_store_local::config::local_store::LocalStoreConfig;
 use serde::Deserialize;
 
+use super::timer_native_config::TimerNativeConfig;
 use super::timer_store_config::TimerStoreConfig;
 
 use crate::base::store_enum::StoreType;
@@ -48,7 +51,14 @@ mod defaults {
     }
 
     pub fn mapped_file_size_commit_log() -> usize {
-        1024 * 1024 * 1024 // 1GB
+        // Every unit test opens a store of its own. On Linux each mapped file takes all its disk
+        // space up front, and it keeps it until the process ends if the store is never dropped,
+        // even after the test deleted the file. At the production sizes they fill a CI runner.
+        if cfg!(test) {
+            16 * 1024 * 1024
+        } else {
+            1024 * 1024 * 1024 // 1GB
+        }
     }
 
     pub fn compaction_mapped_file_size() -> usize {
@@ -85,6 +95,10 @@ mod defaults {
 
     pub fn timer_flush_interval_ms() -> usize {
         1000 // 1 second
+    }
+
+    pub const fn timer_enable_retry_until_success() -> bool {
+        true
     }
 
     pub fn timer_get_message_thread_num() -> usize {
@@ -212,7 +226,12 @@ mod defaults {
     }
 
     pub fn mapped_file_size_consume_queue() -> usize {
-        300000 * 20
+        // See `mapped_file_size_commit_log`.
+        if cfg!(test) {
+            30000 * 20
+        } else {
+            300000 * 20
+        }
     }
 
     pub fn mapped_file_size_consume_queue_ext() -> usize {
@@ -348,11 +367,16 @@ mod defaults {
     }
 
     pub fn max_hash_slot_num() -> u32 {
-        5000000
+        // One index file takes 400 MB at the production size. See `mapped_file_size_commit_log`.
+        if cfg!(test) {
+            5000
+        } else {
+            5000000
+        }
     }
 
     pub fn max_index_num() -> u32 {
-        5000000 * 4
+        max_hash_slot_num() * 4
     }
 
     pub fn max_msgs_num_batch() -> usize {
@@ -452,7 +476,7 @@ mod defaults {
     }
 
     pub const fn commit_log_micro_batch_max_wait_micros() -> u64 {
-        50
+        0
     }
 
     pub const fn max_ha_transfer_byte_in_second() -> usize {
@@ -750,7 +774,16 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::timer_store_mode")]
     pub timer_store_mode: TimerStoreMode,
 
+    /// On-disk format of the Java-compatible timer store. `java`, the default, reads and writes
+    /// the files of an Apache RocketMQ 5.x Broker; `rust_v2` keeps the segmented Rust files.
+    /// After a change, timers still held in the other format are delivered from it first.
+    #[serde(default)]
+    pub timer_file_format: TimerFileFormat,
+
     /// Enables the non-delivering Extended Timeline shadow pipeline.
+    ///
+    /// Deprecated with the Extended Timeline; `timer_native.shadow_enable` compares the native
+    /// engine instead.
     #[serde(default)]
     pub timer_extended_shadow_enable: bool,
 
@@ -769,6 +802,10 @@ pub struct MessageStoreConfig {
     /// Bounded resource limits for the independent Extended Timeline store.
     #[serde(default)]
     pub timer_store_config: TimerStoreConfig,
+
+    /// Settings of the native timer engine, used under `timerStoreMode = native`.
+    #[serde(default)]
+    pub timer_native: TimerNativeConfig,
 
     #[serde(default = "defaults::timer_pipeline_queue_messages")]
     pub timer_pipeline_queue_messages: usize,
@@ -862,8 +899,25 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::timer_check_metrics_when")]
     pub timer_check_metrics_when: String,
 
+    /// Whether a JavaCompat timer that cannot be handled is skipped instead of stopping the
+    /// timers behind it, as Apache RocketMQ's switch of the same name does. That covers an
+    /// unreadable or misrouted Timer-topic record, a payload no longer in the CommitLog, a
+    /// message that cannot be converted for delivery, and a write the store rejects as invalid.
+    /// A skipped timer is recorded in the timer quarantine manifest and is not delivered.
+    ///
+    /// Defaults to `false`: such a timer is quarantined and its slot waits for an operator. Java
+    /// also defaults to `false`, but it still drops a missing payload or a rejected message.
     #[serde(default)]
     pub timer_skip_unknown_error: bool,
+
+    /// Whether a JavaCompat delivery whose write keeps failing for a transient reason is retried
+    /// until it succeeds. With `false`, a timer whose write has failed three times is dropped and
+    /// logged, as Apache RocketMQ does by default.
+    ///
+    /// Defaults to `true`, unlike Java's `false`, so that no timer is lost without an operator
+    /// choosing it.
+    #[serde(default = "defaults::timer_enable_retry_until_success")]
+    pub timer_enable_retry_until_success: bool,
 
     #[serde(default)]
     pub timer_warm_enable: bool,
@@ -1408,6 +1462,10 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::commit_log_micro_batch_max_bytes")]
     pub commit_log_micro_batch_max_bytes: usize,
 
+    /// How long the CommitLog append worker waits for more requests before writing a partial
+    /// micro-batch. The default, 0, writes whatever is already queued: requests that arrive while
+    /// a batch is being written form the next batch, so load still batches without delaying
+    /// every send.
     #[serde(default = "defaults::commit_log_micro_batch_max_wait_micros")]
     pub commit_log_micro_batch_max_wait_micros: u64,
 
@@ -1448,7 +1506,7 @@ impl Default for MessageStoreConfig {
             store_path_epoch_file: None,
             store_path_broker_identity: None,
             read_only_commit_log_store_paths: None,
-            mapped_file_size_commit_log: 1024 * 1024 * 1024, //CommitLog file size,default is 1G
+            mapped_file_size_commit_log: defaults::mapped_file_size_commit_log(), //CommitLog file size,default is 1G
             compaction_mapped_file_size: 100 * 1024 * 1024,
             /* CompactinLog file size, default
              * is 100M */
@@ -1466,11 +1524,13 @@ impl Default for MessageStoreConfig {
             timer_get_message_thread_num: 3,
             timer_put_message_thread_num: 3,
             timer_store_mode: TimerStoreMode::JavaCompat,
+            timer_file_format: TimerFileFormat::default(),
             timer_extended_shadow_enable: false,
             timer_extended_admission_enable: false,
             timer_extended_activation_epoch: 0,
             timer_extended_admission_horizon_days: defaults::timer_extended_admission_horizon_days(),
             timer_store_config: TimerStoreConfig::default(),
+            timer_native: TimerNativeConfig::default(),
             timer_pipeline_queue_messages: defaults::timer_pipeline_queue_messages(),
             timer_pipeline_queue_bytes: defaults::timer_pipeline_queue_bytes(),
             timer_source_batch_messages: defaults::timer_source_batch_messages(),
@@ -1502,13 +1562,14 @@ impl Default for MessageStoreConfig {
             timer_stop_enqueue: false,
             timer_check_metrics_when: "".to_string(),
             timer_skip_unknown_error: false,
+            timer_enable_retry_until_success: defaults::timer_enable_retry_until_success(),
             timer_warm_enable: false,
             timer_stop_dequeue: false,
             timer_congest_num_each_slot: 0,
             timer_metric_small_threshold: 0,
             timer_progress_log_interval_ms: 0,
             store_type: Default::default(),
-            mapped_file_size_consume_queue: 300000 * 20,
+            mapped_file_size_consume_queue: defaults::mapped_file_size_consume_queue(),
             enable_consume_queue_ext: false,
             mapped_file_size_consume_queue_ext: 48 * 1024 * 1024,
             mapper_file_size_batch_consume_queue: 300000 * 46,
@@ -1547,8 +1608,8 @@ impl Default for MessageStoreConfig {
             max_transfer_count_on_message_in_disk: 8,
             access_message_in_memory_max_ratio: 40,
             message_index_enable: true,
-            max_hash_slot_num: 5000000,
-            max_index_num: 5000000 * 4,
+            max_hash_slot_num: defaults::max_hash_slot_num(),
+            max_index_num: defaults::max_index_num(),
             max_msgs_num_batch: 64,
             message_index_safe: false,
             ha_listen_address: defaults::ha_listen_address(),
@@ -1724,8 +1785,19 @@ impl MessageStoreConfig {
         self.timer_policy_snapshot().map(|policy| policy.fingerprint())
     }
 
-    /// Projects the legacy Serde-compatible envelope into local backend settings.
-    pub fn normalized_local_backend_config(&self) -> LocalBackendConfig {
+    /// Route of new timer messages under the configured `timerStoreMode`.
+    pub fn timer_admission_route(&self) -> TimerAdmissionRoute {
+        TimerAdmissionRoute::for_mode(
+            self.timer_store_mode,
+            self.timer_max_delay_sec,
+            self.timer_extended_admission_horizon_days,
+            self.timer_extended_admission_enable,
+            self.timer_native.max_delay_days,
+        )
+    }
+
+    /// Projects the legacy Serde-compatible envelope into normalized local-store configuration.
+    pub fn normalized_local_store_config(&self) -> LocalStoreConfig {
         let commit_log_paths = self
             .get_store_path_commit_log()
             .split(mix_all::MULTI_PATH_SPLITTER.as_str())
@@ -1734,7 +1806,7 @@ impl MessageStoreConfig {
             .map(PathBuf::from)
             .collect();
 
-        LocalBackendConfig {
+        LocalStoreConfig {
             store_path_root_dir: PathBuf::from(self.store_path_root_dir.as_str()),
             commit_log_paths,
             store_io_hint_enabled: self.store_io_hint_enable,
@@ -1977,6 +2049,10 @@ impl MessageStoreConfig {
         );
         properties.insert("timerStoreMode".to_string(), self.timer_store_mode.as_str().to_owned());
         properties.insert(
+            "timerFileFormat".to_string(),
+            self.timer_file_format.as_str().to_owned(),
+        );
+        properties.insert(
             "timerExtendedShadowEnable".to_string(),
             self.timer_extended_shadow_enable.to_string(),
         );
@@ -2100,6 +2176,10 @@ impl MessageStoreConfig {
         properties.insert(
             "timerSkipUnknownError".to_string(),
             self.timer_skip_unknown_error.to_string(),
+        );
+        properties.insert(
+            "timerEnableRetryUntilSuccess".to_string(),
+            self.timer_enable_retry_until_success.to_string(),
         );
         properties.insert("timerWarmEnable".to_string(), self.timer_warm_enable.to_string());
         properties.insert("timerStopDequeue".to_string(), self.timer_stop_dequeue.to_string());
@@ -2718,7 +2798,7 @@ mod tests {
         assert!(config.commit_log_micro_batch_enabled);
         assert_eq!(config.commit_log_micro_batch_max_items, 32);
         assert_eq!(config.commit_log_micro_batch_max_bytes, 1024 * 1024);
-        assert_eq!(config.commit_log_micro_batch_max_wait_micros, 50);
+        assert_eq!(config.commit_log_micro_batch_max_wait_micros, 0);
 
         let properties = config.get_properties();
         assert_eq!(properties["commitLogAppendQueueCapacity"], "1024");
@@ -2726,7 +2806,7 @@ mod tests {
         assert_eq!(properties["commitLogMicroBatchEnabled"], "true");
         assert_eq!(properties["commitLogMicroBatchMaxItems"], "32");
         assert_eq!(properties["commitLogMicroBatchMaxBytes"], (1024 * 1024).to_string());
-        assert_eq!(properties["commitLogMicroBatchMaxWaitMicros"], "50");
+        assert_eq!(properties["commitLogMicroBatchMaxWaitMicros"], "0");
     }
 
     #[test]
@@ -2770,33 +2850,33 @@ mod tests {
     }
 
     #[test]
-    fn normalized_local_backend_config_preserves_legacy_defaults() {
+    fn normalized_local_store_config_preserves_legacy_defaults() {
         let config = MessageStoreConfig::default();
-        let normalized = config.normalized_local_backend_config();
+        let local_store_config = config.normalized_local_store_config();
 
         assert_eq!(
-            normalized.store_path_root_dir,
+            local_store_config.store_path_root_dir,
             std::path::PathBuf::from(config.store_path_root_dir.as_str())
         );
         assert_eq!(
-            normalized.commit_log_paths,
+            local_store_config.commit_log_paths,
             vec![std::path::PathBuf::from(config.get_store_path_commit_log())]
         );
         assert_eq!(
-            normalized.recovery.consume_queue_parallelism,
+            local_store_config.recovery.consume_queue_parallelism,
             config.effective_local_file_consume_queue_recovery_parallelism()
         );
-        assert!(!normalized.recovery.background_index_rebuild_enabled);
-        assert!(normalized.query.message_index_enabled);
-        assert!(!normalized.reput.read_uncommitted);
-        assert_eq!(normalized.cleanup.disk_warning_ratio, 0.90);
-        assert_eq!(normalized.cleanup.disk_clean_forcibly_ratio, 0.85);
-        assert_eq!(normalized.cleanup.disk_max_used_ratio, 0.75);
-        assert!(normalized.cleanup.clean_file_forcibly_enabled);
+        assert!(!local_store_config.recovery.background_index_rebuild_enabled);
+        assert!(local_store_config.query.message_index_enabled);
+        assert!(!local_store_config.reput.read_uncommitted);
+        assert_eq!(local_store_config.cleanup.disk_warning_ratio, 0.90);
+        assert_eq!(local_store_config.cleanup.disk_clean_forcibly_ratio, 0.85);
+        assert_eq!(local_store_config.cleanup.disk_max_used_ratio, 0.75);
+        assert!(local_store_config.cleanup.clean_file_forcibly_enabled);
     }
 
     #[test]
-    fn normalized_local_backend_config_uses_deserialized_alias_values() -> Result<(), serde_json::Error> {
+    fn normalized_local_store_config_uses_deserialized_alias_values() -> Result<(), serde_json::Error> {
         let config: MessageStoreConfig = serde_json::from_str(
             r#"{
                 "store_io_hint_enable": false,
@@ -2808,14 +2888,14 @@ mod tests {
             }"#,
         )?;
 
-        let normalized = config.normalized_local_backend_config();
+        let local_store_config = config.normalized_local_store_config();
 
-        assert_eq!(normalized.commit_log_paths.len(), 2);
-        assert!(!normalized.store_io_hint_enabled);
-        assert_eq!(normalized.cleanup.disk_warning_ratio, 0.35);
-        assert_eq!(normalized.cleanup.disk_clean_forcibly_ratio, 0.85);
-        assert_eq!(normalized.cleanup.disk_max_used_ratio, 0.10);
-        assert!(normalized.reput.read_uncommitted);
+        assert_eq!(local_store_config.commit_log_paths.len(), 2);
+        assert!(!local_store_config.store_io_hint_enabled);
+        assert_eq!(local_store_config.cleanup.disk_warning_ratio, 0.35);
+        assert_eq!(local_store_config.cleanup.disk_clean_forcibly_ratio, 0.85);
+        assert_eq!(local_store_config.cleanup.disk_max_used_ratio, 0.10);
+        assert!(local_store_config.reput.read_uncommitted);
         Ok(())
     }
 
@@ -2844,13 +2924,13 @@ mod tests {
     }
 
     #[test]
-    fn normalized_local_backend_config_keeps_camel_case_and_alias_inputs_equivalent() -> Result<(), serde_json::Error> {
+    fn normalized_local_store_config_keeps_camel_case_and_alias_inputs_equivalent() -> Result<(), serde_json::Error> {
         let camel_case: MessageStoreConfig = serde_json::from_str(r#"{"storeIoHintEnable":false}"#)?;
         let alias: MessageStoreConfig = serde_json::from_str(r#"{"store_io_hint_enable":false}"#)?;
 
         assert_eq!(
-            camel_case.normalized_local_backend_config(),
-            alias.normalized_local_backend_config()
+            camel_case.normalized_local_store_config(),
+            alias.normalized_local_store_config()
         );
         Ok(())
     }

@@ -56,7 +56,7 @@ async fn owner_injected_legacy_limits_accept_a_large_fragmented_frame() {
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
-        let mut connection = Connection::new_with_limits(socket, FrameLimits::legacy_compatibility());
+        let mut connection = Connection::new_with_limits(socket, FrameLimits::java_compatibility());
         connection
             .send_command(RemotingCommand::create_remoting_command(105).set_body(vec![3_u8; 5 * 1024 * 1024]))
             .await
@@ -64,7 +64,7 @@ async fn owner_injected_legacy_limits_accept_a_large_fragmented_frame() {
         connection.shutdown().await.unwrap();
     });
     let socket = tokio::net::TcpStream::connect(address).await.unwrap();
-    let mut connection = Connection::new_with_limits(socket, FrameLimits::legacy_compatibility());
+    let mut connection = Connection::new_with_limits(socket, FrameLimits::java_compatibility());
 
     let command = connection
         .receive_command()

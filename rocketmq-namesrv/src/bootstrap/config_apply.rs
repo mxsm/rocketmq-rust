@@ -39,7 +39,7 @@ const CONFIG_RESOURCE: &str = "namesrv.runtime-config";
 const CONFIG_PERSIST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ConfigApplyOutcome {
+pub(crate) struct RuntimeConfigUpdateReport {
     pub(crate) desired_generation: u64,
     pub(crate) durable_generation: u64,
     pub(crate) effective_generation: u64,
@@ -70,7 +70,7 @@ impl ConfigGenerationState {
 pub(crate) async fn apply_runtime_updates(
     runtime: &NameServerRuntimeInner,
     updates: HashMap<CheetahString, CheetahString>,
-) -> NameServerResult<ConfigApplyOutcome> {
+) -> NameServerResult<RuntimeConfigUpdateReport> {
     let _transaction_guard = runtime.config_transaction_lock.lock().await;
     let classified = classify_runtime_updates(updates)?;
     let (current_desired, previous_generation, previous_effective_generation, reconciliation_required) = {
@@ -183,7 +183,7 @@ pub(crate) async fn apply_runtime_updates(
         generations.effective_generation = effective_generation;
     }
 
-    Ok(ConfigApplyOutcome {
+    Ok(RuntimeConfigUpdateReport {
         desired_generation,
         durable_generation,
         effective_generation,

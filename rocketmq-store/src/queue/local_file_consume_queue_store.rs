@@ -15,6 +15,7 @@
 #![allow(unused_variables)]
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -45,17 +46,21 @@ use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use tokio::sync::Semaphore;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::log_file::commit_log::check_message_and_return_size;
 use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+use crate::queue::queue_offset_operator::QueueOffsetHandle;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
+use crate::queue::queue_offset_operator::QueueOffsetTable;
 use crate::queue::single_consume_queue::ConsumeQueue;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 use crate::queue::ArcConsumeQueue;
@@ -163,9 +168,43 @@ struct Inner {
     pub(crate) broker_config: Arc<StoreRuntimeConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
     pub(crate) consume_queue_table: Arc<ConsumeQueueTable>,
+    /// Read view of `consume_queue_table` for lookups on the send, dispatch and pull paths.
+    ///
+    /// Every write to the table republishes the changed topic here while still holding the table
+    /// lock, so after each write the index holds the same queues. Lookups then take one map shard
+    /// lock instead of the table's global mutex, and topics on different shards do not contend.
+    /// Each topic's queues are copied on write, which keeps an update proportional to that topic's
+    /// queue count even with many LMQ topics.
+    queue_index: DashMap<CheetahString, Arc<HashMap<i32, ArcConsumeQueue>>>,
     managed_lifecycle_runtime: RwLock<Option<ManagedLifecycleRuntime>>,
-    /// Serializes queue admission with destructive work for the same topic.
-    topic_lifecycle_locks: parking_lot::Mutex<HashMap<CheetahString, Arc<RwLock<()>>>>,
+    /// Serializes queue admission with destructive work for the same topic. Entries are never
+    /// removed, so a topic keeps one fence for the store's lifetime.
+    topic_lifecycle_locks: DashMap<CheetahString, Arc<RwLock<()>>>,
+}
+
+impl Inner {
+    /// Republishes `topic` in [`Self::queue_index`] from the locked table.
+    ///
+    /// Callers hold the `consume_queue_table` lock, which serializes publications.
+    fn publish_topic_index(
+        &self,
+        table: &HashMap<CheetahString, HashMap<i32, ArcConsumeQueue>>,
+        topic: &CheetahString,
+    ) {
+        match table.get(topic) {
+            Some(queues) if !queues.is_empty() => {
+                self.queue_index.insert(topic.clone(), Arc::new(queues.clone()));
+            }
+            _ => {
+                self.queue_index.remove(topic);
+            }
+        }
+    }
+
+    #[inline]
+    fn find_indexed_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+        self.queue_index.get(topic)?.get(&queue_id).cloned()
+    }
 }
 
 #[derive(Clone)]
@@ -236,6 +275,21 @@ impl ConsumeQueueLookupHandle {
         Some(ConsumeQueueStoreTrait::find_or_create_consume_queue(
             &store, topic, queue_id,
         ))
+    }
+
+    /// Resolves the offset slot that appends to `topic`/`queue_id` draw from, creating the consume
+    /// queue as the first append to it would.
+    ///
+    /// Returns `None` once the store is gone.
+    pub(crate) fn resolve_queue_offset(&self, topic: &CheetahString, queue_id: i32) -> Option<QueueOffsetHandle> {
+        let inner = self.inner.upgrade()?;
+        let store = ConsumeQueueStore {
+            inner: ConsumeQueueStoreRoot::new(inner),
+        };
+        let consume_queue = ConsumeQueueStoreTrait::find_or_create_consume_queue(&store, topic, queue_id);
+        let table = QueueOffsetTable::of(consume_queue.read().get_cq_type());
+        let key = CheetahString::from_string(format!("{topic}-{queue_id}"));
+        Some(store.inner.queue_offset_operator.queue_offset_handle(table, key))
     }
 
     pub(crate) fn put_message_position_info_wrapper(&self, request: &DispatchRequest) -> bool {
@@ -341,25 +395,23 @@ impl ConsumeQueueStore {
     }
 
     fn topic_lifecycle_lock(&self, topic: &CheetahString) -> Arc<RwLock<()>> {
-        self.inner
-            .topic_lifecycle_locks
-            .lock()
-            .entry(topic.clone())
-            .or_insert_with(|| Arc::new(RwLock::new(())))
-            .clone()
+        if let Some(lock) = self.inner.topic_lifecycle_locks.get(topic) {
+            return Arc::clone(lock.value());
+        }
+        Arc::clone(
+            self.inner
+                .topic_lifecycle_locks
+                .entry(topic.clone())
+                .or_insert_with(|| Arc::new(RwLock::new(())))
+                .value(),
+        )
     }
 
     fn find_or_create_consume_queue_unfenced(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue {
-        let managed_runtime = self.inner.managed_lifecycle_runtime.read().clone();
         drive_find_or_create_consume_queue(
+            || self.inner.find_indexed_queue(topic, queue_id),
             || {
-                self.inner
-                    .consume_queue_table
-                    .lock()
-                    .get(topic)
-                    .and_then(|topic_map| topic_map.get(&queue_id).cloned())
-            },
-            || {
+                let managed_runtime = self.inner.managed_lifecycle_runtime.read().clone();
                 let context = self
                     .inner
                     .context
@@ -423,14 +475,15 @@ impl ConsumeQueueStore {
                 }
             },
             |new_queue| {
-                self.inner
-                    .consume_queue_table
-                    .lock()
+                let mut table = self.inner.consume_queue_table.lock();
+                let queue = table
                     .entry(topic.clone())
                     .or_default()
                     .entry(queue_id)
                     .or_insert(new_queue)
-                    .clone()
+                    .clone();
+                self.inner.publish_topic_index(&table, topic);
+                queue
             },
         )
     }
@@ -469,6 +522,7 @@ impl ConsumeQueueStore {
         match queues.get(&queue_id) {
             Some(current) if current.ptr_eq(expected) => {
                 queues.remove(&queue_id);
+                self.inner.publish_topic_index(&table, topic);
                 true
             }
             None => true,
@@ -482,6 +536,7 @@ impl ConsumeQueueStore {
         let empty = table.get(topic).is_none_or(HashMap::is_empty);
         if empty {
             table.remove(topic);
+            self.inner.publish_topic_index(&table, topic);
         }
         empty
     }
@@ -533,6 +588,20 @@ impl ConsumeQueueStore {
         ConsumeQueueLookupHandle {
             inner: Arc::downgrade(self.inner.adapter()),
         }
+    }
+
+    /// Assigns `msg` the next offset of the queue that `handle` was resolved for.
+    #[inline]
+    pub(crate) fn assign_resolved_queue_offset(&self, handle: &mut QueueOffsetHandle, msg: &mut MessageExtBrokerInner) {
+        msg.message_ext_inner.queue_offset = handle.live_slot(&self.inner.queue_offset_operator).next_offset();
+    }
+
+    /// Moves the queue that `handle` was resolved for past `message_num` appended messages.
+    #[inline]
+    pub(crate) fn increase_resolved_queue_offset(&self, handle: &mut QueueOffsetHandle, message_num: i16) {
+        handle
+            .live_slot(&self.inner.queue_offset_operator)
+            .advance(i64::from(message_num));
     }
 
     async fn recover_one_consume_queue(
@@ -900,6 +969,9 @@ impl ConsumeQueueStore {
                 if remove_topic {
                     consume_queue_table.remove(&topic);
                 }
+                if removed {
+                    self.inner.publish_topic_index(&consume_queue_table, &topic);
+                }
                 removed
             };
 
@@ -915,9 +987,7 @@ impl ConsumeQueueStore {
     }
 
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
-        let table = self.inner.consume_queue_table.lock();
-        let queue_table = table.get(topic)?;
-        queue_table.get(&queue_id).cloned()
+        self.inner.find_indexed_queue(topic, queue_id)
     }
 
     fn encode_cq_unit(cq_unit: &CqUnit) -> Bytes {
@@ -945,8 +1015,9 @@ impl ConsumeQueueStore {
                 broker_config,
                 queue_offset_operator: Default::default(),
                 consume_queue_table: Arc::new(Default::default()),
+                queue_index: DashMap::new(),
                 managed_lifecycle_runtime: RwLock::new(None),
-                topic_lifecycle_locks: parking_lot::Mutex::new(HashMap::new()),
+                topic_lifecycle_locks: DashMap::new(),
             })),
         }
     }
@@ -1208,6 +1279,9 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn recover_offset_table(&mut self, min_phy_offset: i64) {
+        // Read the dispatch frontier before the queues, so that a message dispatched in between is
+        // counted either by its queue or by the CommitLog scan.
+        let dispatch_frontier = self.get_max_phy_offset_in_consume_queue_global();
         let mut cq_offset_table = HashMap::with_capacity(1024);
         let mut bcq_offset_table = HashMap::with_capacity(1024);
         for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter_mut() {
@@ -1228,14 +1302,10 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
             }
         }
         if self.inner.message_store_config.duplication_enable || self.inner.broker_config.enable_controller_mode {
-            // In duplication/controller mode, use LMQ offset table
-            self.inner
-                .queue_offset_operator
-                .set_lmq_topic_queue_table(cq_offset_table);
-        } else {
-            self.set_topic_queue_table(cq_offset_table);
-            self.set_batch_topic_queue_table(bcq_offset_table);
+            self.compensate_for_ha(&mut cq_offset_table, dispatch_frontier.max(min_phy_offset));
         }
+        self.set_topic_queue_table(cq_offset_table);
+        self.set_batch_topic_queue_table(bcq_offset_table);
     }
 
     fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<CheetahString, i64>) {
@@ -1369,6 +1439,82 @@ impl ConsumeQueueStore {
         self.inner
             .queue_offset_operator
             .set_batch_topic_queue_table(batch_topic_queue_table)
+    }
+
+    /// Continues each queue after the CommitLog messages that its consume queue does not hold yet.
+    ///
+    /// In controller and duplication modes the reput service dispatches only up to the confirm
+    /// offset, so messages after the dispatch frontier already own queue offsets. This mirrors Java's
+    /// `ConsumeQueueStore#compensateForHA`, except that an entry only moves forward: a stale queue
+    /// offset left in the CommitLog cannot rewind a queue.
+    fn compensate_for_ha(&self, cq_offset_table: &mut HashMap<CheetahString, i64>, scan_from: i64) {
+        let Some(context) = self.inner.context.read().clone() else {
+            warn!("consume queue store context is not wired; queue offsets are not compensated");
+            return;
+        };
+        let commit_log = context.commit_log();
+        let message_store_config = Arc::clone(&self.inner.message_store_config);
+        // Delay levels only shape the tags code of scheduled messages, which is not read here.
+        let delay_level_table = BTreeMap::new();
+        let max_offset = commit_log.get_max_offset();
+        let mut offset = scan_from;
+        let mut compensated_messages = 0u64;
+        'segments: while offset < max_offset {
+            let Some(mut result) = commit_log.get_data(offset) else {
+                break;
+            };
+            let segment_start = offset;
+            let mut read_size = 0i32;
+            while read_size < result.size() {
+                let Some(bytes) = result.bytes_mut() else {
+                    break 'segments;
+                };
+                let request = check_message_and_return_size(
+                    bytes,
+                    false,
+                    false,
+                    false,
+                    &message_store_config,
+                    0,
+                    &delay_level_table,
+                );
+                if !request.success {
+                    break 'segments;
+                }
+                if request.msg_size == 0 {
+                    offset = commit_log.roll_next_file(offset);
+                    continue 'segments;
+                }
+                let size = if request.buffer_size == -1 {
+                    request.msg_size
+                } else {
+                    request.buffer_size
+                };
+                if size <= 0 {
+                    break 'segments;
+                }
+                let next_queue_offset = request.consume_queue_offset + 1;
+                cq_offset_table
+                    .entry(CheetahString::from_string(format!(
+                        "{}-{}",
+                        request.topic, request.queue_id
+                    )))
+                    .and_modify(|queue_offset| *queue_offset = (*queue_offset).max(next_queue_offset))
+                    .or_insert(next_queue_offset);
+                compensated_messages += 1;
+                offset += i64::from(size);
+                read_size += size;
+            }
+            if offset == segment_start {
+                break;
+            }
+        }
+        if compensated_messages > 0 {
+            info!(
+                "compensated queue offsets from {} CommitLog messages in [{}, {})",
+                compensated_messages, scan_from, offset
+            );
+        }
     }
 
     /// Load consume queues from the given directory path for a specific queue type
@@ -1516,8 +1662,11 @@ impl ConsumeQueueStore {
     #[inline]
     fn put_consume_queue(&self, topic: CheetahString, queue_id: i32, consume_queue: ArcConsumeQueue) {
         let mut consume_queue_table = self.inner.consume_queue_table.lock();
-        let topic_table = consume_queue_table.entry(topic).or_default();
-        topic_table.insert(queue_id, consume_queue);
+        consume_queue_table
+            .entry(topic.clone())
+            .or_default()
+            .insert(queue_id, consume_queue);
+        self.inner.publish_topic_index(&consume_queue_table, &topic);
     }
 
     #[inline]
@@ -2093,13 +2242,7 @@ mod tests {
         let topic = CheetahString::from_static_str("TrackingTopic0");
         let expected = store.find_consume_queue_map(&topic).expect("tracked topic");
         let unexpected = expected.get(&0).expect("tracked queue").clone();
-        store
-            .inner
-            .consume_queue_table
-            .lock()
-            .get_mut(&topic)
-            .expect("tracked topic")
-            .insert(1, unexpected);
+        store.put_consume_queue(topic.clone(), 1, unexpected);
 
         assert!(!store.remove_topic_if_empty(&topic));
         assert_eq!(store.find_consume_queue_map(&topic).expect("topic retained").len(), 2);
@@ -2236,6 +2379,58 @@ mod tests {
         );
         store.set_context(message_store.consume_queue_context());
         (store, simple_store_path)
+    }
+
+    #[test]
+    fn queue_lookups_follow_every_table_write() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("IndexedTopic");
+        let (store, _) = consume_queue_load_store(root.path(), &topic);
+
+        assert!(store.find_consume_queue(&topic, 0).is_none());
+        let created = store.find_or_create_consume_queue(&topic, 0);
+        let found = store.find_consume_queue(&topic, 0).expect("a created queue is indexed");
+        assert!(found.ptr_eq(&created));
+        assert!(store.find_or_create_consume_queue(&topic, 0).ptr_eq(&created));
+
+        assert!(store.remove_destroyed_topic_queue(&topic, 0, &created));
+        assert!(
+            store.find_consume_queue(&topic, 0).is_none(),
+            "a removed queue leaves the index"
+        );
+        assert!(store.remove_topic_if_empty(&topic));
+        assert!(!store.inner.queue_index.contains_key(&topic));
+
+        let replacement = store.find_or_create_consume_queue(&topic, 0);
+        assert!(!replacement.ptr_eq(&created));
+        assert!(store
+            .find_consume_queue(&topic, 0)
+            .expect("the replacement is indexed")
+            .ptr_eq(&replacement));
+    }
+
+    #[test]
+    fn concurrent_creators_of_one_queue_share_a_single_instance() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("RacingTopic");
+        let (store, _) = consume_queue_load_store(root.path(), &topic);
+
+        let queues = std::thread::scope(|scope| {
+            let creators = (0..8)
+                .map(|_| scope.spawn(|| store.find_or_create_consume_queue(&topic, 3)))
+                .collect::<Vec<_>>();
+            creators
+                .into_iter()
+                .map(|creator| creator.join().expect("creator thread"))
+                .collect::<Vec<_>>()
+        });
+
+        assert!(queues.iter().all(|queue| queue.ptr_eq(&queues[0])));
+        assert!(store
+            .find_consume_queue(&topic, 3)
+            .expect("the shared queue is indexed")
+            .ptr_eq(&queues[0]));
+        assert_eq!(store.inner.consume_queue_table.lock()[&topic].len(), 1);
     }
 
     #[test]
@@ -2468,13 +2663,7 @@ mod tests {
             ..DispatchRequest::default()
         });
 
-        store
-            .inner
-            .consume_queue_table
-            .lock()
-            .entry(topic.clone())
-            .or_default()
-            .insert(queue_id, ArcConsumeQueue::new(Box::new(batch_queue)));
+        store.put_consume_queue(topic.clone(), queue_id, ArcConsumeQueue::new(Box::new(batch_queue)));
 
         let bytes = crate::runtime::test_runtime_owner().block_on(store.get(&topic, queue_id, 0));
 

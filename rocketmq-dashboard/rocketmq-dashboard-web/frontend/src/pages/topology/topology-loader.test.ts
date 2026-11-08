@@ -8,7 +8,8 @@ import {
   fixtureConsumers,
   fixtureProducers,
   fixtureSnapshot,
-  fixtureTopics
+  fixtureTopics,
+  withReplication
 } from './topology-fixtures';
 import { createTopologyLoader, type TopologyLoaderDeps } from './topology-loader';
 
@@ -73,6 +74,18 @@ describe('createTopologyLoader', () => {
     expect(snapshot.generatedAt).toBe(42);
     expect(snapshot.clusters).toEqual(aggregated.clusters);
     expect(snapshot.consumers.every((consumer) => consumer.displayName === consumer.group)).toBe(true);
+  });
+
+  it('keeps the Controllers the backend reports and reads a backend without them as having none', async () => {
+    const replicated = withReplication(fixtureSnapshot({}, [], 42));
+    const older: Partial<TopologySnapshot> = { ...replicated };
+    delete older.controllers;
+
+    const current = await settle(createTopologyLoader(deps({}, vi.fn(() => Promise.resolve(replicated)))));
+    const withoutControllers = await settle(createTopologyLoader(deps({}, vi.fn(() => Promise.resolve(older as TopologySnapshot)))));
+
+    expect(current.controllers).toEqual(replicated.controllers);
+    expect(withoutControllers.controllers).toEqual([]);
   });
 
   it('turns the error code of a failed aggregated layer into text and orders clusters like the list path', async () => {

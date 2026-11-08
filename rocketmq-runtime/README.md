@@ -13,6 +13,17 @@ persistence, and shutdown diagnostics.
 
 [Unreleased API migration and contract corrections](MIGRATION.md)
 
+## Features
+
+The default-enabled `config-file` feature provides `common::parse_config_file`,
+including file parsing and safe configuration-error diagnostics. Consumers that
+only need runtime services can disable default features to omit the `config`
+dependency and its format parsers. Consumers already disabling default features
+must explicitly enable `config-file` if they use that module.
+
+The root workspace disables runtime default features. Broker, NameServer, and
+Controller explicitly enable `config-file` to preserve their configuration loading
+and diagnostics. Supported configuration formats are unchanged.
 
 ## Runtime Model
 
@@ -290,6 +301,7 @@ Use the executors supplied by a `ChildServiceContext`:
 | `storage_io()` | `StorageIo` | Short storage and filesystem operations. |
 | `metadata_io()` | `MetadataIo` | Metadata persistence. |
 | `cpu_crypto()` | `CpuCrypto` | Bounded CPU or cryptographic work. |
+| `consume_listener()` | `ConsumeListener` | User consume listeners, which may block for a whole consume timeout. |
 
 Managed lanes share one global admission budget per runtime owner, bounded by
 `RuntimeConfig::max_blocking_threads`. Each lane has its own concurrency
@@ -297,13 +309,22 @@ ceiling and queue bound. Idle capacity can be borrowed; a waiting lane's
 reservation is protected from new borrowers. Cloning an executor or deriving
 a context shares this capacity rather than creating another pool.
 
+`ConsumeListener` is not part of that budget. It has its own capacity
+(`BlockingLanePolicies::consume_listener`, 64 by default regardless of the CPU
+count), a 1,024-call queue that waits up to 15 minutes, and callers keep waiting
+on a running listener for up to a day. A slow listener therefore cannot take
+the slots that storage or metadata I/O count on, and those lanes cannot starve
+listeners.
+
 Waiters of one lane are admitted in arrival order, and a new submission never
 passes a queued waiter of its own lane. A released slot is handed directly to
 the waiter that can use it, which wakes only that waiter; a lane still below
 its reservation is served first. The Tokio blocking pool holds
-`RuntimeConfig::tokio_blocking_threads()` threads: the managed capacity plus
-`max(2, capacity / 8)` threads of headroom, so direct `spawn_blocking` calls,
-DNS resolution, and `tokio::fs` do not take the threads admitted work relies on.
+`RuntimeConfig::tokio_blocking_threads()` threads: the managed capacity, the
+consume listener capacity, and `max(2, managed capacity / 8)` threads of
+headroom, so direct `spawn_blocking` calls, DNS resolution, and `tokio::fs` do
+not take the threads admitted work relies on. Tokio starts these threads on
+demand, so the listener capacity costs nothing in a process without consumers.
 
 `max_queue_depth` rejects submissions when the admission queue is full.
 `queue_timeout` bounds waiting for execution capacity; `task_timeout` bounds

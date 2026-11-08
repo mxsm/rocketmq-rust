@@ -19,11 +19,10 @@ use std::{fmt, sync::Arc};
 
 use rocketmq_admin_core::core::topic::{
     DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicCatalogItem, DetailedTopicConsumers,
-    DetailedTopicStats, PatchTopicConfigRequest, QueryTopicConfigCasRequest, TopicBatchDeleteRequest,
-    TopicBatchMutationReport, TopicBatchUpsertRequest, TopicConfigCasPatch, TopicConfigCasState,
-    TopicConfigPatchResult, TopicInspectionCompleteness, TopicInspectionFailure, TopicInspectionFailureCode,
-    TopicInspectionStage, TopicMutationSummary, TopicOffsetMutationFailureCode, TopicOffsetMutationReport,
-    TopicOffsetMutationRequest, TopicRoute, TopicSendRequest,
+    DetailedTopicStats, TopicBatchDeleteRequest, TopicBatchMutationReport, TopicBatchUpsertRequest,
+    TopicInspectionCompleteness, TopicInspectionFailure, TopicInspectionFailureCode, TopicInspectionStage,
+    TopicMutationSummary, TopicOffsetMutationFailureCode, TopicOffsetMutationReport, TopicOffsetMutationRequest,
+    TopicRoute, TopicSendRequest,
 };
 use rocketmq_dashboard_common::{
     TopicCategory, TopicCompleteness, TopicConfigField, TopicConfigTargetView, TopicConfigView, TopicConsumerView,
@@ -35,8 +34,11 @@ use rocketmq_dashboard_common::{
 
 use super::{GpuiAdminProvider, ProviderFailure, mutation_for_revision, query_for_revision, select_admin};
 
+#[path = "topics/fields.rs"]
+mod fields;
 #[path = "topics/mapping.rs"]
 mod mapping;
+pub(crate) use fields::SafeTopicFieldsPatchRequest;
 
 use mapping::*;
 
@@ -61,31 +63,6 @@ impl fmt::Debug for SafeTopicCreateRequest {
             .field("message_type", &self.message_type)
             .finish()
     }
-}
-
-pub(crate) struct SafeTopicQueuePatchRequest {
-    pub topic: TopicIdentity,
-    pub target: TopicTargetIdentity,
-    pub expected_version: u64,
-    pub read_queue_count: Option<u32>,
-    pub write_queue_count: Option<u32>,
-}
-
-impl fmt::Debug for SafeTopicQueuePatchRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SafeTopicQueuePatchRequest")
-            .field("expected_version", &self.expected_version)
-            .field("read_queue_count", &self.read_queue_count)
-            .field("write_queue_count", &self.write_queue_count)
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SafeTopicPatchOutcome {
-    Applied { previous_version: u64, version: u64 },
-    VersionConflict { expected_version: u64, actual_version: u64 },
 }
 
 pub(crate) struct SafeTopicDeleteRequest {
@@ -251,24 +228,6 @@ impl GpuiAdminProvider {
         .await
     }
 
-    pub async fn topic_config_preflight(
-        self: &Arc<Self>,
-        revision: u64,
-        topic: TopicIdentity,
-        target: TopicTargetIdentity,
-    ) -> Result<TopicConfigCasState, ProviderFailure> {
-        let this = Arc::clone(self);
-        self.run_owned("gpui-topic-config-preflight", move |cancellation| async move {
-            let mut guard = this.mutation_session.lock().await;
-            this.ensure_mutation(&mut guard, revision, cancellation.clone()).await?;
-            let session = mutation_for_revision(&mut guard, revision)?;
-            let request = QueryTopicConfigCasRequest::try_new(target.broker_address(), topic.as_str())
-                .map_err(|_| invalid_request())?;
-            select_admin(cancellation, session.topic_config_cas_state(&request)).await
-        })
-        .await
-    }
-
     pub async fn create_topic(
         self: &Arc<Self>,
         revision: u64,
@@ -328,69 +287,6 @@ impl GpuiAdminProvider {
                 TopicMutationKind::Create,
                 response,
             ))
-        })
-        .await
-    }
-
-    pub async fn patch_topic_queue_counts(
-        self: &Arc<Self>,
-        revision: u64,
-        request: SafeTopicQueuePatchRequest,
-    ) -> Result<SafeTopicPatchOutcome, ProviderFailure> {
-        let this = Arc::clone(self);
-        self.run_owned("gpui-topic-edit", move |cancellation| async move {
-            let catalog = {
-                let guard = this.query_session.read().await;
-                let session = query_for_revision(&guard, revision)?;
-                select_admin(cancellation.clone(), session.topic_catalog()).await?
-            };
-            if !catalog_topic_is_mutation_safe(&catalog, &request.topic)
-                || !catalog_has_exact_target(&catalog, &request.target)
-            {
-                return Err(invalid_request());
-            }
-            let mut guard = this.mutation_session.lock().await;
-            this.ensure_mutation(&mut guard, revision, cancellation.clone()).await?;
-            let session = mutation_for_revision(&mut guard, revision)?;
-            let preflight =
-                QueryTopicConfigCasRequest::try_new(request.target.broker_address(), request.topic.as_str())
-                    .map_err(|_| invalid_request())?;
-            let state = select_admin(cancellation.clone(), session.topic_config_cas_state(&preflight)).await?;
-            if state.version != request.expected_version {
-                return Ok(SafeTopicPatchOutcome::VersionConflict {
-                    expected_version: request.expected_version,
-                    actual_version: state.version,
-                });
-            }
-            let patch = PatchTopicConfigRequest::try_new(
-                request.target.broker_address(),
-                request.topic.as_str(),
-                request.expected_version,
-                TopicConfigCasPatch {
-                    read_queue_nums: request.read_queue_count,
-                    write_queue_nums: request.write_queue_count,
-                    order: None,
-                },
-            )
-            .map_err(|_| invalid_request())?;
-            select_admin(cancellation, session.patch_topic_config(&patch))
-                .await
-                .map(|outcome| match outcome {
-                    TopicConfigPatchResult::Applied {
-                        previous_version,
-                        version,
-                    } => SafeTopicPatchOutcome::Applied {
-                        previous_version,
-                        version,
-                    },
-                    TopicConfigPatchResult::VersionConflict {
-                        expected_version,
-                        actual_version,
-                    } => SafeTopicPatchOutcome::VersionConflict {
-                        expected_version,
-                        actual_version,
-                    },
-                })
         })
         .await
     }

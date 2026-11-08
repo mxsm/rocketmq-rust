@@ -35,7 +35,7 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TagFilterConsumerTestTopic";
 pub const TAG_EXPRESSION: &str = "TagA || TagB";
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

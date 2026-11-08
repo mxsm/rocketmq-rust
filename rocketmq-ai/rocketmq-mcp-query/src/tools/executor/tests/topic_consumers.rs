@@ -24,7 +24,7 @@ pub(super) fn answer(
     args: topic_tools::ListTopicConsumersArgs,
 ) -> Result<QueryResult<topic_tools::ListTopicConsumersOutput>, ToolFailure> {
     if adapter.fail {
-        return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+        return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
     }
     let items = ["billing", "workers"]
         .map(|group| topic_tools::TopicConsumerGroup {

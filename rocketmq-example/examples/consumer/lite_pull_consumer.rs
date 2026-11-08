@@ -30,7 +30,7 @@ pub const TOPIC: &str = "LitePullConsumerTestTopic";
 pub const TAG_EXPRESSION: &str = "LitePullTag";
 pub const POLL_TIMEOUT_MS: u64 = 1000;
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

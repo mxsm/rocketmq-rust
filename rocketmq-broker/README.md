@@ -266,6 +266,11 @@ Broker readiness checks the normal and fast listeners, storage readiness, instal
 state, and registration readiness. The storage readiness field is not a guarantee that the current role/controller
 lease permits producer writes.
 
+RocksDB configuration managers sharing a store close it once; independently opened stores close separately.
+The internal `store_instance_id` helper and `closed_store_ids` set deduplicate shared cores during shutdown.
+These pointer-derived IDs are valid for in-process comparison while the cores are alive; they may be reused after
+release and are not stable across reopens or process restarts.
+
 Signal handling and lifecycle shutdown share a deadline configured by `ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS`
 (default `45`, accepted range `1..=300`). Startup rollback and shutdown reports account for owned services;
 an unhealthy shutdown result propagates to a nonzero binary exit status.

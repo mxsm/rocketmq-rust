@@ -14,6 +14,12 @@
 
 #![recursion_limit = "512"]
 
+// Message decoding and property handling allocate many short-lived objects per message;
+// production images serve them from mimalloc instead of the system allocator.
+#[cfg(feature = "allocator-mimalloc")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -1004,7 +1010,7 @@ struct ControllerConfigOverrides {
     election_timeout_ms: Option<u64>,
     heartbeat_interval_ms: Option<u64>,
     storage_path: Option<String>,
-    #[serde(rename = "storageBackend")]
+    #[serde(rename = "storageEngineType", alias = "storageBackend")]
     storage_engine_type: Option<String>,
     enable_elect_unclean_master_local: Option<bool>,
 }
@@ -1109,7 +1115,7 @@ fn apply_controller_config_overrides(
             "rocks_db" | "rocksdb" => StorageEngineType::RocksDB,
             "file" => StorageEngineType::File,
             "memory" => StorageEngineType::Memory,
-            _ => bail!("invalid storageBackend: {}", storage_engine_type),
+            _ => bail!("invalid storageEngineType: {}", storage_engine_type),
         };
     }
     if let Some(enable_elect_unclean_master_local) = overrides.enable_elect_unclean_master_local {
@@ -1143,12 +1149,14 @@ fn parse_raft_peers(value: &str) -> Result<Vec<RaftPeer>> {
 /// Command line arguments structure
 #[derive(Parser, Debug)]
 #[command(
-    name = "mqnamesrv",
-    author = "Apache RocketMQ",
-    version = "0.1.0",
-    about = "RocketMQ Name Server (Rust Implementation)",
-    long_about = "Apache RocketMQ Name Server - Rust implementation providing lightweight service discovery and \
-                  routing"
+    name = "rocketmq-namesrv-rust",
+    author,
+    version,
+    about = "RocketMQ-Rust NameServer",
+    long_about = "NameServer for RocketMQ-Rust, a Rust implementation of Apache RocketMQ.\n\n\
+                  Provides broker registration, liveness tracking, topic route discovery, \
+                  and namespaced key-value configuration management.\n\n\
+                  Project: https://github.com/mxsm/rocketmq-rust"
 )]
 struct Args {
     /// Name server config properties file
@@ -1209,8 +1217,23 @@ mod tests {
 
     #[cfg(feature = "embedded-controller")]
     #[test]
-    fn controller_storage_engine_override_preserves_storage_backend_key() {
-        let overrides: ControllerConfigOverrides = Config::builder()
+    fn controller_storage_engine_override_accepts_canonical_and_legacy_keys() {
+        let canonical_overrides: ControllerConfigOverrides = Config::builder()
+            .add_source(config::File::from_str(
+                "storageEngineType = \"memory\"",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(canonical_overrides.storage_engine_type.as_deref(), Some("memory"));
+
+        let mut controller_config = ControllerConfig::default();
+        apply_controller_config_overrides(&mut controller_config, canonical_overrides).unwrap();
+        assert_eq!(controller_config.storage_engine_type, StorageEngineType::Memory);
+
+        let legacy_overrides: ControllerConfigOverrides = Config::builder()
             .add_source(config::File::from_str(
                 "storageBackend = \"memory\"",
                 config::FileFormat::Toml,
@@ -1219,11 +1242,25 @@ mod tests {
             .unwrap()
             .try_deserialize()
             .unwrap();
-        assert_eq!(overrides.storage_engine_type.as_deref(), Some("memory"));
+        assert_eq!(legacy_overrides.storage_engine_type.as_deref(), Some("memory"));
 
-        let mut controller_config = ControllerConfig::default();
-        apply_controller_config_overrides(&mut controller_config, overrides).unwrap();
-        assert_eq!(controller_config.storage_engine_type, StorageEngineType::Memory);
+        let mut controller_config_legacy = ControllerConfig::default();
+        apply_controller_config_overrides(&mut controller_config_legacy, legacy_overrides).unwrap();
+        assert_eq!(controller_config_legacy.storage_engine_type, StorageEngineType::Memory);
+
+        // Invalid selector value reports diagnostic with canonical key
+        let invalid_overrides: ControllerConfigOverrides = Config::builder()
+            .add_source(config::File::from_str(
+                "storageEngineType = \"unknown_engine\"",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        let mut cfg = ControllerConfig::default();
+        let err = apply_controller_config_overrides(&mut cfg, invalid_overrides).unwrap_err();
+        assert!(err.to_string().contains("invalid storageEngineType"));
     }
 
     #[test]

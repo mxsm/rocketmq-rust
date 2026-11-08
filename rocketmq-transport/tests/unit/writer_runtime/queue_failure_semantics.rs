@@ -98,7 +98,7 @@ impl Drop for DropLease {
 
 fn queued_write_with_completion(
     admission: &crate::admission::AdmissionScopeHandle,
-    target: &'static str,
+    _target: &'static str,
     bytes: usize,
     progress: Arc<QueuedWriteProgress>,
 ) -> (QueuedWrite, oneshot::Receiver<crate::write_result::WriterResult>) {
@@ -109,10 +109,9 @@ fn queued_write_with_completion(
     (
         QueuedWrite::data(
             OutboundPayload::Contiguous(Bytes::from(vec![0x5a; bytes])),
-            completion,
+            crate::write_strategy::WriteCompletion::Caller(completion),
             permit,
             None,
-            target.to_string(),
             progress,
             Instant::now(),
         ),
@@ -122,7 +121,7 @@ fn queued_write_with_completion(
 
 fn queued_file_write_with_completion(
     admission: &crate::admission::AdmissionScopeHandle,
-    target: &'static str,
+    _target: &'static str,
 ) -> (
     QueuedWrite,
     oneshot::Receiver<crate::write_result::WriterResult>,
@@ -151,10 +150,9 @@ fn queued_file_write_with_completion(
     let (completion, result) = oneshot::channel();
     let write = QueuedWrite::data(
         payload,
-        completion,
+        crate::write_strategy::WriteCompletion::Caller(completion),
         permit,
         None,
-        target.to_string(),
         Arc::new(QueuedWriteProgress::waiting()),
         Instant::now(),
     );

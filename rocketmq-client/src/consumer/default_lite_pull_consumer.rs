@@ -1730,7 +1730,7 @@ impl ConsumerOffsetControl for DefaultLitePullConsumer {
 
     async fn offset_for_timestamp(&self, message_queue: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
-        self.try_impl_()?.offset_for_timestamp(&wrapped_mq, timestamp).await
+        self.try_impl_()?.search_offset(&wrapped_mq, timestamp).await
     }
 
     async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
@@ -1740,12 +1740,12 @@ impl ConsumerOffsetControl for DefaultLitePullConsumer {
 
     async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
-        self.try_impl_()?.max_offset_public(&wrapped_mq).await
+        self.try_impl_()?.max_offset(&wrapped_mq).await
     }
 
     async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
-        self.try_impl_()?.min_offset_public(&wrapped_mq).await
+        self.try_impl_()?.min_offset(&wrapped_mq).await
     }
 }
 

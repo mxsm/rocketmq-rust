@@ -208,12 +208,18 @@ impl TimerBacklogMetrics {
     }
 
     pub fn observe(&mut self, topic: String, deliver_time_ms: i64, now_ms: i64, is_delete: bool) {
+        self.observe_due(deliver_time_ms, now_ms, 1);
+        *self.topic_backlog.entry(topic).or_default() += if is_delete { -1 } else { 1 };
+    }
+
+    /// Adds `records` due at `deliver_time_ms` to the distribution bucket of their remaining time,
+    /// without attributing them to a topic.
+    pub fn observe_due(&mut self, deliver_time_ms: i64, now_ms: i64, records: i64) {
         let remaining_ms = deliver_time_ms.saturating_sub(now_ms).max(0);
         let remaining_secs = ((remaining_ms + 999) / 1000) as i32;
         if let Some(period) = self.timer_dist.iter().copied().find(|period| remaining_secs <= *period) {
-            *self.timer_backlog_distribution.entry(period).or_default() += 1;
+            *self.timer_backlog_distribution.entry(period).or_default() += records;
         }
-        *self.topic_backlog.entry(topic).or_default() += if is_delete { -1 } else { 1 };
     }
 
     pub fn topic_snapshot(&self) -> HashMap<String, i64> {

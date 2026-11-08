@@ -39,16 +39,18 @@ use tokio::sync::broadcast;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
 use crate::base::connection_net_event::ConnectionNetEvent;
-use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
+use crate::base::pending_request_table::estimate_wire_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestRegistrationResult;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingResponseDisposition;
 use crate::codec::remoting_command_codec::FrameLimits;
+use crate::connection::request_write_failure;
 use crate::connection::CommandWriteResult;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
+use crate::connection::RequestEnqueueResult;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::WriteProgress;
 use crate::error::RequestOperation;
@@ -696,12 +698,11 @@ impl<PR> TransportSession<PR> {
                 ),
             ));
         }
-        let target = self.peer.address().to_string();
         if let Err(source) = self.transport_security.sign(&mut request, Some(&self.peer)) {
             return Err(TransportError::request(
                 RequestOperation::BeforeHook,
                 OutboundRequestStage::BeforeWrite,
-                connection_failed_for_remote(&target, TransportStage::Connect, source),
+                connection_failed_for_remote(self.peer.address().to_string(), TransportStage::Connect, source),
             ));
         }
         if deadline.is_expired() {
@@ -716,7 +717,7 @@ impl<PR> TransportSession<PR> {
 
         let (tx, rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
         let opaque = request.opaque();
-        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
+        let retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut request);
         let guard = match self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             opaque,
@@ -753,56 +754,24 @@ impl<PR> TransportSession<PR> {
             }
         };
 
-        match self
+        // The request is only queued here: the writer fails its pending entry if it cannot write
+        // it, so a successful write costs this task no extra wake-up before the response.
+        let write_progress = match self
             .session
             .connection()
-            .send_command_outcome_with_deadline(request, deadline, target)
+            .enqueue_request_with_deadline(request, deadline, &guard)
             .await
         {
-            CommandWriteResult::Written => {}
-            CommandWriteResult::DeadlineExpired => {
-                return Ok(OutboundRequestResult::Rejected(
-                    OutboundRequestRejection::deadline_expired(
-                        OutboundRequestStage::BeforeWrite,
-                        deadline.budget_millis(),
-                        REMOTE_ADDR_PRESENT,
-                    ),
-                ));
-            }
-            CommandWriteResult::SessionClosed => {
-                return Ok(OutboundRequestResult::Rejected(
-                    OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
-                ));
-            }
-            CommandWriteResult::Cancelled => {
-                return Ok(OutboundRequestResult::Rejected(OutboundRequestRejection::cancelled(
-                    OutboundRequestStage::BeforeWrite,
-                    REMOTE_ADDR_PRESENT,
-                )));
-            }
-            CommandWriteResult::QueueSaturated => {
-                return Ok(OutboundRequestResult::Rejected(
-                    OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
-                ));
-            }
-            CommandWriteResult::EncodingFailed(error) => {
-                return Err(TransportError::request(
-                    RequestOperation::Write,
-                    OutboundRequestStage::BeforeWrite,
-                    error,
-                ));
-            }
-            CommandWriteResult::OperationalFailure { progress, error } => {
-                let stage = match progress {
-                    WriteProgress::NotStarted => OutboundRequestStage::BeforeWrite,
-                    WriteProgress::PossiblyPartial => OutboundRequestStage::Writing,
-                };
-                return Err(TransportError::request(RequestOperation::Write, stage, error));
-            }
-        }
+            RequestEnqueueResult::Queued(progress) => Some(progress),
+            RequestEnqueueResult::Settled(CommandWriteResult::Written) => None,
+            RequestEnqueueResult::Settled(outcome) => return unwritten_request_outcome(outcome, deadline),
+        };
 
         match deadline.timeout(rx).await {
             Ok(Ok(PendingRequestCompletion::Response(response))) => Ok(OutboundRequestResult::Response(response)),
+            Ok(Ok(PendingRequestCompletion::WriteFailed(failure))) => {
+                unwritten_request_outcome(request_write_failure(failure, deadline), deadline)
+            }
             Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(
                     OutboundRequestStage::AwaitingResponse,
@@ -827,6 +796,17 @@ impl<PR> TransportSession<PR> {
                 connection_failed_for_remote(self.peer.address().to_string(), TransportStage::Closed, source),
             )),
             Err(source) => {
+                // A write the writer had not started is withdrawn, as an awaited send withdraws
+                // it when its deadline passes first.
+                if write_progress.is_some_and(|progress| progress.cancel_before_start()) {
+                    return Ok(OutboundRequestResult::Rejected(
+                        OutboundRequestRejection::deadline_expired(
+                            OutboundRequestStage::BeforeWrite,
+                            deadline.budget_millis(),
+                            REMOTE_ADDR_PRESENT,
+                        ),
+                    ));
+                }
                 let source = response_timeout_caused_by_for_remote(
                     self.peer.address().to_string(),
                     deadline.budget_millis(),
@@ -853,7 +833,7 @@ impl<PR> TransportSession<PR> {
         if self.prepare_transport_request(&mut request, deadline).is_err() {
             return;
         }
-        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
+        let retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut request);
         let guard = match self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             request.opaque(),
@@ -957,7 +937,7 @@ impl<PR> TransportSession<PR> {
         for mut request in requests {
             self.prepare_transport_request(&mut request, deadline)?;
             let (tx, rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
-            let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
+            let retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut request);
             let guard = match self.pending_requests.register_for_owner_with_bytes(
                 &self.pending_request_owner,
                 request.opaque(),
@@ -999,6 +979,9 @@ impl<PR> TransportSession<PR> {
                     ))
                 }
                 Ok(Ok(PendingRequestCompletion::OperationalFailure(error))) => Err(error),
+                Ok(Ok(PendingRequestCompletion::WriteFailed(failure))) => {
+                    Err(PendingRequestCompletion::write_failure_error(failure))
+                }
                 Ok(Err(source)) => Err(connection_failed_for_remote(
                     self.peer.address().to_string(),
                     TransportStage::Closed,
@@ -1399,7 +1382,7 @@ mod lifecycle_tests {
 
         let mut retained_client = client.clone();
         let mut retained_request = RemotingCommand::create_remoting_command(105).set_body(vec![7_u8; 4096]);
-        let expected_retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut retained_request);
+        let expected_retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut retained_request);
         let retained_invocation = tokio::spawn(async move {
             retained_client
                 .send_read(retained_request, RequestDeadline::from_timeout_millis(100))
@@ -1427,5 +1410,50 @@ mod lifecycle_tests {
 
         assert_eq!(service.task_group().component_count(), baseline_components);
         server.abort();
+    }
+}
+
+/// The outcome of a request that was not written: rejected before or during the write, or failed
+/// by the writer. A failure after the write started may have reached the peer.
+fn unwritten_request_outcome(
+    outcome: CommandWriteResult,
+    deadline: RequestDeadline,
+) -> Result<OutboundRequestResult, TransportError> {
+    const REMOTE_ADDR_PRESENT: bool = true;
+    let rejected = |rejection| Ok(OutboundRequestResult::Rejected(rejection));
+    match outcome {
+        // Callers handle `Written` before this point, and a writer failure never classifies as
+        // written; it is reported like an expired deadline rather than trusted as a send.
+        CommandWriteResult::Written | CommandWriteResult::DeadlineExpired => {
+            rejected(OutboundRequestRejection::deadline_expired(
+                OutboundRequestStage::BeforeWrite,
+                deadline.budget_millis(),
+                REMOTE_ADDR_PRESENT,
+            ))
+        }
+        CommandWriteResult::SessionClosed => rejected(OutboundRequestRejection::session_closed(
+            OutboundRequestStage::BeforeWrite,
+            REMOTE_ADDR_PRESENT,
+        )),
+        CommandWriteResult::Cancelled => rejected(OutboundRequestRejection::cancelled(
+            OutboundRequestStage::BeforeWrite,
+            REMOTE_ADDR_PRESENT,
+        )),
+        CommandWriteResult::QueueSaturated => rejected(OutboundRequestRejection::queue_saturated(
+            OutboundRequestStage::BeforeWrite,
+            REMOTE_ADDR_PRESENT,
+        )),
+        CommandWriteResult::EncodingFailed(error) => Err(TransportError::request(
+            RequestOperation::Write,
+            OutboundRequestStage::BeforeWrite,
+            error,
+        )),
+        CommandWriteResult::OperationalFailure { progress, error } => {
+            let stage = match progress {
+                WriteProgress::NotStarted => OutboundRequestStage::BeforeWrite,
+                WriteProgress::PossiblyPartial => OutboundRequestStage::Writing,
+            };
+            Err(TransportError::request(RequestOperation::Write, stage, error))
+        }
     }
 }

@@ -14,7 +14,8 @@
   `.clippy.toml`. Do not lower the MSRV or change these settings merely to bypass a local failure.
 - Keep `Cargo.lock` committed and synchronized when dependencies change. Avoid unrelated dependency upgrades.
 - `src/main.rs` owns process startup, observability bootstrap, GPUI initialization, the application window, and
-  orderly shutdown. `src/ui.rs` declares UI modules, and `src/ui/*.rs` owns views and presentation state.
+  orderly shutdown. `src/features.rs` declares product pages, and `src/features/*.rs` owns their views and
+  presentation state. `src/components.rs` and `src/components/*.rs` contain shared native UI components.
 - Keep the existing flat module layout and do not introduce `mod.rs` files.
 - Several view modules are already large; prefer extracting cohesive components or state when extending them.
 
@@ -23,8 +24,11 @@
 - Keep GPUI-specific rendering, window behavior, event handling, and view state in this project.
 - Put reusable Dashboard models, client contracts, and UI-independent service logic in
   `../rocketmq-dashboard-common/` when practical; do not duplicate shared domain behavior in views.
-- The direct repository path dependencies are `rocketmq-dashboard-common` and `rocketmq-observability`.
-  Revalidate this consumer when their API, features, or shared behavior changes affect it.
+- Repository path dependencies provide shared contracts (`rocketmq-dashboard-common`), native persistence
+  (`rocketmq-dashboard-storage`), Admin adapters (`rocketmq-admin-core`), owned tasks (`rocketmq-runtime`), and
+  observability (`rocketmq-observability`). Revalidate this consumer when their changed behavior affects it.
+- Keep all native persistence on the same opened `DashboardStore`. File mode retains the directory writer;
+  SQL drivers stay optional, with no silent file fallback. Web backend migrations are a separate boundary.
 - Changes to shared RocketMQ crates consumed through those dependencies may also require GPUI revalidation. Use
   the current manifests and the root shared-code rules to determine the actual consumer scope.
 - Do not modify the Tauri or Web Dashboard implementations merely to mirror a GPUI change unless the user asks

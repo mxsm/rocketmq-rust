@@ -88,7 +88,7 @@ impl ProxyDrainState {
         pending: ProxyDrainPending,
     ) -> AdminResult<Self> {
         if schema_version != "rocketmq.proxy-drain.v1" {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "decode_proxy_drain_state",
                 "unsupported Proxy drain schema",
             ));
@@ -98,7 +98,7 @@ impl ProxyDrainState {
             "draining" => ProxyDrainPhase::Draining,
             "drained" => ProxyDrainPhase::Drained,
             _ => {
-                return Err(AdminError::backend(
+                return Err(AdminError::operation_failed(
                     "decode_proxy_drain_state",
                     "unknown Proxy drain phase",
                 ));
@@ -109,7 +109,7 @@ impl ProxyDrainState {
             || (phase != ProxyDrainPhase::Accepting && (admission_open || routing_open))
             || (phase == ProxyDrainPhase::Drained && !zero_pending)
         {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "decode_proxy_drain_state",
                 "inconsistent Proxy drain state",
             ));

@@ -278,7 +278,7 @@ async fn preflight_topic_with_targets<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     let master_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
@@ -287,7 +287,7 @@ async fn preflight_topic_with_targets<A: MQAdminMutationExt + ?Sized>(
         let current = admin
             .mutation_order_topic_config(topic.clone().into())
             .await
-            .map_err(|error| backend_error("mutation_order_topic_config", error))?;
+            .map_err(|source| promote_to_admin_error("mutation_order_topic_config", source))?;
         let expected = parse_order_topic_config(current.as_deref())?;
         validate_targeted_order_state(
             &expected,
@@ -333,7 +333,7 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
         let current = admin
             .mutation_order_topic_config(plan.topic.as_str().into())
             .await
-            .map_err(|error| backend_error("mutation_order_topic_config", error))?;
+            .map_err(|source| promote_to_admin_error("mutation_order_topic_config", source))?;
         let current = parse_order_topic_config(current.as_deref())?;
         if current != guard.expected {
             return Ok(targeted_order_conflict(plan));
@@ -587,7 +587,7 @@ async fn preflight_subscription_group_with_targets<A: MQAdminMutationExt + ?Size
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     let master_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
@@ -700,7 +700,7 @@ async fn preflight_request_mode_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
@@ -786,7 +786,7 @@ async fn preflight_broker_config_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
@@ -814,7 +814,7 @@ async fn preflight_broker_config_target_with_admin<A: MQAdminMutationExt + ?Size
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let all_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
     let selected = vec![broker_name];
     let selected_targets = select_metadata_targets(all_targets, Some(&selected))?;
@@ -1074,7 +1074,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let selected_masters = master_targets_by_cluster_name(&cluster_info, &cluster)?;
     let route = require_topic_route(admin, &topic).await?;
     let selected_names = selected_masters
@@ -1087,15 +1087,14 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
             continue;
         }
         if broker.cluster() != cluster || route_masters.contains_key(broker.broker_name().as_str()) {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route has inconsistent broker identity",
             ));
         }
-        let master = broker
-            .broker_addrs()
-            .get(&MASTER_ID)
-            .ok_or_else(|| AdminError::backend("mutation_topic_route", "selected Topic route broker has no master"))?;
+        let master = broker.broker_addrs().get(&MASTER_ID).ok_or_else(|| {
+            AdminError::operation_failed("mutation_topic_route", "selected Topic route broker has no master")
+        })?;
         route_masters.insert(broker.broker_name().to_string(), master.clone());
     }
     let mut queue_data = HashMap::with_capacity(selected_masters.len());
@@ -1105,7 +1104,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
             continue;
         }
         if queue_data.insert(broker_name, queue.read_queue_nums()).is_some() {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route has duplicate queue ownership",
             ));
@@ -1113,13 +1112,13 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
     }
     for (broker_name, master_addr) in &selected_masters {
         if route_masters.get(broker_name) != Some(master_addr) {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route does not match cluster topology",
             ));
         }
         queue_data.get(broker_name).ok_or_else(|| {
-            AdminError::backend("mutation_topic_route", "selected Topic route has no queue ownership")
+            AdminError::operation_failed("mutation_topic_route", "selected Topic route has no queue ownership")
         })?;
     }
     let target_budget = checked_offset_target_budget(queue_data.values().copied())?;
@@ -1150,7 +1149,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                         .enumerate()
                         .any(|(expected, actual)| *actual != expected as i32)
                 {
-                    return Err(AdminError::backend(
+                    return Err(AdminError::operation_failed(
                         "preview_consumer_offset_reset_on_broker",
                         "Broker returned rows outside the selected Topic queue range",
                     ));
@@ -1401,7 +1400,7 @@ fn map_expected_state_to_client(state: ExpectedState) -> ClientExpectedState {
     }
 }
 
-fn map_client_topic_config(config: ClientTopicConfig) -> TopicReplacement {
+pub(super) fn map_client_topic_config(config: ClientTopicConfig) -> TopicReplacement {
     TopicReplacement {
         read_queue_nums: config.read_queue_nums,
         write_queue_nums: config.write_queue_nums,
@@ -1417,7 +1416,7 @@ fn map_client_topic_config(config: ClientTopicConfig) -> TopicReplacement {
     }
 }
 
-fn map_topic_replacement_to_client(config: &TopicReplacement) -> ClientTopicConfig {
+pub(super) fn map_topic_replacement_to_client(config: &TopicReplacement) -> ClientTopicConfig {
     ClientTopicConfig {
         read_queue_nums: config.read_queue_nums,
         write_queue_nums: config.write_queue_nums,
@@ -1487,7 +1486,7 @@ fn map_client_request_mode(mode: ClientMessageRequestMode) -> RequestModeValue {
     }
 }
 
-fn map_client_persistence(state: ClientMutationPersistenceState) -> MutationPersistenceState {
+pub(super) fn map_client_persistence(state: ClientMutationPersistenceState) -> MutationPersistenceState {
     match state {
         ClientMutationPersistenceState::NotRequired => MutationPersistenceState::NotRequired,
         ClientMutationPersistenceState::Persisted => MutationPersistenceState::Persisted,

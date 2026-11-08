@@ -20,7 +20,6 @@ use crate::config::broker_config::BrokerConfig;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::SharedError;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -44,9 +43,11 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
+use rocketmq_store_api::TimerAdmissionRoute;
+use rocketmq_store_api::TimerEngineId;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
-use rocketmq_store_api::TimerStoreMode;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
@@ -75,9 +76,7 @@ pub(crate) struct RecallMessagePolicy {
     broker_permission: BrokerPermissionState,
     allow_recall_when_broker_not_writeable: bool,
     broker_name: CheetahString,
-    timer_max_delay_sec: u64,
-    timer_store_mode: TimerStoreMode,
-    timer_extended_horizon_days: u16,
+    timer_route: TimerAdmissionRoute,
     timer_delete_key_with_topic: bool,
     timer_policy_fingerprint: u64,
     store_host: SocketAddr,
@@ -97,9 +96,7 @@ impl RecallMessagePolicy {
             broker_permission,
             allow_recall_when_broker_not_writeable: broker_config.allow_recall_when_broker_not_writeable,
             broker_name: broker_config.broker_name().clone(),
-            timer_max_delay_sec: message_store_config.timer_max_delay_sec,
-            timer_store_mode: message_store_config.timer_store_mode,
-            timer_extended_horizon_days: message_store_config.timer_extended_admission_horizon_days,
+            timer_route: message_store_config.timer_admission_route(),
             timer_delete_key_with_topic: message_store_config.timer_delete_key_with_topic,
             timer_policy_fingerprint: message_store_config.timer_policy_fingerprint().unwrap_or_default(),
             store_host,
@@ -134,6 +131,27 @@ impl<MS: BrokerWriteStore> RecallMessageStoreCapability<MS> {
             .upgrade()
             .ok_or(MessageStoreUnavailable)?
             .recall_extended_timer(request)
+    }
+
+    fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .register_native_timer_recall(registration)
+    }
+
+    fn withdraw_native_timer_recall(&self, registration: &TimerRecallRegistration) {
+        let withdrawn = self
+            .escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)
+            .and_then(|bridge| bridge.withdraw_native_timer_recall(registration));
+        if withdrawn.is_err() {
+            warn!("withdraw a native timer recall failed; the timer stays cancelled until restart");
+        }
     }
 
     fn is_slave(&self) -> Result<bool, MessageStoreUnavailable> {
@@ -292,10 +310,9 @@ where
         remote_address: std::net::SocketAddr,
         request: &mut RemotingCommand,
     ) -> crate::broker_error::BrokerResult<RemotingCommand> {
-        let mut response = self
-            .context
-            .command_factory
-            .create_success_response_command_with_header(RecallMessageResponseHeader::default());
+        // The response header is required to carry the recalled message's ID, so only a recall
+        // that succeeds gets one; a refusal with an empty ID could not be encoded at all.
+        let mut response = self.context.command_factory.create_success_response_command();
         response.set_opaque_mut(request.opaque());
 
         let region_id = self.context.policy.region_id.clone();
@@ -383,11 +400,7 @@ where
                 .set_code(ResponseCode::IllegalOperation)
                 .set_remark(CheetahString::from_static_str("recall failed, timestamp invalid")));
         };
-        let max_delay_ms = if self.context.policy.timer_store_mode == TimerStoreMode::ExtendedTimeline {
-            u64::from(self.context.policy.timer_extended_horizon_days).saturating_mul(86_400_000)
-        } else {
-            self.context.policy.timer_max_delay_sec.saturating_mul(1_000)
-        };
+        let max_delay_ms = self.context.policy.timer_route.max_delay_sec.saturating_mul(1_000);
 
         if time_left <= 0 || time_left as u64 >= max_delay_ms {
             return Ok(response
@@ -395,7 +408,7 @@ where
                 .set_remark(CheetahString::from_static_str("recall failed, timestamp invalid")));
         }
 
-        if self.context.policy.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+        if self.context.policy.timer_route.engine == TimerEngineId::ExtendedTimeline {
             let status = match self.context.message_store.recall_extended_timer(&TimerRecallRequest {
                 topic: handle_topic.to_owned(),
                 unique_key: handle_message_id.to_owned(),
@@ -403,32 +416,43 @@ where
                 Ok(status) => status,
                 Err(MessageStoreUnavailable) => TimerRecallStatus::Retry,
             };
-            match status {
-                TimerRecallStatus::Cancelled | TimerRecallStatus::AlreadyCancelled => {
-                    response
-                        .read_custom_header_mut::<RecallMessageResponseHeader>()
-                        .ok_or_else(recall_response_header_missing)?
-                        .set_msg_id(handle_message_id);
+            match refused_recall(status) {
+                None => {
+                    response.set_command_custom_header_ref(RecallMessageResponseHeader::new(handle_message_id));
                     response.set_code_mut(ResponseCode::Success);
                 }
-                TimerRecallStatus::TooLate | TimerRecallStatus::NotFound => {
-                    response.set_code_mut(ResponseCode::IllegalOperation);
-                    response.set_remark_mut(CheetahString::from_static_str(
-                        "recall failed, timer is too late or absent",
-                    ));
-                }
-                TimerRecallStatus::Retry => {
-                    response.set_code_mut(ResponseCode::ServiceNotAvailable);
-                    response.set_remark_mut(CheetahString::from_static_str(
-                        "recall failed, timer state is not ready",
-                    ));
-                }
-                TimerRecallStatus::Quarantined | TimerRecallStatus::Unsupported => {
-                    response.set_code_mut(ResponseCode::SystemError);
-                    response.set_remark_mut(CheetahString::from_static_str("recall failed, timer state unavailable"));
+                Some((code, remark)) => {
+                    response.set_code_mut(code);
+                    response.set_remark_mut(CheetahString::from_static_str(remark));
                 }
             }
             return Ok(response);
+        }
+
+        let recall_key = build_canonical_delete_key(
+            handle_topic,
+            handle_message_id,
+            self.context.policy.timer_delete_key_with_topic,
+        );
+        // The native engine registers the recall before its tombstone is written, so a delivery
+        // batch taken in between still sees it, and says whether the timer can still be stopped.
+        let native_registration =
+            (self.context.policy.timer_route.engine == TimerEngineId::Native).then(|| TimerRecallRegistration {
+                key: recall_key.to_string(),
+                generation: 0,
+                deliver_ms: timestamp,
+            });
+        if let Some(registration) = native_registration.as_ref() {
+            let status = self
+                .context
+                .message_store
+                .register_native_timer_recall(registration)
+                .unwrap_or(TimerRecallStatus::Retry);
+            if let Some((code, remark)) = refused_recall(status) {
+                return Ok(response
+                    .set_code(code)
+                    .set_remark(CheetahString::from_static_str(remark)));
+            }
         }
 
         let msg_inner = self.build_message(
@@ -437,17 +461,26 @@ where
             handle_topic,
             handle_timestamp_str,
             handle_message_id,
+            recall_key,
         );
 
         let begin_time_millis = current_millis();
         let put_message_result = match self.context.message_store.put_message(msg_inner).await {
             Ok(put_message_result) => put_message_result,
             Err(MessageStoreUnavailable) => {
+                if let Some(registration) = native_registration.as_ref() {
+                    self.context.message_store.withdraw_native_timer_recall(registration);
+                }
                 return Ok(response
                     .set_code(ResponseCode::SystemError)
                     .set_remark(CheetahString::from_static_str("recall failed, execute error")));
             }
         };
+        if let Some(registration) = native_registration.as_ref() {
+            if !tombstone_written(&put_message_result) {
+                self.context.message_store.withdraw_native_timer_recall(registration);
+            }
+        }
 
         self.handle_put_message_result(
             put_message_result,
@@ -467,13 +500,8 @@ where
         handle_topic: &str,
         handle_timestamp_str: &str,
         handle_message_id: &str,
+        timer_del_uniqkey: CheetahString,
     ) -> MessageExtBrokerInner {
-        let timer_del_uniqkey = build_canonical_delete_key(
-            handle_topic,
-            handle_message_id,
-            self.context.policy.timer_delete_key_with_topic,
-        );
-
         let body = Bytes::from_static(b"0");
 
         let tags_code =
@@ -606,26 +634,14 @@ where
                     .broker_stats_manager
                     .inc_topic_put_latency(&topic, 0, latency);
 
-                {
-                    let response_header = response
-                        .read_custom_header_mut::<RecallMessageResponseHeader>()
-                        .ok_or_else(recall_response_header_missing)?;
-
-                    response_header.set_msg_id(message_id.as_str());
-                }
+                response.set_command_custom_header_ref(RecallMessageResponseHeader::new(message_id.clone()));
 
                 response.set_code_mut(ResponseCode::Success);
             }
             PutMessageStatus::FlushDiskTimeout
             | PutMessageStatus::FlushSlaveTimeout
             | PutMessageStatus::SlaveNotAvailable => {
-                {
-                    let response_header = response
-                        .read_custom_header_mut::<RecallMessageResponseHeader>()
-                        .ok_or_else(recall_response_header_missing)?;
-
-                    response_header.set_msg_id(message_id.as_str());
-                }
+                response.set_command_custom_header_ref(RecallMessageResponseHeader::new(message_id.clone()));
 
                 response.set_code_mut(ResponseCode::Success);
             }
@@ -639,8 +655,34 @@ where
     }
 }
 
-fn recall_response_header_missing() -> SharedError {
-    crate::broker_error::response_process_failed("RECALL_MESSAGE", "response header is missing")
+/// The response to a typed recall the store refused, or `None` when it cancelled the timer.
+fn refused_recall(status: TimerRecallStatus) -> Option<(ResponseCode, &'static str)> {
+    match status {
+        TimerRecallStatus::Cancelled | TimerRecallStatus::AlreadyCancelled => None,
+        TimerRecallStatus::TooLate | TimerRecallStatus::NotFound => Some((
+            ResponseCode::IllegalOperation,
+            "recall failed, timer is too late or absent",
+        )),
+        TimerRecallStatus::Retry => Some((
+            ResponseCode::ServiceNotAvailable,
+            "recall failed, timer state is not ready",
+        )),
+        TimerRecallStatus::Quarantined | TimerRecallStatus::Unsupported => {
+            Some((ResponseCode::SystemError, "recall failed, timer state unavailable"))
+        }
+    }
+}
+
+/// Whether the recall's tombstone reached the CommitLog, which the response reports as success.
+fn tombstone_written(put_message_result: &PutMessageResult) -> bool {
+    put_message_result.append_message_result().is_some()
+        && matches!(
+            put_message_result.put_message_status(),
+            PutMessageStatus::PutOk
+                | PutMessageStatus::FlushDiskTimeout
+                | PutMessageStatus::FlushSlaveTimeout
+                | PutMessageStatus::SlaveNotAvailable
+        )
 }
 
 #[cfg(test)]
@@ -706,6 +748,32 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_typed_recall_gets_the_response_of_its_status() {
+        let code = |status| refused_recall(status).map(|(code, _)| code);
+        assert_eq!(code(TimerRecallStatus::Cancelled), None);
+        assert_eq!(code(TimerRecallStatus::AlreadyCancelled), None);
+        assert_eq!(code(TimerRecallStatus::TooLate), Some(ResponseCode::IllegalOperation));
+        assert_eq!(code(TimerRecallStatus::NotFound), Some(ResponseCode::IllegalOperation));
+        assert_eq!(code(TimerRecallStatus::Retry), Some(ResponseCode::ServiceNotAvailable));
+        assert_eq!(code(TimerRecallStatus::Quarantined), Some(ResponseCode::SystemError));
+        assert_eq!(code(TimerRecallStatus::Unsupported), Some(ResponseCode::SystemError));
+    }
+
+    #[test]
+    fn a_tombstone_is_written_only_when_the_commit_log_took_it() {
+        let appended = |status| PutMessageResult::new(status, Some(Default::default()), false);
+        assert!(tombstone_written(&appended(PutMessageStatus::PutOk)));
+        assert!(tombstone_written(&appended(PutMessageStatus::FlushDiskTimeout)));
+        assert!(tombstone_written(&appended(PutMessageStatus::SlaveNotAvailable)));
+        assert!(!tombstone_written(&appended(PutMessageStatus::ServiceNotAvailable)));
+        assert!(!tombstone_written(&PutMessageResult::new(
+            PutMessageStatus::PutOk,
+            None,
+            false
+        )));
+    }
+
+    #[test]
     fn embedded_recall_cannot_forge_a_persisted_network_born_host() {
         let origin = RequestOrigin::Embedded {
             caller: EmbeddedCaller::BrokerProxy,
@@ -741,16 +809,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_recall_message_tag_constant() {
-        assert_eq!(RECALL_MESSAGE_TAG, "_RECALL_TAG_");
+    #[tokio::test]
+    async fn a_refused_recall_gets_a_response_that_encodes() {
+        let processor = test_processor();
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::RecallMessage,
+            RecallMessageRequestHeader::new("TopicA", "not-a-handle", None::<CheetahString>),
+        );
+        request.make_custom_header_to_net();
+        // Without a message store the Broker cannot recall, and says so.
+        let response = processor
+            .process_recall_message("127.0.0.1:9876".parse().expect("valid address"), &mut request)
+            .await
+            .expect("a refused recall still gets a response");
+        assert_ne!(response.code(), ResponseCode::Success as i32);
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let mut response = response.clone().set_serialize_type(serialize_type);
+            let mut encoded = bytes::BytesMut::new();
+            response
+                .try_fast_header_encode(&mut encoded)
+                .expect("a refused recall's response encodes");
+        }
     }
 
     #[test]
-    fn recall_response_header_missing_uses_response_process_failed_kind() {
-        let error = recall_response_header_missing();
-
-        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
+    fn test_recall_message_tag_constant() {
+        assert_eq!(RECALL_MESSAGE_TAG, "_RECALL_TAG_");
     }
 
     #[test]
@@ -783,7 +867,7 @@ mod tests {
         assert_eq!(policy.broker_permission.get(), 3);
         assert!(policy.allow_recall_when_broker_not_writeable);
         assert_eq!(policy.broker_name, broker_config.broker_name().clone());
-        assert_eq!(policy.timer_max_delay_sec, 99);
+        assert_eq!(policy.timer_route.max_delay_sec, 99);
         assert_eq!(policy.store_host, store_host);
         broker_permission.update(4);
         assert_eq!(policy.broker_permission.get(), 4);

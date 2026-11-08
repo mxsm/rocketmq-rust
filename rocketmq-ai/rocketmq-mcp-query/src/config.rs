@@ -24,6 +24,8 @@ use serde::Deserialize;
 
 use crate::error::McpError;
 
+mod defaults;
+
 const MAX_JWKS_CA_BYTES: usize = 1024 * 1024;
 const MAX_CLUSTER_CREDENTIAL_BYTES: usize = 64 * 1024;
 /// How long the HTTPS transport lets a request run before it answers with HTTP 408.
@@ -38,9 +40,8 @@ const MAX_PSEUDONYM_KEY_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, Parser)]
 pub struct Args {
-    /// Configuration is explicit so the standalone binary never depends on
-    /// the caller's current working directory.
-    #[arg(long, env = "ROCKETMQ_MCP_CONFIG")]
+    /// Configuration file; an empty value selects built-in local stdio settings.
+    #[arg(long, env = "ROCKETMQ_MCP_CONFIG", default_value = "", hide_default_value = true)]
     pub config: String,
 
     #[arg(long, default_value = "stdio", value_parser = parse_transport)]
@@ -139,7 +140,16 @@ impl McpConfig {
     }
 
     pub fn load_with_overrides(args: &Args) -> crate::error::McpResult<Self> {
-        let mut config = Self::load(&args.config)?;
+        let mut config = if args.config.is_empty() {
+            if args.transport != TransportKind::Stdio {
+                return Err(McpError::invalid_config(
+                    "streamable-http requires --config or ROCKETMQ_MCP_CONFIG".to_string(),
+                ));
+            }
+            defaults::load()?
+        } else {
+            Self::load(&args.config)?
+        };
         config.apply_overrides(args)?;
         config.validate()?;
         Ok(config)
@@ -2080,9 +2090,7 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
     }
 
     #[test]
-    fn standalone_config_is_explicit_and_relative_paths_are_config_owned() {
-        assert!(Args::try_parse_from(["rocketmq-mcp"]).is_err());
-
+    fn relative_paths_are_config_owned() {
         let config = McpConfig::load(example_config_path()).unwrap();
         assert!(Path::new(&config.security.permissions_file).is_absolute());
         assert!(Path::new(&config.server.http.tls.cert_path).is_absolute());

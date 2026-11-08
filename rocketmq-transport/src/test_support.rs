@@ -37,6 +37,7 @@ pub use crate::client::connect_with_config_options_and_telemetry;
 pub use crate::codec::remoting_command_codec::RemotingCommandCodec;
 pub use crate::connection::transport_io_snapshot;
 pub use crate::connection::Connection;
+pub use crate::request_ordering::request_ordering_held;
 pub use crate::server::run_connected_session;
 pub use crate::server::run_connected_session_with_io_policy;
 pub use crate::server::ConnectionHandler;

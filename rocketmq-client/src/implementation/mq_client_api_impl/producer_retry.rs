@@ -32,7 +32,7 @@ impl MQClientAPIImpl {
     )]
     pub(super) async fn handle_async_retry_input(
         mq_fault_strategy: &MQFaultStrategy,
-        topic_publish_info: &mut Option<TopicPublishInfo>,
+        topic_publish_info: &mut Option<Arc<TopicPublishInfo>>,
         instance: Option<&Arc<MQClientInstance>>,
         current_broker_name: &mut CheetahString,
         current_addr: &mut CheetahString,
@@ -124,7 +124,7 @@ impl MQClientAPIImpl {
     pub(super) async fn execute_async_retry_action(
         action: RetryAction,
         mq_fault_strategy: &MQFaultStrategy,
-        topic_publish_info: &mut Option<TopicPublishInfo>,
+        topic_publish_info: &mut Option<Arc<TopicPublishInfo>>,
         instance: Option<&Arc<MQClientInstance>>,
         current_broker_name: &mut CheetahString,
         current_addr: &mut CheetahString,
@@ -155,7 +155,7 @@ impl MQClientAPIImpl {
             RetryAction::SwitchBroker => {
                 let Some((retry_addr, retry_broker_name)) = Self::select_async_retry_target(
                     mq_fault_strategy,
-                    topic_publish_info.as_ref(),
+                    topic_publish_info.as_deref(),
                     instance,
                     current_broker_name,
                 )
@@ -172,7 +172,7 @@ impl MQClientAPIImpl {
 
     pub(super) async fn refresh_async_retry_route(
         mq_fault_strategy: &MQFaultStrategy,
-        topic_publish_info: &mut Option<TopicPublishInfo>,
+        topic_publish_info: &mut Option<Arc<TopicPublishInfo>>,
         instance: Option<&Arc<MQClientInstance>>,
         current_broker_name: &mut CheetahString,
         current_addr: &mut CheetahString,
@@ -183,8 +183,8 @@ impl MQClientAPIImpl {
         let Some(refreshed) = instance.refresh_topic_route_info_once(msg_topic, deadline).await? else {
             return Err(RetryInput::RouteUnavailable);
         };
-        *topic_publish_info = Some(refreshed);
-        let mq = Self::select_async_retry_queue(mq_fault_strategy, topic_publish_info.as_ref(), current_broker_name)
+        *topic_publish_info = Some(Arc::new(refreshed));
+        let mq = Self::select_async_retry_queue(mq_fault_strategy, topic_publish_info.as_deref(), current_broker_name)
             .ok_or(RetryInput::RouteUnavailable)?;
         let broker_name = instance.get_broker_name_from_message_queue(&mq).await;
         let broker_addr = instance
@@ -383,13 +383,11 @@ impl MQClientAPIImpl {
             }
         };
         let response_header = response.decode_command_custom_header_fast::<SendMessageResponseHeader>()?;
-        let mut topic = msg.topic().to_string();
-        if let Some(ns) = self.client_config.get_namespace_v2() {
-            if !ns.is_empty() {
-                topic = NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
-            }
-        }
-        let message_queue = MessageQueue::from_parts(topic.as_str(), broker_name, response_header.queue_id());
+        let message_queue = MessageQueue::from_parts(
+            send_result_topic(msg.topic(), self.client_config.get_namespace_v2()),
+            broker_name.clone(),
+            response_header.queue_id(),
+        );
         let mut uniq_msg_id = MessageClientIDSetter::get_uniq_id(msg);
         let msgs = msg.as_any().downcast_ref::<MessageBatch>();
 
@@ -432,38 +430,32 @@ impl MQClientAPIImpl {
             ..Default::default()
         })
     }
+}
 
-    pub(super) async fn prepare_retry<T: MessageTrait>(
-        &self,
-        broker_name: &CheetahString,
-        msg: &T,
-        _request: &mut RemotingCommand,
-        topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<&Arc<MQClientInstance>>,
-        producer: &DefaultMQProducerImpl,
-    ) -> Option<(CheetahString, CheetahString)> {
-        let mut retry_broker_name = broker_name.clone();
+/// The topic a send result reports: the message's topic without the client namespace. Without a
+/// namespace the message's topic is shared instead of copied.
+pub(super) fn send_result_topic(topic: &CheetahString, namespace: Option<&CheetahString>) -> CheetahString {
+    match namespace.filter(|namespace| !namespace.is_empty()) {
+        Some(namespace) => CheetahString::from_string(NamespaceUtil::without_namespace_with_namespace(
+            topic.as_str(),
+            namespace.as_str(),
+        )),
+        None => topic.clone(),
+    }
+}
 
-        if let Some(topic_publish_info) = topic_publish_info {
-            let mq_chosen = producer.select_one_message_queue(topic_publish_info, Some(&retry_broker_name), false);
-            let Some(mq_chosen) = mq_chosen.as_ref() else {
-                warn!(
-                    "prepare async retry failed: no message queue selected for topic={}",
-                    msg.topic()
-                );
-                return None;
-            };
-            if let Some(instance) = instance {
-                retry_broker_name = instance.get_broker_name_from_message_queue(mq_chosen).await;
-            }
-        }
+#[cfg(test)]
+mod send_result_topic_tests {
+    use super::*;
 
-        if let Some(instance) = instance {
-            if let Some(addr) = instance.find_broker_address_in_publish(retry_broker_name.as_ref()) {
-                return Some((addr, retry_broker_name));
-            }
-        }
+    #[test]
+    fn send_result_topic_strips_only_a_configured_namespace() {
+        let topic = CheetahString::from_static_str("ns%TopicTest");
+        let namespace = CheetahString::from_static_str("ns");
+        let empty = CheetahString::new();
 
-        None
+        assert_eq!("TopicTest", send_result_topic(&topic, Some(&namespace)).as_str());
+        assert_eq!("ns%TopicTest", send_result_topic(&topic, Some(&empty)).as_str());
+        assert_eq!("ns%TopicTest", send_result_topic(&topic, None).as_str());
     }
 }

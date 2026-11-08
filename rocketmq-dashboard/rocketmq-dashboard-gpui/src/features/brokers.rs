@@ -164,6 +164,8 @@ pub struct BrokersView {
     keyword: Entity<InputState>,
     table: Entity<TableState<BrokerTableDelegate>>,
     inspector: Option<Entity<BrokerInspector>>,
+    // A hidden inspector keeps an already accepted write alive until its result arrives.
+    pending_inspectors: Vec<(Entity<BrokerInspector>, Subscription)>,
     _subscriptions: [Subscription; 2],
     inspector_subscription: Option<Subscription>,
     pending_route: Option<(String, BrokerTab)>,
@@ -205,6 +207,7 @@ impl BrokersView {
             keyword,
             table,
             inspector: None,
+            pending_inspectors: Vec::new(),
             _subscriptions: subscriptions,
             inspector_subscription: None,
             pending_route: None,
@@ -228,6 +231,32 @@ impl BrokersView {
             }
         }
         self.refresh(cx);
+    }
+
+    pub fn clear_for_environment(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.revision = revision;
+        self.inventory_task = None;
+        self.pending_route = None;
+        self.inspector_subscription = None;
+        self.pending_inspectors
+            .retain(|(inspector, _)| inspector.read(cx).has_pending_mutation());
+        if let Some(inspector) = self.inspector.take() {
+            inspector.update(cx, |inspector, cx| inspector.clear_for_environment(revision, cx));
+            if inspector.read(cx).has_pending_mutation() {
+                let completion = cx.observe(&inspector, |view, _, cx| {
+                    view.pending_inspectors
+                        .retain(|(inspector, _)| inspector.read(cx).has_pending_mutation());
+                });
+                self.pending_inspectors.push((inspector, completion));
+            }
+        }
+        self.store.inventory.clear();
+        self.store.selected = None;
+        self.store.filter = Default::default();
+        self.store.page = 0;
+        self.keyword.update(cx, |input, cx| input.set_value("", window, cx));
+        self.table.update(cx, |table, cx| table.clear_selection(cx));
+        self.sync_table(cx);
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {

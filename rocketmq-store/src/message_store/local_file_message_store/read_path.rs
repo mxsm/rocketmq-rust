@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use rocketmq_store_local::mapped_file::ResidencyCheck;
 
 pub(super) fn estimate_in_mem_by_commit_offset(
     offset_py: i64,
@@ -62,6 +63,24 @@ pub(super) fn is_the_batch_full(
 }
 
 impl LocalFileMessageStore {
+    /// Page-cache residency is consumed only by cold-data flow control and by a tiered store that
+    /// reads remotely when local data is not in memory. Without either, a read does not ask the
+    /// kernel, matching RocketMQ Java's `ColdDataCheckService::isDataInPageCache`.
+    pub(super) fn read_path_residency_check(&self) -> ResidencyCheck {
+        #[cfg(feature = "tieredstore")]
+        let tiered_needs_residency = self
+            .tiered_store
+            .as_ref()
+            .is_some_and(|tiered_store| tiered_store.reads_by_local_page_cache_residency());
+        #[cfg(not(feature = "tieredstore"))]
+        let tiered_needs_residency = false;
+        if self.message_store_config.cold_data_flow_control_enable || tiered_needs_residency {
+            ResidencyCheck::Probe
+        } else {
+            ResidencyCheck::AssumeResident
+        }
+    }
+
     pub(crate) fn apply_runtime_index_safety(&self, result: &mut QueryMessageResult) {
         self.apply_runtime_index_safety_at(result, self.current_index_safe_offset());
     }
@@ -142,6 +161,8 @@ impl LocalFileMessageStore {
             }
         }
         let begin_time = Instant::now();
+        let residency = self.read_path_residency_check();
+        let cold_data_flow_control = self.message_store_config.cold_data_flow_control_enable;
 
         let mut status = GetMessageStatus::NoMessageInQueue;
 
@@ -263,11 +284,10 @@ impl LocalFileMessageStore {
                             let requires_payload = message_filter
                                 .as_ref()
                                 .is_some_and(|filter| filter.requires_commit_log_payload());
-                            let selected = if requires_payload {
-                                self.commit_log.get_message(offset_py, size_py)
-                            } else {
-                                self.commit_log.get_message_for_transfer(offset_py, size_py)
-                            };
+                            // Both transfer modes select from the mapping: a read-only mapping yields
+                            // an owner-backed range and a writable one a copy of the message. Either
+                            // avoids the per-message positional read of a file-range selection.
+                            let selected = self.commit_log.get_message_with(offset_py, size_py, residency);
                             let Some(select_result) = selected else {
                                 if get_result_ref.buffer_total_size() == 0 {
                                     status = GetMessageStatus::MessageWasRemoving;
@@ -284,14 +304,16 @@ impl LocalFileMessageStore {
                                     _ => TieredLocalResidency::Disk,
                                 };
                             }
-                            self.commit_log.get_cold_data_check_service().observe_message_residency(
-                                group,
-                                topic,
-                                queue_id,
-                                cq_unit.queue_offset,
-                                in_cache,
-                            );
-                            if self.message_store_config.cold_data_flow_control_enable
+                            if cold_data_flow_control {
+                                self.commit_log.get_cold_data_check_service().observe_message_residency(
+                                    group,
+                                    topic,
+                                    queue_id,
+                                    cq_unit.queue_offset,
+                                    in_cache,
+                                );
+                            }
+                            if cold_data_flow_control
                                 && !is_sys_consumer_group_for_no_cold_read_limit(group)
                                 && !in_cache
                             {

@@ -119,11 +119,14 @@ struct BlockingLanes {
     storage_io: BlockingExecutor,
     metadata_io: BlockingExecutor,
     cpu_crypto: BlockingExecutor,
+    consume_listener: BlockingExecutor,
 }
 
 impl BlockingLanes {
     fn new(policies: BlockingLanePolicies, global_capacity: usize, runtime: RuntimeHandle, scope: &TaskGroup) -> Self {
         let budget = GlobalBlockingBudget::managed(global_capacity, &policies);
+        let listener_budget =
+            GlobalBlockingBudget::dedicated(BlockingLane::ConsumeListener, policies.consume_listener.max_concurrency);
         Self {
             storage_io: BlockingExecutor::new_managed(
                 policies.storage_io,
@@ -141,9 +144,22 @@ impl BlockingLanes {
             )
             .expect("RuntimeConfig validates metadata blocking policy before root context construction")
             .scoped_to(scope.clone()),
-            cpu_crypto: BlockingExecutor::new_managed(policies.cpu_crypto, BlockingLane::CpuCrypto, budget, runtime)
-                .expect("RuntimeConfig validates CPU blocking policy before root context construction")
-                .scoped_to(scope.clone()),
+            cpu_crypto: BlockingExecutor::new_managed(
+                policies.cpu_crypto,
+                BlockingLane::CpuCrypto,
+                budget,
+                runtime.clone(),
+            )
+            .expect("RuntimeConfig validates CPU blocking policy before root context construction")
+            .scoped_to(scope.clone()),
+            consume_listener: BlockingExecutor::new_managed(
+                policies.consume_listener,
+                BlockingLane::ConsumeListener,
+                listener_budget,
+                runtime,
+            )
+            .expect("RuntimeConfig validates consume listener blocking policy before root context construction")
+            .scoped_to(scope.clone()),
         }
     }
 
@@ -152,6 +168,7 @@ impl BlockingLanes {
             storage_io: self.storage_io.scoped_to(scope.clone()),
             metadata_io: self.metadata_io.scoped_to(scope.clone()),
             cpu_crypto: self.cpu_crypto.scoped_to(scope.clone()),
+            consume_listener: self.consume_listener.scoped_to(scope.clone()),
         }
     }
 
@@ -160,6 +177,7 @@ impl BlockingLanes {
             BlockingLane::StorageIo => &self.storage_io,
             BlockingLane::MetadataIo => &self.metadata_io,
             BlockingLane::CpuCrypto => &self.cpu_crypto,
+            BlockingLane::ConsumeListener => &self.consume_listener,
         }
     }
 
@@ -168,6 +186,7 @@ impl BlockingLanes {
             self.storage_io.snapshot(),
             self.metadata_io.snapshot(),
             self.cpu_crypto.snapshot(),
+            self.consume_listener.snapshot(),
         ]
     }
 
@@ -176,6 +195,7 @@ impl BlockingLanes {
             self.storage_io.aggregate(),
             self.metadata_io.aggregate(),
             self.cpu_crypto.aggregate(),
+            self.consume_listener.aggregate(),
         ]
     }
 }
@@ -387,6 +407,11 @@ impl ChildServiceContext {
     /// Returns the cpu crypto.
     pub fn cpu_crypto(&self) -> &BlockingExecutor {
         self.blocking(BlockingLane::CpuCrypto)
+    }
+
+    /// Returns the lane that runs user consume listeners.
+    pub fn consume_listener(&self) -> &BlockingExecutor {
+        self.blocking(BlockingLane::ConsumeListener)
     }
 
     /// Returns the diagnostics.

@@ -165,7 +165,7 @@ impl AdminSession {
         self.inner
             .probe_name_server(name_server.into())
             .await
-            .map_err(|error| backend_error("probe_name_server", error))
+            .map_err(|source| promote_to_admin_error("probe_name_server", source))
     }
 
     pub(crate) fn ensure_open(&self) -> AdminResult<()> {
@@ -284,7 +284,7 @@ impl AdminBuilder {
         admin
             .start()
             .await
-            .map_err(|error| backend_error("start_admin_session", error))?;
+            .map_err(|source| promote_to_admin_error("start_admin_session", source))?;
 
         Ok(AdminSession {
             request_signing_hook,
@@ -311,6 +311,9 @@ fn admin_acl_rpc_hook(credentials: &AdminCredentials) -> AclClientRPCHook {
     AclClientRPCHook::with_signature_algorithm(credentials, SigningAlgorithm::HmacSha256)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }

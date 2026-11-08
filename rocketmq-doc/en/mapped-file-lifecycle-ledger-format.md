@@ -584,6 +584,8 @@ This scan also applies when filesystem metadata later damages a previously valid
 
 ## 11. Platform namespace and durability model
 
+Implementation note: inside the platform backend, a failed namespace I/O step is carried by the internal `NamespaceIoFailure` value. It is an implementation detail, not part of the persisted format. Its `NamespaceFailure` payload retains the operation, failure class, and raw OS code diagnostics, and its `is_retryable` flag, set by the platform error classifier, selects conversion to the `Retryable` or `Failed` namespace operation result. A value built with `non_retryable` simply converts to the existing `Failed` result. Neither a retryable nor a failed attempt proves that the namespace mutation happened or that the entry is absent; the platform rules below still decide what the durable stage may record.
+
 ### 11.1 Unix
 
 All operations use directory-relative, no-follow APIs and verify `fstat` identity on the opened handle. After durable intent and logical handoff, v1 may rename to the unique same-directory tombstone and unlink it, or directly unlink the canonical path. After rename/unlink, it calls `fsync` on the containing directory before appending the corresponding stage. A directory-sync error keeps the prior durable stage and retries/reconciles; it is not reported as durable namespace success. Existing mappings and open file descriptions may remain usable until their Rust owners drop.

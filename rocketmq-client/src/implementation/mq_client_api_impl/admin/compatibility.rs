@@ -14,7 +14,7 @@
 
 use super::*;
 #[cfg(feature = "admin-full")]
-impl MqClientAdminInner for MQClientAPIImpl {
+impl MqClientAdmin for MQClientAPIImpl {
     async fn query_message(
         &self,
         address: &str,
@@ -745,5 +745,16 @@ impl MqClientAdminInner for MQClientAPIImpl {
                 response.remark().map_or_else(String::new, |s| s.to_string())
             )),
         }
+    }
+}
+
+#[cfg(all(test, feature = "admin-full"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mq_client_api_implements_send_admin_contract() {
+        fn assert_admin<T: crate::MqClientAdmin>() {}
+        assert_admin::<MQClientAPIImpl>();
     }
 }

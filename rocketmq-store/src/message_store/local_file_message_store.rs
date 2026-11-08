@@ -82,6 +82,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
+use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
@@ -113,7 +114,7 @@ use rocketmq_store_local::message_store::LocalStoreComposition;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::backend_ops::build_store_health_snapshot;
-use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreEngine;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
@@ -139,8 +140,6 @@ use crate::capability::ConsumeQueueStatistics;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::MessageStoreConfig;
-use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
-use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
 use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
@@ -185,7 +184,9 @@ use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
 use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
+use crate::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::store_path_config_helper::get_store_path_consume_queue;
+use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 #[cfg(feature = "tieredstore")]
 use crate::tieredstore::resolve_tiered_dispatch_body_with_reader;
 #[cfg(feature = "tieredstore")]
@@ -200,8 +201,13 @@ use crate::timer::delivery::TimelineDeliveryCoordinator;
 use crate::timer::engine::TimerEngine;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::engine::WorkBudget;
+use crate::timer::native::NativeDeliveryFeed;
+use crate::timer::native::NativeRecallVerdict;
+use crate::timer::native::NativeServiceRole;
+use crate::timer::native::NativeTimerService;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::role::TimerRoleState;
+use crate::timer::source_wake::TimerSourceWake;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::ExtendedTimelineEngine;
 #[cfg(feature = "extended_timeline")]
@@ -211,9 +217,9 @@ use crate::timer::timeline::TimelineAdmissionController;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineAdmissionDecision;
 #[cfg(feature = "extended_timeline")]
-use crate::timer::timeline::TimelineCompletionReconciler;
+use crate::timer::timeline::TimelineCompletionFeed;
 #[cfg(feature = "extended_timeline")]
-use crate::timer::timeline::TimelineCompletionWake;
+use crate::timer::timeline::TimelineCompletionReconciler;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineDueScanner;
 #[cfg(feature = "extended_timeline")]
@@ -226,6 +232,7 @@ use crate::timer::timeline::TimelineRecallService;
 use crate::timer::timeline::TimelineSnapshotManager;
 use crate::timer::timer_message_store::TimerMessageStore;
 use crate::timer::timer_message_store::TimerStoreContext;
+use crate::timer::timer_message_store::TIMER_TOPIC;
 use crate::transfer::segment::SegmentLease;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 #[cfg(feature = "extended_timeline")]
@@ -298,7 +305,9 @@ enum PendingHAService {
 ///
 /// The handle deliberately excludes queue, index, dispatcher, and lifecycle
 /// mutation APIs while retaining replica append/read, confirm publication, and
-/// replication progress state shared by the owning Store.
+/// replication progress state shared by the owning Store. Its one queue operation
+/// rebuilds the queue offset table when the Store becomes master, and replica appends and
+/// confirm offsets wake the reput service so that replicated data is dispatched.
 #[derive(Clone)]
 pub(crate) struct HAReplicaStoreHandle {
     message_store_config: Arc<MessageStoreConfig>,
@@ -309,6 +318,13 @@ pub(crate) struct HAReplicaStoreHandle {
     state_machine_version: Arc<AtomicI64>,
     controller_epoch_start_offset: Arc<AtomicI64>,
     commit_log: CommitLogReplicaHandle,
+    consume_queue_store: ConsumeQueueStore,
+    reput_notify: ReputNotifyHandle,
+    /// The end of what every CommitLog dispatcher has seen.
+    dispatch_frontier: Arc<AtomicI64>,
+    native_timer: Option<Arc<NativeTimerService>>,
+    native_shadow: Option<Arc<NativeTimerService>>,
+    runtime_scope: StoreRuntimeScope,
 }
 
 impl HAReplicaStoreHandle {
@@ -383,6 +399,20 @@ impl HAReplicaStoreHandle {
             .store(epoch_start_offset, Ordering::SeqCst);
     }
 
+    #[inline]
+    pub(crate) fn get_controller_epoch_start_offset(&self) -> i64 {
+        self.controller_epoch_start_offset.load(Ordering::SeqCst)
+    }
+
+    /// Rebuilds the next queue offsets that the write path assigns from.
+    ///
+    /// A replica appends and dispatches without assigning offsets, so its table goes stale. Java's
+    /// `AutoSwitchHAService#changeToMaster` rebuilds it before the Store accepts writes as master.
+    pub(crate) fn recover_topic_queue_table(&self) {
+        let mut consume_queue_store = self.consume_queue_store.clone();
+        consume_queue_store.recover_offset_table(self.get_min_phy_offset());
+    }
+
     pub(crate) async fn append_replica_data(
         &self,
         start_offset: i64,
@@ -399,7 +429,9 @@ impl HAReplicaStoreHandle {
             .commit_log
             .append_data(start_offset, data, data_start, data_length)
             .await?;
-        if !appended {
+        if appended {
+            self.reput_notify.notify_dispatchable();
+        } else {
             error!(
                 "HA replica append failed, physical offset={}, data length={}",
                 start_offset, data_length
@@ -411,6 +443,90 @@ impl HAReplicaStoreHandle {
     #[inline]
     pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
         self.commit_log.publish_confirm_offset(phy_offset);
+        // In controller mode the reput service stops at the confirm offset.
+        self.reput_notify.notify_dispatchable();
+    }
+
+    /// Cuts off a record the old master did not finish sending, and returns the new end of the
+    /// log if it cut anything. Replication frames end at any byte.
+    pub(crate) async fn cut_unfinished_record(&self) -> Result<Option<i64>, StoreError> {
+        // The consume queues end at a record boundary, and nothing behind them is dispatched yet.
+        let start = self
+            .consume_queue_store
+            .get_max_phy_offset_in_consume_queue_global()
+            .max(self.commit_log.get_min_offset())
+            .max(0);
+        self.commit_log
+            .cut_unfinished_record(start, dispatch::reput_read_max_bytes(&self.message_store_config))
+            .await
+    }
+
+    /// Cuts the log back to `offset`, with what was dispatched from the part that goes: the
+    /// consume queues, Reput's position and what a native timer engine took from it. A master
+    /// that accepts writes without waiting for its replicas dispatched its whole log, and a
+    /// replica what the master let it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when Reput does not come to rest within `dispatch_timeout`, or a step of the cut
+    /// fails. Each step leaves alone what is cut already, so a later cut completes this one.
+    pub(crate) async fn cut_back_to(&self, offset: i64, dispatch_timeout: Duration) -> Result<(), StoreError> {
+        // First, or Reput could still read what is about to go.
+        self.publish_confirm_offset(self.get_confirm_offset_directly().min(offset));
+        if !self.wait_until_dispatched(dispatch_timeout).await {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Append)
+                    .in_component(StoreComponent::CommitLog)
+                    .with_detail("Reput did not stop in time to cut the CommitLog back"),
+            );
+        }
+        self.reput_notify.rewind_to(offset);
+        self.dispatch_frontier.fetch_min(offset, Ordering::AcqRel);
+        for native_timer in self.native_timer.iter().chain(&self.native_shadow) {
+            let native_timer = Arc::clone(native_timer);
+            self.runtime_scope
+                .spawn_io("ha-cut-native-timers", move || native_timer.cut_back(offset))
+                .await?
+                .map_err(|error| {
+                    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
+                        .in_component(StoreComponent::CommitLog)
+                        .with_detail("the native timer engine could not take back what is cut off")
+                        .with_source(error)
+                })?;
+        }
+        let consume_queue_store = self.consume_queue_store.clone();
+        let consume_queues_cut = self
+            .runtime_scope
+            .spawn_io("ha-cut-consume-queues", move || {
+                consume_queue_store.truncate_dirty_with_outcome(offset)
+            })
+            .await?;
+        if !consume_queues_cut {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
+                    .in_component(StoreComponent::CommitLog)
+                    .with_detail("the consume queues could not be cut back to the new master"),
+            );
+        }
+        if !self.commit_log.truncate_tail(offset).await {
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
+                    .in_component(StoreComponent::CommitLog)
+                    .with_detail("the CommitLog could not be cut back to the new master"),
+            );
+        }
+        let replica_store = self.clone();
+        self.runtime_scope
+            .spawn_io("ha-recover-topic-queue-table", move || {
+                replica_store.recover_topic_queue_table()
+            })
+            .await
+    }
+
+    /// Waits until the dispatchers saw all that is dispatchable, or `timeout` passes, and says
+    /// which came first.
+    pub(crate) async fn wait_until_dispatched(&self, timeout: Duration) -> bool {
+        self.reput_notify.wait_until_dispatched(timeout).await
     }
 }
 
@@ -633,6 +749,18 @@ pub struct LocalFileMessageStore {
     compaction_service: Option<CompactionService>,
 
     timer_message_store: Option<Arc<TimerMessageStore>>,
+    /// Woken by Reput after it dispatches Timer topic records; the timer source stages wait on it.
+    timer_source_wake: Arc<TimerSourceWake>,
+    /// The native timer engine, run under `timerStoreMode = native`.
+    native_timer: Option<Arc<NativeTimerService>>,
+    /// The lowest CommitLog offset the native timer engine still needs; `-1` without it.
+    native_timer_cleanup_pin: Arc<AtomicI64>,
+    /// The native deliveries Reput dispatches while this Broker is a slave.
+    native_delivery_feed: Arc<NativeDeliveryFeed>,
+    /// The native timer engine in shadow, `[store.timerNative] shadowEnable` under another mode.
+    native_shadow: Option<Arc<NativeTimerService>>,
+    /// The other engines' deliveries, which the shadow compares itself with.
+    native_shadow_feed: Arc<NativeDeliveryFeed>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_cleanup_pin: Arc<AtomicI64>,
     #[cfg(feature = "extended_timeline")]
@@ -644,7 +772,7 @@ pub struct LocalFileMessageStore {
     #[cfg(feature = "extended_timeline")]
     extended_timeline_recall_service: Option<Arc<TimelineRecallService>>,
     #[cfg(feature = "extended_timeline")]
-    extended_timeline_completion_wake: Arc<TimelineCompletionWake>,
+    extended_timeline_completion_feed: Arc<TimelineCompletionFeed>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_completion_reconciler: Option<Arc<TimelineCompletionReconciler>>,
     #[cfg(feature = "extended_timeline")]
@@ -847,7 +975,7 @@ impl LocalFileMessageStore {
 
 #[allow(unused_variables)]
 #[allow(unused_assignments)]
-impl BackendOps for LocalFileMessageStore {
+impl MessageStoreEngine for LocalFileMessageStore {
     async fn load(&mut self) -> bool {
         self.load_store().await
     }
@@ -922,6 +1050,35 @@ impl BackendOps for LocalFileMessageStore {
         {
             let _ = request;
             Ok(TimerRecallStatus::Unsupported)
+        }
+    }
+
+    fn register_native_timer_recall(
+        &self,
+        registration: &TimerRecallRegistration,
+    ) -> Result<TimerRecallStatus, StoreError> {
+        if self.message_store_config.timer_store_mode != TimerStoreMode::Native {
+            return Ok(TimerRecallStatus::Unsupported);
+        }
+        let Some(native_timer) = self.native_timer.as_ref() else {
+            return Ok(TimerRecallStatus::Retry);
+        };
+        let verdict = native_timer.register_recall(
+            registration.key.as_bytes(),
+            registration.generation,
+            registration.deliver_ms,
+        );
+        Ok(match verdict {
+            Ok(NativeRecallVerdict::Cancelled) => TimerRecallStatus::Cancelled,
+            Ok(NativeRecallVerdict::TooLate) => TimerRecallStatus::TooLate,
+            // No timer the engine admits can have that deadline.
+            Err(_rejection) => TimerRecallStatus::NotFound,
+        })
+    }
+
+    fn withdraw_native_timer_recall(&self, registration: &TimerRecallRegistration) {
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            native_timer.withdraw_recall(registration.key.as_bytes(), registration.generation);
         }
     }
 
@@ -1476,6 +1633,9 @@ impl BackendOps for LocalFileMessageStore {
                     result.insert("timerPipelineMetrics".to_string(), pipeline_metrics);
                 }
             }
+            if let Some(draining) = timer_message_store.draining_file_format() {
+                result.insert("timerDrainingFileFormat".to_string(), draining.as_str().to_string());
+            }
         } else {
             result.insert("timerReadBehind".to_string(), "0".to_string());
             result.insert("timerOffsetBehind".to_string(), "0".to_string());
@@ -1490,6 +1650,31 @@ impl BackendOps for LocalFileMessageStore {
         result.insert(
             "timerStoreMode".to_string(),
             self.message_store_config.timer_store_mode.as_str().to_string(),
+        );
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            result.insert("timerNativeRole".to_string(), native_timer.role_name().to_string());
+            if let Ok(native_metrics) = serde_json::to_string(&native_timer.runtime_metrics()) {
+                result.insert("timerNativeMetrics".to_string(), native_metrics);
+            }
+            if let Some(pipeline_snapshot) = native_timer.pipeline_diagnostics() {
+                if let Ok(pipeline_metrics) = serde_json::to_string(
+                    &crate::timer::timer_metrics::TimerMetrics::pipeline_runtime_metrics(pipeline_snapshot),
+                ) {
+                    result.insert("timerNativePipelineMetrics".to_string(), pipeline_metrics);
+                }
+            }
+        }
+        if let Some(native_shadow) = self.native_shadow.as_ref() {
+            if let Ok(shadow_metrics) = serde_json::to_string(&native_shadow.runtime_metrics()) {
+                result.insert("timerNativeShadowMetrics".to_string(), shadow_metrics);
+            }
+            if let Ok(shadow_samples) = serde_json::to_string(&native_shadow.shadow_samples()) {
+                result.insert("timerNativeShadowSamples".to_string(), shadow_samples);
+            }
+        }
+        result.insert(
+            "timerFileFormat".to_string(),
+            self.message_store_config.timer_file_format.as_str().to_string(),
         );
         result.insert(
             "timerMaximumHorizonDays".to_string(),
@@ -1994,7 +2179,7 @@ impl BackendOps for LocalFileMessageStore {
         }
     }
 
-    fn get_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
+    fn get_master_store_in_process<M: MessageStoreEngine + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
         let guard = match self.master_store_in_process.read() {
             Ok(guard) => guard,
             Err(error) => {
@@ -2007,7 +2192,10 @@ impl BackendOps for LocalFileMessageStore {
         Some(Arc::clone(boxed_master_store.as_ref()))
     }
 
-    fn set_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
+    fn set_master_store_in_process<M: MessageStoreEngine + Send + Sync + 'static>(
+        &self,
+        master_store_in_process: Arc<M>,
+    ) {
         let mut guard = match self.master_store_in_process.write() {
             Ok(guard) => guard,
             Err(error) => {
@@ -2091,6 +2279,17 @@ impl BackendOps for LocalFileMessageStore {
         #[cfg(feature = "extended_timeline")]
         if !self.sync_extended_timeline_controller_role(previous_role, broker_role, external_term)? {
             return Ok(false);
+        }
+        // Before the CommitLog role, as Extended does: a failed epoch write keeps the old role
+        // with delivery fenced. `sync_timer_message_store_role` below then finds it in place.
+        if let Some(native_timer) = self.native_timer.as_ref() {
+            native_timer
+                .change_delivery_role(broker_role != BrokerRole::Slave, external_term)
+                .map_err(|error| {
+                    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
+                        .with_detail("failed to persist the native timer delivery epoch")
+                        .with_source(error)
+                })?;
         }
         self.commit_log.sync_broker_role(broker_role);
         self.refresh_controller_confirm_offset_after_role_change();

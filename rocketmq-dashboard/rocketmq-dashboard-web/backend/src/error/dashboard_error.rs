@@ -682,8 +682,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generic_admin_backend_uses_the_tools_descriptor() {
-        let error = AdminError::backend("query", "password=plain-text C:\\private\\admin");
+    async fn generic_admin_operation_failure_uses_the_tools_descriptor() {
+        let error = AdminError::operation_failed("query", "password=plain-text C:\\private\\admin");
         let (status, body, bytes) = failure_response(DashboardError::from(error)).await;
 
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

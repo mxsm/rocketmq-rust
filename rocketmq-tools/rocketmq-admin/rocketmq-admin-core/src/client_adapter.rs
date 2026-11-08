@@ -15,6 +15,9 @@
 //! RocketMQ client-backed implementations of the admin-owned contracts.
 
 #[cfg(feature = "client-adapter")]
+mod acl_workspace;
+
+#[cfg(feature = "client-adapter")]
 mod broker;
 #[cfg(feature = "client-adapter")]
 mod connection;
@@ -22,11 +25,17 @@ mod connection;
 mod consumer;
 #[cfg(feature = "client-adapter")]
 mod dashboard;
+#[cfg(feature = "client-adapter")]
+mod dashboard_metrics;
 pub(crate) mod lifecycle;
 #[cfg(feature = "client-adapter")]
 mod lite;
 #[cfg(feature = "client-adapter")]
 mod message;
+#[cfg(any(feature = "client-adapter", feature = "mutation-client-adapter"))]
+pub(crate) mod message_target;
+#[cfg(feature = "client-adapter")]
+mod message_trace;
 #[cfg(feature = "mutation-client-adapter")]
 #[path = "client_adapter/topic/producer.rs"]
 pub(crate) mod producer;
@@ -40,6 +49,8 @@ mod static_topic;
 mod targeted_read;
 #[cfg(feature = "client-adapter")]
 mod topic;
+#[cfg(feature = "client-adapter")]
+mod topology;
 
 #[cfg(feature = "client-adapter")]
 pub use lifecycle::AdminBuilder;

@@ -213,6 +213,24 @@ requests.
 | Providers | `TieredStoreProvider`, `ProviderKind`, `PosixProvider`, `MemoryProvider` |
 | Services | `CommitLogRecoverService`, `TieredRecoverResult`, cleanup service set |
 
+FileSegment API migration: the `FileSegment` trait is now declared directly with
+`#[trait_variant::make(Send)]`, and the previously generated source trait
+`rocketmq_tieredstore::file::file_segment::FileSegmentInner` has been removed. Replace
+any import, implementation, or generic-bound reference to `FileSegmentInner` with the
+canonical `rocketmq_tieredstore::FileSegment`. The retained trait requires the
+implementing type and its asynchronous futures to be `Send`; an implementation that
+relied on a non-`Send` future must be adapted, because an alias for the old name would
+not preserve that contract.
+
+### Provider API migration (unreleased)
+
+`rocketmq_tieredstore::provider::TieredStoreProviderInner` is removed.
+Replace it in imports, `impl` headers, and generic bounds with
+`rocketmq_tieredstore::TieredStoreProvider`. This breaks source compatibility: the
+retained trait requires implementations and returned futures to be `Send`.
+Non-`Send` implementations or futures must be adapted; an alias would not preserve
+the old contract. The existing `Sync + Clone + 'static` bounds remain in place.
+
 ## Data Model
 
 ### Write Path
