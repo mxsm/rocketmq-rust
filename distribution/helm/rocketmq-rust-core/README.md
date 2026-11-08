@@ -49,6 +49,8 @@ identity, listeners, and storage configuration require a restart; changing the
 configured peer list does not perform a Raft membership change. Keep those values
 consistent with the persisted membership when upgrading an existing cluster.
 
+Both RocketMQ charts use `services.controller.storageEngineType` for the Controller engine. Replace `services.controller.storageBackend` in existing values overrides before upgrading; both charts reject the removed key even when defaults or overrides also provide the canonical key.
+
 ## Restarting one Controller
 
 The packaged `files/rollout.py` requires Python 3.11+, `kubectl`, and a matching

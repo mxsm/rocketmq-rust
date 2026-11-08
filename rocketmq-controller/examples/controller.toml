@@ -80,10 +80,10 @@ heartbeat_interval_ms = 500
 # Path to store Raft logs and state machine data
 storage_path = "/opt/rocketmq/controller/storage"
 
-# Storage backend type
+# Storage engine selected by storageEngineType
 # Options: "RocksDB", "Memory"
 # Default: "RocksDB"
-storage_backend = "RocksDB"
+storageEngineType = "RocksDB"
 
 # Mapped file size for storage (in bytes)
 # Default: 1073741824 (1GB)

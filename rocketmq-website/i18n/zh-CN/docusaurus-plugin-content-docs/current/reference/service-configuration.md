@@ -66,7 +66,9 @@ NameServer 配置路径将属性分为即时生效、重启生效和不支持三
 
 ### 文件模型与身份
 
-Controller 使用根层级 camelCase 字段及 Serde 默认值。应使用 `nodeId`、`listenAddr`、`raftListenAddr`、`raftPeers`、`storageEngineType`（及旧输入别名 `storageBackend`），不要直接复制 Rust 的 snake_case 字段名。文件值覆盖默认值；节点身份与存储没有通用 CLI 覆盖项。`--log-filter` 是独立的启动日志覆盖项。
+升级前，请将独立或嵌入式 Controller 启动配置、运行时属性更新、配置黑名单及 `services.controller` Helm 覆盖项中的 `storageBackend` 改为 `storageEngineType`。启动文件和 Helm values 中出现旧键时会被拒绝，即使同时提供了新键也不例外。无需迁移持久化数据。
+
+Controller 使用根层级 camelCase 字段及 Serde 默认值。应使用 `nodeId`、`listenAddr`、`raftListenAddr`、`raftPeers`、`storageEngineType`，不要直接复制 Rust 的 snake_case 字段名。文件值覆盖默认值；节点身份与存储没有通用 CLI 覆盖项。`--log-filter` 是独立的启动日志覆盖项。
 
 | 外部键名 | 类型 / 默认值 | 含义 |
 | --- | --- | --- |
@@ -77,7 +79,7 @@ Controller 使用根层级 camelCase 字段及 Serde 默认值。应使用 `node
 | `raftPeers` | `{ id, addr }` 数组 / 空 | Raft 成员端点输入。`controllerPeers` 是独立的 remoting 对等节点列表；配置模型还提供强类型端点替代形式。 |
 | `electionTimeoutMs` | u64 / `1000` ms | Raft 选举时间输入，应结合心跳时序与网络条件配置。 |
 | `heartbeatIntervalMs` | u64 / `300` ms | Raft 心跳时间输入，不是 Broker 心跳租约超时。 |
-| `storageEngineType` | enum / `RocksDB` | 序列化值为 `RocksDB`、`File`、`Memory`。Memory 用于测试，不提供重启持久性。支持 `storageBackend` 作为旧输入兼容别名。 |
+| `storageEngineType` | enum / `RocksDB` | 序列化值为 `RocksDB`、`File`、`Memory`。Memory 用于测试，不提供重启持久性。 |
 | `storagePath` | string / 空 | 首选存储根目录。为空时使用 `controllerStorePath`；两者均为空时使用 `rocketmqHome/controller/node-<nodeId>`。 |
 | `snapshotLogsSinceLast` | u64 / `5000` | 触发快照的日志条目阈值，必须为正数。 |
 | `snapshotMaxLogEntriesToKeep` | u64 / `1000` | 与快照相关的保留日志设置，必须为正数。 |

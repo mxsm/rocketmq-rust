@@ -56,7 +56,7 @@ fn unused<T: Send>() -> RuntimeFuture<'static, Result<T, ControlError>> {
     Box::pin(async { Err(ControlError::operation_unavailable()) })
 }
 
-impl SupervisedMutationBackend for ProductionPathBackend {
+impl MutationAdmin for ProductionPathBackend {
     type TopicPlan = ();
     type GroupPlan = ();
     type OffsetPlan = OffsetPlan;

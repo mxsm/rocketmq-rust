@@ -48,7 +48,7 @@ services:
     replicas: 1
     peerServiceClusterIPs: []
     autoInitializeCluster: true
-    storageBackend: Memory
+    storageEngineType: Memory
     image:
       repository: rocketmq-rust/controller
       tag: local

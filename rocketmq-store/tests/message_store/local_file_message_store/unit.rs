@@ -45,7 +45,6 @@ use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
-use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
@@ -103,7 +102,6 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::message_store_config::RecoveryMode;
 use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::PutMessageHook;
-use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::kv::compaction_service::CompactionService;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
@@ -3851,34 +3849,6 @@ fn master_store_in_process_round_trips_concrete_store_reference() {
         .expect("master store should be present");
 
     assert!(Arc::ptr_eq(&master_store, &restored));
-}
-
-#[test]
-fn send_message_back_hook_round_trips_registered_hook() {
-    struct MockSendBackHook;
-
-    impl SendMessageBackHook for MockSendBackHook {
-        fn execute_send_message_back(
-            &self,
-            _msg_list: &mut [MessageExt],
-            broker_name: &CheetahString,
-            broker_addr: &CheetahString,
-        ) -> bool {
-            !broker_name.is_empty() && !broker_addr.is_empty()
-        }
-    }
-
-    let temp_dir = tempdir().unwrap();
-    let store = new_test_store(&temp_dir);
-    let hook = Arc::new(MockSendBackHook) as Arc<dyn SendMessageBackHook>;
-
-    store.set_send_message_back_hook(hook.clone());
-
-    let restored = store
-        .get_send_message_back_hook()
-        .expect("send message back hook should be present");
-
-    assert!(Arc::ptr_eq(&hook, &restored));
 }
 
 #[test]

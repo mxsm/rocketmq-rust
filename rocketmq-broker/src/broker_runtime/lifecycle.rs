@@ -25,7 +25,6 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStorePort;
 pub(super) struct BrokerLifecycle {
-    pub(super) shutdown_hook: Option<BrokerShutdownHook>,
     pub(super) scheduled_tasks: ScheduledTaskGroup,
     pub(super) diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
     pub(super) remoting_server_task_group: Option<TaskGroup>,
@@ -37,7 +36,6 @@ pub(super) struct BrokerLifecycle {
 impl BrokerLifecycle {
     pub(super) fn new(scheduled_tasks: ScheduledTaskGroup) -> Self {
         Self {
-            shutdown_hook: None,
             scheduled_tasks,
             diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources::default(),
             remoting_server_task_group: None,
@@ -526,21 +524,6 @@ impl BrokerRuntime {
             // A completed shutdown is the ownership boundary for the Store root lease. Retain the
             // owner after failures or timeouts so a later shutdown attempt can finish durably.
             self.composition.state.message_store.take();
-        }
-
-        if let Some(hook) = self.lifecycle.shutdown_hook.clone() {
-            let hook_result = run_shutdown_blocking_operation(
-                &self.composition.state.service_context,
-                deadline,
-                "broker.shutdown-hook",
-                move || {
-                    hook.before_shutdown();
-                },
-            )
-            .await;
-            if let Err(error) = hook_result {
-                warn!(error = %error.detail(), "Broker shutdown hook did not complete cleanly");
-            }
         }
 
         if let Some(broker_stats_manager) = self.composition.state.broker_stats_manager.as_ref() {

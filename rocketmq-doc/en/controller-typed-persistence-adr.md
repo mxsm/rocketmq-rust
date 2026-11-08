@@ -29,9 +29,11 @@ Rust modules that produce them are internal.
 
 `LogStore` depends only on the log repository. `StateMachine` depends only on
 the state repository. Neither consumer contains a raw persistence key,
-backend batch/sync call, or persistence decoder.
+key-value store batch/sync call, or persistence decoder. Both repositories share
+the configured key-value store instance, which supplies byte-level access,
+atomic batches, and synchronization.
 
-Repository updates use one backend batch for each domain commit and call
+Repository updates use one key-value store batch for each domain commit and call
 `sync` before publishing the corresponding in-memory state. Partial
 state-machine triples and partial snapshot pairs fail closed. Persisted log
 keys are strictly parsed, entries remain contiguous, entry indices must match
