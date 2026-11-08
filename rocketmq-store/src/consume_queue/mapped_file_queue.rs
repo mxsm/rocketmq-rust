@@ -1870,26 +1870,6 @@ impl MappedFileQueue {
 
     // ============ Additional Helper Methods ============
 
-    /// Copy mapped files to array
-    ///
-    /// Internal method to create a snapshot of files, optionally reserving
-    /// some files from the copy.
-    ///
-    /// # Arguments
-    /// * `reserved_mapped_files` - Number of files to exclude from the end
-    ///
-    /// # Returns
-    /// Vector of mapped files, or None if insufficient files
-    fn copy_mapped_files(&self, reserved_mapped_files: usize) -> Option<Vec<Arc<DefaultMappedFile>>> {
-        let files = self.storage.mapped_files().snapshot();
-
-        if files.len() <= reserved_mapped_files {
-            return None;
-        }
-
-        Some(files.as_ref().to_vec())
-    }
-
     /// Stream access to mapped files
     ///
     /// Returns an iterator that can be used with standard iterator combinators.
