@@ -38,18 +38,28 @@ pub(crate) trait AclBackend: Send + Sync {
     fn policies(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclPolicy>, UiError>>;
     fn mutate(&self, revision: u64, command: AclCommand) -> ServiceFuture<'_, Result<AclWriteResult, UiError>>;
 }
-pub(super) struct RealAclBackend {
+/// Adapts the service-layer ACL operations contract to `GpuiAdminProvider`.
+/// Delegates user and policy queries and mutations to the configured Admin provider
+/// and adapts provider failures to `UiError`.
+pub(super) struct AdminAclAdapter {
     provider: Option<Arc<GpuiAdminProvider>>,
 }
-impl RealAclBackend {
+impl AdminAclAdapter {
+    /// Wraps an existing shared provider.
+    ///
+    /// Construction does not establish a connection or guarantee availability of a connected Admin session.
     pub(super) fn new(provider: Arc<GpuiAdminProvider>) -> Arc<Self> {
         Arc::new(Self {
             provider: Some(provider),
         })
     }
+
+    /// Constructs an adapter without a provider, whose operations return a capability-unavailable error.
     pub(super) fn unavailable() -> Arc<Self> {
         Arc::new(Self { provider: None })
     }
+
+    // Returns a reference to the active provider or yields a CapabilityUnavailable error when missing.
     fn provider(&self) -> Result<&Arc<GpuiAdminProvider>, UiError> {
         self.provider.as_ref().ok_or_else(|| {
             UiError::new(
@@ -60,7 +70,7 @@ impl RealAclBackend {
         })
     }
 }
-impl AclBackend for RealAclBackend {
+impl AclBackend for AdminAclAdapter {
     fn users(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclUser>, UiError>> {
         Box::pin(async move {
             self.provider()?
