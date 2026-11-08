@@ -18,6 +18,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use rocketmq_protocol::protocol::RemotingCommand;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_transport::api::file_transfer_snapshot;
@@ -29,6 +30,9 @@ use rocketmq_transport::test_support::Connection;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+
+// Snapshot assertions need exclusive access to the process-wide transfer counters.
+static FILE_TRANSFER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn runtime_owner() -> RuntimeOwner {
     RuntimeOwner::new().expect("test runtime owner")
@@ -53,6 +57,7 @@ async fn tcp_pair() -> (TcpStream, TcpStream) {
 
 #[test]
 fn sendfile_round_trips_under_socket_backpressure() {
+    let _guard = FILE_TRANSFER_TEST_LOCK.lock();
     let owner = runtime_owner();
     let blocking = owner
         .root_context()
@@ -95,6 +100,7 @@ fn sendfile_round_trips_under_socket_backpressure() {
 
 #[test]
 fn auto_keeps_small_file_regions_on_the_portable_path() {
+    let _guard = FILE_TRANSFER_TEST_LOCK.lock();
     let owner = runtime_owner();
     let blocking = owner
         .root_context()
@@ -130,6 +136,7 @@ fn auto_keeps_small_file_regions_on_the_portable_path() {
 
 #[test]
 fn sendfile_eof_poison_closes_the_connection() {
+    let _guard = FILE_TRANSFER_TEST_LOCK.lock();
     let owner = runtime_owner();
     let blocking = owner
         .root_context()
@@ -163,6 +170,7 @@ fn sendfile_eof_poison_closes_the_connection() {
 
 #[test]
 fn sendfile_cancellation_after_head_closes_the_connection() {
+    let _guard = FILE_TRANSFER_TEST_LOCK.lock();
     let owner = runtime_owner();
     let blocking = owner
         .root_context()
