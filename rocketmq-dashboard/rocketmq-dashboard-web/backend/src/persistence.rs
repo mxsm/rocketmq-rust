@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 pub mod audit_repository;
-pub mod backend;
+pub mod data_store;
 pub mod environment_repository;
 pub mod error;
 pub mod file_store;
@@ -37,7 +37,7 @@ mod session_audit_docker_tests;
 
 use crate::config::StorageConfig;
 use crate::model::StorageEngine;
-use crate::persistence::backend::DashboardDataStore;
+use crate::persistence::data_store::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use chrono::Utc;
 use rocketmq_runtime::ChildServiceContext;

@@ -24,7 +24,7 @@ use crate::model::EndpointRole;
 use crate::model::EndpointType;
 use crate::model::EnvironmentId;
 use crate::model::StorageEngine;
-use crate::persistence::backend::DashboardDataStore;
+use crate::persistence::data_store::DashboardDataStore;
 use crate::persistence::environment_repository::DEFAULT_ENVIRONMENT_ID;
 use crate::persistence::error::PersistenceError;
 use rocketmq_runtime::RuntimeOwner;
