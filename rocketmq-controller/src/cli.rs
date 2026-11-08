@@ -59,6 +59,12 @@ fn parse_controller_config_file(config_path: &Path) -> ControllerResult<Controll
         .build()
         .map_err(|error| crate::error::configuration_invalid_by("controller.config", error))?;
 
+    if config.get::<config::Value>("storageBackend").is_ok() {
+        return Err(crate::error::configuration_invalid(
+            "storageBackend (removed; use storageEngineType)",
+        ));
+    }
+
     for key in REMOVED_CONTROLLER_TELEMETRY_KEYS {
         if config.get::<config::Value>(key).is_ok() {
             return Err(crate::error::configuration_invalid(key));
@@ -350,6 +356,36 @@ path = "/rocketmq"
         assert_eq!(logging.log_filter.as_deref(), Some("info"));
         assert_eq!(logging.logging.filter.as_deref(), Some("info"));
         assert!(logging.logging.reload.enabled);
+    }
+
+    #[test]
+    fn controller_config_file_storage_selector_uses_only_canonical_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("controller.toml");
+        for source in [
+            "storageBackend = 'Memory'",
+            "storageEngineType = 'RocksDB'\nstorageBackend = 'Memory'",
+            "storageBackend = 'private-value'",
+            "storageEngineType = 'Memory'\nstorageBackend = 'private-value'",
+        ] {
+            std::fs::write(&path, source).unwrap();
+            let error = cli_with_config_file(path.clone())
+                .load_config(ControllerConfig::default())
+                .unwrap_err();
+            assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_CONFIGURATION_INVALID);
+            let diagnostic = error.diagnostic_view().unwrap();
+            let key = diagnostic.fields().find(|field| field.name() == "key").unwrap();
+            assert_eq!(
+                key.value(),
+                rocketmq_error::ViewValueRef::Text("storageBackend (removed; use storageEngineType)")
+            );
+            assert!(!format!("{error:?}").contains("private-value"));
+        }
+        std::fs::write(&path, "storageEngineType = 'Memory'\nunrelatedField = true").unwrap();
+        let config = cli_with_config_file(path)
+            .load_config(ControllerConfig::default())
+            .unwrap();
+        assert_eq!(config.storage_engine_type, crate::StorageEngineType::Memory);
     }
 
     #[test]

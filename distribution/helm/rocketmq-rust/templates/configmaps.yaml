@@ -125,7 +125,7 @@ data:
     snapshotLogsSinceLast = {{ $.Values.services.controller.snapshotLogsSinceLast }}
     snapshotMaxLogEntriesToKeep = {{ $.Values.services.controller.snapshotMaxLogEntriesToKeep }}
     storagePath = "/var/lib/rocketmq/controller/node-{{ add $ordinal 1 }}"
-    storageEngineType = {{ $.Values.services.controller.storageBackend | quote }}
+    storageEngineType = {{ $.Values.services.controller.storageEngineType | quote }}
     enableElectUncleanMasterLocal = false
 {{- if $.Values.maintenance.enabled }}
     authenticationEnabled = true

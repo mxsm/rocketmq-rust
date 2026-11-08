@@ -88,7 +88,7 @@ fn storage_config(config: &ControllerConfig) -> Result<StorageConfig> {
             }
             #[cfg(not(feature = "dev-single"))]
             {
-                Err(configuration_invalid("controller.storage_backend"))
+                Err(configuration_invalid("storageEngineType"))
             }
         }
         StorageEngineType::RocksDB => {
@@ -100,7 +100,7 @@ fn storage_config(config: &ControllerConfig) -> Result<StorageConfig> {
             }
             #[cfg(not(feature = "storage-rocksdb"))]
             {
-                Err(configuration_invalid("controller.storage_backend"))
+                Err(configuration_invalid("storageEngineType"))
             }
         }
     }

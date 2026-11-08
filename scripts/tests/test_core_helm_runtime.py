@@ -6,7 +6,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tomllib
 import unittest
+
+import yaml
 
 from scripts.core_helm_configs import CHART, POLICY, configurations, render
 
@@ -102,6 +105,35 @@ class CoreHelmRuntimeTests(unittest.TestCase):
         self.assertTrue(controller["spec"]["template"]["spec"]["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"])
         pdb = next(d for d in documents if d["kind"] == "PodDisruptionBudget" and d["metadata"]["name"] == "core-controller")
         self.assertEqual(2, pdb["spec"]["minAvailable"])
+
+    def test_controller_storage_selector_is_canonical_in_both_charts(self):
+        for chart in [CHART, CHART.parent / "rocketmq-rust"]:
+            engine = "File" if chart == CHART else "RocksDB"
+            command = [self.helm, "template", "core", str(chart), "-f", str(chart / "values-dev-single.yaml"),
+                       "--set", f"services.controller.storageEngineType={engine}"]
+            if chart == CHART:
+                command.extend(["--set", "services.controller.enabled=true"])
+            with self.subTest(chart=chart.name):
+                result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=60)
+                documents = [document for document in yaml.safe_load_all(result.stdout) if document]
+                controllers = [tomllib.loads(source) for document in documents
+                               if document["kind"] == "ConfigMap"
+                               for filename, source in document["data"].items()
+                               if "controller" in filename and filename.endswith(".toml")]
+                self.assertTrue(controllers)
+                for config in controllers:
+                    self.assertEqual(engine, config["storageEngineType"])
+                    self.assertNotIn("storageBackend", config)
+
+            for canonical in [False, True]:
+                with self.subTest(chart=chart.name, canonical=canonical):
+                    rejected = [self.helm, "template", "core", str(chart), "-f", str(chart / "values-dev-single.yaml"),
+                                "--set", "services.controller.storageBackend=RocksDB"]
+                    if canonical:
+                        rejected.extend(["--set", f"services.controller.storageEngineType={engine}"])
+                    result = subprocess.run(rejected, capture_output=True, text=True, timeout=60)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("controller", result.stderr)
 
     def test_default_ha_roles_and_separate_peer_services(self):
         documents = self.profiles["values-production-default-ha.yaml"]
