@@ -93,7 +93,6 @@ use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::broker::broker_control_plane::BrokerControllerRuntime;
 use crate::broker::broker_control_plane::BrokerControllerState;
 use crate::broker::broker_control_plane::BrokerMembershipState;
-use crate::broker::broker_hook::BrokerShutdownHook;
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::broker::broker_pre_online_capability::BrokerOnlineTransitionCapability;
 use crate::broker::broker_pre_online_capability::BrokerPreOnlineContext;

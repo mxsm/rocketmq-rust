@@ -90,6 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove the unconfigured internal shutdown hook and its injection-only test; active shutdown ownership and deadlines are unchanged ([#12324](https://github.com/mxsm/rocketmq-rust/issues/12324)).
 - **refactor(broker):** Remove the unused reply correlation-ID fallback helper and its dedicated tests ([#12315](https://github.com/mxsm/rocketmq-rust/issues/12315)).
 - **refactor(store):** Remove unused internal send-message-back hook storage, backend forwarding, and dedicated tests ([#12322](https://github.com/mxsm/rocketmq-rust/issues/12322)).
 - **refactor(store):** Remove unused extended timer payload and timeline path helpers; active configuration and Store timer paths are unchanged ([#12320](https://github.com/mxsm/rocketmq-rust/issues/12320)).
