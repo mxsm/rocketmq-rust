@@ -153,7 +153,7 @@ impl KeyValueStore for FaultInjectingKeyValueStore {
         Ok(StorageStats {
             key_count: data.len(),
             total_size: data.values().map(|value| value.len() as u64).sum(),
-            backend_info: "fault-injecting".to_string(),
+            implementation_details: "fault-injecting".to_string(),
         })
     }
 }

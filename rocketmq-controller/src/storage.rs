@@ -94,7 +94,7 @@ pub trait KeyValueStore: Send + Sync {
     /// Sync data to disk
     async fn sync(&self) -> Result<()>;
 
-    /// Get storage statistics
+    /// Get common metrics and implementation-specific details.
     async fn stats(&self) -> Result<StorageStats>;
 }
 
@@ -113,8 +113,9 @@ pub struct StorageStats {
     /// Total size in bytes
     pub total_size: u64,
 
-    /// Backend-specific info
-    pub backend_info: String,
+    /// Implementation-specific identifiers, locations, or diagnostic statistics.
+    /// The format varies by implementation and is not intended for programmatic parsing.
+    pub implementation_details: String,
 }
 
 /// Test-only helpers for storing/retrieving typed data.
@@ -254,7 +255,7 @@ pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor)
                     Ok(StorageStats {
                         key_count: data.len(),
                         total_size,
-                        backend_info: "Memory".to_string(),
+                        implementation_details: "Memory".to_string(),
                     })
                 }
             }
