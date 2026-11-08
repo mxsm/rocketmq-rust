@@ -320,7 +320,7 @@ impl KeyValueStore for RocksDBKeyValueStore {
             }
 
             // Get RocksDB property
-            let backend_info = db
+            let implementation_details = db
                 .property_value("rocksdb.stats")
                 .unwrap_or(None)
                 .unwrap_or_else(|| "RocksDB".to_string());
@@ -328,7 +328,7 @@ impl KeyValueStore for RocksDBKeyValueStore {
             Ok(StorageStats {
                 key_count,
                 total_size,
-                backend_info,
+                implementation_details,
             })
         })
         .await
