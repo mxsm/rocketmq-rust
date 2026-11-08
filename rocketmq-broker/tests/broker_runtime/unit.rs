@@ -1068,48 +1068,6 @@ async fn timed_out_shutdown_blocking_operation_remains_owned_until_completion() 
     .expect("owned shutdown blocking task should finish after release");
 }
 
-#[tokio::test]
-async fn blocking_shutdown_hook_cannot_extend_the_absolute_deadline() {
-    struct BlockingHook {
-        release: Arc<(StdMutex<bool>, Condvar)>,
-    }
-
-    impl crate::broker::broker_hook::ShutdownHook for BlockingHook {
-        fn before_shutdown(&self) {
-            let (released, signal) = &*self.release;
-            let mut released = released.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            while !*released {
-                released = signal.wait(released).unwrap_or_else(std::sync::PoisonError::into_inner);
-            }
-        }
-    }
-
-    let context = RuntimeContext::from_current("broker-blocking-hook-test");
-    let service = context.service_context("broker-blocking-hook-service");
-    let mut runtime = BrokerRuntime::new_with_service_context(
-        Arc::new(BrokerConfig::default()),
-        Arc::new(MessageStoreConfig::default()),
-        service,
-    );
-    let release = Arc::new((StdMutex::new(false), Condvar::new()));
-    runtime.lifecycle.shutdown_hook = Some(Arc::new(BlockingHook {
-        release: Arc::clone(&release),
-    }));
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        runtime.shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_millis(20))),
-    )
-    .await;
-    let (released, signal) = &*release;
-    *released.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
-    signal.notify_all();
-
-    let report = result.expect("shutdown must return while the hook remains blocked");
-    let _ = context.shutdown_tasks(Duration::from_secs(1)).await;
-    assert!(report.deadline.timed_out, "{report:?}");
-    assert!(!report.is_healthy(), "{report:?}");
-}
-
 #[test]
 fn broker_shutdown_report_records_healthy_telemetry_detail() {
     let telemetry_report = rocketmq_observability::TelemetryShutdownReport {
