@@ -539,7 +539,7 @@ mod tests {
     }
 
     #[cfg(feature = "write-tools")]
-    impl crate::tool_runtime::admin_session::SupervisedMutationBackend for ProtocolBackend {
+    impl crate::tool_runtime::admin_session::MutationAdmin for ProtocolBackend {
         type TopicPlan = ProtocolTopicPlan;
         type GroupPlan = ProtocolGroupPlan;
         type OffsetPlan = ();

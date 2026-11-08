@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(controller)!:** Remove the `storageBackend` compatibility alias. Before upgrading, use `storageEngineType` in standalone/embedded startup files, runtime property updates, blacklist entries, and `services.controller` Helm overrides. Old-key startup files, updates, and Helm overrides are rejected; persisted data is unchanged ([#12333](https://github.com/mxsm/rocketmq-rust/issues/12333)).
+
+- **refactor(store):** Remove the unused property-free message encoder, its length helper, multi-dispatch predicate, retained configuration field, and dedicated tests ([#12314](https://github.com/mxsm/rocketmq-rust/issues/12314)).
 - **refactor(controller):** Adopt canonical external configuration key `storageEngineType` across Controller configuration files, Helm templates, manifests, examples, and documentation while retaining `storageBackend` as a legacy input compatibility alias; canonical property output emits `storageEngineType` and updates accept either spelling with duplicate rejection and alias-aware blacklist enforcement ([#12191](https://github.com/mxsm/rocketmq-rust/issues/12191)).
 - **refactor(transport):** Rename the private transport `backend` module to `transport_halves`, matching the `TransportReadHalf` and `TransportWriteHalf` types; private naming cleanup only, transport behavior and public APIs are unchanged ([#12193](https://github.com/mxsm/rocketmq-rust/issues/12193)).
 - **refactor(namesrv):** Rename NameServer fields, constructor/worker parameters, and locals from `name_server_runtime_inner` to `name_server_runtime_handle` to match the `NameServerRuntimeHandle` type, including the misnamed `remoting_client` handle binding in `RouteInfoManager::notify_min_broker_id_changed`; private naming cleanup only, weak-reference ownership and behavior are unchanged ([#12192](https://github.com/mxsm/rocketmq-rust/issues/12192)).
@@ -88,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(store):** Remove unused internal send-message-back hook storage, backend forwarding, and dedicated tests ([#12322](https://github.com/mxsm/rocketmq-rust/issues/12322)).
+- **refactor(store):** Remove unused extended timer payload and timeline path helpers; active configuration and Store timer paths are unchanged ([#12320](https://github.com/mxsm/rocketmq-rust/issues/12320)).
 - **refactor(store):** Consolidate Store path helpers into canonical module and remove obsolete internal config store path helper module ([#12306](https://github.com/mxsm/rocketmq-rust/issues/12306)).
 - **refactor(store):** Remove unused internal transaction state-table and redo-log path helpers together with their dedicated tests; active Store configuration and message paths are unchanged ([#12304](https://github.com/mxsm/rocketmq-rust/issues/12304)).
 - **refactor(broker):** Remove unused internal broker, LMQ offset, and timer path helpers together with their dedicated tests; active configuration and Store timer paths are unchanged ([#12296](https://github.com/mxsm/rocketmq-rust/issues/12296)).

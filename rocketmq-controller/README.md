@@ -61,10 +61,12 @@ record and manifest writes succeed.
 
 ## Requirements
 
+Before upgrading, replace `storageBackend` with `storageEngineType` in standalone or embedded Controller startup files, runtime property updates, configured blacklist entries, and `services.controller` Helm overrides. Startup files and Helm values containing the removed key are rejected, even when the canonical key is also present. No persisted-data migration is required.
+
 - Stable Rust `1.95.0` is the workspace minimum and the repository build toolchain.
 - Build this crate with the pinned repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - `ROCKETMQ_HOME` or `rocketmqHome` must be set before starting the controller binary.
-- The default feature set enables RocksDB and the default configuration uses `storageEngineType = "RocksDB"` (`storageBackend` is accepted as a legacy input alias).
+- The default feature set enables RocksDB and the default configuration uses `storageEngineType = "RocksDB"`.
 - Use `storageEngineType = "File"` only when building with the opt-in `storage-file` feature.
 
 ## Build

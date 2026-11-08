@@ -72,7 +72,7 @@ rocketmq-{{ .service }}
   {{- if lt (int .Values.services.broker.replicas) 3 -}}
     {{- fail "production-controller-ha requires at least 3 Broker replicas in the Controller-managed replica group" -}}
   {{- end -}}
-  {{- if ne .Values.services.controller.storageBackend "RocksDB" -}}
+  {{- if ne .Values.services.controller.storageEngineType "RocksDB" -}}
     {{- fail "production-controller-ha requires Controller RocksDB storage" -}}
   {{- end -}}
   {{- range $service := list "broker" "namesrv" "controller" -}}
