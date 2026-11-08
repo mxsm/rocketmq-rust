@@ -27,14 +27,17 @@ pub(super) use state_repository::RaftStateRepository;
 
 use rocketmq_error::Error;
 
+/// Private wrapper that adds operation/record-class context to a key-value store failure.
+/// Displays only that context and retains the canonical error and its source chain.
+/// It is not the storage SPI's public error type.
 #[derive(Debug)]
-struct PersistenceBackendError {
+struct KeyValueStoreOperationError {
     operation: &'static str,
     key_class: &'static str,
     source: Error,
 }
 
-impl std::fmt::Display for PersistenceBackendError {
+impl std::fmt::Display for KeyValueStoreOperationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
@@ -44,7 +47,7 @@ impl std::fmt::Display for PersistenceBackendError {
     }
 }
 
-impl std::error::Error for PersistenceBackendError {
+impl std::error::Error for KeyValueStoreOperationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.source)
     }
@@ -56,7 +59,7 @@ impl std::error::Error for PersistenceBackendError {
 /// retained. The returned error has kind `std::io::ErrorKind::Other` and wraps a
 /// private contextual error that preserves `error` as its typed source.
 fn map_key_value_store_error(operation: &'static str, key: RaftRecordKey, error: Error) -> std::io::Error {
-    std::io::Error::other(PersistenceBackendError {
+    std::io::Error::other(KeyValueStoreOperationError {
         operation,
         key_class: key.class(),
         source: error,
