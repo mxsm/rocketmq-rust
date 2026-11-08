@@ -38,10 +38,10 @@ pub(crate) trait AclBackend: Send + Sync {
     fn policies(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclPolicy>, UiError>>;
     fn mutate(&self, revision: u64, command: AclCommand) -> ServiceFuture<'_, Result<AclWriteResult, UiError>>;
 }
-pub(super) struct RealAclBackend {
+pub(super) struct AdminAclAdapter {
     provider: Option<Arc<GpuiAdminProvider>>,
 }
-impl RealAclBackend {
+impl AdminAclAdapter {
     pub(super) fn new(provider: Arc<GpuiAdminProvider>) -> Arc<Self> {
         Arc::new(Self {
             provider: Some(provider),
@@ -60,7 +60,7 @@ impl RealAclBackend {
         })
     }
 }
-impl AclBackend for RealAclBackend {
+impl AclBackend for AdminAclAdapter {
     fn users(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclUser>, UiError>> {
         Box::pin(async move {
             self.provider()?
