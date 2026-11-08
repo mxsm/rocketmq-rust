@@ -18,12 +18,12 @@ use rocketmq_admin_core::core::supervised_mutation as admin;
 
 use super::{dry_status, map_request_mode, map_request_mode_from_admin, status_from_failures};
 use crate::error::ControlError;
-use crate::tool_runtime::admin_session::SupervisedMutationBackend;
+use crate::tool_runtime::admin_session::MutationAdmin;
 use crate::tool_runtime::plan_binding::PlanBinding;
 use crate::tool_runtime::{map_failure, map_persistence, map_verification, MutationToolResponse};
 use crate::tools;
 
-pub(crate) async fn run_request_mode<B: SupervisedMutationBackend>(
+pub(crate) async fn run_request_mode<B: MutationAdmin>(
     backend: &mut B,
     args: tools::SetConsumerRequestModeArgs,
     binding: &PlanBinding,

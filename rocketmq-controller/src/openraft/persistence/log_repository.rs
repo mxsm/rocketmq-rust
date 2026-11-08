@@ -29,12 +29,15 @@ pub(in crate::openraft) struct LoadedLogRepository {
     pub(in crate::openraft) entries: Vec<(u64, LogEntry)>,
 }
 
+/// Typed access to Controller vote, position, and log records in a shared store.
 #[derive(Clone)]
 pub(in crate::openraft) struct RaftLogRepository {
+    /// Configured store shared with other repositories; clones share this handle.
     key_value_store: SharedKeyValueStore,
 }
 
 impl RaftLogRepository {
+    /// Wraps `key_value_store` for log records without opening storage or loading records.
     pub(in crate::openraft) fn new(key_value_store: SharedKeyValueStore) -> Self {
         Self { key_value_store }
     }

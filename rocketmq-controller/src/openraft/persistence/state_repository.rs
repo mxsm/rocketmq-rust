@@ -41,12 +41,15 @@ pub(in crate::openraft) struct LoadedStateRepository {
     pub(in crate::openraft) current_snapshot: Option<PersistedSnapshot>,
 }
 
+/// Typed access to replica state, applied position, membership, and snapshot records.
 #[derive(Clone)]
 pub(in crate::openraft) struct RaftStateRepository {
+    /// Configured store shared with other repositories; clones share this handle.
     key_value_store: SharedKeyValueStore,
 }
 
 impl RaftStateRepository {
+    /// Wraps `key_value_store` for state records without opening storage or loading records.
     pub(in crate::openraft) fn new(key_value_store: SharedKeyValueStore) -> Self {
         Self { key_value_store }
     }

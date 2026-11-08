@@ -217,6 +217,16 @@ impl StateMachine {
         }
     }
 
+    /// Restores a state machine from the already-created `key_value_store`.
+    ///
+    /// `config` supplies the Controller configuration used by the replica manager and
+    /// state machine. The shared store supplies replica state, the applied position,
+    /// membership, and snapshot records; recovery does not create another store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage access or decoding fails, or persisted state and
+    /// snapshot records are incomplete, corrupt, or inconsistent.
     pub async fn open(
         config: ControllerConfigReader,
         key_value_store: SharedKeyValueStore,

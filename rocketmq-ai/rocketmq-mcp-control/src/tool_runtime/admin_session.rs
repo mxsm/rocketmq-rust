@@ -42,7 +42,7 @@ use crate::error::ControlError;
 use crate::model::ClusterName;
 use crate::tools;
 
-pub(crate) trait SupervisedMutationBackend: Send {
+pub(crate) trait MutationAdmin: Send {
     type TopicPlan: Send;
     type GroupPlan: Send;
     type OffsetPlan: Send;
@@ -129,7 +129,7 @@ pub(crate) trait SupervisedMutationBackend: Send {
     fn shutdown(&mut self) -> RuntimeFuture<'_, Result<(), ControlError>>;
 }
 
-impl SupervisedMutationBackend for MutationAdminSession {
+impl MutationAdmin for MutationAdminSession {
     type TopicPlan = admin::TopicMutationPlan;
     type GroupPlan = admin::SubscriptionGroupMutationPlan;
     type OffsetPlan = admin::OffsetResetPlan;
@@ -342,7 +342,7 @@ impl<B: OperationBackend> AdminMutationToolSession<B> {
 
 impl<B> MutationToolSession for AdminMutationToolSession<B>
 where
-    B: SupervisedMutationBackend + OperationBackend,
+    B: MutationAdmin + OperationBackend,
 {
     fn run<'a>(
         &'a mut self,
@@ -401,7 +401,7 @@ where
     }
 }
 
-async fn run_topic<B: SupervisedMutationBackend>(
+async fn run_topic<B: MutationAdmin>(
     backend: &mut B,
     args: tools::UpsertTopicArgs,
     binding: &PlanBinding,
@@ -426,7 +426,7 @@ async fn run_topic<B: SupervisedMutationBackend>(
     Ok(topic_executed(&args, before, outcome, observed))
 }
 
-async fn run_group<B: SupervisedMutationBackend>(
+async fn run_group<B: MutationAdmin>(
     backend: &mut B,
     args: tools::UpsertConsumerGroupArgs,
     binding: &PlanBinding,
