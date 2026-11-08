@@ -84,7 +84,7 @@ async fn wait(gate: Option<Gate>) {
         let _ = gate.await;
     }
 }
-impl AclBackend for FakeAclBackend {
+impl AclOperations for FakeAclBackend {
     fn users(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclUser>, UiError>> {
         self.user_calls.lock().unwrap().push(request.clone());
         let items = self
@@ -295,7 +295,7 @@ impl Fixture {
             runtime.root_context().component("history"),
             runtime.root_context().component("monitor"),
         )
-        .with_acl_backend(backend.clone())
+        .with_acl_operations(backend.clone())
         .with_dashboard_broker_operations(broker);
         runtime.block_on(services.bootstrap()).unwrap();
         Self {
