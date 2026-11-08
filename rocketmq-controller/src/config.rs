@@ -204,18 +204,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_duplicate_storage_selector_update_keeps_the_previous_snapshot() {
-        let handle = ControllerConfigHandle::new(ControllerConfig::test_config());
-        let previous = handle.snapshot();
-        let mut properties = std::collections::HashMap::new();
-        properties.insert("storageEngineType".to_string(), "Memory".to_string());
-        properties.insert("storageBackend".to_string(), "Memory".to_string());
+    async fn rejected_removed_storage_selector_update_keeps_the_previous_snapshot() {
+        for mixed in [false, true] {
+            let handle = ControllerConfigHandle::new(ControllerConfig::test_config());
+            let previous = handle.snapshot();
+            let mut properties = HashMap::from([("storageBackend".to_string(), "File".to_string())]);
+            if mixed {
+                properties.insert("storageEngineType".to_string(), "File".to_string());
+                properties.insert("notifyBrokerRoleChanged".to_string(), "false".to_string());
+            }
 
-        assert!(handle.update(properties).await.is_err());
-
-        let current = handle.snapshot();
-        assert!(std::sync::Arc::ptr_eq(&previous, &current));
-        assert_eq!(current.storage_engine_type, previous.storage_engine_type);
+            let error = handle
+                .update(properties)
+                .await
+                .expect_err("removed key must be rejected");
+            assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_CONFIGURATION_INVALID);
+            let current = handle.snapshot();
+            assert!(Arc::ptr_eq(&previous, &current));
+            assert_eq!(current.storage_engine_type, previous.storage_engine_type);
+            assert_eq!(current.notify_broker_role_changed, previous.notify_broker_role_changed);
+        }
     }
 
     #[tokio::test]

@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(controller)!:** Remove the `storageBackend` compatibility alias. Before upgrading, use `storageEngineType` in standalone/embedded startup files, runtime property updates, blacklist entries, and `services.controller` Helm overrides. Old-key startup files, updates, and Helm overrides are rejected; persisted data is unchanged ([#12333](https://github.com/mxsm/rocketmq-rust/issues/12333)).
+
 - **refactor(store):** Remove the unused property-free message encoder, its length helper, multi-dispatch predicate, retained configuration field, and dedicated tests ([#12314](https://github.com/mxsm/rocketmq-rust/issues/12314)).
 - **refactor(controller):** Adopt canonical external configuration key `storageEngineType` across Controller configuration files, Helm templates, manifests, examples, and documentation while retaining `storageBackend` as a legacy input compatibility alias; canonical property output emits `storageEngineType` and updates accept either spelling with duplicate rejection and alias-aware blacklist enforcement ([#12191](https://github.com/mxsm/rocketmq-rust/issues/12191)).
 - **refactor(transport):** Rename the private transport `backend` module to `transport_halves`, matching the `TransportReadHalf` and `TransportWriteHalf` types; private naming cleanup only, transport behavior and public APIs are unchanged ([#12193](https://github.com/mxsm/rocketmq-rust/issues/12193)).
