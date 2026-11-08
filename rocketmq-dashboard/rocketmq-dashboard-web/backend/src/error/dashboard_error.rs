@@ -304,7 +304,7 @@ fn storage_http_projection(error: &PersistenceError) -> DashboardHttpProjection 
             StatusCode::SERVICE_UNAVAILABLE,
             "Storage data directory is already in use",
         ),
-        PersistenceError::ConnectionUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "Storage backend is unavailable"),
+        PersistenceError::ConnectionUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "Storage is unavailable"),
         PersistenceError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "Storage operation timed out"),
         PersistenceError::Conflict => (StatusCode::CONFLICT, "Storage write conflict"),
         PersistenceError::UnsupportedLayout => (StatusCode::INTERNAL_SERVER_ERROR, "Storage layout is unsupported"),
@@ -603,6 +603,28 @@ mod tests {
         assert_eq!(body.message, "Storage write conflict");
         assert!(!body.message.contains(':'));
         assert!(!body.message.contains('/'));
+    }
+
+    #[tokio::test]
+    async fn storage_connection_unavailable_uses_fixed_public_response() {
+        let (status, body, bytes) =
+            failure_response(DashboardError::from(PersistenceError::ConnectionUnavailable)).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.code, "STORAGE_UNAVAILABLE");
+        assert_eq!(body.message, "Storage is unavailable");
+        assert!(body.details.is_empty());
+
+        let response_json: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON response");
+        assert_eq!(
+            response_json,
+            serde_json::json!({
+                "success": false,
+                "code": "STORAGE_UNAVAILABLE",
+                "message": "Storage is unavailable",
+                "data": null
+            })
+        );
     }
 
     #[tokio::test]
