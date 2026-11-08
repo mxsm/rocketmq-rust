@@ -25,8 +25,14 @@ type Gate = (
     tokio::sync::oneshot::Receiver<()>,
     tokio::sync::oneshot::Sender<()>,
 );
+
+/// Stateful in-memory ACL test double providing:
+/// - Mutable in-memory user and policy records.
+/// - Recorded query requests and write commands.
+/// - Queued per-target mutation outcomes.
+/// - Controllable one-shot query and write synchronization gates.
 #[derive(Default)]
-pub(crate) struct FakeAclBackend {
+pub(crate) struct FakeAclOperations {
     pub users: Mutex<Vec<AclUser>>,
     pub policies: Mutex<Vec<AclPolicy>>,
     pub user_calls: Mutex<Vec<AclRequest>>,
@@ -36,7 +42,11 @@ pub(crate) struct FakeAclBackend {
     query_gate: Mutex<Option<Gate>>,
     write_gate: Mutex<Option<Gate>>,
 }
-impl FakeAclBackend {
+impl FakeAclOperations {
+    /// Gates the next `users()` call (while `policies()` returns immediately).
+    ///
+    /// Returns channels to observe entry into the wait, release the wait, and
+    /// observe the wait phase exiting or dropping.
     pub fn hold_query(
         &self,
     ) -> (
@@ -46,6 +56,11 @@ impl FakeAclBackend {
     ) {
         hold(&self.query_gate)
     }
+
+    /// Gates the next mutation write execution.
+    ///
+    /// Returns channels to observe entry into the wait, release the wait, and
+    /// observe the wait phase exiting or dropping.
     pub fn hold_write(
         &self,
     ) -> (
@@ -84,7 +99,7 @@ async fn wait(gate: Option<Gate>) {
         let _ = gate.await;
     }
 }
-impl AclBackend for FakeAclBackend {
+impl AclBackend for FakeAclOperations {
     fn users(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclUser>, UiError>> {
         self.user_calls.lock().unwrap().push(request.clone());
         let items = self
@@ -263,7 +278,7 @@ pub(crate) fn inventory() -> Vec<BrokerInventoryItem> {
 pub(crate) struct Fixture {
     pub runtime: RuntimeOwner,
     pub services: AppServices,
-    pub backend: Arc<FakeAclBackend>,
+    pub backend: Arc<FakeAclOperations>,
     pub mutations: ChildServiceContext,
     pub store: Arc<DesktopConfigStore>,
     _directory: tempfile::TempDir,
@@ -285,7 +300,7 @@ impl Fixture {
             (LOGIN_USERNAME_ENV, "operator"),
             (LOGIN_PASSWORD_ENV, "private-password"),
         ])));
-        let backend = Arc::new(FakeAclBackend::default());
+        let backend = Arc::new(FakeAclOperations::default());
         let broker = Arc::new(super::super::dashboard_broker::test_support::FakeDashboardBrokerOperations::default());
         broker.queue_inventory(Ok(inventory()));
         let services = AppServices::desktop_with_fake_provider(
