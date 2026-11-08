@@ -25,7 +25,7 @@ listenAddr = "0.0.0.0:{{ $config.port }}"
 raftListenAddr = "0.0.0.0:{{ $config.raftPort }}"
 storagePath = "/var/lib/rocketmq/controller/raft"
 controllerStorePath = "/var/lib/rocketmq/controller"
-storageEngineType = {{ $config.storageBackend | quote }}
+storageEngineType = {{ $config.storageEngineType | quote }}
 configStorePath = "/var/lib/rocketmq/controller/controller.toml"
 configBlackList = "configBlackList;configStorePath;nodeId;listenAddr;raftListenAddr;raftPeers;controllerPeers;raftPeerEndpoints;controllerPeerEndpoints;storagePath;storageEngineType"
 {{ include "rocketmq-core.authConfig" $config.auth }}

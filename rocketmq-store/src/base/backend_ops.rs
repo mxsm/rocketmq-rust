@@ -61,7 +61,6 @@ use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::write_lease::ControllerWriteLeaseState;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
-use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::ArcConsumeQueue;
@@ -716,12 +715,6 @@ pub trait MessageStoreEngine: MessageStoreReader + Send + Sync + 'static {
 
     /// Get put message hook list
     fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>>;
-
-    /// Set send message back hook
-    fn set_send_message_back_hook(&self, send_message_back_hook: Arc<dyn SendMessageBackHook>);
-
-    /// Get send message back hook
-    fn get_send_message_back_hook(&self) -> Option<Arc<dyn SendMessageBackHook>>;
 
     /// Get last mapped file and return last file first Offset
     fn get_last_file_from_offset(&self) -> i64;

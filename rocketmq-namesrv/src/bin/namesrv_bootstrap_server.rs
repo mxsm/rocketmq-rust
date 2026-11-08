@@ -1010,7 +1010,7 @@ struct ControllerConfigOverrides {
     election_timeout_ms: Option<u64>,
     heartbeat_interval_ms: Option<u64>,
     storage_path: Option<String>,
-    #[serde(rename = "storageEngineType", alias = "storageBackend")]
+    #[serde(rename = "storageEngineType")]
     storage_engine_type: Option<String>,
     enable_elect_unclean_master_local: Option<bool>,
 }
@@ -1029,6 +1029,9 @@ fn load_controller_config(config_file: Option<PathBuf>, namesrv_config: &Namesrv
                     parse_config_file::render_safe_config_error(&error)
                 )
             })?;
+        if cfg.get::<config::Value>("storageBackend").is_ok() {
+            anyhow::bail!("storageBackend has been removed; use storageEngineType");
+        }
         let overrides = cfg.try_deserialize::<ControllerConfigOverrides>().map_err(|error| {
             anyhow::anyhow!(
                 "failed to deserialize embedded Controller configuration: {}",
@@ -1217,50 +1220,43 @@ mod tests {
 
     #[cfg(feature = "embedded-controller")]
     #[test]
-    fn controller_storage_engine_override_accepts_canonical_and_legacy_keys() {
-        let canonical_overrides: ControllerConfigOverrides = Config::builder()
-            .add_source(config::File::from_str(
-                "storageEngineType = \"memory\"",
-                config::FileFormat::Toml,
-            ))
-            .build()
-            .unwrap()
-            .try_deserialize()
-            .unwrap();
-        assert_eq!(canonical_overrides.storage_engine_type.as_deref(), Some("memory"));
+    fn controller_storage_engine_override_accepts_only_canonical_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("namesrv.toml");
+        std::fs::write(&path, "storageEngineType = 'memory'\nunrelatedField = true").unwrap();
+        let config = load_controller_config(Some(path), &NamesrvConfig::default()).unwrap();
+        assert_eq!(config.storage_engine_type, StorageEngineType::Memory);
+    }
 
-        let mut controller_config = ControllerConfig::default();
-        apply_controller_config_overrides(&mut controller_config, canonical_overrides).unwrap();
-        assert_eq!(controller_config.storage_engine_type, StorageEngineType::Memory);
+    #[cfg(feature = "embedded-controller")]
+    #[test]
+    fn controller_storage_engine_override_rejects_removed_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("namesrv.toml");
+        for source in [
+            "storageBackend = 'Memory'",
+            "storageEngineType = 'RocksDB'\nstorageBackend = 'Memory'",
+            "storageBackend = 'private-value'",
+            "storageEngineType = 'Memory'\nstorageBackend = 'private-value'",
+        ] {
+            std::fs::write(&path, source).unwrap();
+            let error = load_controller_config(Some(path.clone()), &NamesrvConfig::default()).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "storageBackend has been removed; use storageEngineType"
+            );
+            assert!(!format!("{error:?}").contains("private-value"));
+        }
+    }
 
-        let legacy_overrides: ControllerConfigOverrides = Config::builder()
-            .add_source(config::File::from_str(
-                "storageBackend = \"memory\"",
-                config::FileFormat::Toml,
-            ))
-            .build()
-            .unwrap()
-            .try_deserialize()
-            .unwrap();
-        assert_eq!(legacy_overrides.storage_engine_type.as_deref(), Some("memory"));
-
-        let mut controller_config_legacy = ControllerConfig::default();
-        apply_controller_config_overrides(&mut controller_config_legacy, legacy_overrides).unwrap();
-        assert_eq!(controller_config_legacy.storage_engine_type, StorageEngineType::Memory);
-
-        // Invalid selector value reports diagnostic with canonical key
-        let invalid_overrides: ControllerConfigOverrides = Config::builder()
-            .add_source(config::File::from_str(
-                "storageEngineType = \"unknown_engine\"",
-                config::FileFormat::Toml,
-            ))
-            .build()
-            .unwrap()
-            .try_deserialize()
-            .unwrap();
-        let mut cfg = ControllerConfig::default();
-        let err = apply_controller_config_overrides(&mut cfg, invalid_overrides).unwrap_err();
-        assert!(err.to_string().contains("invalid storageEngineType"));
+    #[cfg(feature = "embedded-controller")]
+    #[test]
+    fn controller_storage_engine_override_rejects_invalid_canonical_value() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("namesrv.toml");
+        std::fs::write(&path, "storageEngineType = 'unknown_engine'").unwrap();
+        let error = load_controller_config(Some(path), &NamesrvConfig::default()).unwrap_err();
+        assert!(error.to_string().contains("invalid storageEngineType"));
     }
 
     #[test]

@@ -66,7 +66,9 @@ Live examples include `orderMessageEnable`, `namesrvRouteResponseCacheEnable`, `
 
 ### File schema and identity
 
-Controller uses top-level camelCase fields with Serde defaults. Use `nodeId`, `listenAddr`, `raftListenAddr`, `raftPeers`, and `storageEngineType` (with legacy input alias `storageBackend`) rather than copying Rust snake_case field names. File values override defaults; there is no general CLI override for node identity or storage. `--log-filter` is a separate startup logging override.
+Before upgrading, replace `storageBackend` with `storageEngineType` in standalone or embedded Controller startup files, runtime property updates, configured blacklist entries, and `services.controller` Helm overrides. Startup files and Helm values containing the removed key are rejected, even when the canonical key is also present. No persisted-data migration is required.
+
+Controller uses top-level camelCase fields with Serde defaults. Use `nodeId`, `listenAddr`, `raftListenAddr`, `raftPeers`, and `storageEngineType` rather than copying Rust snake_case field names. File values override defaults; there is no general CLI override for node identity or storage. `--log-filter` is a separate startup logging override.
 
 | External key | Type / default | Meaning |
 | --- | --- | --- |
@@ -77,7 +79,7 @@ Controller uses top-level camelCase fields with Serde defaults. Use `nodeId`, `l
 | `raftPeers` | array of `{ id, addr }` / empty | Raft membership endpoint input. `controllerPeers` is the separate remoting peer list; typed endpoint alternatives also exist in the schema. |
 | `electionTimeoutMs` | u64 / `1000` ms | Raft election timing input; coordinate it with heartbeat timing and network conditions. |
 | `heartbeatIntervalMs` | u64 / `300` ms | Raft heartbeat timing input; not the Broker heartbeat lease timeout. |
-| `storageEngineType` | enum / `RocksDB` | Serialized variants `RocksDB`, `File`, `Memory`. Memory is for tests and does not provide restart durability. Accepts `storageBackend` as a legacy input alias. |
+| `storageEngineType` | enum / `RocksDB` | Serialized variants `RocksDB`, `File`, `Memory`. Memory is for tests and does not provide restart durability. |
 | `storagePath` | string / empty | Preferred storage root. If empty, use `controllerStorePath`; if both are empty, use `rocketmqHome/controller/node-<nodeId>`. |
 | `snapshotLogsSinceLast` | u64 / `5000` | Positive log-entry threshold for snapshots. |
 | `snapshotMaxLogEntriesToKeep` | u64 / `1000` | Positive retained-log setting associated with snapshots. |

@@ -68,7 +68,6 @@ use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
-use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
@@ -769,14 +768,6 @@ macro_rules! message_store_methods {
 
     fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>> {
         delegate_store!(self, get_put_message_hook_list())
-    }
-
-    fn set_send_message_back_hook(&self, send_message_back_hook: Arc<dyn SendMessageBackHook>) {
-        delegate_store!(self, set_send_message_back_hook(send_message_back_hook));
-    }
-
-    fn get_send_message_back_hook(&self) -> Option<Arc<dyn SendMessageBackHook>> {
-        delegate_store!(self, get_send_message_back_hook())
     }
 
     fn get_last_file_from_offset(&self) -> i64 {

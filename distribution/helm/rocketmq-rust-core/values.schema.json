@@ -127,9 +127,9 @@
     "controllerService": {
       "allOf": [
         {"$ref": "#/$defs/statefulService"},
-        {"type": "object", "required": ["raftPort", "storageBackend"], "properties": {
+        {"type": "object", "required": ["raftPort", "storageEngineType"], "not": {"required": ["storageBackend"]}, "properties": {
           "raftPort": {"$ref": "#/$defs/port"},
-          "storageBackend": {"enum": ["RocksDB", "File"]}
+          "storageEngineType": {"enum": ["RocksDB", "File"]}
         }}
       ]
     },

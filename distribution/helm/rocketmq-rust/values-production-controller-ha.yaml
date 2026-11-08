@@ -54,7 +54,7 @@ services:
       - 10.96.0.202
       - 10.96.0.203
     autoInitializeCluster: true
-    storageBackend: RocksDB
+    storageEngineType: RocksDB
     image:
       repository: rocketmq-rust/controller
       tag: local
