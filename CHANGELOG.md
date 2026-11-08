@@ -90,6 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Remove the unused private GetMessageResult constructor and retain the active capacity-based construction paths ([#12355](https://github.com/mxsm/rocketmq-rust/issues/12355)).
 - **refactor(client):** Remove the unused producer send kernel wrapper superseded by the runtime-snapshot send path ([#12323](https://github.com/mxsm/rocketmq-rust/issues/12323)).
 - **refactor(broker):** Remove the unconfigured internal shutdown hook and its injection-only test; active shutdown ownership and deadlines are unchanged ([#12324](https://github.com/mxsm/rocketmq-rust/issues/12324)).
 - **refactor(broker):** Remove the unused reply correlation-ID fallback helper and its dedicated tests ([#12315](https://github.com/mxsm/rocketmq-rust/issues/12315)).
