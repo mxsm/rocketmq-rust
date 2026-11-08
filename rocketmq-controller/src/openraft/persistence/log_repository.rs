@@ -31,12 +31,12 @@ pub(in crate::openraft) struct LoadedLogRepository {
 
 #[derive(Clone)]
 pub(in crate::openraft) struct RaftLogRepository {
-    backend: SharedKeyValueStore,
+    key_value_store: SharedKeyValueStore,
 }
 
 impl RaftLogRepository {
-    pub(in crate::openraft) fn new(backend: SharedKeyValueStore) -> Self {
-        Self { backend }
+    pub(in crate::openraft) fn new(key_value_store: SharedKeyValueStore) -> Self {
+        Self { key_value_store }
     }
 
     pub(in crate::openraft) async fn load(&self) -> Result<LoadedLogRepository, std::io::Error> {
@@ -44,7 +44,7 @@ impl RaftLogRepository {
         let committed = self.load_json(RaftRecordKey::Committed).await?;
         let last_purged = self.load_json(RaftRecordKey::LastPurgedLog).await?;
         let mut keys = self
-            .backend
+            .key_value_store
             .list_keys(RaftRecordKey::log_prefix_v1())
             .await
             .map_err(|error| map_key_value_store_error("list", RaftRecordKey::LogEntry(0), error))?;
@@ -55,7 +55,7 @@ impl RaftLogRepository {
             let index = RaftRecordKey::parse_v1_log_key(&key)?;
             let record_key = RaftRecordKey::LogEntry(index);
             let Some(bytes) = self
-                .backend
+                .key_value_store
                 .get(&key)
                 .await
                 .map_err(|error| map_key_value_store_error("read", record_key, error))?
@@ -127,7 +127,7 @@ impl RaftLogRepository {
 
     async fn load_json<T: serde::de::DeserializeOwned>(&self, key: RaftRecordKey) -> Result<Option<T>, std::io::Error> {
         let Some(bytes) = self
-            .backend
+            .key_value_store
             .get(key.as_v1_key().as_ref())
             .await
             .map_err(|error| map_key_value_store_error("read", key, error))?
@@ -155,11 +155,11 @@ impl RaftLogRepository {
         if puts.is_empty() && deletes.is_empty() {
             return Ok(());
         }
-        self.backend
+        self.key_value_store
             .write_batch(puts, deletes)
             .await
             .map_err(|error| map_key_value_store_error("write batch", key, error))?;
-        self.backend
+        self.key_value_store
             .sync()
             .await
             .map_err(|error| map_key_value_store_error("sync", key, error))

@@ -105,8 +105,8 @@ impl LogStore {
         }
     }
 
-    pub async fn open(backend: SharedKeyValueStore) -> Result<Self, std::io::Error> {
-        let repository = RaftLogRepository::new(backend);
+    pub async fn open(key_value_store: SharedKeyValueStore) -> Result<Self, std::io::Error> {
+        let repository = RaftLogRepository::new(key_value_store);
         let loaded = repository.load().await?;
         let store = Self {
             logs: Arc::new(DashMap::new()),

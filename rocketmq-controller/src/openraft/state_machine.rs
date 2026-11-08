@@ -217,8 +217,11 @@ impl StateMachine {
         }
     }
 
-    pub async fn open(config: ControllerConfigReader, backend: SharedKeyValueStore) -> Result<Self, std::io::Error> {
-        let repository = RaftStateRepository::new(backend);
+    pub async fn open(
+        config: ControllerConfigReader,
+        key_value_store: SharedKeyValueStore,
+    ) -> Result<Self, std::io::Error> {
+        let repository = RaftStateRepository::new(key_value_store);
         let loaded = repository.load().await?;
         let replicas_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
         if let Some(state) = loaded.replicas_info_manager_state {
@@ -818,16 +821,16 @@ mod tests {
     #[tokio::test]
     async fn reopened_state_reports_persisted_applied_log_before_raft_metrics_publish() {
         let context = rocketmq_runtime::RuntimeContext::from_current("controller-persisted-bootstrap-state-test");
-        let backend = crate::storage::create_storage(
+        let key_value_store = crate::storage::create_storage(
             crate::storage::StorageConfig::Memory,
             context.service_context("storage").storage_io().clone(),
         )
         .await
-        .expect("create shared memory backend");
+        .expect("create shared memory key-value store");
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:39877".parse().expect("valid addr")),
         );
-        let state_machine = StateMachine::open(config.clone(), backend.clone())
+        let state_machine = StateMachine::open(config.clone(), key_value_store.clone())
             .await
             .expect("open state machine");
         let last_applied = LogId {
@@ -843,7 +846,9 @@ mod tests {
             .await
             .expect("persist applied state");
 
-        let reopened = StateMachine::open(config, backend).await.expect("reopen state machine");
+        let reopened = StateMachine::open(config, key_value_store)
+            .await
+            .expect("reopen state machine");
 
         assert!(reopened.has_persisted_applied_state().await);
     }

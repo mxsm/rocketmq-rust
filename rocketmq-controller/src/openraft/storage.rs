@@ -54,18 +54,18 @@ impl Store {
 
     pub async fn open(config: ControllerConfigReader, storage_io: BlockingExecutor) -> Result<Self> {
         let startup_config = config.snapshot();
-        let backend = create_storage(storage_config(&startup_config)?, storage_io).await?;
-        Self::open_with_backend(config, backend).await
+        let key_value_store = create_storage(storage_config(&startup_config)?, storage_io).await?;
+        Self::open_with_key_value_store(config, key_value_store).await
     }
 
-    async fn open_with_backend(
+    async fn open_with_key_value_store(
         config: ControllerConfigReader,
-        backend: crate::storage::SharedKeyValueStore,
+        key_value_store: crate::storage::SharedKeyValueStore,
     ) -> Result<Self> {
-        let log_store = LogStore::open(backend.clone())
+        let log_store = LogStore::open(key_value_store.clone())
             .await
             .map_err(|error| controller_internal_by("open OpenRaft log store", error))?;
-        let state_machine = StateMachine::open(config, backend)
+        let state_machine = StateMachine::open(config, key_value_store)
             .await
             .map_err(|error| controller_internal_by("open OpenRaft state machine", error))?;
 
