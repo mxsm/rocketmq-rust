@@ -17,9 +17,9 @@ use crate::typ::LogId;
 use crate::typ::SnapshotMeta;
 use crate::typ::StoredMembership;
 
-use super::backend_error;
 use super::decode_v1;
 use super::encode_v1;
+use super::map_key_value_store_error;
 use super::RaftRecordKey;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -200,7 +200,7 @@ impl RaftStateRepository {
         self.backend
             .get(key.as_v1_key().as_ref())
             .await
-            .map_err(|error| backend_error("read", key, error))
+            .map_err(|error| map_key_value_store_error("read", key, error))
     }
 
     async fn read_json<T: serde::de::DeserializeOwned>(&self, key: RaftRecordKey) -> Result<Option<T>, std::io::Error> {
@@ -218,11 +218,11 @@ impl RaftStateRepository {
         self.backend
             .write_batch(puts, Vec::new())
             .await
-            .map_err(|error| backend_error("write batch", key, error))?;
+            .map_err(|error| map_key_value_store_error("write batch", key, error))?;
         self.backend
             .sync()
             .await
-            .map_err(|error| backend_error("sync", key, error))
+            .map_err(|error| map_key_value_store_error("sync", key, error))
     }
 }
 
