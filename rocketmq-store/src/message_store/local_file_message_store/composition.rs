@@ -618,7 +618,6 @@ impl LocalFileMessageStore {
             transient_store_pool,
             root_dependencies_wired: false,
             master_store_in_process: StdRwLock::new(None),
-            send_message_back_hook: StdRwLock::new(None),
             pending_ha_service: None,
             ha_service: None,
             flush_consume_queue_service: FlushConsumeQueueService::new(
