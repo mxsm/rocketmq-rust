@@ -623,7 +623,7 @@ pub struct AppServices {
     consumers: Arc<dyn consumers::ConsumerBackend>,
     topics: Arc<dyn topics::TopicBackend>,
     messages: Arc<dyn messages::MessageBackend>,
-    acl: Arc<dyn acl::AclBackend>,
+    acl: Arc<dyn acl::AclOperations>,
     dlq: Arc<dyn dlq::DlqBackend>,
     topology: Arc<dyn topology::TopologyBackend>,
 }
