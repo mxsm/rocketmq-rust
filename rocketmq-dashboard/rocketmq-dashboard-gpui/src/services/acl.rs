@@ -48,15 +48,18 @@ pub(crate) trait AclOperations: Send + Sync {
     /// or unknown outcomes. An overall `UiError` reports failure to obtain that structured result.
     fn mutate(&self, revision: u64, command: AclCommand) -> ServiceFuture<'_, Result<AclWriteResult, UiError>>;
 }
-pub(super) struct RealAclBackend {
+/// Delegates ACL operations to the configured Admin provider and maps its failures to UI errors.
+pub(super) struct AdminAclAdapter {
     provider: Option<Arc<GpuiAdminProvider>>,
 }
-impl RealAclBackend {
+impl AdminAclAdapter {
+    /// Wraps an existing shared provider without connecting or guaranteeing a connected session.
     pub(super) fn new(provider: Arc<GpuiAdminProvider>) -> Arc<Self> {
         Arc::new(Self {
             provider: Some(provider),
         })
     }
+    /// Constructs an adapter whose operations return the existing capability-unavailable error.
     pub(super) fn unavailable() -> Arc<Self> {
         Arc::new(Self { provider: None })
     }
@@ -70,7 +73,7 @@ impl RealAclBackend {
         })
     }
 }
-impl AclOperations for RealAclBackend {
+impl AclOperations for AdminAclAdapter {
     fn users(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclUser>, UiError>> {
         Box::pin(async move {
             self.provider()?
