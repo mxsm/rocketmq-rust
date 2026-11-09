@@ -20,7 +20,7 @@
 //! maintenance-locked write transaction.
 
 use crate::persistence::DashboardPersistence;
-use crate::persistence::backend::DashboardDataStore;
+use crate::persistence::data_store::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 
 pub const BACKUP_FORMAT_VERSION: u32 = 1;

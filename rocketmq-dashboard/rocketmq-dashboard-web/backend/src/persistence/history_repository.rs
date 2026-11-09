@@ -16,7 +16,7 @@ use crate::model::MetricDimension;
 use crate::model::MetricSample;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::TimeRange;
-use crate::persistence::backend::DashboardDataStore;
+use crate::persistence::data_store::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::lease_repository::HistoryLease;
 use chrono::TimeZone;
