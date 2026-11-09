@@ -14,7 +14,7 @@
 use crate::model::EnvironmentId;
 use crate::model::StorageEngine;
 use crate::persistence::DashboardPersistence;
-use crate::persistence::backend::DashboardDataStore;
+use crate::persistence::data_store::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 
 /// Opaque authority granted by the SQL task lease. The holder identity is
