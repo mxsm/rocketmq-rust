@@ -25,6 +25,8 @@ type Gate = (
     tokio::sync::oneshot::Receiver<()>,
     tokio::sync::oneshot::Sender<()>,
 );
+/// Stateful ACL test double with mutable records, recorded calls, queued write outcomes,
+/// and controllable user-query and write waits.
 #[derive(Default)]
 pub(crate) struct FakeAclOperations {
     pub users: Mutex<Vec<AclUser>>,
@@ -37,6 +39,10 @@ pub(crate) struct FakeAclOperations {
     write_gate: Mutex<Option<Gate>>,
 }
 impl FakeAclOperations {
+    /// Gates the next `users()` call; `policies()` returns immediately.
+    ///
+    /// Channels observe wait entry, release the wait, and observe wait exit or drop, in that
+    /// order. Exit does not certify subsequent state changes or audit persistence have completed.
     pub fn hold_query(
         &self,
     ) -> (
@@ -46,6 +52,10 @@ impl FakeAclOperations {
     ) {
         hold(&self.query_gate)
     }
+    /// Gates the next write, preserving its existing release and cancellation behavior.
+    ///
+    /// Channels observe wait entry, release the wait, and observe wait exit or drop, in that
+    /// order. Exit does not certify subsequent state changes or audit persistence have completed.
     pub fn hold_write(
         &self,
     ) -> (
