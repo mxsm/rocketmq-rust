@@ -99,31 +99,6 @@ impl GetMessageResult {
             ..Default::default()
         }
     }
-
-    fn new_with_params(
-        status: GetMessageStatus,
-        next_begin_offset: i64,
-        min_offset: i64,
-        max_offset: i64,
-        message_mapped_list: Vec<SelectMappedBufferResult>,
-        message_queue_offset: Vec<u64>,
-    ) -> Self {
-        GetMessageResult {
-            status: Some(status),
-            next_begin_offset,
-            min_offset,
-            max_offset,
-            message_mapped_list,
-            message_queue_offset,
-            // Other fields would be initialized with default values
-            buffer_total_size: 0,
-            message_count: 0,
-            suggest_pulling_from_slave: false,
-            msg_count4_commercial: 0,
-            commercial_size_per_msg: 4 * 1024,
-            cold_data_sum: 0,
-        }
-    }
 }
 
 impl GetMessageResult {

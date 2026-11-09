@@ -17,7 +17,7 @@ use crate::model::NewSession;
 use crate::model::SessionRecord;
 use crate::model::SessionTokenHash;
 use crate::persistence::DashboardPersistence;
-use crate::persistence::backend::DashboardDataStore;
+use crate::persistence::data_store::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use serde::Deserialize;
 use serde::Serialize;
