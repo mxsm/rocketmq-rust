@@ -649,7 +649,7 @@ impl AppServices {
             consumers: consumers::RealConsumerBackend::unavailable(),
             topics: topics::RealTopicBackend::unavailable(),
             messages: messages::RealMessageBackend::unavailable(),
-            acl: acl::RealAclBackend::unavailable(),
+            acl: acl::AdminAclAdapter::unavailable(),
             dlq: dlq::RealDlqBackend::unavailable(),
             topology: topology::RealTopologyBackend::unavailable(),
         }
@@ -721,8 +721,8 @@ impl AppServices {
         let acl = admin_provider
             .as_ref()
             .cloned()
-            .map(acl::RealAclBackend::new)
-            .unwrap_or_else(acl::RealAclBackend::unavailable);
+            .map(acl::AdminAclAdapter::new)
+            .unwrap_or_else(acl::AdminAclAdapter::unavailable);
         let dlq = admin_provider
             .as_ref()
             .cloned()
