@@ -33,9 +33,19 @@ pub(crate) struct AclRequest {
     pub epoch: u64,
     pub scope: AclScope,
 }
-pub(crate) trait AclBackend: Send + Sync {
+/// Service-layer ACL reads and structured mutations, implemented by the Admin adapter and test substitutes.
+///
+/// Authentication and auditing belong to the calling service; provider session ownership and
+/// implementation-specific validation remain with the implementation.
+pub(crate) trait AclOperations: Send + Sync {
+    /// Reads users for the connection/request context and confirmed scope in `request`.
+    /// The result carries records, per-target failures, and truncation state.
     fn users(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclUser>, UiError>>;
+    /// Reads policies for the connection/request context and confirmed scope in `request`.
+    /// The result carries records, per-target failures, and truncation state.
     fn policies(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclPolicy>, UiError>>;
+    /// Executes `command` at the connection `revision`, returning per-target applied, rejected,
+    /// or unknown outcomes. An overall `UiError` reports failure to obtain that structured result.
     fn mutate(&self, revision: u64, command: AclCommand) -> ServiceFuture<'_, Result<AclWriteResult, UiError>>;
 }
 /// Delegates ACL operations to the configured Admin provider and maps its failures to UI errors.
@@ -63,7 +73,7 @@ impl AdminAclAdapter {
         })
     }
 }
-impl AclBackend for AdminAclAdapter {
+impl AclOperations for AdminAclAdapter {
     fn users(&self, request: AclRequest) -> ServiceFuture<'_, Result<AclRead<AclUser>, UiError>> {
         Box::pin(async move {
             self.provider()?
@@ -120,17 +130,16 @@ fn provider_error(error: ProviderFailure) -> UiError {
 impl AppServices {
     pub(crate) async fn acl_users(&self, request: AclRequest) -> Result<AclRead<AclUser>, UiError> {
         self.require_acl_access(request.revision)?;
-        let backend = self.acl.clone();
-        self.run_protected_query("gpui-service-acl-users", async move { backend.users(request).await })
+        let operations = self.acl.clone();
+        self.run_protected_query("gpui-service-acl-users", async move { operations.users(request).await })
             .await
     }
     pub(crate) async fn acl_policies(&self, request: AclRequest) -> Result<AclRead<AclPolicy>, UiError> {
         self.require_acl_access(request.revision)?;
-        let backend = self.acl.clone();
-        self.run_protected_query(
-            "gpui-service-acl-policies",
-            async move { backend.policies(request).await },
-        )
+        let operations = self.acl.clone();
+        self.run_protected_query("gpui-service-acl-policies", async move {
+            operations.policies(request).await
+        })
         .await
     }
     pub(crate) async fn mutate_acl(&self, revision: u64, command: AclCommand) -> Result<AclWriteResult, UiError> {
@@ -151,15 +160,16 @@ impl AppServices {
             action,
             OperationResource::AclSubject(command.change.subject().into()),
         )?;
-        let backend = self.acl.clone();
+        let operations = self.acl.clone();
         self.run_mutation("gpui-service-acl-write", operation, async move {
-            backend.mutate(revision, command).await
+            operations.mutate(revision, command).await
         })
         .await
     }
+    /// Replaces the injected ACL operations implementation for tests.
     #[cfg(test)]
-    pub(crate) fn with_acl_backend(mut self, backend: Arc<dyn AclBackend>) -> Self {
-        self.acl = backend;
+    pub(crate) fn with_acl_operations(mut self, operations: Arc<dyn AclOperations>) -> Self {
+        self.acl = operations;
         self
     }
 }
