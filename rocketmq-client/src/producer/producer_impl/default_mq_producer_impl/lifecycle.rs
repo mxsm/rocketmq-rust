@@ -311,13 +311,6 @@ impl DefaultMQProducerImpl {
             .ok_or_else(|| mq_client_err!("producer one-way egress is not initialized"))
     }
 
-    pub(crate) fn oneway_egress_snapshot(&self) -> OnewayEgressSnapshot {
-        self.oneway_egress
-            .get()
-            .map(BoundedEgress::snapshot)
-            .unwrap_or_default()
-    }
-
     #[inline]
     pub(super) fn load_state(&self, ordering: Ordering) -> ProducerState {
         ProducerState::from_u8(self.state.load(ordering))
