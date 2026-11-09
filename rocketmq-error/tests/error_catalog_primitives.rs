@@ -19,6 +19,9 @@ use rocketmq_error::RecoveryHint;
 #[test]
 fn canonical_error_codes_accept_lowercase_dotted_domain_semantics() {
     let cases = [
+        "storage.unavailable",
+        "storage.commit_log",
+        "a.b",
         "storage.commit_log.corrupt_record",
         "auth.credentials.expired",
         "route.v2.leader_not_found",
@@ -37,7 +40,6 @@ fn canonical_error_codes_reject_noncanonical_values() {
     let cases = [
         "",
         "storage",
-        "storage.commit_log",
         "Storage.commit_log.corrupt_record",
         "storage.Commit_Log.corrupt_record",
         "storage.commit_log.CORRUPT_RECORD",
