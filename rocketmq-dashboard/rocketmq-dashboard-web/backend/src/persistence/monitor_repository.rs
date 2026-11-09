@@ -16,7 +16,7 @@ use crate::model::ConsumerMonitorRule;
 use crate::model::EnvironmentId;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::Revision;
-use crate::persistence::backend::DashboardDataStore;
+use crate::persistence::data_store::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::file_store::FileDashboardStore;
 use chrono::Utc;

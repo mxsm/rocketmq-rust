@@ -516,38 +516,6 @@ impl CompactionStore {
         Ok(removed)
     }
 
-    pub(crate) async fn rollback_to_previous_generation(&self) -> Result<bool, StoreError> {
-        let _generation_guard = self.generation_lock.lock().await;
-        let (current, previous, next_generation) = {
-            let state = self.state.read();
-            let Some(previous) = state.previous.clone() else {
-                return Ok(false);
-            };
-            (state.current.clone(), previous, state.next_generation)
-        };
-        if let Some(root) = self.root.clone() {
-            compaction_generation::write_current(
-                self.runtime_scope()?,
-                root,
-                CurrentPointer {
-                    current: previous.metadata.generation,
-                    previous: Some(current.metadata.generation),
-                    next_generation,
-                },
-            )
-            .await?;
-        }
-        let mut state = self.state.write();
-        state.current = previous;
-        state.previous = Some(current);
-        state.read_state = CompactionReadState::Recovering {
-            generation: state.current.metadata.generation,
-            durable_watermark: state.current.metadata.max_physical_offset,
-            required_wal_position: state.current.metadata.max_physical_offset,
-        };
-        Ok(true)
-    }
-
     async fn materialize_queues(&self, queues: &CompactionQueues) -> Result<CompactionQueues, StoreError> {
         let mut materialized = queues.clone();
         for queue in materialized.values_mut() {
