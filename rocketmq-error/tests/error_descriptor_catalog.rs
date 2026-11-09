@@ -49,7 +49,7 @@ const EXPECTED_DESCRIPTOR_SNAPSHOTS: &[&str] = &[
     "transport.response.failed|internal|Internal|Dependency|transport|Transport response delivery failed|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "transport.session.failed|unavailable|Unavailable|Dependency|transport|Transport session operation failed|Error|backoff|Never|Generic|1|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "storage.lifecycle.not_started|validation|FailedPrecondition|Caller|storage|Storage service is not started|Warn|never|Never|Public|1|InternalError|FailedPrecondition|409|65|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
-    "storage.backend.unavailable|unavailable|Unavailable|Dependency|storage|Storage backend is unavailable|Error|backoff|Never|Generic|1|InternalError|Unavailable|503|69|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.unavailable|unavailable|Unavailable|Dependency|storage|Storage is unavailable|Error|backoff|Never|Generic|1|InternalError|Unavailable|503|69|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "storage.request.invalid|validation|InvalidArgument|Caller|storage|Storage request is invalid|Info|never|Never|Public|29|BadRequest|InvalidArgument|400|64|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "storage.mapped_file.not_found|io|NotFound|LocalResource|storage|Mapped file was not found|Warn|never|Never|Generic|22|NotFound|NotFound|404|66|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "storage.capacity.exhausted|capacity|ResourceExhausted|LocalResource|storage|Storage capacity is exhausted|Critical|operator_action|Never|Generic|1|InternalError|ResourceExhausted|507|65|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
@@ -283,6 +283,7 @@ fn catalog_codes_are_unique_valid_and_lookup_is_exact() {
     }
 
     for unknown in [
+        "storage.backend.unavailable",
         "route.topic.missing",
         "route.topic",
         "route..topic",
@@ -292,6 +293,8 @@ fn catalog_codes_are_unique_valid_and_lookup_is_exact() {
     ] {
         assert_eq!(descriptor_by_code(unknown), None, "unexpected lookup for {unknown:?}");
     }
+
+    assert_eq!(descriptor_by_code("storage.unavailable"), Some(&STORAGE_UNAVAILABLE));
 }
 
 #[test]

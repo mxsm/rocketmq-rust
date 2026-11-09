@@ -267,17 +267,17 @@ fn store_health_error_preserves_canonical_code_and_component() {
         (
             &rocketmq_error::STORAGE_UNAVAILABLE,
             StoreComponent::TieredStore,
-            "storage.backend.unavailable",
+            "storage.unavailable",
         ),
         (
             &rocketmq_error::STORAGE_UNAVAILABLE,
             StoreComponent::HighAvailability,
-            "storage.backend.unavailable",
+            "storage.unavailable",
         ),
         (
             &rocketmq_error::STORAGE_UNAVAILABLE,
             StoreComponent::DLedger,
-            "storage.backend.unavailable",
+            "storage.unavailable",
         ),
         (
             &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,

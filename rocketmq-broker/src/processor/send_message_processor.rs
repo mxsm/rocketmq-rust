@@ -2610,7 +2610,7 @@ mod tests {
             (
                 &rocketmq_error::STORAGE_UNAVAILABLE,
                 RemotingResponseCode::SystemError,
-                "Storage backend is unavailable",
+                "Storage is unavailable",
                 StoreApiRetryDisposition::SwitchBroker,
             ),
             (

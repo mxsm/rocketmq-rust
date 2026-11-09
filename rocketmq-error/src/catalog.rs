@@ -437,12 +437,12 @@ define_error_catalog! {
     }
     /// Storage is unavailable for the requested operation.
     STORAGE_UNAVAILABLE {
-        code: "storage.backend.unavailable",
+        code: "storage.unavailable",
         class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
         fault: FaultAttribution::Dependency,
         component: ComponentId::STORAGE,
-        public_message: "Storage backend is unavailable",
+        public_message: "Storage is unavailable",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Backoff,
         backtrace: BacktracePolicy::Never,

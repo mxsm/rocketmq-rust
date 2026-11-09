@@ -181,7 +181,7 @@ pub struct ErrorCode(&'static str);
 impl ErrorCode {
     /// Attempts to create a canonical catalog code.
     ///
-    /// Canonical codes have at least three dot-separated segments. Every
+    /// Canonical codes have at least two dot-separated segments. Every
     /// segment starts with a lowercase ASCII letter and continues with
     /// lowercase ASCII letters, ASCII digits, or underscores.
     ///
@@ -422,7 +422,7 @@ const fn is_valid_catalog_code(value: &str) -> bool {
         index += 1;
     }
 
-    !starts_segment && segment_count >= 3
+    !starts_segment && segment_count >= 2
 }
 
 #[cfg(test)]

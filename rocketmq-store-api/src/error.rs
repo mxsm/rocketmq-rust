@@ -302,7 +302,7 @@ fn is_storage_descriptor(descriptor: &ErrorDescriptor) -> bool {
     matches!(
         descriptor.code().as_str(),
         "storage.lifecycle.not_started"
-            | "storage.backend.unavailable"
+            | "storage.unavailable"
             | "storage.request.invalid"
             | "storage.mapped_file.not_found"
             | "storage.capacity.exhausted"
@@ -401,7 +401,7 @@ mod tests {
             .in_component(StoreComponent::HighAvailability);
 
         assert_eq!(&STORAGE_UNAVAILABLE, error.descriptor());
-        assert_eq!("storage.backend.unavailable", error.code().as_str());
+        assert_eq!("storage.unavailable", error.code().as_str());
         assert_eq!(StoreOperation::Append, error.operation());
         assert_eq!(StoreComponent::HighAvailability, error.component());
     }
