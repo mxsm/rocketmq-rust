@@ -16,7 +16,7 @@ use crate::model::AuditAction;
 use crate::model::AuditEvent;
 use crate::model::AuditOutcome;
 use crate::persistence::DashboardPersistence;
-use crate::persistence::backend::DashboardDataStore;
+use crate::persistence::data_store::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
