@@ -222,18 +222,6 @@ impl DefaultMQPushConsumerImpl {
         this
     }
 
-    pub(crate) fn new_with_config_store(
-        client_runtime: Arc<ClientRuntime>,
-        client_config: ClientConfig,
-        consumer_config: Arc<ArcSwap<ConsumerConfig>>,
-        rpc_hook: Option<Arc<dyn RPCHook>>,
-    ) -> Self {
-        let initial_config = (*consumer_config.load_full()).clone();
-        let mut this = Self::new(client_runtime, client_config, initial_config, rpc_hook);
-        this.consumer_config = consumer_config;
-        this
-    }
-
     pub(crate) fn new_with_config_store_and_discovery(
         client_runtime: Arc<ClientRuntime>,
         client_config: ClientConfig,
