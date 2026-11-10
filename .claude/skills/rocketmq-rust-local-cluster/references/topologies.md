@@ -8,7 +8,7 @@ Paths below are relative to the repository root. These are targeted inspection e
 | NameServer | `rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs`, `rocketmq-namesrv/src/config.rs` |
 | Broker | `rocketmq-broker/src/command.rs`, `rocketmq-broker/src/config/raw.rs`, `rocketmq-broker/src/config/sections.rs`, `rocketmq-broker/src/config/broker_config.rs`, `rocketmq-store/src/config/message_store_config.rs` |
 | Ordinary HA | `distribution/config/broker/1m-1s-async-one-machine/`, `distribution/config/broker/2m-2s-async/`, `scripts/interop/run_default_ha_interop.py` |
-| Proxy | `rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs`, `rocketmq-proxy/src/config.rs`, `rocketmq-proxy-local/src/config.rs`, `rocketmq-proxy/README.md` |
+| Proxy | `rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs`, `rocketmq-proxy/src/config.rs`, `rocketmq-proxy-local/src/config.rs`, `rocketmq-proxy/README.md` |
 | Controller | `rocketmq-controller/src/cli.rs`, `rocketmq-controller/src/config/controller_config.rs`, `rocketmq-controller/src/config/peer_endpoints.rs`, `rocketmq-controller/README.md` |
 | Controller HA composition | `distribution/helm/rocketmq-rust-core/templates/_config.tpl`; reuse field/role semantics, not container addresses |
 | Security and probes | `rocketmq-security-api/src/secure_deployment.rs`, `rocketmq-runtime/src/service_lifecycle.rs` |

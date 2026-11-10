@@ -55,7 +55,7 @@ const GOVERNED_ENTRYPOINTS: &[&str] = &[
     "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
     "rocketmq-controller/src/bin/controller_bootstrap.rs",
     "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
-    "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+    "rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs",
     "rocketmq-ai/rocketmq-mcp-query/src/app.rs",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/src/main.rs",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs",
@@ -65,7 +65,7 @@ const CORE_SERVICE_ENTRYPOINTS: &[&str] = &[
     "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
     "rocketmq-controller/src/bin/controller_bootstrap.rs",
     "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
-    "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+    "rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs",
 ];
 
 const TELEMETRY_ENV_GOVERNED_CRATE_DIRS: &[&str] = &[

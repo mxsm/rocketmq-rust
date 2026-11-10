@@ -594,7 +594,7 @@ and the legacy `ServiceManager` constructors have been removed; see
 
 The [broker](../rocketmq-broker/src/bin/broker_bootstrap_server.rs),
 [NameServer](../rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs),
-[proxy](../rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs), and
+[proxy](../rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs), and
 [controller](../rocketmq-controller/src/bin/controller_bootstrap.rs) entrypoints
 build runtime owners and use service lifecycle deadlines. Other consumers
 include `rocketmq-client`, `rocketmq-transport`, `rocketmq-store`,
