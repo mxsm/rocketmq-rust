@@ -27,7 +27,7 @@ use crate::mapped_file::retirement::writer::{AllocatedIncarnationReceipt, BoundI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::mapped_file::retirement) enum IncarnationCreationStage {
     OpenParent,
-    VerifyNames,
+    VerifyIncarnationBinding,
     CreateTemp,
     SizeTemp,
     SyncTemp,
@@ -156,7 +156,7 @@ impl VerifiedNamespaceRoot {
     ) -> Result<CreatedIncarnationTemp, IncarnationCreationFailure> {
         if allocated.incarnation().store_uuid() != self.store_uuid {
             return Err(IncarnationCreationFailure::policy(
-                IncarnationCreationStage::VerifyNames,
+                IncarnationCreationStage::VerifyIncarnationBinding,
                 "allocation belongs to a different Store UUID",
             ));
         }
@@ -173,7 +173,7 @@ impl VerifiedNamespaceRoot {
     ) -> Result<VerifiedCreatedIncarnation, IncarnationCreationFailure> {
         if bound.incarnation().store_uuid() != self.store_uuid {
             return Err(IncarnationCreationFailure::policy(
-                IncarnationCreationStage::VerifyNames,
+                IncarnationCreationStage::VerifyIncarnationBinding,
                 "binding belongs to a different Store UUID",
             ));
         }
