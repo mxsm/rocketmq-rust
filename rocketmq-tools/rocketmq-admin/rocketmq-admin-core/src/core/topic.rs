@@ -25,7 +25,7 @@ pub(crate) use deletion::TopicDeletionOperations;
 pub use deletion::TopicOperationFailure;
 pub use fields::*;
 #[cfg(feature = "mutation-client-adapter")]
-pub(crate) use fields::{execute_fields_patch, TopicFieldsBackend, TopicFieldsWriteResult};
+pub(crate) use fields::{execute_fields_patch, TopicConfigFieldsPatchOperations, TopicFieldsWriteResult};
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
