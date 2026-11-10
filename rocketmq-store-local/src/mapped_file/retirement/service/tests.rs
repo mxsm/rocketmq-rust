@@ -318,16 +318,16 @@ fn retryable_namespace_work_is_owned_and_backed_off() {
 }
 
 #[test]
-fn store_destroy_admission_requires_completed_shutdown() {
-    let mut running = RuntimeAdmission::Running;
-    assert!(!running.enter_store_destroy());
-    assert_eq!(running, RuntimeAdmission::Running);
+fn store_destroy_admission_requires_closed_admission() {
+    let mut open = RuntimeAdmission::Open;
+    assert!(!open.enter_store_destroy());
+    assert_eq!(open, RuntimeAdmission::Open);
 
-    let mut shutdown = RuntimeAdmission::Shutdown;
-    assert!(shutdown.enter_store_destroy());
-    assert_eq!(shutdown, RuntimeAdmission::StoreDestroy);
+    let mut closed_for_shutdown = RuntimeAdmission::ClosedForShutdown;
+    assert!(closed_for_shutdown.enter_store_destroy());
+    assert_eq!(closed_for_shutdown, RuntimeAdmission::StoreDestroyOnly);
     assert!(
-        shutdown.enter_store_destroy(),
+        closed_for_shutdown.enter_store_destroy(),
         "Store-destroy retries remain idempotent"
     );
 }
