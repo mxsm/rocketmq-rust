@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(ci):** Bind an ephemeral listener and wait for Proxy lifecycle readiness in the ACL watcher shutdown test to avoid mistaking another listener for the test runtime ([#12404](https://github.com/mxsm/rocketmq-rust/issues/12404)).
 - **fix(ci):** Subscribe before saving peer configuration in the GPUI notification test to avoid missing updates from background polling ([#12293](https://github.com/mxsm/rocketmq-rust/issues/12293)).
 - **fix(ci):** Set the MCP query error-boundary test recursion limit to prevent compilation failures in query and control CI ([#12285](https://github.com/mxsm/rocketmq-rust/issues/12285)).
 - **fix(ci):** Keep the HA port distinct from both remoting listener ports in Broker lifecycle test fixtures ([#12276](https://github.com/mxsm/rocketmq-rust/issues/12276)).
