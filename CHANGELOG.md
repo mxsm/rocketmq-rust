@@ -111,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(broker):** Remove unused internal subscription consume toggle helpers; slow-consumer protection and configuration updates remain intact ([#12223](https://github.com/mxsm/rocketmq-rust/issues/12223)).
 - **refactor(broker):** Remove obsolete publish-route queue selection state and its dedicated test; active failover selection and Lite sharding are unchanged ([#12309](https://github.com/mxsm/rocketmq-rust/issues/12309)).
 - **refactor(broker):** Remove unused internal global Pull forced-scan plumbing while retaining per-queue offset replay ([#12185](https://github.com/mxsm/rocketmq-rust/issues/12185)).
+- **refactor(broker):** Remove unused Pull arrival continuation admission and scan wrappers; estimate retained pending arrivals from their actual payload type ([#12409](https://github.com/mxsm/rocketmq-rust/issues/12409)).
 - **refactor(store):** Remove obsolete internal CommitLog append callbacks and retain rollover coverage on the prepared append path ([#12175](https://github.com/mxsm/rocketmq-rust/issues/12175)).
 - **refactor(broker):** Remove the unused internal Producer change listener framework and notification-only session removal records ([#12166](https://github.com/mxsm/rocketmq-rust/issues/12166)).
 - **refactor(broker):** Remove unused internal attached plugin scaffolding and its unreachable runtime dispatch paths ([#12165](https://github.com/mxsm/rocketmq-rust/issues/12165)).

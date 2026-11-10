@@ -89,9 +89,7 @@ use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
 use crate::long_polling::pending_arrival_latch::PendingOffsetRangeLatch;
 use crate::long_polling::pending_arrival_latch::PendingOffsetRangeReservation;
 use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
-pub(crate) use continuation::PullArrivalContinuation;
 use continuation::PullContinuationAdmission;
-pub(crate) use continuation::PullContinuationAdmissionStatus;
 pub(crate) use continuation::PullContinuationError;
 use continuation::PullContinuationPermit;
 use continuation::PullPendingArrival;
@@ -678,21 +676,6 @@ impl PullDeferredService {
 
     pub(crate) const fn scan_cursor(&self) -> PullScanCursor {
         PullScanCursor::new()
-    }
-
-    pub(crate) fn admit_arrival_continuation(
-        &self,
-        arrival: PullArrivalView<'_>,
-        cursor: PullScanCursor,
-    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
-        PullArrivalContinuation::arrival(&self.continuation_admission, arrival, cursor)
-    }
-
-    pub(crate) fn reserve_continuation_batch(&self, continuation: &mut PullArrivalContinuation) -> PullCandidateBatch {
-        if self.closed.load(Ordering::Acquire) {
-            return PullCandidateBatch::empty();
-        }
-        continuation.reserve_next(&self.index, self.scan_limit, self.candidate_limit)
     }
 
     pub(crate) fn latch_arrival(

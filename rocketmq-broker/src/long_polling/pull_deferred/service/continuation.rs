@@ -45,7 +45,7 @@ struct OwnedPullArrival {
 impl OwnedPullArrival {
     fn retained_bytes(arrival: PullArrivalView<'_>) -> Result<usize, PullContinuationError> {
         retained_arrival_bytes(
-            size_of::<PullArrivalContinuation>(),
+            size_of::<PullPendingArrival>(),
             arrival.topic().len(),
             arrival.filter_bitmap(),
             arrival.properties(),
@@ -131,49 +131,6 @@ impl PendingArrivalValue for PullPendingArrival {
 
     fn coalesce_refresh(&mut self) {
         self.rewind_from_start();
-    }
-}
-
-#[must_use]
-pub(crate) struct PullArrivalContinuation {
-    pending: PullPendingArrival,
-    _permit: PullContinuationPermit,
-}
-
-#[must_use]
-pub(crate) enum PullContinuationAdmissionStatus {
-    Admitted(PullArrivalContinuation),
-    Rejected(PullContinuationRejection),
-}
-
-impl PullArrivalContinuation {
-    pub(super) fn arrival(
-        admission: &Arc<PullContinuationAdmission>,
-        arrival: PullArrivalView<'_>,
-        cursor: PullScanCursor,
-    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
-        let pending = PullPendingArrival::arrival(arrival, cursor)?;
-        let retained_bytes = pending.retained_bytes();
-        match admission.reserve(retained_bytes)? {
-            PullContinuationReservationStatus::Reserved(permit) => {
-                Ok(PullContinuationAdmissionStatus::Admitted(Self {
-                    pending,
-                    _permit: permit,
-                }))
-            }
-            PullContinuationReservationStatus::Rejected(rejection) => {
-                Ok(PullContinuationAdmissionStatus::Rejected(rejection))
-            }
-        }
-    }
-
-    pub(super) fn reserve_next(
-        &mut self,
-        index: &PullCriteriaIndex,
-        scan_limit: NonZeroUsize,
-        candidate_limit: NonZeroUsize,
-    ) -> PullCandidateBatch {
-        self.pending.reserve_next(index, scan_limit, candidate_limit)
     }
 }
 

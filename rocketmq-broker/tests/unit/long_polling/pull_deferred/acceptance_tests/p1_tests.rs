@@ -13,7 +13,44 @@
 // limitations under the License.
 
 use super::*;
+use crate::long_polling::pull_deferred::service::PullArrivalLatchStatus;
 use crate::long_polling::pull_deferred::service::PullDeferredRegisterRejection;
+use crate::long_polling::pull_deferred::service::PullPendingArrivalRejection;
+
+#[test]
+fn pending_arrival_byte_limit_is_enforced_and_released_after_completion() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let topic = CheetahString::from_static_str("TopicA");
+    let bitmap = [1, 2, 3];
+    let properties = std::collections::HashMap::from([(CheetahString::from("key"), CheetahString::from("value"))]);
+    let arrival =
+        PullArrivalView::new(&topic, 0, 8).with_filter_metadata(Some(7), 11, Some(&bitmap), Some(&properties));
+    let probe = service(&controller);
+    assert!(matches!(
+        probe.latch_arrival(arrival, probe.scan_cursor()),
+        Ok(PullArrivalLatchStatus::Latched)
+    ));
+    let retained = probe.resource_snapshot().pending_arrival_bytes;
+
+    for limit in [retained - 1, retained] {
+        let controller = AdmissionController::new(AdmissionLimits::default());
+        let bounded = service_with_limits(&controller, 2, limit, 2, 2);
+        let outcome = bounded.latch_arrival(arrival, bounded.scan_cursor()).unwrap();
+        if limit < retained {
+            assert!(matches!(
+                outcome,
+                PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::BytesFull)
+            ));
+        } else {
+            assert!(matches!(outcome, PullArrivalLatchStatus::Latched));
+            let mut pending = bounded.pending_arrival_reservations().pop().unwrap().claim().unwrap();
+            assert_eq!(bounded.resource_snapshot().pending_arrival_bytes, retained);
+            assert!(pending.finish_if_clean());
+        }
+        assert_eq!(bounded.resource_snapshot().pending_arrivals, 0);
+        assert_eq!(bounded.resource_snapshot().pending_arrival_bytes, 0);
+    }
+}
 
 fn prepared(
     service: &PullDeferredService,
