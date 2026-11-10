@@ -28,7 +28,7 @@ use crate::client_adapter::services::resolver::BrokerAddressResolver;
 use crate::client_adapter::services::{stable_error_code, stable_error_message};
 use crate::core::security::AdminCredentials;
 use crate::core::topic::{
-    execute_deletion, DeleteTopicRequest, DeleteTopicResult, TopicDeletionBackend, TopicOperationFailure,
+    execute_deletion, DeleteTopicRequest, DeleteTopicResult, TopicDeletionOperations, TopicOperationFailure,
 };
 
 impl DeleteTopicRequest {
@@ -71,13 +71,15 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         request: &DeleteTopicRequest,
     ) -> Result<DeleteTopicResult> {
-        execute_deletion(&mut SdkTopicDeletion(admin), request).await
+        execute_deletion(&mut SdkTopicDeletionOperations(admin), request).await
     }
 }
 
-struct SdkTopicDeletion<'a>(&'a mut DefaultMQAdminExt);
+/// SDK implementation of [`TopicDeletionOperations`], which translates each
+/// operation into an admin request and projects failures into the existing errors.
+struct SdkTopicDeletionOperations<'a>(&'a mut DefaultMQAdminExt);
 
-impl TopicDeletionBackend for SdkTopicDeletion<'_> {
+impl TopicDeletionOperations for SdkTopicDeletionOperations<'_> {
     async fn master_targets(&mut self, cluster: &CheetahString) -> Result<Vec<CheetahString>> {
         let info = self
             .0

@@ -21,7 +21,7 @@ pub(crate) use deletion::execute_deletion;
 pub use deletion::DeleteTopicRequest;
 pub use deletion::DeleteTopicResult;
 #[cfg(feature = "client-adapter")]
-pub(crate) use deletion::TopicDeletionBackend;
+pub(crate) use deletion::TopicDeletionOperations;
 pub use deletion::TopicOperationFailure;
 pub use fields::*;
 #[cfg(feature = "mutation-client-adapter")]
