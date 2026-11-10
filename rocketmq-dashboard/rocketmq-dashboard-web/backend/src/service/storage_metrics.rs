@@ -17,7 +17,7 @@ use crate::model::StorageEngine;
 use crate::model::StorageStatusView;
 use crate::persistence::StorageStatus;
 use crate::persistence::error::PersistenceError;
-use rocketmq_observability::DashboardStorageBackend;
+use rocketmq_observability::DashboardStorageEngine;
 use rocketmq_observability::DashboardStorageFailureLabel;
 use rocketmq_observability::DashboardStorageMetricsRecorder;
 use rocketmq_observability::DashboardStorageOperation;
@@ -41,10 +41,10 @@ impl StorageMetrics {
     }
 
     pub fn record_status(&self, view: &StorageStatusView) {
-        let backend = storage_backend(view.backend);
-        self.inner.record_status(backend, storage_result(view.status));
+        let storage_engine = to_metric_storage_engine(view.backend);
+        self.inner.record_status(storage_engine, storage_result(view.status));
         self.inner.record_state(
-            backend,
+            storage_engine,
             view.safe_available_bytes,
             view.pool_size,
             view.idle_connections,
@@ -54,7 +54,7 @@ impl StorageMetrics {
     /// Records a persistence operation using a fixed metric catalog.
     pub fn record_dashboard_operation<T>(
         &self,
-        backend: StorageEngine,
+        storage_engine: StorageEngine,
         operation: DashboardStorageOperation,
         result: &Result<T, DashboardError>,
         elapsed: Duration,
@@ -66,14 +66,19 @@ impl StorageMetrics {
                 Some(storage_failure_label(error)),
             ),
         };
-        self.inner
-            .record_operation(storage_backend(backend), operation, result, failure, elapsed);
+        self.inner.record_operation(
+            to_metric_storage_engine(storage_engine),
+            operation,
+            result,
+            failure,
+            elapsed,
+        );
     }
 
     /// Records a direct persistence result without exposing its source error.
     pub fn record_persistence_operation<T>(
         &self,
-        backend: StorageEngine,
+        storage_engine: StorageEngine,
         operation: DashboardStorageOperation,
         result: &Result<T, PersistenceError>,
         elapsed: Duration,
@@ -85,17 +90,23 @@ impl StorageMetrics {
                 Some(persistence_failure_label(error)),
             ),
         };
-        self.inner
-            .record_operation(storage_backend(backend), operation, result, failure, elapsed);
+        self.inner.record_operation(
+            to_metric_storage_engine(storage_engine),
+            operation,
+            result,
+            failure,
+            elapsed,
+        );
     }
 }
 
-fn storage_backend(backend: StorageEngine) -> DashboardStorageBackend {
-    match backend {
-        StorageEngine::File => DashboardStorageBackend::File,
-        StorageEngine::Sqlite => DashboardStorageBackend::Sqlite,
-        StorageEngine::MySql => DashboardStorageBackend::MySql,
-        StorageEngine::Postgres => DashboardStorageBackend::Postgres,
+/// Maps the Web model's storage engine onto the observability metric label enum.
+fn to_metric_storage_engine(storage_engine: StorageEngine) -> DashboardStorageEngine {
+    match storage_engine {
+        StorageEngine::File => DashboardStorageEngine::File,
+        StorageEngine::Sqlite => DashboardStorageEngine::Sqlite,
+        StorageEngine::MySql => DashboardStorageEngine::MySql,
+        StorageEngine::Postgres => DashboardStorageEngine::Postgres,
     }
 }
 
@@ -128,20 +139,23 @@ fn persistence_failure_label(error: &PersistenceError) -> DashboardStorageFailur
 
 #[cfg(test)]
 mod tests {
-    use super::storage_backend;
     use super::storage_failure_label;
     use super::storage_result;
+    use super::to_metric_storage_engine;
     use crate::error::DashboardError;
     use crate::model::StorageEngine;
     use crate::persistence::StorageStatus;
     use crate::persistence::error::PersistenceError;
-    use rocketmq_observability::DashboardStorageBackend;
+    use rocketmq_observability::DashboardStorageEngine;
     use rocketmq_observability::DashboardStorageFailureLabel;
     use rocketmq_observability::DashboardStorageResult;
 
     #[test]
     fn status_labels_are_only_fixed_values() {
-        assert_eq!(storage_backend(StorageEngine::MySql), DashboardStorageBackend::MySql);
+        assert_eq!(
+            to_metric_storage_engine(StorageEngine::MySql),
+            DashboardStorageEngine::MySql
+        );
         assert_eq!(
             storage_result(StorageStatus::Degraded),
             DashboardStorageResult::Degraded

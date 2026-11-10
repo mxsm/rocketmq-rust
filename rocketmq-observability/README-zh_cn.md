@@ -142,6 +142,14 @@ Prometheus 必须使用接收作用域的初始化 API，以及 `shutdown_with_s
 `observability-metrics` 启用客户端指标。通过 OTLP 导出客户端指标还需直接依赖
 `rocketmq-observability/otlp-metrics`；客户端没有同名特性。
 
+Dashboard 存储指标标签枚举为 `DashboardStorageEngine`，同时通过
+`rocketmq_observability::DashboardStorageEngine` 与
+`rocketmq_observability::metrics::dashboard::DashboardStorageEngine` 两条公开路径暴露。
+该枚举是 Dashboard 指标记录器接受的固定、低基数的存储引擎分类，
+承载指标标签值，不表示存储连接或后端服务。先前的 `DashboardStorageBackend`
+名称已移除，不提供弃用别名或兼容包装；引用旧枚举的下游导入、类型标注与
+变体限定需要源码更新，指向旧枚举 Rustdoc 页面的外部链接也随之改变。
+
 ## 源码与验证
 
 参见[公开导出](src/lib.rs)、[启动与关闭](src/logging.rs)、
