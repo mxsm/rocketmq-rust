@@ -32,6 +32,10 @@ rocketmq-error = { version = "1.1.0", path = "../../../rocketmq-error" }
 rocketmq-observability = { version = "1.1.0", path = "../../../rocketmq-observability", features = ["otel-metrics"] }
 rocketmq-runtime = { version = "1.1.0", path = "../../../rocketmq-runtime" }
 
+[[bin]]
+name = "rocketmq-dashboard-storage"
+path = "src/bin/rocketmq_dashboard_storage.rs"
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
