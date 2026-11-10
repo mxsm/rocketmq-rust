@@ -475,7 +475,7 @@ V1/V2 的聚合仍遍历全部活动任务和组，不受明细预算限制。
 
 [Broker](../rocketmq-broker/src/bin/broker_bootstrap_server.rs)、
 [NameServer](../rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs)、
-[Proxy](../rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs) 和
+[Proxy](../rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs) 和
 [Controller](../rocketmq-controller/src/bin/controller_bootstrap.rs) 入口构建运行时所有者，
 并使用服务生命周期截止时间。其他使用方包括 `rocketmq-client`、`rocketmq-transport`、
 `rocketmq-store`、`rocketmq-auth`、`rocketmq-observability` 和管理工具。

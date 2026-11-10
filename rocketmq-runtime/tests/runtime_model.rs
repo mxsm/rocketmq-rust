@@ -80,7 +80,7 @@ fn owned_runtime_entrypoints_use_runtime_owner() {
             "namesrv runtime shutdown report is unhealthy",
         ),
         (
-            "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+            "rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs",
             "RuntimeOwner::plan(proxy_runtime_config())",
             "proxy runtime shutdown report is unhealthy",
         ),

@@ -27,6 +27,10 @@ readme                 = "README.md"
 description            = "RocketMQ Proxy Module - gRPC proxy runtime for the Rust implementation"
 rust-version.workspace = true
 
+[[bin]]
+name = "rocketmq-proxy-rust"
+path = "src/bin/rocketmq_proxy_rust.rs"
+
 [features]
 default = ["cluster-mode", "local-mode"]
 # Use mimalloc as the binary's global allocator (production images enable it).

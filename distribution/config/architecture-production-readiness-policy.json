@@ -145,7 +145,7 @@
         ],
         "source_contracts": [
           {
-            "path": "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+            "path": "rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs",
             "required_markers": [
               "validate_proxy_security",
               "register_proxy_release_identity",

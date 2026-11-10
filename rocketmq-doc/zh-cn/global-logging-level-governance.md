@@ -55,13 +55,13 @@
    - `rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs:129-132`
    - `rocketmq-broker/src/bin/broker_bootstrap_server.rs:116-119`
    - `rocketmq-controller/src/bin/controller_bootstrap.rs:136-139`
-   - `rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs:105-110`
+   - `rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs:105-110`
 4. 当前工作树的共享修复把 `EnvFilter` 从 `Vec<BoxedRegistryLayer>` 中移出，并组合为 `registry().with(layers).with(filter)`，位置为 `rocketmq-observability/src/logging.rs:149-200`。
 5. 当前工作树已有回归测试覆盖“INFO span 内的 DEBUG event 必须被过滤”，位置为 `rocketmq-observability/src/logging.rs:473`。
 6. Broker、Controller、Proxy 都直接使用 `LoggingConfig::default()`，没有各自实现不同的过滤算法：
    - `rocketmq-broker/src/broker_runtime.rs:489-496`
    - `rocketmq-controller/src/bin/controller_bootstrap.rs:242-258`
-   - `rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs:146-159`
+   - `rocketmq-proxy/src/bin/rocketmq_proxy_rust.rs:146-159`
 7. `rocketmq-broker/build.rs:17` 仍设置编译期 `RUST_LOG=INFO`，但新的 Broker bootstrap 没有从运行时环境解析该值。
 8. NameServer 当前未提交修改把服务默认值放在 `build.rs`，且编译期值为 `INFO`，测试字符串期望为 `info`，已经出现重复真源漂移。
 9. `ReloadConfig` 已存在于 `rocketmq-observability/src/config.rs:90-92`，但日志安装路径没有使用它。
