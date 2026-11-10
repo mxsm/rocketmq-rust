@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(namesrv):** Extract embedded Controller configuration into a private module, preserving defaults, overrides, and removed-key rejection ([#12380](https://github.com/mxsm/rocketmq-rust/issues/12380)).
+
 - **refactor(observability)!:** Rename the public `DashboardStorageBackend` enum to `DashboardStorageEngine` and update the Dashboard Web adapter; the crate-root re-export follows the new name, and enum variants, string values and metric output are unchanged. Source code referring to the old name no longer compiles ([#12382](https://github.com/mxsm/rocketmq-rust/issues/12382)).
 
 - **refactor(error)!:** Canonical error descriptor `STORAGE_UNAVAILABLE` changes code from `storage.backend.unavailable` to `storage.unavailable` and public message from `Storage backend is unavailable` to `Storage is unavailable`. Consumers matching the old code or text must update their comparisons or alert rules; numeric protocol codes, gRPC, and HTTP status mappings remain unchanged ([#12352](https://github.com/mxsm/rocketmq-rust/issues/12352)).
