@@ -35,6 +35,10 @@ resolver     = "3"
 name       = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "rocketmq-dashboard-storage"
+path = "src/bin/rocketmq_dashboard_storage.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 
