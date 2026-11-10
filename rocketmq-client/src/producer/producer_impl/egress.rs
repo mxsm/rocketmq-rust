@@ -14,8 +14,6 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::ClientError;
@@ -64,31 +62,9 @@ struct ReservedEnvelope {
     permit: ResourcePermit,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct OnewayEgressSnapshot {
-    pub(crate) current_items: usize,
-    pub(crate) current_bytes: usize,
-    pub(crate) accepted: u64,
-    pub(crate) delivered: u64,
-    pub(crate) failed: u64,
-    pub(crate) cancelled: u64,
-    pub(crate) rejected: u64,
-    pub(crate) closed: bool,
-}
-
-#[derive(Default)]
-struct OnewayEgressMetrics {
-    accepted: AtomicU64,
-    delivered: AtomicU64,
-    failed: AtomicU64,
-    cancelled: AtomicU64,
-    rejected: AtomicU64,
-}
-
 pub(crate) struct BoundedEgress {
     budget: ResourceBudget,
     sender: Mutex<Option<mpsc::Sender<ReservedEnvelope>>>,
-    metrics: Arc<OnewayEgressMetrics>,
     client_metrics: ClientMetrics,
 }
 
@@ -121,16 +97,13 @@ impl BoundedEgress {
             .map_err(|error| ClientError::config_invalid_source("producer.onewayEgress", true, error))?;
         let (sender, receiver) = mpsc::channel(count_limit);
         let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
-        let metrics = Arc::new(OnewayEgressMetrics::default());
-
         for worker_index in 0..DEFAULT_EGRESS_WORKERS {
             let receiver = Arc::clone(&receiver);
-            let metrics = Arc::clone(&metrics);
             let client_metrics = client_metrics.clone();
             let worker_budget = producer_budget.clone();
             let cancellation = cancellation.clone();
             let task = tracker.track_future(async move {
-                run_worker(receiver, metrics, cancellation, client_metrics, worker_budget).await;
+                run_worker(receiver, cancellation, client_metrics, worker_budget).await;
             });
             service_context
                 .spawn_service(format!("producer.oneway-egress.worker-{worker_index}"), task)
@@ -140,7 +113,6 @@ impl BoundedEgress {
         Ok(Self {
             budget: producer_budget,
             sender: Mutex::new(Some(sender)),
-            metrics,
             client_metrics,
         })
     }
@@ -175,7 +147,6 @@ impl BoundedEgress {
             };
             return Ok(self.reject(rejection));
         }
-        self.metrics.accepted.fetch_add(1, Ordering::Relaxed);
         self.client_metrics.record_oneway_egress_event("accepted");
         self.record_state();
         Ok(OnewayAdmissionDecision::Accepted)
@@ -184,20 +155,6 @@ impl BoundedEgress {
     pub(crate) fn close(&self) {
         self.sender.lock().take();
         self.record_state();
-    }
-
-    pub(crate) fn snapshot(&self) -> OnewayEgressSnapshot {
-        let budget = self.budget.snapshot();
-        OnewayEgressSnapshot {
-            current_items: budget.current_count,
-            current_bytes: budget.current_bytes,
-            accepted: self.metrics.accepted.load(Ordering::Relaxed),
-            delivered: self.metrics.delivered.load(Ordering::Relaxed),
-            failed: self.metrics.failed.load(Ordering::Relaxed),
-            cancelled: self.metrics.cancelled.load(Ordering::Relaxed),
-            rejected: self.metrics.rejected.load(Ordering::Relaxed),
-            closed: self.sender.lock().is_none(),
-        }
     }
 
     #[cfg(test)]
@@ -216,7 +173,6 @@ impl BoundedEgress {
     }
 
     fn reject(&self, rejection: OnewayAdmissionRejection) -> OnewayAdmissionDecision {
-        self.metrics.rejected.fetch_add(1, Ordering::Relaxed);
         self.client_metrics.record_oneway_egress_event("rejected");
         self.record_state();
         OnewayAdmissionDecision::Rejected(rejection)
@@ -225,7 +181,6 @@ impl BoundedEgress {
 
 async fn run_worker(
     receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<ReservedEnvelope>>>,
-    metrics: Arc<OnewayEgressMetrics>,
     cancellation: CancellationToken,
     client_metrics: ClientMetrics,
     budget: ResourceBudget,
@@ -234,7 +189,6 @@ async fn run_worker(
         let next = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
-                metrics.cancelled.fetch_add(1, Ordering::Relaxed);
                 client_metrics.record_oneway_egress_event("cancelled");
                 return;
             }
@@ -257,7 +211,6 @@ async fn run_worker(
         let result = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
-                metrics.cancelled.fetch_add(1, Ordering::Relaxed);
                 client_metrics.record_oneway_egress_event("cancelled");
                 return;
             }
@@ -265,11 +218,9 @@ async fn run_worker(
         };
         match result {
             Ok(()) => {
-                metrics.delivered.fetch_add(1, Ordering::Relaxed);
                 client_metrics.record_oneway_egress_event("delivered");
             }
             Err(error) => {
-                metrics.failed.fetch_add(1, Ordering::Relaxed);
                 client_metrics.record_oneway_egress_event("failed");
                 tracing::warn!(remote_addr = %remote_addr, error = ?error, "producer one-way egress send failed");
             }
@@ -299,6 +250,8 @@ fn sanitize_budget_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::panic::AssertUnwindSafe;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use rocketmq_runtime::ProcessMemoryLimit;
@@ -343,7 +296,6 @@ mod tests {
             OnewayAdmissionDecision::Rejected(OnewayAdmissionRejection::Capacity)
         );
         assert_eq!(built.load(Ordering::Relaxed), 0);
-        assert_eq!(egress.snapshot().rejected, 1);
         drop(permit);
     }
 
@@ -358,7 +310,6 @@ mod tests {
             closed.expect("closed admission is a normal rejection"),
             OnewayAdmissionDecision::Rejected(OnewayAdmissionRejection::Closed)
         );
-        assert_eq!(egress.snapshot().rejected, 1);
 
         let (_owner, open, _tracker, _cancellation) = fixture();
         let expired = open.try_admit(1, RequestDeadline::from_timeout_millis(0), || {
@@ -368,7 +319,6 @@ mod tests {
             expired.expect("expired admission is a normal rejection"),
             OnewayAdmissionDecision::Rejected(OnewayAdmissionRejection::DeadlineExpired)
         );
-        assert_eq!(open.snapshot().rejected, 1);
     }
 
     #[test]
@@ -381,7 +331,7 @@ mod tests {
         }));
 
         assert!(panic.is_err());
-        assert_eq!(egress.snapshot().current_bytes, 0);
+        assert_eq!(egress.budget.snapshot().current_bytes, 0);
     }
 
     #[test]
@@ -394,6 +344,5 @@ mod tests {
         owner
             .block_on(async { tokio::time::timeout(Duration::from_secs(1), tracker.wait()).await })
             .expect("fixed egress workers must drain after admission closes");
-        assert!(egress.snapshot().closed);
     }
 }
