@@ -101,7 +101,14 @@ use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyMessageExt;
 use rocketmq_proxy_core::ProxyServiceFuture;
+use rocketmq_runtime::DrainRequestMethods;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ServiceLifecycleConfig;
+use rocketmq_runtime::ServiceLifecycleObserver;
+use rocketmq_runtime::ServiceLifecycleState;
+use rocketmq_runtime::ServiceLifecycleTransition;
+use rocketmq_runtime::ShutdownReason;
 use serde::Deserialize;
 use sha1::Sha1;
 use tokio::sync::oneshot;
@@ -882,11 +889,11 @@ accounts:
         Arc::new(DefaultConsumerService),
         Arc::new(DefaultTransactionService),
     ));
-    let listen_addr = reserve_loopback_addr();
     let runtime = ProxyRuntime::builder(
         ProxyConfig {
             grpc: GrpcConfig {
-                listen_addr: listen_addr.to_string(),
+                // This test only observes shutdown; binding :0 avoids reserving and releasing a test port.
+                listen_addr: "127.0.0.1:0".to_owned(),
                 ..GrpcConfig::default()
             },
             ..ProxyConfig::default()
@@ -899,19 +906,29 @@ accounts:
     .build()
     .expect("the injected child context should build the proxy runtime");
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let mut server_task = tokio::spawn(async move {
-        runtime
-            .serve_with_shutdown(async move {
-                let _ = shutdown_rx.await;
-            })
-            .await
+    let lifecycle = ServiceLifecycle::new(ServiceLifecycleConfig {
+        service_name: Arc::from("proxy-grpc-auth-watcher"),
+        probe_bind_addr: None,
+        shutdown_timeout: Duration::from_secs(10),
+        liveness_stale_after: Duration::from_secs(30),
+        drain_request_methods: DrainRequestMethods::PostOnly,
     });
-    wait_for_server_ready(listen_addr, &mut server_task)
-        .await
-        .expect("proxy runtime should become ready");
+    let readiness = Arc::new(RuntimeReadinessObserver::default());
+    lifecycle
+        .set_observer(readiness.clone())
+        .expect("attach proxy readiness observer before startup");
+    let server_lifecycle = lifecycle.clone();
+    let mut server_task = tokio::spawn(async move { runtime.serve_with_lifecycle(server_lifecycle).await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            _ = readiness.ready.notified() => {},
+            result = &mut server_task => panic!("proxy runtime exited before becoming ready: {result:?}"),
+        }
+    })
+    .await
+    .expect("proxy runtime should publish readiness after binding its own listener");
 
-    let _ = shutdown_tx.send(());
+    lifecycle.request_shutdown(ShutdownReason::PreStop);
     let serve_result = server_task.await.expect("server task should join");
     assert!(
         serve_result.is_ok(),
@@ -1355,6 +1372,19 @@ impl TestCertificateAuthority {
 struct TestTlsIdentity {
     certificate_pem: String,
     private_key_pem: String,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeReadinessObserver {
+    ready: tokio::sync::Notify,
+}
+
+impl ServiceLifecycleObserver for RuntimeReadinessObserver {
+    fn on_transition(&self, transition: ServiceLifecycleTransition) {
+        if transition.to == ServiceLifecycleState::Ready {
+            self.ready.notify_one();
+        }
+    }
 }
 
 async fn wait_for_server_ready(
