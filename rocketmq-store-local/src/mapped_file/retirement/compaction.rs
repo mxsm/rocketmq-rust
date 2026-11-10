@@ -61,21 +61,21 @@ enum CompactionTrigger {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CompactionSchedule {
-    NotScheduled,
-    Candidate(CompactionTrigger),
+enum CompactionPressure {
+    BelowThresholds,
+    ThresholdReached(CompactionTrigger),
 }
 
-/// Evaluates scheduling pressure only; this result is never compaction authority.
-const fn compaction_schedule(metrics: CompactionMetrics) -> CompactionSchedule {
+/// Evaluates advisory threshold pressure; this result is never compaction authority.
+const fn evaluate_compaction_pressure(metrics: CompactionMetrics) -> CompactionPressure {
     match (
         metrics.active_log_bytes >= COMPACTION_LOG_BYTES_THRESHOLD,
         metrics.completed_record_count >= COMPLETED_RECORD_THRESHOLD,
     ) {
-        (false, false) => CompactionSchedule::NotScheduled,
-        (true, false) => CompactionSchedule::Candidate(CompactionTrigger::LogSize),
-        (false, true) => CompactionSchedule::Candidate(CompactionTrigger::CompletedRecords),
-        (true, true) => CompactionSchedule::Candidate(CompactionTrigger::Both),
+        (false, false) => CompactionPressure::BelowThresholds,
+        (true, false) => CompactionPressure::ThresholdReached(CompactionTrigger::LogSize),
+        (false, true) => CompactionPressure::ThresholdReached(CompactionTrigger::CompletedRecords),
+        (true, true) => CompactionPressure::ThresholdReached(CompactionTrigger::Both),
     }
 }
 
