@@ -191,21 +191,38 @@ pub(crate) struct TopicFieldsWriteResult {
     pub persistence: MutationPersistenceState,
 }
 
+/// Operations required by the Topic configuration-field patch workflow.
+///
+/// [`execute_fields_patch`] owns merging changed fields with each Broker's
+/// configuration, conflict and partial-result handling, and order-map
+/// reconciliation. Implementations supply the remote operations and their model
+/// and error conversion.
+///
+/// Broker replacement is conditional on the reviewed version. The NameServer
+/// order map has no such guarantee: the workflow compares the current map with
+/// its earlier read before writing, which is a preflight comparison and not an
+/// atomic compare-and-swap.
 #[cfg(any(feature = "mutation-client-adapter", test))]
-pub(crate) trait TopicFieldsBackend {
+pub(crate) trait TopicConfigFieldsPatchOperations {
+    /// Validates that every target still names the exact confirmed Broker identity.
     fn validate_targets<'a>(&'a mut self, targets: &'a [TopicConfigFieldsTarget]) -> AdminFuture<'a, ()>;
+    /// Reads the versioned configuration state of `topic` on the target Broker.
     fn state<'a>(
         &'a mut self,
         topic: &'a str,
         target: &'a TopicConfigFieldsTarget,
     ) -> AdminFuture<'a, TopicConfigFieldsState>;
+    /// Replaces the Broker configuration only at the target's reviewed expected
+    /// version, and returns the application and persistence state.
     fn replace<'a>(
         &'a mut self,
         topic: &'a str,
         target: &'a TopicConfigFieldsTarget,
         replacement: &'a TopicReplacement,
     ) -> AdminFuture<'a, TopicFieldsWriteResult>;
+    /// Reads the NameServer order configuration of `topic`, if there is one.
     fn order_config<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, Option<String>>;
+    /// Writes the NameServer order configuration of `topic`; `None` removes it.
     fn write_order_config<'a>(&'a mut self, topic: &'a str, value: Option<String>) -> AdminFuture<'a, ()>;
 }
 
@@ -214,10 +231,10 @@ pub(crate) trait TopicFieldsBackend {
 /// NameServer failure is reported separately and never erases Broker success.
 #[cfg(any(feature = "mutation-client-adapter", test))]
 pub(crate) async fn execute_fields_patch(
-    backend: &mut impl TopicFieldsBackend,
+    patch_operations: &mut impl TopicConfigFieldsPatchOperations,
     request: &TopicConfigFieldsPatchRequest,
 ) -> AdminResult<TopicConfigFieldsPatchReport> {
-    backend.validate_targets(request.targets()).await?;
+    patch_operations.validate_targets(request.targets()).await?;
     let mut targets = Vec::new();
     let mut replacements = Vec::new();
     for target in request.targets() {
@@ -229,7 +246,7 @@ pub(crate) async fn execute_fields_patch(
             outcome_unknown: false,
             latest: None,
         };
-        let replacement = match backend.state(request.topic(), target).await {
+        let replacement = match patch_operations.state(request.topic(), target).await {
             Ok(state) if state.version == Some(target.expected_version) && state.configuration.is_some() => {
                 state.configuration.as_ref().map(|config| request.patch().apply(config))
             }
@@ -250,13 +267,16 @@ pub(crate) async fn execute_fields_patch(
         && (request.patch().order.is_some()
             || request.patch().write_queue_nums.is_some() && replacements.iter().flatten().any(|config| config.order));
     let original_order = if changes_order {
-        Some(parse_order(backend.order_config(request.topic()).await?)?)
+        Some(parse_order(patch_operations.order_config(request.topic()).await?)?)
     } else {
         None
     };
     for (outcome, replacement) in targets.iter_mut().zip(&replacements) {
         let Some(replacement) = replacement else { continue };
-        match backend.replace(request.topic(), &outcome.target, replacement).await {
+        match patch_operations
+            .replace(request.topic(), &outcome.target, replacement)
+            .await
+        {
             Ok(result) => {
                 outcome.applied = result.applied;
                 outcome.outcome_unknown = result.persistence == MutationPersistenceState::Unconfirmed;
@@ -281,7 +301,7 @@ pub(crate) async fn execute_fields_patch(
                     None
                 };
                 if outcome.failure == Some(MutationFailureCode::Conflict) {
-                    outcome.latest = backend.state(request.topic(), &outcome.target).await.ok();
+                    outcome.latest = patch_operations.state(request.topic(), &outcome.target).await.ok();
                 } else if result.applied {
                     outcome.latest = Some(TopicConfigFieldsState {
                         version: result.version,
@@ -327,7 +347,7 @@ pub(crate) async fn execute_fields_patch(
             }
         }
         if changed {
-            let still_current = backend
+            let still_current = patch_operations
                 .order_config(request.topic())
                 .await
                 .ok()
@@ -335,7 +355,7 @@ pub(crate) async fn execute_fields_patch(
                 == Some(original_order);
             Some(
                 still_current
-                    && backend
+                    && patch_operations
                         .write_order_config(request.topic(), encode_order(desired))
                         .await
                         .is_ok(),
@@ -387,7 +407,7 @@ fn encode_order(entries: BTreeMap<String, u32>) -> Option<String> {
 mod tests {
     use super::*;
 
-    struct Fake {
+    struct FakeTopicConfigFieldsPatchOperations {
         states: BTreeMap<String, TopicConfigFieldsState>,
         writes: Vec<(String, TopicReplacement)>,
         fail_broker: Option<String>,
@@ -420,8 +440,8 @@ mod tests {
         }
     }
 
-    fn fake() -> Fake {
-        Fake {
+    fn fake_patch_operations() -> FakeTopicConfigFieldsPatchOperations {
+        FakeTopicConfigFieldsPatchOperations {
             states: [
                 (
                     "broker-a".into(),
@@ -452,7 +472,7 @@ mod tests {
         }
     }
 
-    impl TopicFieldsBackend for Fake {
+    impl TopicConfigFieldsPatchOperations for FakeTopicConfigFieldsPatchOperations {
         fn validate_targets<'a>(&'a mut self, _: &'a [TopicConfigFieldsTarget]) -> AdminFuture<'a, ()> {
             Box::pin(async move {
                 if self.identities_changed {
@@ -525,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn field_patch_preserves_each_brokers_unchanged_fields() {
-        let mut backend = fake();
+        let mut patch_operations = fake_patch_operations();
         let request = TopicConfigFieldsPatchRequest::try_new(
             "orders",
             [target("broker-a", 7), target("broker-b", 9)],
@@ -535,34 +555,34 @@ mod tests {
             },
         )
         .unwrap();
-        let report = execute_fields_patch(&mut backend, &request).await.unwrap();
+        let report = execute_fields_patch(&mut patch_operations, &request).await.unwrap();
         assert!(report
             .targets
             .iter()
             .all(|target| target.applied && target.failure.is_none()));
         assert_eq!(
-            backend.writes[0].1,
+            patch_operations.writes[0].1,
             TopicReplacement {
                 message_type: TopicMessageType::Transaction,
                 ..config(8, 6)
             }
         );
         assert_eq!(
-            backend.writes[1].1,
+            patch_operations.writes[1].1,
             TopicReplacement {
                 message_type: TopicMessageType::Transaction,
                 ..config(12, 4)
             }
         );
-        assert_eq!(backend.order_reads, 0);
-        assert!(backend.order_writes.is_empty());
+        assert_eq!(patch_operations.order_reads, 0);
+        assert!(patch_operations.order_writes.is_empty());
     }
 
     #[tokio::test]
     async fn multi_field_patch_retains_partial_results_and_unselected_order_entries() {
-        let mut backend = fake();
-        backend.fail_broker = Some("broker-b".into());
-        backend.order = Some("broker-b:8;outside:16".into());
+        let mut patch_operations = fake_patch_operations();
+        patch_operations.fail_broker = Some("broker-b".into());
+        patch_operations.order = Some("broker-b:8;outside:16".into());
         let request = TopicConfigFieldsPatchRequest::try_new(
             "orders",
             [target("broker-a", 7), target("broker-b", 9)],
@@ -575,12 +595,12 @@ mod tests {
             },
         )
         .unwrap();
-        let report = execute_fields_patch(&mut backend, &request).await.unwrap();
+        let report = execute_fields_patch(&mut patch_operations, &request).await.unwrap();
         assert!(report.targets[0].applied);
         assert_eq!(report.targets[1].failure, Some(MutationFailureCode::Unavailable));
         assert!(report.targets[1].outcome_unknown);
         assert_eq!(
-            backend.writes,
+            patch_operations.writes,
             vec![(
                 "broker-a".into(),
                 TopicReplacement {
@@ -593,7 +613,7 @@ mod tests {
             )]
         );
         assert_eq!(
-            backend.order_writes,
+            patch_operations.order_writes,
             vec![Some("broker-a:6;broker-b:8;outside:16".into())]
         );
         assert_eq!(report.order_reconciled, Some(true));
@@ -601,8 +621,8 @@ mod tests {
 
     #[tokio::test]
     async fn unordered_patch_removes_only_the_successful_brokers_order_entry() {
-        let mut backend = fake();
-        backend
+        let mut patch_operations = fake_patch_operations();
+        patch_operations
             .states
             .get_mut("broker-a")
             .unwrap()
@@ -610,7 +630,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .order = true;
-        backend
+        patch_operations
             .states
             .get_mut("broker-b")
             .unwrap()
@@ -618,8 +638,8 @@ mod tests {
             .as_mut()
             .unwrap()
             .order = true;
-        backend.order = Some("broker-a:8;broker-b:8;outside:256".into());
-        backend.fail_broker = Some("broker-b".into());
+        patch_operations.order = Some("broker-a:8;broker-b:8;outside:256".into());
+        patch_operations.fail_broker = Some("broker-b".into());
         let request = TopicConfigFieldsPatchRequest::try_new(
             "orders",
             [target("broker-a", 7), target("broker-b", 9)],
@@ -629,17 +649,17 @@ mod tests {
             },
         )
         .unwrap();
-        let report = execute_fields_patch(&mut backend, &request).await.unwrap();
+        let report = execute_fields_patch(&mut patch_operations, &request).await.unwrap();
         assert_eq!(report.order_reconciled, Some(true));
-        assert_eq!(backend.order_writes, [Some("broker-b:8;outside:256".into())]);
+        assert_eq!(patch_operations.order_writes, [Some("broker-b:8;outside:256".into())]);
     }
 
     #[tokio::test]
     async fn stale_versions_and_cas_races_return_full_authoritative_fields() {
         for race in [false, true] {
-            let mut backend = fake();
+            let mut patch_operations = fake_patch_operations();
             if race {
-                backend.race_broker = Some("broker-a".into());
+                patch_operations.race_broker = Some("broker-a".into());
             }
             let request = TopicConfigFieldsPatchRequest::try_new(
                 "orders",
@@ -652,15 +672,15 @@ mod tests {
                 },
             )
             .unwrap();
-            let report = execute_fields_patch(&mut backend, &request).await.unwrap();
+            let report = execute_fields_patch(&mut patch_operations, &request).await.unwrap();
             let result = &report.targets[0];
             assert!(!result.applied);
             assert_eq!(result.failure, Some(MutationFailureCode::Conflict));
             let latest = result.latest.as_ref().unwrap();
             assert_eq!(latest.version, Some(if race { 9 } else { 7 }));
             assert_eq!(latest.configuration, Some(config(8, 6)));
-            assert!(backend.writes.is_empty());
-            assert!(backend.order_writes.is_empty());
+            assert!(patch_operations.writes.is_empty());
+            assert!(patch_operations.order_writes.is_empty());
         }
     }
 
@@ -672,8 +692,8 @@ mod tests {
             (true, MutationPersistenceState::Failed, false),
             (true, MutationPersistenceState::Unconfirmed, true),
         ] {
-            let mut backend = fake();
-            backend.write_results.insert(
+            let mut patch_operations = fake_patch_operations();
+            patch_operations.write_results.insert(
                 "broker-b".into(),
                 TopicFieldsWriteResult {
                     applied,
@@ -690,7 +710,7 @@ mod tests {
                 },
             )
             .unwrap();
-            let report = execute_fields_patch(&mut backend, &request).await.unwrap();
+            let report = execute_fields_patch(&mut patch_operations, &request).await.unwrap();
             assert!(report.targets[0].applied);
             assert_eq!(report.targets[0].failure, None);
             let failed = &report.targets[1];
@@ -705,14 +725,14 @@ mod tests {
                 );
             }
             assert_eq!(report.order_reconciled, Some(true));
-            assert_eq!(backend.order_writes, [Some("broker-a:8;outside:16".into())]);
+            assert_eq!(patch_operations.order_writes, [Some("broker-a:8;outside:16".into())]);
         }
     }
 
     #[tokio::test]
     async fn rejected_same_version_without_a_state_conflict_is_not_rebased() {
-        let mut backend = fake();
-        backend.write_results.insert(
+        let mut patch_operations = fake_patch_operations();
+        patch_operations.write_results.insert(
             "broker-a".into(),
             TopicFieldsWriteResult {
                 applied: false,
@@ -729,19 +749,19 @@ mod tests {
             },
         )
         .unwrap();
-        let report = execute_fields_patch(&mut backend, &request).await.unwrap();
+        let report = execute_fields_patch(&mut patch_operations, &request).await.unwrap();
         assert_eq!(report.targets[0].failure, Some(MutationFailureCode::Unavailable));
         assert!(!report.targets[0].outcome_unknown);
         assert!(report.targets[0].latest.is_none());
-        assert!(backend.writes.is_empty());
+        assert!(patch_operations.writes.is_empty());
     }
 
     #[tokio::test]
     async fn order_failure_or_concurrent_change_does_not_erase_applied_broker_success() {
         for concurrent in [false, true] {
-            let mut backend = fake();
-            backend.fail_order = !concurrent;
-            backend.race_order = concurrent;
+            let mut patch_operations = fake_patch_operations();
+            patch_operations.fail_order = !concurrent;
+            patch_operations.race_order = concurrent;
             let request = TopicConfigFieldsPatchRequest::try_new(
                 "orders",
                 [target("broker-a", 7)],
@@ -751,17 +771,17 @@ mod tests {
                 },
             )
             .unwrap();
-            let report = execute_fields_patch(&mut backend, &request).await.unwrap();
+            let report = execute_fields_patch(&mut patch_operations, &request).await.unwrap();
             assert!(report.targets[0].applied);
             assert_eq!(report.order_reconciled, Some(false));
-            assert_eq!(backend.order_writes.len(), usize::from(!concurrent));
+            assert_eq!(patch_operations.order_writes.len(), usize::from(!concurrent));
         }
     }
 
     #[tokio::test]
     async fn changed_exact_identity_rejects_before_any_broker_write() {
-        let mut backend = fake();
-        backend.identities_changed = true;
+        let mut patch_operations = fake_patch_operations();
+        patch_operations.identities_changed = true;
         let request = TopicConfigFieldsPatchRequest::try_new(
             "orders",
             [target("broker-a", 7)],
@@ -771,8 +791,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(execute_fields_patch(&mut backend, &request).await.is_err());
-        assert!(backend.writes.is_empty());
+        assert!(execute_fields_patch(&mut patch_operations, &request).await.is_err());
+        assert!(patch_operations.writes.is_empty());
     }
 
     #[test]

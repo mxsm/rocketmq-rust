@@ -17,8 +17,9 @@
 use super::supervised::{map_client_persistence, map_client_topic_config, map_topic_replacement_to_client};
 use super::*;
 use crate::core::topic::{
-    execute_fields_patch, TopicConfigFieldsMutationAdmin, TopicConfigFieldsPatchReport, TopicConfigFieldsPatchRequest,
-    TopicConfigFieldsState, TopicConfigFieldsTarget, TopicFieldsBackend, TopicFieldsWriteResult,
+    execute_fields_patch, TopicConfigFieldsMutationAdmin, TopicConfigFieldsPatchOperations,
+    TopicConfigFieldsPatchReport, TopicConfigFieldsPatchRequest, TopicConfigFieldsState, TopicConfigFieldsTarget,
+    TopicFieldsWriteResult,
 };
 
 impl TopicConfigFieldsMutationAdmin for MutationAdminSession {
@@ -28,14 +29,15 @@ impl TopicConfigFieldsMutationAdmin for MutationAdminSession {
     ) -> AdminFuture<'a, TopicConfigFieldsPatchReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
-            execute_fields_patch(&mut ClientTopicFields(&self.inner.inner), request).await
+            execute_fields_patch(&mut ClientTopicConfigFieldsPatchOperations(&self.inner.inner), request).await
         })
     }
 }
 
-struct ClientTopicFields<'a>(&'a rocketmq_client_rust::DefaultMQAdminExt);
+/// SDK implementation of [`TopicConfigFieldsPatchOperations`].
+struct ClientTopicConfigFieldsPatchOperations<'a>(&'a rocketmq_client_rust::DefaultMQAdminExt);
 
-impl TopicFieldsBackend for ClientTopicFields<'_> {
+impl TopicConfigFieldsPatchOperations for ClientTopicConfigFieldsPatchOperations<'_> {
     fn validate_targets<'a>(&'a mut self, targets: &'a [TopicConfigFieldsTarget]) -> AdminFuture<'a, ()> {
         Box::pin(async move {
             let cluster_info = self
