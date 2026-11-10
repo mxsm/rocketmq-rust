@@ -187,6 +187,10 @@ impl MessageDetail {
         cx.notify();
     }
     #[cfg(test)]
+    pub(crate) fn select_body_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab(MessageTab::Body, window, cx);
+    }
+    #[cfg(test)]
     pub(crate) fn has_payload(&self) -> bool {
         self.payload.state.value().is_some() || self.preview.is_some()
     }

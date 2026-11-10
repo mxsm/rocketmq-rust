@@ -2365,10 +2365,12 @@ fn message_compact_workspace_and_logout_clear_a_retained_inspector_payload(cx: &
         b"private-body".to_vec(),
         std::collections::BTreeMap::new(),
     )));
-    let body = cx.debug_bounds("message-tab-body").unwrap();
-    cx.simulate_click(body.center(), gpui::Modifiers::default());
+    // The sheet slides while opening; payload setup must not depend on its animated hit targets.
+    cx.update(|window, app| detail.update(app, |detail, cx| detail.select_body_for_test(window, cx)));
     cx.run_until_parked();
+    assert_eq!(backend.calls().payload.len(), 1);
     assert!(cx.read(|app| detail.read(app).has_payload()));
+    assert!(cx.update(|window, app| window.has_active_sheet(app)));
     cx.update(|window, app| dashboard.update(app, |dashboard, cx| dashboard.sign_out(window, cx)));
     cx.run_until_parked();
     assert!(!cx.read(|app| detail.read(app).has_payload()));
