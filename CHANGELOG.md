@@ -129,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(broker):** Remove unused internal NameServer heartbeat broadcasts and their dedicated result types ([#12112](https://github.com/mxsm/rocketmq-rust/issues/12112)).
 - **refactor(broker):** Remove the unused Notification candidate continuation spawner while preserving active pending replay workers and shutdown behavior ([#12080](https://github.com/mxsm/rocketmq-rust/issues/12080)).
 - **refactor(client):** Remove the unused Push Consumer config-store constructor superseded by the discovery-aware construction path ([#12375](https://github.com/mxsm/rocketmq-rust/issues/12375)).
+- **refactor(broker):** Remove unused POP arrival continuation admission and scan wrappers; estimate retained pending arrivals from their actual payload type ([#12408](https://github.com/mxsm/rocketmq-rust/issues/12408)).
 - **refactor(client):** Remove the unused crate-private delayed client action helper; tracked rebalance scheduling is unchanged ([#12079](https://github.com/mxsm/rocketmq-rust/issues/12079)).
 - **refactor(client):** Remove four unused crate-private KV API aliases while preserving public Admin methods and request behavior ([#12078](https://github.com/mxsm/rocketmq-rust/issues/12078)).
 - **refactor(broker):** Remove unused internal subscription statistics logging and its duplicate simulation tests; active metric collection is unchanged ([#12224](https://github.com/mxsm/rocketmq-rust/issues/12224)).

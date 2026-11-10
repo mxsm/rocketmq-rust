@@ -147,63 +147,6 @@ impl PendingArrivalValue for PopPendingArrival {
     }
 }
 
-#[must_use]
-pub(crate) struct PopArrivalContinuation {
-    pending: PopPendingArrival,
-    _permit: PopContinuationPermit,
-}
-
-#[must_use]
-pub(crate) enum PopContinuationAdmissionStatus {
-    Admitted(PopArrivalContinuation),
-    Rejected(PopContinuationRejection),
-}
-
-impl PopArrivalContinuation {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the continuation retains the exact Store arrival callback metadata"
-    )]
-    pub(super) fn try_admit(
-        admission: &Arc<PopContinuationAdmission>,
-        topic: &CheetahString,
-        queue_id: i32,
-        tags_code: Option<i64>,
-        message_store_time: i64,
-        filter_bitmap: Option<&[u8]>,
-        properties: Option<&HashMap<CheetahString, CheetahString>>,
-        cursor: PopFanoutCursor,
-    ) -> Result<PopContinuationAdmissionStatus, PopContinuationError> {
-        let pending = PopPendingArrival::new(
-            topic,
-            queue_id,
-            tags_code,
-            message_store_time,
-            filter_bitmap,
-            properties,
-            cursor,
-        )?;
-        let retained_bytes = pending.retained_bytes();
-        match admission.reserve(retained_bytes)? {
-            PopContinuationReservationStatus::Reserved(permit) => Ok(PopContinuationAdmissionStatus::Admitted(Self {
-                pending,
-                _permit: permit,
-            })),
-            PopContinuationReservationStatus::Rejected(rejection) => {
-                Ok(PopContinuationAdmissionStatus::Rejected(rejection))
-            }
-        }
-    }
-
-    pub(crate) fn view<'a>(&'a self, consumer_group: &'a CheetahString) -> PopArrivalView<'a> {
-        self.pending.view(consumer_group)
-    }
-
-    pub(super) fn next_batch(&mut self, index: &PopCriteriaIndex, limit: NonZeroUsize) -> PopFanoutBatch {
-        self.pending.next_batch(index, limit)
-    }
-}
-
 pub(super) struct PopContinuationAdmission {
     max_count: usize,
     max_bytes: usize,
@@ -332,7 +275,7 @@ fn retained_arrival_bytes(
     bitmap: Option<&[u8]>,
     properties: Option<&HashMap<CheetahString, CheetahString>>,
 ) -> Result<usize, PopContinuationError> {
-    let mut bytes = size_of::<PopArrivalContinuation>()
+    let mut bytes = size_of::<PopPendingArrival>()
         .checked_add(allocation_bound(topic.len())?)
         .ok_or(PopContinuationError::SizeOverflow)?;
     if let Some(bitmap) = bitmap {
