@@ -138,16 +138,21 @@ impl DeleteTopicResult {
     }
 }
 
+/// Operations required by the Topic-deletion workflow.
+///
 /// The SDK adapter owns metadata decoding and safe failure projection. This
 /// use case owns target normalization and when route deletion is permitted.
 #[cfg(any(feature = "client-adapter", test))]
-pub(crate) trait TopicDeletionBackend {
+pub(crate) trait TopicDeletionOperations {
+    /// Discovers the Master Broker addresses of `cluster`.
     fn master_targets(&mut self, cluster: &CheetahString) -> impl Future<Output = Result<Vec<CheetahString>>> + Send;
+    /// Deletes `topic` on the selected `broker`.
     fn delete_broker(
         &mut self,
         topic: &CheetahString,
         broker: &CheetahString,
     ) -> impl Future<Output = std::result::Result<(), TopicOperationFailure>> + Send;
+    /// Removes the NameServer route of `topic` for `cluster`.
     fn delete_route(
         &mut self,
         topic: &CheetahString,
@@ -157,12 +162,12 @@ pub(crate) trait TopicDeletionBackend {
 
 #[cfg(any(feature = "client-adapter", test))]
 pub(crate) async fn execute_deletion(
-    backend: &mut impl TopicDeletionBackend,
+    deletion_operations: &mut impl TopicDeletionOperations,
     request: &DeleteTopicRequest,
 ) -> Result<DeleteTopicResult> {
     // Deserialized requests must pass the same validation as CLI/TUI builders.
     let request = request.validated()?;
-    let mut targets = backend.master_targets(request.cluster_name()).await?;
+    let mut targets = deletion_operations.master_targets(request.cluster_name()).await?;
     targets.sort();
     targets.dedup();
     if targets.is_empty() {
@@ -176,14 +181,16 @@ pub(crate) async fn execute_deletion(
         name_server_deleted: false,
     };
     for broker in targets {
-        match backend.delete_broker(request.topic(), &broker).await {
+        match deletion_operations.delete_broker(request.topic(), &broker).await {
             Ok(()) => result.broker_addrs.push(broker),
             Err(failure) => result.failures.push(failure),
         }
     }
     // Preserve the NameServer mapping whenever a master still owns the Topic.
     if result.failures.is_empty() {
-        backend.delete_route(request.topic(), request.cluster_name()).await?;
+        deletion_operations
+            .delete_route(request.topic(), request.cluster_name())
+            .await?;
         result.name_server_deleted = true;
     }
     Ok(result)
@@ -215,13 +222,13 @@ mod tests {
         }
     }
 
-    struct Backend {
+    struct FakeTopicDeletionOperations {
         targets: Vec<CheetahString>,
         failure: Option<&'static str>,
         calls: Vec<String>,
     }
 
-    impl TopicDeletionBackend for Backend {
+    impl TopicDeletionOperations for FakeTopicDeletionOperations {
         async fn master_targets(&mut self, _: &CheetahString) -> Result<Vec<CheetahString>> {
             self.calls.push("targets".into());
             Ok(self.targets.clone())
@@ -251,14 +258,14 @@ mod tests {
 
     #[tokio::test]
     async fn deletion_preserves_partial_outcomes_and_retains_the_route() {
-        let mut backend = Backend {
+        let mut deletion_operations = FakeTopicDeletionOperations {
             targets: vec!["b".into(), "a".into(), "c".into(), "a".into()],
             failure: Some("b"),
             calls: Vec::new(),
         };
         let request = DeleteTopicRequest::try_new(" Topic ", Some(" Cluster ".into())).unwrap();
-        let result = execute_deletion(&mut backend, &request).await.unwrap();
-        assert_eq!(backend.calls, ["targets", "a", "b", "c"]);
+        let result = execute_deletion(&mut deletion_operations, &request).await.unwrap();
+        assert_eq!(deletion_operations.calls, ["targets", "a", "b", "c"]);
         assert_eq!(result.broker_addrs, [CheetahString::from("a"), "c".into()]);
         assert!(result.is_partial_failure());
         assert_eq!(
@@ -270,34 +277,37 @@ mod tests {
 
     #[tokio::test]
     async fn deletion_removes_route_only_after_all_distinct_masters_succeed() {
-        let mut backend = Backend {
+        let mut deletion_operations = FakeTopicDeletionOperations {
             targets: vec!["b".into(), "a".into()],
             failure: None,
             calls: Vec::new(),
         };
         let request = DeleteTopicRequest::try_new("Topic", Some("Cluster".into())).unwrap();
-        let result = execute_deletion(&mut backend, &request).await.unwrap();
-        assert_eq!(backend.calls, ["targets", "a", "b", "route"]);
+        let result = execute_deletion(&mut deletion_operations, &request).await.unwrap();
+        assert_eq!(deletion_operations.calls, ["targets", "a", "b", "route"]);
         result.ensure_complete().unwrap();
     }
 
     #[tokio::test]
     async fn deletion_rejects_invalid_deserialized_input_and_empty_target_sets() {
-        let mut backend = Backend {
+        let mut deletion_operations = FakeTopicDeletionOperations {
             targets: Vec::new(),
             failure: None,
             calls: Vec::new(),
         };
         let request: DeleteTopicRequest =
             serde_json::from_str(r#"{"topic":"illegal topic","cluster_name":"cluster","namesrv_addr":null}"#).unwrap();
-        assert!(execute_deletion(&mut backend, &request).await.is_err());
-        assert!(backend.calls.is_empty());
+        assert!(execute_deletion(&mut deletion_operations, &request).await.is_err());
+        assert!(deletion_operations.calls.is_empty());
         let request = DeleteTopicRequest::try_new("Topic", Some("Cluster".into())).unwrap();
         assert_eq!(
-            execute_deletion(&mut backend, &request).await.unwrap_err().descriptor(),
+            execute_deletion(&mut deletion_operations, &request)
+                .await
+                .unwrap_err()
+                .descriptor(),
             &rocketmq_error::ROUTE_CLUSTER_NOT_FOUND
         );
-        assert_eq!(backend.calls, ["targets"]);
+        assert_eq!(deletion_operations.calls, ["targets"]);
     }
 
     #[test]
