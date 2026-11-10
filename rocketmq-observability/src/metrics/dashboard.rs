@@ -15,9 +15,9 @@
 #[cfg(feature = "otel-metrics")]
 use crate::DASHBOARD_METER_SCOPE;
 
-/// Fixed storage backend labels accepted by the dashboard storage recorder.
+/// Fixed storage engine labels accepted by the dashboard storage recorder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DashboardStorageBackend {
+pub enum DashboardStorageEngine {
     File,
     Sqlite,
     MySql,
@@ -25,7 +25,7 @@ pub enum DashboardStorageBackend {
 }
 
 #[cfg(feature = "otel-metrics")]
-impl DashboardStorageBackend {
+impl DashboardStorageEngine {
     const fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
@@ -155,22 +155,22 @@ impl DashboardStorageMetricsRecorder {
     }
 
     /// Records one status operation using only the three fixed labels.
-    pub fn record_status(&self, backend: DashboardStorageBackend, result: DashboardStorageResult) {
+    pub fn record_status(&self, storage_engine: DashboardStorageEngine, result: DashboardStorageResult) {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
-                metrics.record_status(backend, result);
+                metrics.record_status(storage_engine, result);
             }
         }
 
         #[cfg(not(feature = "otel-metrics"))]
-        let _ = (backend, result);
+        let _ = (storage_engine, result);
     }
 
     /// Records a bounded repository or background-maintenance operation.
     pub fn record_operation(
         &self,
-        backend: DashboardStorageBackend,
+        storage_engine: DashboardStorageEngine,
         operation: DashboardStorageOperation,
         result: DashboardStorageOperationResult,
         failure: Option<DashboardStorageFailureLabel>,
@@ -179,18 +179,18 @@ impl DashboardStorageMetricsRecorder {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
-                metrics.record_operation(backend, operation, result, failure, elapsed);
+                metrics.record_operation(storage_engine, operation, result, failure, elapsed);
             }
         }
 
         #[cfg(not(feature = "otel-metrics"))]
-        let _ = (backend, operation, result, failure, elapsed);
+        let _ = (storage_engine, operation, result, failure, elapsed);
     }
 
     /// Records safe capacity and connection-pool observations from the status view.
     pub fn record_state(
         &self,
-        backend: DashboardStorageBackend,
+        storage_engine: DashboardStorageEngine,
         available_bytes: Option<u64>,
         pool_size: Option<u32>,
         idle_connections: Option<usize>,
@@ -198,12 +198,12 @@ impl DashboardStorageMetricsRecorder {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
-                metrics.record_state(backend, available_bytes, pool_size, idle_connections);
+                metrics.record_state(storage_engine, available_bytes, pool_size, idle_connections);
             }
         }
 
         #[cfg(not(feature = "otel-metrics"))]
-        let _ = (backend, available_bytes, pool_size, idle_connections);
+        let _ = (storage_engine, available_bytes, pool_size, idle_connections);
     }
 }
 
@@ -246,11 +246,11 @@ impl DashboardStorageMetrics {
         }
     }
 
-    fn record_status(&self, backend: DashboardStorageBackend, result: DashboardStorageResult) {
+    fn record_status(&self, storage_engine: DashboardStorageEngine, result: DashboardStorageResult) {
         self.operations_total.add(
             1,
             &[
-                opentelemetry::KeyValue::new("backend", backend.as_str()),
+                opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
                 opentelemetry::KeyValue::new("operation", "status"),
                 opentelemetry::KeyValue::new("result", result.as_str()),
             ],
@@ -259,14 +259,14 @@ impl DashboardStorageMetrics {
 
     fn record_operation(
         &self,
-        backend: DashboardStorageBackend,
+        storage_engine: DashboardStorageEngine,
         operation: DashboardStorageOperation,
         result: DashboardStorageOperationResult,
         failure: Option<DashboardStorageFailureLabel>,
         elapsed: std::time::Duration,
     ) {
         let labels = [
-            opentelemetry::KeyValue::new("backend", backend.as_str()),
+            opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
             opentelemetry::KeyValue::new("operation", operation.as_str()),
             opentelemetry::KeyValue::new("result", result.as_str()),
         ];
@@ -278,7 +278,7 @@ impl DashboardStorageMetrics {
             self.operation_errors_total.add(
                 1,
                 &[
-                    opentelemetry::KeyValue::new("backend", backend.as_str()),
+                    opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
                     opentelemetry::KeyValue::new("operation", operation.as_str()),
                     opentelemetry::KeyValue::new("error_kind", failure.as_str()),
                 ],
@@ -288,20 +288,20 @@ impl DashboardStorageMetrics {
 
     fn record_state(
         &self,
-        backend: DashboardStorageBackend,
+        storage_engine: DashboardStorageEngine,
         available_bytes: Option<u64>,
         pool_size: Option<u32>,
         idle_connections: Option<usize>,
     ) {
-        let backend_label = [opentelemetry::KeyValue::new("backend", backend.as_str())];
+        let storage_engine_labels = [opentelemetry::KeyValue::new("backend", storage_engine.as_str())];
         if let Some(available_bytes) = available_bytes {
-            self.capacity_bytes.record(available_bytes, &backend_label);
+            self.capacity_bytes.record(available_bytes, &storage_engine_labels);
         }
         if let Some(pool_size) = pool_size {
             self.pool_connections.record(
                 u64::from(pool_size),
                 &[
-                    opentelemetry::KeyValue::new("backend", backend.as_str()),
+                    opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
                     opentelemetry::KeyValue::new("state", "total"),
                 ],
             );
@@ -310,7 +310,7 @@ impl DashboardStorageMetrics {
             self.pool_connections.record(
                 u64::try_from(idle_connections).unwrap_or(u64::MAX),
                 &[
-                    opentelemetry::KeyValue::new("backend", backend.as_str()),
+                    opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
                     opentelemetry::KeyValue::new("state", "idle"),
                 ],
             );
@@ -320,7 +320,7 @@ impl DashboardStorageMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::DashboardStorageBackend;
+    use super::DashboardStorageEngine;
     use super::DashboardStorageFailureLabel;
     use super::DashboardStorageMetricsRecorder;
     use super::DashboardStorageOperation;
@@ -330,15 +330,15 @@ mod tests {
     #[test]
     fn noop_recorder_accepts_only_typed_low_cardinality_values() {
         let recorder = DashboardStorageMetricsRecorder::noop();
-        recorder.record_status(DashboardStorageBackend::File, DashboardStorageResult::Available);
-        recorder.record_status(DashboardStorageBackend::Postgres, DashboardStorageResult::Unavailable);
+        recorder.record_status(DashboardStorageEngine::File, DashboardStorageResult::Available);
+        recorder.record_status(DashboardStorageEngine::Postgres, DashboardStorageResult::Unavailable);
         recorder.record_operation(
-            DashboardStorageBackend::Sqlite,
+            DashboardStorageEngine::Sqlite,
             DashboardStorageOperation::HistoryCollection,
             DashboardStorageOperationResult::Failure,
             Some(DashboardStorageFailureLabel::Timeout),
             std::time::Duration::from_millis(1),
         );
-        recorder.record_state(DashboardStorageBackend::File, Some(1), None, None);
+        recorder.record_state(DashboardStorageEngine::File, Some(1), None, None);
     }
 }

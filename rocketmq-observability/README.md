@@ -157,6 +157,16 @@ The shared `TRACEPARENT` and `TRACESTATE` constants identify the wire property n
 `observability-metrics` enables client metrics. Client metrics over OTLP also require
 a direct `rocketmq-observability/otlp-metrics` dependency; the client has no feature with that name.
 
+The dashboard storage metric label enum is `DashboardStorageEngine`, exposed both as
+`rocketmq_observability::DashboardStorageEngine` and
+`rocketmq_observability::metrics::dashboard::DashboardStorageEngine`. It is the fixed,
+low-cardinality storage-engine classification accepted by the Dashboard metrics recorder;
+it carries a metric-label value, not a storage connection or backend service. The previous
+`DashboardStorageBackend` name was removed without a deprecated alias or compatibility
+wrapper, so downstream imports, type annotations and variant qualifications referring to
+the old enum require source updates, and external links to the old enum's Rustdoc page
+also change.
+
 ## Owned runtime diagnostics
 
 `RuntimeDiagnosticsService` owns its sampler and optional authenticated listener

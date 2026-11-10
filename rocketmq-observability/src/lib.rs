@@ -115,7 +115,7 @@ pub use logging::FileLogLayer;
 pub use logging::LoggingGuard;
 pub use logging::TelemetryRuntimeGuard;
 pub use logging::TelemetryShutdownReport;
-pub use metrics::dashboard::DashboardStorageBackend;
+pub use metrics::dashboard::DashboardStorageEngine;
 pub use metrics::dashboard::DashboardStorageFailureLabel;
 pub use metrics::dashboard::DashboardStorageMetricsRecorder;
 pub use metrics::dashboard::DashboardStorageOperation;
