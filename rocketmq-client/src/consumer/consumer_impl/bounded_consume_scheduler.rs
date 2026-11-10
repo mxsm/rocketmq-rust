@@ -264,14 +264,6 @@ where
     }
 
     pub(crate) async fn schedule(&self, item: T) -> Result<(), ConsumeScheduleError<T>> {
-        self.schedule_on(item, None).await
-    }
-
-    pub(crate) async fn schedule_after(&self, item: T, delay: Duration) -> Result<(), ConsumeScheduleError<T>> {
-        self.schedule_on(item, Some(delay)).await
-    }
-
-    async fn schedule_on(&self, item: T, delay: Option<Duration>) -> Result<(), ConsumeScheduleError<T>> {
         if self.stopping.is_cancelled() {
             return Err(ConsumeScheduleError { item });
         }
@@ -290,17 +282,9 @@ where
             item,
             _queued_permit: permit,
         };
-        match delay {
-            Some(delay) => self
-                .delayed_tx
-                .try_send((scheduled, delay))
-                .map_err(|error| ConsumeScheduleError {
-                    item: error.into_inner().0.into_item(),
-                }),
-            None => self.ready_tx.try_send(scheduled).map_err(|error| ConsumeScheduleError {
-                item: error.into_inner().into_item(),
-            }),
-        }
+        self.ready_tx.try_send(scheduled).map_err(|error| ConsumeScheduleError {
+            item: error.into_inner().into_item(),
+        })
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -424,41 +408,45 @@ mod tests {
         assert_eq!(scheduler.queued(), 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn delayed_retries_share_one_owned_scheduler_task() {
         let scheduler = BoundedConsumeScheduler::new(64).expect("scheduler config should be valid");
         let completed = Arc::new(AtomicUsize::new(0));
         let changed = Arc::new(Notify::new());
+        let runtime = rocketmq_runtime::RuntimeContext::try_from_current("bounded-consume-delay-test").unwrap();
+        let context = runtime
+            .service_context("bounded-consume-delay-service")
+            .component("consume");
         scheduler
-            .start(
-                &crate::runtime::test_service_context("bounded-consume-delay-test"),
-                2,
-                {
+            .start(&context, 2, {
+                let completed = Arc::clone(&completed);
+                let changed = Arc::clone(&changed);
+                move |(item, attempt)| {
                     let completed = Arc::clone(&completed);
                     let changed = Arc::clone(&changed);
-                    move |_item: usize| {
-                        let completed = Arc::clone(&completed);
-                        let changed = Arc::clone(&changed);
-                        async move {
-                            completed.fetch_add(1, Ordering::AcqRel);
-                            changed.notify_waiters();
-                            ConsumeDisposition::Complete
+                    async move {
+                        if attempt == 0 {
+                            return ConsumeDisposition::Retry {
+                                item: (item, 1),
+                                after: Duration::from_secs(5),
+                            };
                         }
+                        completed.fetch_add(1, Ordering::AcqRel);
+                        changed.notify_waiters();
+                        ConsumeDisposition::Complete
                     }
-                },
-            )
+                }
+            })
             .expect("scheduler should start");
 
         for item in 0..64 {
-            scheduler
-                .schedule_after(item, Duration::from_millis(1))
-                .await
-                .expect("delayed item should enqueue");
+            scheduler.schedule((item, 0)).await.expect("item should enqueue");
         }
         assert_eq!(scheduler.task_count(), 3, "retry count must not create more tasks");
-        tokio::time::timeout(Duration::from_secs(1), wait_for(&completed, 64, &changed))
+        tokio::time::timeout(Duration::from_secs(6), wait_for(&completed, 64, &changed))
             .await
             .expect("all delayed retries should complete");
+        assert_eq!(scheduler.task_count(), 3, "completed retries reuse the same tasks");
         assert!(scheduler.shutdown(Duration::from_secs(1)).await);
     }
 
