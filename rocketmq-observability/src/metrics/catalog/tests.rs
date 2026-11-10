@@ -362,31 +362,31 @@ fn dashboard_storage_metrics_have_exact_catalog_contracts() {
             metrics::DASHBOARD_STORAGE_OPERATIONS_TOTAL,
             MetricKind::Counter,
             "",
-            &[labels::BACKEND, labels::OPERATION, labels::RESULT][..],
+            &[labels::STORAGE_ENGINE, labels::OPERATION, labels::RESULT][..],
         ),
         (
             metrics::DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS,
             MetricKind::Histogram,
             "ms",
-            &[labels::BACKEND, labels::OPERATION, labels::RESULT][..],
+            &[labels::STORAGE_ENGINE, labels::OPERATION, labels::RESULT][..],
         ),
         (
             metrics::DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL,
             MetricKind::Counter,
             "",
-            &[labels::BACKEND, labels::OPERATION, labels::ERROR_KIND][..],
+            &[labels::STORAGE_ENGINE, labels::OPERATION, labels::ERROR_KIND][..],
         ),
         (
             metrics::DASHBOARD_STORAGE_CAPACITY_BYTES,
             MetricKind::Gauge,
             "By",
-            &[labels::BACKEND][..],
+            &[labels::STORAGE_ENGINE][..],
         ),
         (
             metrics::DASHBOARD_STORAGE_POOL_CONNECTIONS,
             MetricKind::Gauge,
             "",
-            &[labels::BACKEND, labels::STATE][..],
+            &[labels::STORAGE_ENGINE, labels::STATE][..],
         ),
     ];
 

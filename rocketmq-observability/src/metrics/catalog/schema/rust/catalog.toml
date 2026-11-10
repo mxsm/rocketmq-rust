@@ -934,7 +934,7 @@ index = 210
 symbol = "DASHBOARD_STORAGE_OPERATIONS_TOTAL"
 kind = "Counter"
 unit = ""
-labels = ["BACKEND", "OPERATION", "RESULT"]
+labels = ["STORAGE_ENGINE", "OPERATION", "RESULT"]
 source = "Observability"
 description = "Dashboard storage status and operation events"
 
@@ -943,7 +943,7 @@ index = 211
 symbol = "DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS"
 kind = "Histogram"
 unit = "ms"
-labels = ["BACKEND", "OPERATION", "RESULT"]
+labels = ["STORAGE_ENGINE", "OPERATION", "RESULT"]
 source = "Observability"
 description = "Dashboard storage operation duration"
 
@@ -952,7 +952,7 @@ index = 212
 symbol = "DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL"
 kind = "Counter"
 unit = ""
-labels = ["BACKEND", "OPERATION", "ERROR_KIND"]
+labels = ["STORAGE_ENGINE", "OPERATION", "ERROR_KIND"]
 source = "Observability"
 description = "Dashboard storage operation failures"
 
@@ -961,7 +961,7 @@ index = 213
 symbol = "DASHBOARD_STORAGE_CAPACITY_BYTES"
 kind = "Gauge"
 unit = "By"
-labels = ["BACKEND"]
+labels = ["STORAGE_ENGINE"]
 source = "Observability"
 description = "Dashboard storage capacity"
 
@@ -970,7 +970,7 @@ index = 214
 symbol = "DASHBOARD_STORAGE_POOL_CONNECTIONS"
 kind = "Gauge"
 unit = ""
-labels = ["BACKEND", "STATE"]
+labels = ["STORAGE_ENGINE", "STATE"]
 source = "Observability"
 description = "Dashboard SQL connection pool state"
 

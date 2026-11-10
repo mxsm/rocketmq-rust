@@ -245,7 +245,8 @@ pub mod metrics {
 }
 
 pub mod labels {
-    pub const BACKEND: &str = "backend";
+    /// Dashboard storage engine: `file`, `sqlite`, `mysql`, or `postgres`.
+    pub const STORAGE_ENGINE: &str = "storage_engine";
     pub const ADDRESS: &str = "address";
     pub const CLUSTER: &str = "cluster";
     pub const NODE_TYPE: &str = "node_type";

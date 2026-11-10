@@ -297,7 +297,7 @@ def build_registry(*, scope: str = "core-release") -> dict[str, Any]:
     )
     return {
         "schema_version": 1,
-        "registry_version": "1.2.0",
+        "registry_version": "2.0.0",
         "milestone": "M11-01",
         "description": "Canonical telemetry semantics and collector-outage behavior for RocketMQ Rust.",
         "required_families": sorted(guard.REQUIRED_FAMILIES),

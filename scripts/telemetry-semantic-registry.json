@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "registry_version": "1.2.0",
+  "registry_version": "2.0.0",
   "milestone": "M11-01",
   "description": "Canonical telemetry semantics and collector-outage behavior for RocketMQ Rust.",
   "required_families": [
@@ -34,15 +34,6 @@
     },
     {
       "id": "aggregation",
-      "cardinality": "bounded",
-      "privacy": "operational",
-      "max_distinct": 10000,
-      "max_value_bytes": 256,
-      "default_enabled": true,
-      "redaction": "none"
-    },
-    {
-      "id": "backend",
       "cardinality": "bounded",
       "privacy": "operational",
       "max_distinct": 10000,
@@ -711,6 +702,15 @@
       "id": "state",
       "cardinality": "bounded",
       "privacy": "public",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "storage_engine",
+      "cardinality": "bounded",
+      "privacy": "operational",
       "max_distinct": 10000,
       "max_value_bytes": 256,
       "default_enabled": true,
@@ -5996,7 +5996,7 @@
       "family": "recovery-cache",
       "stability": "stable",
       "attributes": [
-        "backend",
+        "storage_engine",
         "operation",
         "result"
       ],
@@ -6023,7 +6023,7 @@
       "family": "recovery-cache",
       "stability": "stable",
       "attributes": [
-        "backend",
+        "storage_engine",
         "operation",
         "result"
       ],
@@ -6050,7 +6050,7 @@
       "family": "recovery-cache",
       "stability": "stable",
       "attributes": [
-        "backend",
+        "storage_engine",
         "operation",
         "error_kind"
       ],
@@ -6077,7 +6077,7 @@
       "family": "connection-bytes",
       "stability": "stable",
       "attributes": [
-        "backend"
+        "storage_engine"
       ],
       "cardinality_budget": 10000,
       "privacy": "operational",
@@ -6102,7 +6102,7 @@
       "family": "connection-bytes",
       "stability": "stable",
       "attributes": [
-        "backend",
+        "storage_engine",
         "state"
       ],
       "cardinality_budget": 10000,

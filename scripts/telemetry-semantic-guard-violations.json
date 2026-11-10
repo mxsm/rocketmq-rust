@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "registry_version": "1.2.0",
+  "registry_version": "2.0.0",
   "fixtures": [
     {
       "id": "unknown-signal",
@@ -31,7 +31,7 @@
       "operation": "set",
       "path": [
         "attributes",
-        38,
+        37,
         "default_enabled"
       ],
       "value": true,
