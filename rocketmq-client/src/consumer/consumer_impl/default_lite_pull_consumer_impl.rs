@@ -2226,11 +2226,6 @@ impl DefaultLitePullConsumerImpl {
         self.assigned_message_queue.total_msg_count().await
     }
 
-    /// Get total cached message size in MiB.
-    async fn get_cached_message_size_in_mib(&self) -> i64 {
-        self.assigned_message_queue.total_msg_size_in_mib().await
-    }
-
     /// Polls for messages with the specified timeout.
     pub async fn poll(&self, timeout_millis: u64) -> ClientResult<Vec<Arc<MessageExt>>> {
         let _poll_guard = self.poll_lock.lock().await;
