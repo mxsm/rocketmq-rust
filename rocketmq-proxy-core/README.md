@@ -10,7 +10,7 @@ Backend-neutral service contracts, protocol bindings, and ingress/session state 
 - [`session`](src/session.rs), [`receipt_renewal`](src/receipt_renewal.rs), and [`drain`](src/drain.rs) track sessions, receipt ownership/renewal, and bounded draining.
 - [`settings`](src/settings.rs), [`config`](src/config.rs), and [`status`](src/status.rs) define configuration and client-visible settings/status values.
 
-Prefer `contracts` and `ingress::remoting` over the deprecated `service` and `remoting` compatibility paths. Although the crate separates backend concerns, it uses Tokio and shared runtime capabilities for ingress/session work; it is not an executor-free model crate.
+Import service contracts from [`contracts`](src/contracts.rs) and remoting ingress types from [`ingress::remoting`](src/ingress/remoting.rs); these are the canonical module paths. Core uses Tokio and `rocketmq-runtime` for ingress and session work, and the application assembles the listeners and the runtime.
 
 ## Generated protocol and features
 
