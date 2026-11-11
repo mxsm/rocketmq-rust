@@ -1087,6 +1087,20 @@ impl<PR> TransportSession<PR> {
         })
     }
 
+    /// Retires the connection after a request that started at `request_started` timed out,
+    /// unless the connection delivered a response since then. Returns whether it retired.
+    ///
+    /// Retiring recovers from a connection that stopped answering. A connection that still
+    /// answers is only slow for this request, and retiring it would fail every other request in
+    /// flight on it.
+    pub(crate) async fn retire_after_timeout_if_silent(&self, request_started: tokio::time::Instant) -> bool {
+        if self.pending_request_owner.responded_since(request_started) {
+            return false;
+        }
+        self.retire_after_timeout().await;
+        true
+    }
+
     pub(crate) fn begin_drain(&self) {
         self.accepting_requests.store(false, Ordering::Release);
         self.pending_requests.retire_owner(&self.pending_request_owner);

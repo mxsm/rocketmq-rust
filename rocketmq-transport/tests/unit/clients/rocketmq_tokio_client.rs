@@ -1085,6 +1085,87 @@ async fn timed_out_request_retires_the_cached_session_before_the_next_request() 
 }
 
 #[tokio::test]
+async fn timed_out_request_keeps_a_connection_that_still_responds() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let (slow_received_tx, slow_received_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("accept client");
+        let mut connection = Connection::new(socket);
+        let _slow = connection
+            .receive_command()
+            .await
+            .expect("slow request frame")
+            .expect("slow request");
+        let _ = slow_received_tx.send(());
+        for _ in 0..2 {
+            let request = time::timeout(Duration::from_secs(2), connection.receive_command())
+                .await
+                .expect("later requests arrive on the first connection")
+                .expect("request frame")
+                .expect("request");
+            connection
+                .send_command(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(request.opaque()),
+                )
+                .await
+                .expect("send response");
+        }
+        assert!(
+            time::timeout(Duration::from_millis(200), listener.accept())
+                .await
+                .is_err(),
+            "a connection that still responds must not be replaced"
+        );
+    });
+
+    let client = TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("remoting-client-slow-request-test"),
+    );
+    let target = CheetahString::from_string(addr.to_string());
+    let slow = client.invoke_request(
+        Some(&target),
+        RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+        300,
+    );
+    let answered = async {
+        slow_received_rx.await.expect("server received the slow request");
+        client
+            .invoke_request(
+                Some(&target),
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                2_000,
+            )
+            .await
+    };
+    let (slow, answered) = tokio::join!(slow, answered);
+    assert_eq!(
+        slow.expect_err("the unanswered request times out").descriptor(),
+        &rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT
+    );
+    assert_eq!(
+        expect_response(answered.expect("the answered request succeeds")).code(),
+        ResponseCode::Success.to_i32()
+    );
+
+    let next = client
+        .invoke_request(
+            Some(&target),
+            RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+            2_000,
+        )
+        .await
+        .expect("the next request reuses the responding connection");
+    assert_eq!(expect_response(next).code(), ResponseCode::Success.to_i32());
+
+    server.await.expect("server task");
+    client.shutdown();
+}
+
+#[tokio::test]
 async fn registry_token_distinguishes_replacements_and_same_port_nameserver_identities() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
     let addr = listener.local_addr().expect("listener addr");
