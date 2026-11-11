@@ -40,7 +40,9 @@ use rocketmq_security_api::Signature;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::OutboundRequestRejectionReason;
 use rocketmq_transport::api::OutboundRequestResult;
+use rocketmq_transport::api::OutboundRequestStage;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::TlsClientConfig;
@@ -515,19 +517,19 @@ async fn request_code_does_not_change_single_attempt_go_away_behavior() {
 async fn go_away_response_uses_one_attempt_within_the_original_deadline() {
     let runtime = RuntimeContext::from_current("go-away-deadline-test");
     let handler = Arc::new(ScriptedHandler::new(vec![
-        Reply::delayed(ResponseCode::GoAway.to_i32(), Duration::from_millis(100), b"retire"),
-        Reply::delayed(ResponseCode::Success.to_i32(), Duration::from_millis(150), b"too-late"),
+        Reply::immediate(ResponseCode::GoAway.to_i32(), b"retire"),
+        Reply::immediate(ResponseCode::Success.to_i32(), b"unexpected-replay"),
     ]));
     let address = start_server(&runtime, "go-away-deadline-server", handler.clone(), false).await;
     let client = start_client(&runtime, "go-away-deadline-client", false).await;
     let target = CheetahString::from_string(address.to_string());
 
     let result = tokio::time::timeout(
-        Duration::from_millis(220),
+        Duration::from_secs(3),
         client.invoke_request_with_deadline(
             Some(&target),
             RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
-            RequestDeadline::after(Duration::from_millis(180)),
+            RequestDeadline::after(Duration::from_secs(2)),
         ),
     )
     .await
@@ -545,29 +547,57 @@ async fn go_away_response_uses_one_attempt_within_the_original_deadline() {
 #[tokio::test]
 async fn an_exhausted_deadline_never_writes_a_second_attempt() {
     let runtime = RuntimeContext::from_current("go-away-exhausted-deadline-test");
-    let handler = Arc::new(ScriptedHandler::new(vec![Reply::delayed(
-        ResponseCode::GoAway.to_i32(),
-        Duration::from_millis(80),
-        b"too-late",
-    )]));
+    let first_entered = Arc::new(tokio::sync::Notify::new());
+    let first_release = Arc::new(tokio::sync::Notify::new());
+    let handler = Arc::new(ScriptedHandler::gated_first(
+        vec![Reply::immediate(ResponseCode::GoAway.to_i32(), b"too-late")],
+        first_entered.clone(),
+        first_release.clone(),
+    ));
     let address = start_server(&runtime, "go-away-exhausted-deadline-server", handler.clone(), false).await;
     let client = start_client(&runtime, "go-away-exhausted-deadline-client", false).await;
     let target = CheetahString::from_string(address.to_string());
 
-    let result = client
-        .invoke_request_with_deadline(
-            Some(&target),
-            RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
-            RequestDeadline::after(Duration::from_millis(30)),
-        )
-        .await;
+    let deadline = RequestDeadline::after(Duration::from_secs(2));
+    let request = client.invoke_request_with_deadline(
+        Some(&target),
+        RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+        deadline,
+    );
+    tokio::pin!(request);
+    tokio::select! {
+        _ = first_entered.notified() => {},
+        outcome = &mut request => panic!("request completed before reaching the server: {outcome:?}"),
+    }
 
-    assert!(result.is_err());
+    // The first write has reached the server. Hold its reply until the caller's deadline has expired.
+    tokio::time::pause();
+    tokio::time::advance(deadline.remaining()).await;
+    tokio::time::resume();
+    first_release.notify_one();
     handler.wait_for_completions(1).await;
-    assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+
+    // Wait for the client reader to deliver the late reply before polling the request again.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while client.snapshot().pending.count != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("client should receive the late response");
+    let outcome = request
+        .await
+        .expect("a received late response produces a typed rejection");
+    let OutboundRequestResult::Rejected(rejection) = outcome else {
+        panic!("late GO_AWAY must be rejected: {outcome:?}");
+    };
+    assert_eq!(rejection.reason(), OutboundRequestRejectionReason::DeadlineExpired);
+    assert_eq!(rejection.stage(), OutboundRequestStage::ResponseReceived);
+    assert_eq!(rejection.timeout_millis(), Some(deadline.budget_millis()));
     assert_eq!(client.snapshot().pending.count, 0);
 
-    shutdown(runtime, &[client]).await;
+    shutdown(runtime, std::slice::from_ref(&client)).await;
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
