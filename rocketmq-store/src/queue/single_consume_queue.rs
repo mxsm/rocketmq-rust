@@ -41,6 +41,7 @@ use rocketmq_store_local::consume_queue::single::ConsumeQueueTimeBoundary;
 use rocketmq_store_local::consume_queue::single::ConsumeQueueTruncatePlan;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
 use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
+use rocketmq_store_local::mapped_file::ResidencyCheck;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -393,19 +394,34 @@ impl ConsumeQueue {
 
     #[inline]
     pub fn get_index_buffer(&self, start_index: i64) -> Option<SelectMappedBufferResult> {
-        let mapped_file_size = self.mapped_file_size;
+        self.get_index_units(start_index, i32::MAX)
+    }
+
+    /// Selects at most `max_units` index units from `start_index`, and at least one when any is
+    /// readable.
+    ///
+    /// The file being appended to is copied under its write-state lock, so an unbounded read
+    /// copies the rest of the file, up to its whole 6 MB, for a pull that reads 32 units. Nothing
+    /// reads the in-cache flag of index units, so the read also skips the residency probe, a
+    /// `mincore` over every selected page.
+    fn get_index_units(&self, start_index: i64, max_units: i32) -> Option<SelectMappedBufferResult> {
         let offset = start_index * CQ_STORE_UNIT_SIZE as i64;
-        if offset >= self.get_min_logic_offset() {
-            if let Some(mapped_file) = self.mapped_file_queue.find_mapped_file_by_offset(offset, false) {
-                let mut result =
-                    mapped_file.select_mapped_buffer_with_position((offset % mapped_file_size as i64) as i32);
-                if let Some(ref mut result) = result {
-                    result.try_attach_mapped_file(mapped_file);
-                }
-                return result;
-            }
+        if offset < self.get_min_logic_offset() {
+            return None;
         }
-        None
+        let mapped_file = self.mapped_file_queue.find_mapped_file_by_offset(offset, false)?;
+        let mut result = mapped_file
+            .try_select_readable_with(
+                (offset % self.mapped_file_size as i64) as i32,
+                max_units.max(1).saturating_mul(CQ_STORE_UNIT_SIZE),
+                ResidencyCheck::AssumeResident,
+            )
+            .ok()
+            .flatten();
+        if let Some(ref mut result) = result {
+            result.try_attach_mapped_file(mapped_file);
+        }
+        result
     }
 
     fn multi_dispatch_lmq_queue(&self, request: &DispatchRequest, _max_retries: i32) {
@@ -738,7 +754,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
 
     #[inline]
     fn get(&self, index: i64) -> Option<CqUnit> {
-        self.iterate_from(index).and_then(|mut iter| iter.next())
+        self.iterate_from_with_count(index, 1).and_then(|mut iter| iter.next())
     }
 
     #[inline]
@@ -1052,7 +1068,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
         start_index: i64,
         count: i32,
     ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
-        self.get_index_buffer(start_index).map(|value| {
+        self.get_index_units(start_index, count).map(|value| {
             Box::new(ConsumeQueueIterator {
                 smbr: Some(value),
                 counter: 0,
@@ -1387,6 +1403,42 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn consume_queue_bounded_reads_select_only_the_requested_units() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-bounded-selection-topic");
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, (8 * CQ_STORE_UNIT_SIZE) as usize);
+
+        for queue_offset in 0_i64..5 {
+            consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 0,
+                commit_log_offset: queue_offset * 32,
+                msg_size: 32,
+                consume_queue_offset: queue_offset,
+                success: true,
+                ..DispatchRequest::default()
+            });
+        }
+
+        let unit = CQ_STORE_UNIT_SIZE;
+        let selected_size = |start_index, max_units| {
+            consume_queue
+                .get_index_units(start_index, max_units)
+                .expect("readable units")
+                .size()
+        };
+        assert_eq!(selected_size(1, 2), 2 * unit);
+        assert_eq!(selected_size(1, 0), unit, "a read selects at least one unit");
+        assert_eq!(selected_size(3, 32), 2 * unit, "a read stops at the written units");
+        assert_eq!(consume_queue.get_index_buffer(1).expect("tail").size(), 4 * unit);
+        assert!(consume_queue.get_index_units(5, 1).is_none());
+
+        let unit_at_three = consume_queue.get(3).expect("unit at queue offset 3");
+        assert_eq!(unit_at_three.queue_offset, 3);
+        assert_eq!(unit_at_three.pos, 96);
     }
 
     #[test]

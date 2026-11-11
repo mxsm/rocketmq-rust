@@ -77,6 +77,7 @@ use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use rocketmq_store_local::mapped_file::ManagedRetirementReason;
 use rocketmq_store_local::mapped_file::MappedFileQueueGeneration;
 use rocketmq_store_local::mapped_file::MappedFileQueueSnapshot;
+use rocketmq_store_local::mapped_file::ResidencyCheck;
 use tracing::error;
 use tracing::warn;
 
@@ -333,7 +334,13 @@ impl MappedFileQueueReadHandle {
             return None;
         }
         let size = usize::try_from(readable).ok()?.min(max_bytes).min(i32::MAX as usize) as i32;
-        let mut result = mapped_file.select_mapped_buffer(position, size);
+        // Reput and record walks parse the bytes and never read the in-cache flag, so the read
+        // skips the residency probe: a `mincore` over up to `max_bytes` under the write-state lock
+        // of the file being appended to.
+        let mut result = mapped_file
+            .try_select_mapped_buffer_with(position, size, ResidencyCheck::AssumeResident)
+            .ok()
+            .flatten();
         if let Some(result) = result.as_mut() {
             result.try_attach_mapped_file(mapped_file);
         }

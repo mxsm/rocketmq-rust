@@ -1472,6 +1472,73 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         }
     }
 
+    /// Selects at most `max_size` readable bytes from `pos`, checking page-cache residency as
+    /// `residency` requests.
+    ///
+    /// A writable file is copied under its write-state lock, and a probe is a `mincore` over every
+    /// selected page, so a reader that needs only the head of the readable tail bounds the
+    /// selection instead of taking the rest of the file. `i32::MAX` selects the whole tail, as
+    /// `select_mapped_buffer_with_position` does. Returns `Ok(None)` when nothing is readable at
+    /// `pos` or `max_size` is not positive.
+    ///
+    /// # Errors
+    ///
+    /// Returns the mapping or bounds failure that `select_mapped_buffer_with_position` would
+    /// report.
+    pub fn try_select_readable_with(
+        &self,
+        pos: i32,
+        max_size: i32,
+        residency: ResidencyCheck,
+    ) -> Result<Option<SelectMappedBufferResult<M>>, StoreError> {
+        if max_size <= 0 {
+            return Ok(None);
+        }
+        let result = (|| -> Result<Option<SelectMappedBufferResult<M>>, MappedFileFailure> {
+            let admission = match self.acquire_owned(MappedFileOperation::Read) {
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(None),
+            };
+            let read_position = self.get_read_position();
+            let Some(size) = self.raw_core.readable_tail_size(pos, read_position) else {
+                return Ok(None);
+            };
+            let size = size.min(max_size);
+            self.mapped_byte_buffer_access_count_since_last_swap
+                .fetch_add(1, Ordering::AcqRel);
+            let is_in_cache = self.cache_residency_admitted(&admission, pos as i64, size as usize, residency);
+
+            if let Some(generation) = self.physical_owners.mapping.load_read_only() {
+                let file_offset = pos as u64;
+                let start_offset = self.get_file_from_offset().checked_add(file_offset).ok_or_else(|| {
+                    MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                })?;
+                let range =
+                    MappedReadLease::try_new(generation, admission, pos as usize, size as usize).map_err(|_| {
+                        MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                    })?;
+                let range = MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone())
+                    .ok_or_else(|| {
+                        MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                    })?;
+                return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
+            }
+
+            Ok(self
+                .copy_range_admitted(&admission, pos as usize, size as usize, None)?
+                .and_then(|bytes| {
+                    SelectMappedBufferResult::from_bytes_with_metadata(
+                        self.get_file_from_offset() + pos as u64,
+                        pos as u64,
+                        bytes,
+                        is_in_cache,
+                        SelectMappedBufferCacheState::from_residency(is_in_cache),
+                    )
+                }))
+        })();
+        MappedFileFailure::into_public_option(result, StoreOperation::Read)
+    }
+
     /// Selects `size` bytes at `pos`, checking page-cache residency as `residency` requests.
     ///
     /// # Errors
@@ -2170,48 +2237,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         &self,
         pos: i32,
     ) -> Result<Option<SelectMappedBufferResult<M>>, StoreError> {
-        let result = (|| -> Result<Option<SelectMappedBufferResult<M>>, MappedFileFailure> {
-            let admission = match self.acquire_owned(MappedFileOperation::Read) {
-                MappedFileAdmissionResult::Acquired(admission) => admission,
-                MappedFileAdmissionResult::Rejected(_) => return Ok(None),
-            };
-            let read_position = self.get_read_position();
-            let Some(size) = self.raw_core.readable_tail_size(pos, read_position) else {
-                return Ok(None);
-            };
-            self.mapped_byte_buffer_access_count_since_last_swap
-                .fetch_add(1, Ordering::AcqRel);
-            let is_in_cache = self.record_cache_residency_admitted(&admission, pos as i64, size as usize);
-
-            if let Some(generation) = self.physical_owners.mapping.load_read_only() {
-                let file_offset = pos as u64;
-                let start_offset = self.get_file_from_offset().checked_add(file_offset).ok_or_else(|| {
-                    MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                })?;
-                let range =
-                    MappedReadLease::try_new(generation, admission, pos as usize, size as usize).map_err(|_| {
-                        MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                    })?;
-                let range = MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone())
-                    .ok_or_else(|| {
-                        MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                    })?;
-                return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
-            }
-
-            Ok(self
-                .copy_range_admitted(&admission, pos as usize, size as usize, None)?
-                .and_then(|bytes| {
-                    SelectMappedBufferResult::from_bytes_with_metadata(
-                        self.get_file_from_offset() + pos as u64,
-                        pos as u64,
-                        bytes,
-                        is_in_cache,
-                        SelectMappedBufferCacheState::from_residency(is_in_cache),
-                    )
-                }))
-        })();
-        MappedFileFailure::into_public_option(result, StoreOperation::Read)
+        self.try_select_readable_with(pos, i32::MAX, ResidencyCheck::Probe)
     }
 
     fn init(
@@ -3492,10 +3518,16 @@ mod tests {
             .try_file_range_selection_with(0, len, ResidencyCheck::AssumeResident)
             .expect("file range selection should succeed")
             .expect("file range should exist");
+        let tail = mapped_file
+            .try_select_readable_with(7, i32::MAX, ResidencyCheck::AssumeResident)
+            .expect("tail selection should succeed")
+            .expect("tail should exist");
 
         assert!(selected.is_in_cache());
         assert!(ranged.is_in_cache());
+        assert!(tail.is_in_cache());
         assert_eq!(selected.get_buffer(), b"assume-resident");
+        assert_eq!(tail.get_buffer(), b"resident");
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(
             metrics.cache_hits() + metrics.cache_misses(),
@@ -3508,6 +3540,44 @@ mod tests {
             .expect("probed selection should succeed")
             .expect("probed buffer should exist");
         assert_eq!(metrics.cache_hits() + metrics.cache_misses(), 1);
+        mapped_file
+            .select_mapped_buffer_with_position(7)
+            .expect("probed tail should exist");
+        assert_eq!(
+            metrics.cache_hits() + metrics.cache_misses(),
+            2,
+            "the trait tail selection still probes"
+        );
+    }
+
+    #[test]
+    fn readable_selection_stops_at_its_bound_or_the_read_position() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        assert!(mapped_file.append_message_bytes(b"bounded-readable"));
+
+        let head = mapped_file
+            .try_select_readable_with(0, 7, ResidencyCheck::AssumeResident)
+            .expect("bounded selection should succeed")
+            .expect("bounded selection should exist");
+        assert_eq!(head.get_buffer(), b"bounded");
+        assert_eq!(head.start_offset(), mapped_file.get_file_from_offset());
+
+        let rest = mapped_file
+            .try_select_readable_with(8, 1024, ResidencyCheck::AssumeResident)
+            .expect("selection past the read position should succeed")
+            .expect("the readable rest should exist");
+        assert_eq!(rest.get_buffer(), b"readable");
+        assert_eq!(rest.start_offset(), mapped_file.get_file_from_offset() + 8);
+
+        for (pos, max_size) in [(0, 0), (0, -1), (16, 1), (-1, 1)] {
+            assert!(
+                mapped_file
+                    .try_select_readable_with(pos, max_size, ResidencyCheck::AssumeResident)
+                    .expect("an empty selection is not an error")
+                    .is_none(),
+                "pos {pos}, max_size {max_size} selects nothing"
+            );
+        }
     }
 
     #[test]
