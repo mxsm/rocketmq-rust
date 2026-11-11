@@ -142,7 +142,7 @@ fn duration_from_millis(millis: u64) -> std::time::Duration {
 /// Object-safe future returned by Proxy service contracts.
 pub type ProxyServiceFuture<'a, T> = Pin<Box<dyn Future<Output = ProxyResult<T>> + Send + 'a>>;
 
-/// Route lookup contract shared by the ingress and backend adapters.
+/// Route lookup contract: resolves the topic route for a client request.
 pub trait RouteService: Send + Sync {
     fn query_route<'a>(
         &'a self,
@@ -152,7 +152,7 @@ pub trait RouteService: Send + Sync {
     ) -> ProxyServiceFuture<'a, TopicRouteData>;
 }
 
-/// Metadata lookup contract shared by the ingress and backend adapters.
+/// Metadata lookup contract: resolves topic message type and subscription-group metadata.
 pub trait MetadataService: Send + Sync {
     /// Verifies that the backing metadata route is available before listeners publish readiness.
     fn readiness_check(&self) -> ProxyServiceFuture<'_, ()> {
@@ -181,7 +181,7 @@ pub trait MetadataService: Send + Sync {
     }
 }
 
-/// Assignment lookup contract shared by the ingress and backend adapters.
+/// Assignment lookup contract: resolves message-queue assignments for a consumer group.
 pub trait AssignmentService: Send + Sync {
     fn query_assignment<'a>(
         &'a self,
@@ -192,7 +192,7 @@ pub trait AssignmentService: Send + Sync {
     ) -> ProxyServiceFuture<'a, Option<Vec<MessageQueueAssignment>>>;
 }
 
-/// Message operation contract shared by the ingress and backend adapters.
+/// Message contract: sends and recalls messages.
 pub trait MessageService: Send + Sync {
     fn send_message<'a>(
         &'a self,
@@ -207,7 +207,7 @@ pub trait MessageService: Send + Sync {
     ) -> ProxyServiceFuture<'a, RecallMessagePlan>;
 }
 
-/// Consumer operation contract shared by the ingress and backend adapters.
+/// Consumer contract: receive, pull, acknowledge, offset, and related consumer operations.
 pub trait ConsumerService: Send + Sync {
     fn sync_lite_subscription<'a>(
         &'a self,
@@ -267,7 +267,7 @@ pub trait ConsumerService: Send + Sync {
     ) -> ProxyServiceFuture<'a, QueryOffsetPlan>;
 }
 
-/// Transaction operation contract shared by the ingress and backend adapters.
+/// Transaction contract: completes transactional send operations.
 pub trait TransactionService: Send + Sync {
     /// Returns the backend-owned producer group used for transactional sends.
     ///
