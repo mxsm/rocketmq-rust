@@ -23,12 +23,14 @@ use crate::error::canonical;
 use crate::ProxyResult;
 use crate::DEFAULT_PROXY_GRPC_PORT;
 
-/// Backend mode selected by the Proxy composition layer.
+/// Proxy deployment mode selected by the composition layer.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProxyMode {
+    /// Uses client-backed services for a remote cluster.
     #[default]
     Cluster,
+    /// Uses an embedded Broker in the Proxy process.
     Local,
 }
 
