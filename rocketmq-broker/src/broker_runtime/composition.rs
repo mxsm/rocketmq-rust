@@ -718,26 +718,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         Ok(())
     }
 
-    #[cfg(test)]
-    #[inline]
-    pub fn set_message_store_config(
-        &mut self,
-        message_store_config: MessageStoreConfig,
-    ) -> Result<(), BrokerConfigError> {
-        let generation = self.config_state.replace_store(message_store_config)?;
-        let message_store_config = generation.store();
-        if let Some(topic_config_manager) = self.topic_config_manager.as_ref() {
-            topic_config_manager.update_message_store_policy(message_store_config);
-        }
-        self.send_message_policy_state
-            .update_message_store_config(message_store_config);
-        self.pull_message_policy_state.update_store_config(message_store_config);
-        self.pop_policy_state.update_store_config(message_store_config);
-        self.escape_bridge_policy_state
-            .update_message_store_config(message_store_config);
-        Ok(())
-    }
-
     #[inline]
     pub fn set_timer_message_store(&mut self, timer_message_store: TimerMessageStore) {
         self.timer_message_store = Some(Arc::new(timer_message_store));
