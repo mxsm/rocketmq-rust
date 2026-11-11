@@ -94,7 +94,7 @@ pub enum RemotingIngressRoute {
 /// Execution ownership selected for a Remoting request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemotingRouteClass {
-    /// The Proxy decodes the request and invokes a backend-neutral service.
+    /// The Proxy decodes and handles the request, invoking a shared service when needed.
     Translate,
     /// The Proxy preserves the command and delegates execution to an embedded or remote Broker.
     ForwardToBroker,
