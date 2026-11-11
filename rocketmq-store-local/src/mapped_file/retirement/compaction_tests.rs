@@ -66,27 +66,27 @@ assert_not_clone!(ReconciliationReceipt);
 assert_not_clone!(FencedCompactionEvidence);
 
 #[test]
-fn scheduling_thresholds_are_advisory_only() {
+fn compaction_pressure_thresholds_are_advisory_only() {
     assert_eq!(
-        compaction_schedule(CompactionMetrics {
+        evaluate_compaction_pressure(CompactionMetrics {
             active_log_bytes: COMPACTION_LOG_BYTES_THRESHOLD - 1,
             completed_record_count: COMPLETED_RECORD_THRESHOLD - 1,
         }),
-        CompactionSchedule::NotScheduled
+        CompactionPressure::BelowThresholds
     );
     assert_eq!(
-        compaction_schedule(CompactionMetrics {
+        evaluate_compaction_pressure(CompactionMetrics {
             active_log_bytes: COMPACTION_LOG_BYTES_THRESHOLD,
             completed_record_count: 0,
         }),
-        CompactionSchedule::Candidate(CompactionTrigger::LogSize)
+        CompactionPressure::ThresholdReached(CompactionTrigger::LogSize)
     );
     assert_eq!(
-        compaction_schedule(CompactionMetrics {
+        evaluate_compaction_pressure(CompactionMetrics {
             active_log_bytes: 0,
             completed_record_count: COMPLETED_RECORD_THRESHOLD,
         }),
-        CompactionSchedule::Candidate(CompactionTrigger::CompletedRecords)
+        CompactionPressure::ThresholdReached(CompactionTrigger::CompletedRecords)
     );
 }
 
