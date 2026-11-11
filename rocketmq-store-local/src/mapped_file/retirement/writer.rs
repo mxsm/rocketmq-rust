@@ -52,10 +52,10 @@ pub(super) use incarnation::{
     PublishedIncarnationReceipt,
 };
 
-/// Durable append stage whose failure requires replay before another append.
+/// Failure stage for ledger file opening, recovery-frontier checks, and durable appends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WriterStage {
-    OpenBackend,
+    OpenLedgerFiles,
     AppendFrame,
     SyncFrame,
     WriteAcknowledgementSlot,
@@ -74,7 +74,7 @@ pub(in crate::mapped_file::retirement) fn open_managed_lifecycle_writer(
 ) -> Result<ManagedLedgerWriter<FileLedgerIo>, ManagedLedgerWriterFailure> {
     let io = FileLedgerIo::open_from_store_root(retained_root, frontier.log_generation()).map_err(|source| {
         WriterFailure::Io {
-            stage: WriterStage::OpenBackend,
+            stage: WriterStage::OpenLedgerFiles,
             source,
         }
     })?;
