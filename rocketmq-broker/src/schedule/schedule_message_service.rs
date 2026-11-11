@@ -1324,10 +1324,14 @@ impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
             return Ok(());
         }
         let cq = cq.unwrap();
-        // Read one unit at a time so the queue guard is never held across delivery awaits.
+        // Read one unit at a time so the queue guard is never held across delivery awaits. The
+        // count bounds the read to that unit: an unbounded one copies the rest of the active
+        // ConsumeQueue file, for every delivered message and for every tick of a level that is
+        // not yet due.
         let first_cq_unit = {
             let cq = cq.read();
-            cq.iterate_from(self.offset).and_then(|mut iter| iter.next())
+            cq.iterate_from_with_count(self.offset, 1)
+                .and_then(|mut iter| iter.next())
         };
         let mut next_cq_unit = match first_cq_unit {
             Some(unit) => Some(unit),
@@ -1394,7 +1398,8 @@ impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
             next_offset = curr_offset + cq_unit.batch_num as i64;
             next_cq_unit = {
                 let cq = cq.read();
-                cq.iterate_from(next_offset).and_then(|mut iter| iter.next())
+                cq.iterate_from_with_count(next_offset, 1)
+                    .and_then(|mut iter| iter.next())
             };
 
             // Detect clock skew/backwards
