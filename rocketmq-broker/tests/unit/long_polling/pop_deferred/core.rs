@@ -34,6 +34,8 @@ use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredWaitLimits;
 
+use super::service::PopArrivalLatchStatus;
+use super::service::PopPendingArrivalRejection;
 use super::*;
 
 fn nonzero(value: usize) -> NonZeroUsize {
@@ -76,6 +78,52 @@ fn service(max_entries: usize, per_key: usize) -> PopDeferredService {
         DeferredExpiryMargins::new(Duration::from_millis(2), Duration::from_millis(2)),
         nonzero(8),
     )
+}
+
+#[test]
+fn pending_arrival_byte_limit_is_enforced_and_released_after_completion() {
+    let topic = CheetahString::from_static_str("TopicA");
+    let bitmap = [1, 2, 3];
+    let properties = HashMap::from([(CheetahString::from("key"), CheetahString::from("value"))]);
+    let latch = |service: &PopDeferredService| {
+        service.latch_arrival(
+            &topic,
+            0,
+            Some(7),
+            11,
+            Some(&bitmap),
+            Some(&properties),
+            service.fanout_cursor(),
+        )
+    };
+    let probe = service(2, 2);
+    assert!(matches!(latch(&probe), Ok(PopArrivalLatchStatus::Latched)));
+    let retained = probe.resource_snapshot().pending_arrival_bytes;
+
+    for limit in [retained - 1, retained] {
+        let controller = AdmissionController::new(AdmissionLimits::default());
+        let admission = DeferredAdmission::try_configure(&controller, DeferredWaitLimits::new(2, limit)).unwrap();
+        let bounded = PopDeferredService::new(
+            admission,
+            PopCriteriaLimits::new(nonzero(2), nonzero(2)),
+            DeferredExpiryMargins::new(Duration::from_millis(2), Duration::from_millis(2)),
+            nonzero(1),
+        );
+        let outcome = latch(&bounded).unwrap();
+        if limit < retained {
+            assert!(matches!(
+                outcome,
+                PopArrivalLatchStatus::Rejected(PopPendingArrivalRejection::BytesFull)
+            ));
+        } else {
+            assert!(matches!(outcome, PopArrivalLatchStatus::Latched));
+            let mut pending = bounded.pending_arrival_reservations().pop().unwrap().claim().unwrap();
+            assert_eq!(bounded.resource_snapshot().pending_arrival_bytes, retained);
+            assert!(pending.finish_if_clean());
+        }
+        assert_eq!(bounded.resource_snapshot().pending_arrivals, 0);
+        assert_eq!(bounded.resource_snapshot().pending_arrival_bytes, 0);
+    }
 }
 
 #[tokio::test]

@@ -97,9 +97,7 @@ use super::index::PopSelectionOrder;
 
 mod continuation;
 
-pub(crate) use continuation::PopArrivalContinuation;
 use continuation::PopContinuationAdmission;
-pub(crate) use continuation::PopContinuationAdmissionStatus;
 pub(crate) use continuation::PopContinuationError;
 use continuation::PopContinuationPermit;
 use continuation::PopPendingArrival;
@@ -863,42 +861,6 @@ impl PopDeferredService {
         }
         self.index
             .consumer_group_batch(topic, queue_id, cursor, self.sweep_limit)
-    }
-
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the continuation retains the exact Store arrival callback metadata"
-    )]
-    pub(crate) fn admit_arrival_continuation(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        tags_code: Option<i64>,
-        message_store_time: i64,
-        filter_bitmap: Option<&[u8]>,
-        properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
-        cursor: PopFanoutCursor,
-    ) -> Result<PopContinuationAdmissionStatus, PopContinuationError> {
-        PopArrivalContinuation::try_admit(
-            &self.continuation_admission,
-            topic,
-            queue_id,
-            tags_code,
-            message_store_time,
-            filter_bitmap,
-            properties,
-            cursor,
-        )
-    }
-
-    pub(crate) fn continuation_consumer_group_batch(
-        &self,
-        continuation: &mut PopArrivalContinuation,
-    ) -> PopFanoutBatch {
-        if self.closed.load(Ordering::Acquire) {
-            return PopFanoutBatch::empty();
-        }
-        continuation.next_batch(&self.index, self.sweep_limit)
     }
 
     #[allow(
