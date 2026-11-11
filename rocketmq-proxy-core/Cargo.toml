@@ -22,7 +22,7 @@ repository.workspace = true
 license.workspace = true
 keywords = ["rocketmq", "proxy", "grpc", "protocol"]
 categories = ["network-programming", "asynchronous"]
-description = "Runtime-neutral RocketMQ Proxy contracts and ingress state"
+description = "Shared RocketMQ Proxy service contracts and ingress state"
 rust-version.workspace = true
 
 [features]
