@@ -18,9 +18,11 @@ Import service contracts from [`contracts`](src/contracts.rs) and remoting ingre
 
 The exported default ports are 8081 for gRPC and 8080 for remoting. Applications select actual bindings through configuration.
 
-## Backends and validation
+## Local and cluster adapters
 
 [rocketmq-proxy-cluster](../rocketmq-proxy-cluster/README.md) supplies client-backed remote services. [rocketmq-proxy-local](../rocketmq-proxy-local/README.md) supplies the embedded broker adapter.
+
+## Validation
 
 Run from the root workspace:
 
