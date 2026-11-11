@@ -277,12 +277,13 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
         frame_limits: FrameLimits,
+        max_pending_requests: usize,
     ) -> Result<Self, rocketmq_error::SharedError> {
         frame_limits.validate()?;
         let process_budget = service_context.process_budget();
         let pending_requests = PendingRequestTable::try_with_limits_and_budget(
             crate::base::pending_request_table::PendingRequestLimits {
-                max_count: 512,
+                max_count: max_pending_requests,
                 ..Default::default()
             },
             &process_budget,

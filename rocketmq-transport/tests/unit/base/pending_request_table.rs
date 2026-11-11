@@ -595,3 +595,136 @@ async fn responses_report_completion_lateness_and_foreign_ownership_separately()
     );
     drop(guard);
 }
+
+#[tokio::test(start_paused = true)]
+async fn waiting_registration_takes_capacity_released_by_a_completed_request() {
+    let table = PendingRequestTable::with_capacity(1);
+    let owner = table.new_owner();
+    let (first_sender, _first_receiver) = tokio::sync::oneshot::channel();
+    let first =
+        registered(table.register_for_owner(&owner, 1, RequestDeadline::from_timeout_millis(3_000), first_sender));
+
+    let waiting = table.register_for_owner_waiting(&owner, 2, RequestDeadline::from_timeout_millis(3_000), 0);
+    tokio::pin!(waiting);
+    tokio::select! {
+        biased;
+        _ = &mut waiting => panic!("a full table must make the registration wait"),
+        () = std::future::ready(()) => {}
+    }
+
+    assert!(first.complete(PendingRequestCompletion::SessionClosed));
+    let (registration, receiver) = waiting.await;
+    let second = registered(registration);
+    assert!(second.complete(PendingRequestCompletion::SessionClosed));
+    assert!(matches!(
+        receiver.await.unwrap(),
+        PendingRequestCompletion::SessionClosed
+    ));
+    assert_eq!(table.usage().rejected_count, 0);
+    assert_eq!(table.usage().count, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn waiting_registration_reports_saturation_once_at_its_deadline() {
+    let table = PendingRequestTable::with_capacity(1);
+    let owner = table.new_owner();
+    let (first_sender, _first_receiver) = tokio::sync::oneshot::channel();
+    let _first =
+        registered(table.register_for_owner(&owner, 1, RequestDeadline::from_timeout_millis(3_000), first_sender));
+
+    let started = tokio::time::Instant::now();
+    let (registration, _receiver) = table
+        .register_for_owner_waiting(&owner, 2, RequestDeadline::from_timeout_millis(500), 0)
+        .await;
+
+    assert!(matches!(registration, PendingRequestRegistrationResult::QueueSaturated));
+    assert!(started.elapsed() >= Duration::from_millis(500));
+    assert_eq!(
+        table.usage().rejected_count,
+        1,
+        "a wait counts one rejection, not one per retry"
+    );
+    assert_eq!(table.usage().count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn waiting_registrations_never_miss_a_release_under_contention() {
+    const CAPACITY: usize = 4;
+    const TASKS: i32 = 16;
+    const ROUNDS: i32 = 1_000;
+    let table = PendingRequestTable::with_capacity(CAPACITY);
+    let owner = table.new_owner();
+
+    let mut tasks = Vec::new();
+    for task in 0..TASKS {
+        let table = table.clone();
+        let owner = owner.clone();
+        tasks.push(tokio::spawn(async move {
+            for round in 0..ROUNDS {
+                let opaque = task * ROUNDS + round;
+                let (registration, _receiver) = table
+                    .register_for_owner_waiting(&owner, opaque, RequestDeadline::from_timeout_millis(30_000), 0)
+                    .await;
+                let guard = registered(registration);
+                tokio::task::yield_now().await;
+                assert!(guard.complete(PendingRequestCompletion::SessionClosed));
+            }
+        }));
+    }
+    for task in tasks {
+        task.await.expect("a waiting registration must not panic");
+    }
+
+    let usage = table.usage();
+    assert_eq!(usage.count, 0);
+    assert_eq!(
+        usage.rejected_count, 0,
+        "a lost wake-up would leave a waiter to reach its deadline"
+    );
+}
+
+#[tokio::test]
+async fn waiting_registration_retries_when_the_admission_rate_refills() {
+    const RATE: u64 = 20;
+    let table = PendingRequestTable::with_limits(PendingRequestLimits {
+        max_count: 1_000,
+        max_bytes: 1 << 20,
+        admission_rate_per_second: RATE,
+        max_request_age: Duration::from_secs(30),
+    });
+    let owner = table.new_owner();
+    let mut guards = Vec::new();
+    for opaque in 0..RATE as i32 {
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        guards.push(registered(table.register_for_owner(
+            &owner,
+            opaque,
+            RequestDeadline::from_timeout_millis(30_000),
+            sender,
+        )));
+    }
+
+    let (rejected_sender, _rejected_receiver) = tokio::sync::oneshot::channel();
+    assert!(
+        is_rejected(&table.register_for_owner(
+            &owner,
+            i32::MAX,
+            RequestDeadline::from_timeout_millis(30_000),
+            rejected_sender,
+        )),
+        "the rate must be exhausted before the waiting registration"
+    );
+
+    // No request completes, so only the rate refill can admit the next one.
+    let (registration, _receiver) = table
+        .register_for_owner_waiting(&owner, RATE as i32, RequestDeadline::from_timeout_millis(5_000), 0)
+        .await;
+
+    let _next = registered(registration);
+    assert_eq!(table.usage().count, RATE as usize + 1);
+    assert_eq!(
+        table.usage().rejected_count,
+        1,
+        "only the immediate registration was rejected"
+    );
+}

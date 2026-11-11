@@ -52,7 +52,12 @@ pub struct TransportClientBuilder<PR> {
     transport_security: Option<Arc<TransportSecurity>>,
     telemetry: TransportTelemetry,
     frame_limits: FrameLimits,
+    max_pending_requests: usize,
 }
+
+/// Requests one client may have awaiting a response, the default of the Java client's async
+/// semaphore.
+pub(crate) const DEFAULT_MAX_PENDING_REQUESTS: usize = 65_535;
 
 impl<PR> TransportClientBuilder<PR>
 where
@@ -85,6 +90,16 @@ where
         Ok(self)
     }
 
+    /// Sets how many requests may await a response at once, at least one; the default is
+    /// [`DEFAULT_MAX_PENDING_REQUESTS`].
+    ///
+    /// A request beyond the limit waits for a slot until its deadline, and is rejected as
+    /// saturated only then. Pending requests also stay within the table's retained-byte limit.
+    pub fn max_pending_requests(mut self, max_pending_requests: usize) -> Self {
+        self.max_pending_requests = max_pending_requests.max(1);
+        self
+    }
+
     /// Builds the transport client.
     ///
     /// # Errors
@@ -99,6 +114,7 @@ where
             self.service_context,
             self.telemetry,
             self.frame_limits,
+            self.max_pending_requests,
         )?;
         if let Some(transport_security) = self.transport_security {
             client = client.with_transport_security(transport_security);
@@ -210,6 +226,13 @@ where
         Ok(self)
     }
 
+    /// Sets how many requests may await a response at once; see
+    /// [`TransportClientBuilder::max_pending_requests`].
+    pub fn max_pending_requests(mut self, max_pending_requests: usize) -> Self {
+        self.transport = self.transport.max_pending_requests(max_pending_requests);
+        self
+    }
+
     /// Builds the nameserver-aware remoting client.
     ///
     /// # Errors
@@ -308,6 +331,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             transport_security: None,
             telemetry: TransportTelemetry::noop(),
             frame_limits: FrameLimits::java_compatibility(),
+            max_pending_requests: DEFAULT_MAX_PENDING_REQUESTS,
         }
     }
 }

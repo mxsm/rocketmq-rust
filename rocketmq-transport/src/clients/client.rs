@@ -715,16 +715,15 @@ impl<PR> TransportSession<PR> {
             ));
         }
 
-        let (tx, rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
         let opaque = request.opaque();
         let retained_bytes = estimate_wire_remoting_command_retained_bytes(&mut request);
-        let guard = match self.pending_requests.register_for_owner_with_bytes(
-            &self.pending_request_owner,
-            opaque,
-            deadline,
-            retained_bytes,
-            tx,
-        ) {
+        // A full table waits for capacity within the request deadline, like the async semaphore
+        // of the Java client, instead of failing a burst that only briefly exceeds the limit.
+        let (registration, rx) = self
+            .pending_requests
+            .register_for_owner_waiting(&self.pending_request_owner, opaque, deadline, retained_bytes)
+            .await;
+        let guard = match registration {
             PendingRequestRegistrationResult::Registered(guard) => guard,
             PendingRequestRegistrationResult::DeadlineExpired => {
                 return Ok(OutboundRequestResult::Rejected(
