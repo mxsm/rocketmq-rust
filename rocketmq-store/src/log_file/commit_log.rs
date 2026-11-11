@@ -68,7 +68,6 @@ use tracing::Instrument;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::append_message_callback::DefaultAppendMessageCallback;
-use crate::base::backend_ops::StoreHealthRecorder;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::flush_manager::FlushManager;
@@ -78,6 +77,7 @@ use crate::base::message_encoder_pool;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::message_store_engine::StoreHealthRecorder;
 use crate::base::put_message_context::PutMessageContext;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -3052,8 +3052,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::base::backend_ops::MessageStoreEngine;
     use crate::base::memory_lock_manager::MemoryLockCategory;
+    use crate::base::message_store_engine::MessageStoreEngine;
     use crate::base::message_store_reader::MessageStoreReader;
     use crate::config::message_store_config::LinuxMemoryLockMode;
     use crate::config::message_store_config::LinuxStorageProfile;

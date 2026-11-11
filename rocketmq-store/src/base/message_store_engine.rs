@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn immutable_commit_log_mutation_facade_is_absent() {
         let sources = [
-            include_str!("backend_ops.rs"),
+            include_str!("message_store_engine.rs"),
             include_str!("../message_store.rs"),
             include_str!("../message_store/local_file_message_store.rs"),
             include_str!("../message_store/rocksdb_message_store.rs"),

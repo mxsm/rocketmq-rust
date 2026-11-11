@@ -673,9 +673,9 @@ mod tests {
 
     use super::FeedEntry;
     use super::TimelineCompletionFeed;
-    use crate::base::backend_ops::MessageStoreEngine;
     use crate::base::commit_log_dispatcher::CommitLogDispatcher;
     use crate::base::dispatch_request::DispatchRequest;
+    use crate::base::message_store_engine::MessageStoreEngine;
     use crate::config::store_runtime_config::StoreRuntimeConfig;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     use crate::timer::timer_message_store::TIMER_TOPIC;

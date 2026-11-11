@@ -15,7 +15,6 @@
 pub mod allocate_mapped_file_service;
 pub mod append_hold;
 pub mod append_message_callback;
-pub(crate) mod backend_ops;
 pub mod commit_log_dispatcher;
 pub mod compaction_append_msg_callback;
 pub mod dispatch_request;
@@ -26,6 +25,7 @@ pub mod message_arriving_listener;
 pub mod message_encoder_pool;
 pub mod message_result;
 pub mod message_status_enum;
+pub(crate) mod message_store_engine;
 pub(crate) mod message_store_reader;
 pub mod put_message_context;
 pub mod query_message_request;
