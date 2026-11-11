@@ -15,7 +15,7 @@
 #![warn(rust_2018_idioms)]
 #![warn(clippy::all)]
 
-//! Backend-neutral contracts and ingress state for RocketMQ Proxy.
+//! Shared service contracts, protocol bindings, and ingress/session state for RocketMQ Proxy.
 
 pub mod config;
 pub mod context;
