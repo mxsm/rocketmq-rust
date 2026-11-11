@@ -59,8 +59,7 @@ use crate::consume_queue::mapped_file_queue::FlushProgress;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::write_lease::ControllerWriteLeaseState;
-use crate::hook::put_message_hook::BoxedPutMessageHook;
-use crate::hook::put_message_hook::PutMessageHook;
+use crate::hook::put_message_hook::ArcPutMessageHook;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::ArcConsumeQueue;
@@ -714,7 +713,7 @@ pub trait MessageStoreEngine: MessageStoreReader + Send + Sync + 'static {
     fn is_offset_aligned(&self, offset: i64) -> bool;
 
     /// Get put message hook list
-    fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>>;
+    fn get_put_message_hook_list(&self) -> Vec<ArcPutMessageHook>;
 
     /// Get last mapped file and return last file first Offset
     fn get_last_file_from_offset(&self) -> i64;
@@ -790,7 +789,7 @@ pub trait MessageStoreEngine: MessageStoreReader + Send + Sync + 'static {
     /// # Arguments
     ///
     /// * `put_message_hook` - The hook to set.
-    fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook);
+    fn set_put_message_hook(&mut self, put_message_hook: ArcPutMessageHook);
 
     /// Get the HA (High Availability) service associated with the message store.
     ///

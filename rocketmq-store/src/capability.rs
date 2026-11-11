@@ -208,7 +208,7 @@ pub trait BrokerStorePort: BrokerAdminStore + BrokerReplicationStore {
     }
 
     fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook) {
-        MessageStoreEngine::set_put_message_hook(self.message_store_mut(), put_message_hook);
+        MessageStoreEngine::set_put_message_hook(self.message_store_mut(), Arc::from(put_message_hook));
     }
 }
 

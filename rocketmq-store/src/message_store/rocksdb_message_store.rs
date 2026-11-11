@@ -70,8 +70,7 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
-use crate::hook::put_message_hook::BoxedPutMessageHook;
-use crate::hook::put_message_hook::PutMessageHook;
+use crate::hook::put_message_hook::ArcPutMessageHook;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
@@ -1045,7 +1044,7 @@ impl MessageStoreEngine for RocksDBMessageStore {
         self.local_file_store.is_offset_aligned(offset)
     }
 
-    fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>> {
+    fn get_put_message_hook_list(&self) -> Vec<ArcPutMessageHook> {
         self.local_file_store.get_put_message_hook_list()
     }
 
@@ -1121,7 +1120,7 @@ impl MessageStoreEngine for RocksDBMessageStore {
             .notify_message_arrive_if_necessary(dispatch_request);
     }
 
-    fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook) {
+    fn set_put_message_hook(&mut self, put_message_hook: ArcPutMessageHook) {
         self.local_file_store.set_put_message_hook(put_message_hook);
     }
 

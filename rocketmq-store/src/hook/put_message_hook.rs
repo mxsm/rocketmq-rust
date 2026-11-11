@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use rocketmq_model::common::message::MessageTrait;
 
 use crate::base::message_result::PutMessageResult;
@@ -34,5 +36,8 @@ pub trait PutMessageHook {
     fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult>;
 }
 
-/// Alias for `Arc<dyn PutMessageHook>`.
+/// Alias for a boxed hook, used by the public `BrokerStorePort` adapter.
 pub type BoxedPutMessageHook = Box<dyn PutMessageHook + Send + Sync + 'static>;
+
+/// Alias for a shared hook handle, used by the internal engine registration and snapshots.
+pub(crate) type ArcPutMessageHook = Arc<dyn PutMessageHook + Send + Sync + 'static>;

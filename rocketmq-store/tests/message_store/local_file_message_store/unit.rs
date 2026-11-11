@@ -4071,7 +4071,7 @@ fn get_put_message_hook_list_returns_registered_hooks() {
 
     let temp_dir = tempdir().unwrap();
     let mut store = new_test_store(&temp_dir);
-    store.set_put_message_hook(Box::new(TestHook));
+    <LocalFileMessageStore as crate::capability::BrokerStorePort>::set_put_message_hook(&mut store, Box::new(TestHook));
 
     let hooks = store.get_put_message_hook_list();
 

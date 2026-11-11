@@ -5691,9 +5691,12 @@ mod tests {
         }
         store.reput_once().await;
         let busy = Arc::new(AtomicBool::new(true));
-        store.set_put_message_hook(Box::new(RejectBusyBodies {
-            busy: Arc::clone(&busy),
-        }));
+        MessageStoreEngine::set_put_message_hook(
+            &mut store,
+            Arc::new(RejectBusyBodies {
+                busy: Arc::clone(&busy),
+            }),
+        );
         timer_message_store.set_should_running_dequeue(true);
 
         // The three sources are indexed and their writes start together. Only the first one

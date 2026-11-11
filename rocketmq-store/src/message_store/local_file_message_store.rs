@@ -144,7 +144,7 @@ use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
-use crate::hook::put_message_hook::BoxedPutMessageHook;
+use crate::hook::put_message_hook::ArcPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
 use crate::index::index_dispatch::CommitLogDispatcherBuildIndex;
 use crate::index::index_service::IndexService;
@@ -2388,12 +2388,8 @@ impl MessageStoreEngine for LocalFileMessageStore {
             .success
     }
 
-    fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>> {
-        self.put_message_hook_list
-            .snapshot()
-            .into_iter()
-            .map(|hook| hook as Arc<dyn PutMessageHook>)
-            .collect()
+    fn get_put_message_hook_list(&self) -> Vec<ArcPutMessageHook> {
+        self.put_message_hook_list.snapshot()
     }
 
     fn get_last_file_from_offset(&self) -> i64 {
@@ -2495,8 +2491,8 @@ impl MessageStoreEngine for LocalFileMessageStore {
         }
     }
 
-    fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook) {
-        self.put_message_hook_list.push(Arc::from(put_message_hook));
+    fn set_put_message_hook(&mut self, put_message_hook: ArcPutMessageHook) {
+        self.put_message_hook_list.push(put_message_hook);
     }
 
     fn get_ha_service(&self) -> Option<&GeneralHAService> {

@@ -66,8 +66,7 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
-use crate::hook::put_message_hook::BoxedPutMessageHook;
-use crate::hook::put_message_hook::PutMessageHook;
+use crate::hook::put_message_hook::ArcPutMessageHook;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
@@ -766,7 +765,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, is_offset_aligned(offset))
     }
 
-    fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>> {
+    fn get_put_message_hook_list(&self) -> Vec<ArcPutMessageHook> {
         delegate_store!(self, get_put_message_hook_list())
     }
 
@@ -842,7 +841,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, notify_message_arrive_if_necessary(dispatch_request));
     }
 
-    fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook) {
+    fn set_put_message_hook(&mut self, put_message_hook: ArcPutMessageHook) {
         delegate_store!(self, set_put_message_hook(put_message_hook));
     }
 
