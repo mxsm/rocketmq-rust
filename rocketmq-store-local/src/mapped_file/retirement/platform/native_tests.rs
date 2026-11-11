@@ -194,7 +194,7 @@ fn durable_creation_refuses_an_existing_canonical_name_before_creating_temp() {
         .root
         .create_incarnation_temp(&allocated)
         .expect_err("canonical collision must fail closed");
-    assert_eq!(error.stage(), super::IncarnationCreationStage::VerifyNames);
+    assert_eq!(error.stage(), super::IncarnationCreationStage::VerifyIncarnationBinding);
     assert_eq!(
         std::fs::read(&canonical_on_disk).expect("read canonical collision"),
         b"existing incarnation"
@@ -227,7 +227,7 @@ fn durable_creation_rejects_a_mismatched_binding_before_namespace_publish() {
         .root
         .publish_bound_incarnation(created, &bound)
         .expect_err("mismatched binding must fail before rename");
-    assert_eq!(error.stage(), super::IncarnationCreationStage::VerifyNames);
+    assert_eq!(error.stage(), super::IncarnationCreationStage::VerifyIncarnationBinding);
     assert!(!canonical_on_disk.exists());
     assert!(create_on_disk.is_file());
 }

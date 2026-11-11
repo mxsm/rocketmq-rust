@@ -244,14 +244,18 @@ impl NamespaceRoot {
         let (create_parent, create_name) = split_parent(allocated.create_file_path().as_str());
         if parent_path != create_parent {
             return Err(IncarnationCreationFailure::policy(
-                IncarnationCreationStage::VerifyNames,
+                IncarnationCreationStage::VerifyIncarnationBinding,
                 "canonical and create-file paths have different parents",
             ));
         }
         let parent = open_or_create_parent(&self.file, parent_path)
             .map_err(|error| IncarnationCreationFailure::namespace(IncarnationCreationStage::OpenParent, error))?;
-        require_missing(&parent, canonical_name, IncarnationCreationStage::VerifyNames)?;
-        require_missing(&parent, create_name, IncarnationCreationStage::VerifyNames)?;
+        require_missing(
+            &parent,
+            canonical_name,
+            IncarnationCreationStage::VerifyIncarnationBinding,
+        )?;
+        require_missing(&parent, create_name, IncarnationCreationStage::VerifyIncarnationBinding)?;
         let file = create_relative(&parent, create_name)?;
         let attributes = query_attributes(&file, NamespaceOperation::VerifyCanonical).map_err(|io_failure| {
             IncarnationCreationFailure::namespace(
@@ -294,7 +298,7 @@ impl NamespaceRoot {
     ) -> Result<(File, PhysicalFileKey), IncarnationCreationFailure> {
         if bound.physical_key() != created.physical_key || bound.expected_length() != created.expected_length {
             return Err(IncarnationCreationFailure::policy(
-                IncarnationCreationStage::VerifyNames,
+                IncarnationCreationStage::VerifyIncarnationBinding,
                 "BindIncarnation differs from the created file",
             ));
         }
@@ -305,7 +309,7 @@ impl NamespaceRoot {
             || created.create_name != bound_create_name
         {
             return Err(IncarnationCreationFailure::policy(
-                IncarnationCreationStage::VerifyNames,
+                IncarnationCreationStage::VerifyIncarnationBinding,
                 "BindIncarnation paths differ from the created file",
             ));
         }
