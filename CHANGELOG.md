@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **refactor(dashboard):** Shorten the Web Dashboard's storage-unavailable HTTP message to `Storage is unavailable`; the `STORAGE_UNAVAILABLE` response code and HTTP 503 status are unchanged ([#12353](https://github.com/mxsm/rocketmq-rust/issues/12353)).
 
+- **refactor(observability)!:** Replace public `semantic::labels::BACKEND` with `STORAGE_ENGINE` and emit `storage_engine` on all five Dashboard storage metrics. Metric names and engine values are unchanged. Update Rust imports and monitoring selectors, grouping/vector matching, recording/alert rules, and Grafana variables/legends; stored series retain old labels and mixed-version rollouts expose both schemas ([#12381](https://github.com/mxsm/rocketmq-rust/issues/12381)).
+
 - **refactor(controller)!:** Remove the `storageBackend` compatibility alias. Before upgrading, use `storageEngineType` in standalone/embedded startup files, runtime property updates, blacklist entries, and `services.controller` Helm overrides. Old-key startup files, updates, and Helm overrides are rejected; persisted data is unchanged ([#12333](https://github.com/mxsm/rocketmq-rust/issues/12333)).
 
 - **refactor(store):** Remove the unused property-free message encoder, its length helper, multi-dispatch predicate, retained configuration field, and dedicated tests ([#12314](https://github.com/mxsm/rocketmq-rust/issues/12314)).

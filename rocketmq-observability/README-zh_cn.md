@@ -150,6 +150,15 @@ Dashboard 存储指标标签枚举为 `DashboardStorageEngine`，同时通过
 名称已移除，不提供弃用别名或兼容包装；引用旧枚举的下游导入、类型标注与
 变体限定需要源码更新，指向旧枚举 Rustdoc 页面的外部链接也随之改变。
 
+Dashboard 存储指标使用 `semantic::labels::STORAGE_ENGINE`（`storage_engine`），
+固定值为 `file`、`sqlite`、`mysql` 和 `postgres`。公开常量 `BACKEND` 已移除，
+外部 Rust 导入需要改用 `STORAGE_ENGINE`；五个 `rocketmq_dashboard_storage_*`
+指标的名称和引擎值保持不变。
+
+这些指标的监控消费者需要更新旧 `backend` 标签选择器、分组/聚合与向量匹配标签、
+记录/告警规则，以及 Grafana 变量/图例。已存储的时间序列保留原有标签，滚动升级期间
+新旧实例也会暴露不同的标签结构；查询和规则需要考虑目标数据时间窗口与部署状态。
+
 ## 源码与验证
 
 参见[公开导出](src/lib.rs)、[启动与关闭](src/logging.rs)、

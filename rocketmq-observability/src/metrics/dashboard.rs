@@ -250,7 +250,7 @@ impl DashboardStorageMetrics {
         self.operations_total.add(
             1,
             &[
-                opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
+                opentelemetry::KeyValue::new(crate::semantic::labels::STORAGE_ENGINE, storage_engine.as_str()),
                 opentelemetry::KeyValue::new("operation", "status"),
                 opentelemetry::KeyValue::new("result", result.as_str()),
             ],
@@ -266,7 +266,7 @@ impl DashboardStorageMetrics {
         elapsed: std::time::Duration,
     ) {
         let labels = [
-            opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
+            opentelemetry::KeyValue::new(crate::semantic::labels::STORAGE_ENGINE, storage_engine.as_str()),
             opentelemetry::KeyValue::new("operation", operation.as_str()),
             opentelemetry::KeyValue::new("result", result.as_str()),
         ];
@@ -278,7 +278,7 @@ impl DashboardStorageMetrics {
             self.operation_errors_total.add(
                 1,
                 &[
-                    opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
+                    opentelemetry::KeyValue::new(crate::semantic::labels::STORAGE_ENGINE, storage_engine.as_str()),
                     opentelemetry::KeyValue::new("operation", operation.as_str()),
                     opentelemetry::KeyValue::new("error_kind", failure.as_str()),
                 ],
@@ -293,7 +293,10 @@ impl DashboardStorageMetrics {
         pool_size: Option<u32>,
         idle_connections: Option<usize>,
     ) {
-        let storage_engine_labels = [opentelemetry::KeyValue::new("backend", storage_engine.as_str())];
+        let storage_engine_labels = [opentelemetry::KeyValue::new(
+            crate::semantic::labels::STORAGE_ENGINE,
+            storage_engine.as_str(),
+        )];
         if let Some(available_bytes) = available_bytes {
             self.capacity_bytes.record(available_bytes, &storage_engine_labels);
         }
@@ -301,7 +304,7 @@ impl DashboardStorageMetrics {
             self.pool_connections.record(
                 u64::from(pool_size),
                 &[
-                    opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
+                    opentelemetry::KeyValue::new(crate::semantic::labels::STORAGE_ENGINE, storage_engine.as_str()),
                     opentelemetry::KeyValue::new("state", "total"),
                 ],
             );
@@ -310,7 +313,7 @@ impl DashboardStorageMetrics {
             self.pool_connections.record(
                 u64::try_from(idle_connections).unwrap_or(u64::MAX),
                 &[
-                    opentelemetry::KeyValue::new("backend", storage_engine.as_str()),
+                    opentelemetry::KeyValue::new(crate::semantic::labels::STORAGE_ENGINE, storage_engine.as_str()),
                     opentelemetry::KeyValue::new("state", "idle"),
                 ],
             );
@@ -340,5 +343,137 @@ mod tests {
             std::time::Duration::from_millis(1),
         );
         recorder.record_state(DashboardStorageEngine::File, Some(1), None, None);
+    }
+
+    #[cfg(feature = "prometheus")]
+    #[test]
+    fn dashboard_storage_metrics_export_storage_engine_labels() {
+        use crate::semantic::metrics::DASHBOARD_STORAGE_CAPACITY_BYTES;
+        use crate::semantic::metrics::DASHBOARD_STORAGE_OPERATIONS_TOTAL;
+        use crate::semantic::metrics::DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS;
+        use crate::semantic::metrics::DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL;
+        use crate::semantic::metrics::DASHBOARD_STORAGE_POOL_CONNECTIONS;
+
+        let mut config = crate::ObservabilityConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        config.metrics.enabled = true;
+        let (provider, registry) = crate::exporter::prometheus::init_prometheus_metrics(&config)
+            .unwrap()
+            .into_parts();
+        let handle = crate::TelemetryHandle::active(&config, Some(&provider));
+        let recorder = DashboardStorageMetricsRecorder::from_handle(&handle);
+        let engines = [
+            (DashboardStorageEngine::File, "file"),
+            (DashboardStorageEngine::Sqlite, "sqlite"),
+            (DashboardStorageEngine::MySql, "mysql"),
+            (DashboardStorageEngine::Postgres, "postgres"),
+        ];
+        for (engine, _) in engines {
+            recorder.record_status(engine, DashboardStorageResult::Available);
+            recorder.record_operation(
+                engine,
+                DashboardStorageOperation::PersistedMutation,
+                DashboardStorageOperationResult::Success,
+                None,
+                std::time::Duration::from_millis(7),
+            );
+            recorder.record_operation(
+                engine,
+                DashboardStorageOperation::HistoryCollection,
+                DashboardStorageOperationResult::Failure,
+                Some(DashboardStorageFailureLabel::Timeout),
+                std::time::Duration::from_millis(11),
+            );
+            recorder.record_state(engine, Some(4096), Some(4), Some(2));
+        }
+
+        let families = registry.gather();
+        for (name, count) in [
+            (DASHBOARD_STORAGE_OPERATIONS_TOTAL, 12),
+            (DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS, 8),
+            (DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL, 4),
+            (DASHBOARD_STORAGE_CAPACITY_BYTES, 4),
+            (DASHBOARD_STORAGE_POOL_CONNECTIONS, 8),
+        ] {
+            let family = families.iter().find(|family| family.name() == name).unwrap();
+            assert_eq!(family.get_metric().len(), count, "{name}");
+            for metric in family.get_metric() {
+                let labels = metric.get_label();
+                assert!(labels.iter().all(|label| label.name() != "backend"), "{name}");
+                let engine_labels: Vec<_> = labels.iter().filter(|label| label.name() == "storage_engine").collect();
+                assert_eq!(engine_labels.len(), 1, "{name}");
+                assert!(engines.iter().any(|(_, value)| *value == engine_labels[0].value()));
+            }
+        }
+
+        for (_, engine) in engines {
+            let sample = |name: &str, expected: &[(&str, &str)]| {
+                let family = families.iter().find(|family| family.name() == name).unwrap();
+                let matches: Vec<_> = family
+                    .get_metric()
+                    .iter()
+                    .filter(|metric| {
+                        std::iter::once(("storage_engine", engine))
+                            .chain(expected.iter().copied())
+                            .all(|(key, value)| {
+                                metric
+                                    .get_label()
+                                    .iter()
+                                    .any(|label| label.name() == key && label.value() == value)
+                            })
+                    })
+                    .collect();
+                assert_eq!(matches.len(), 1, "{name}: {engine}, {expected:?}");
+                matches[0]
+            };
+            assert_eq!(
+                sample(
+                    DASHBOARD_STORAGE_OPERATIONS_TOTAL,
+                    &[("operation", "status"), ("result", "available")]
+                )
+                .get_counter()
+                .get_value(),
+                1.0
+            );
+            for (operation, result, elapsed) in [
+                ("persisted_mutation", "success", 7.0),
+                ("history_collection", "failure", 11.0),
+            ] {
+                let labels = [("operation", operation), ("result", result)];
+                assert_eq!(
+                    sample(DASHBOARD_STORAGE_OPERATIONS_TOTAL, &labels)
+                        .get_counter()
+                        .get_value(),
+                    1.0
+                );
+                let histogram = sample(DASHBOARD_STORAGE_OPERATION_DURATION_MILLISECONDS, &labels).get_histogram();
+                assert_eq!(histogram.get_sample_count(), 1);
+                assert_eq!(histogram.get_sample_sum(), elapsed);
+            }
+            assert_eq!(
+                sample(
+                    DASHBOARD_STORAGE_OPERATION_ERRORS_TOTAL,
+                    &[("operation", "history_collection"), ("error_kind", "timeout")]
+                )
+                .get_counter()
+                .get_value(),
+                1.0
+            );
+            assert_eq!(
+                sample(DASHBOARD_STORAGE_CAPACITY_BYTES, &[]).get_gauge().get_value(),
+                4096.0
+            );
+            for (state, count) in [("total", 4.0), ("idle", 2.0)] {
+                assert_eq!(
+                    sample(DASHBOARD_STORAGE_POOL_CONNECTIONS, &[("state", state)])
+                        .get_gauge()
+                        .get_value(),
+                    count
+                );
+            }
+        }
+        provider.shutdown().unwrap();
     }
 }

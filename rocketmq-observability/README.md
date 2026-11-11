@@ -167,6 +167,17 @@ wrapper, so downstream imports, type annotations and variant qualifications refe
 the old enum require source updates, and external links to the old enum's Rustdoc page
 also change.
 
+Dashboard storage metrics use `semantic::labels::STORAGE_ENGINE` (`storage_engine`),
+with fixed values `file`, `sqlite`, `mysql`, and `postgres`. The public `BACKEND`
+constant is removed; external Rust imports must use `STORAGE_ENGINE`. The five
+`rocketmq_dashboard_storage_*` metric names and engine values are unchanged.
+
+Monitoring consumers of these metrics must update old `backend` label selectors,
+grouping/aggregation and vector-matching labels, recording/alert rules, and Grafana
+variables/legends. Existing stored time series retain their original labels, and
+old/new instances expose different label schemas during rollout. Queries and rules
+must account for the intended data window and deployment state.
+
 ## Owned runtime diagnostics
 
 `RuntimeDiagnosticsService` owns its sampler and optional authenticated listener

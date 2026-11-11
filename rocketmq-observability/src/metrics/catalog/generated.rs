@@ -359,23 +359,23 @@ const METRIC_LABELS_56: &[&str] = &[
 ];
 
 const METRIC_LABELS_57: &[&str] = &[
-    labels::BACKEND,
+    labels::STORAGE_ENGINE,
     labels::OPERATION,
     labels::RESULT,
 ];
 
 const METRIC_LABELS_58: &[&str] = &[
-    labels::BACKEND,
+    labels::STORAGE_ENGINE,
     labels::OPERATION,
     labels::ERROR_KIND,
 ];
 
 const METRIC_LABELS_59: &[&str] = &[
-    labels::BACKEND,
+    labels::STORAGE_ENGINE,
 ];
 
 const METRIC_LABELS_60: &[&str] = &[
-    labels::BACKEND,
+    labels::STORAGE_ENGINE,
     labels::STATE,
 ];
 
