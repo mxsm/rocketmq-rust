@@ -337,15 +337,6 @@ pub(crate) fn spawn_client_task_with_context(
     })
 }
 
-pub(crate) fn spawn_background_client_task_with_context(
-    context: &ChildServiceContext,
-    task_name: &'static str,
-    task: ClientTaskFuture,
-) -> io::Result<()> {
-    drop(spawn_client_task_with_context(context, task_name, task)?);
-    Ok(())
-}
-
 pub(crate) struct ClientTrackedTaskHandle {
     task_group: TaskGroup,
     task_id: TaskId,
