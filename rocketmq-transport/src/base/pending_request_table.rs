@@ -151,8 +151,67 @@ struct PendingRequest {
     owner: PendingRequestOwner,
     created_at: Instant,
     deadline: RequestDeadline,
-    _permit: ResourcePermit,
+    _permit: CapacityPermit,
     completion: PendingCompletion,
+}
+
+/// Wakes registrations that wait for table capacity.
+///
+/// A release signals only while a registration waits, so the unsaturated path pays one atomic
+/// load per release. Both sides follow the store-fence-load pattern: a waiter counts itself
+/// before it retries, and a release frees its capacity before it reads the count. Either the
+/// retry sees the freed capacity or the release sees the waiter, so a wake-up is never lost.
+#[derive(Default)]
+struct CapacitySignal {
+    notify: tokio::sync::Notify,
+    waiters: AtomicUsize,
+}
+
+impl CapacitySignal {
+    fn released(&self) {
+        std::sync::atomic::fence(Ordering::SeqCst);
+        if self.waiters.load(Ordering::SeqCst) > 0 {
+            self.notify.notify_one();
+        }
+    }
+}
+
+/// Counts one registration as waiting for capacity while it is alive.
+struct CapacityWaiter<'a> {
+    signal: &'a CapacitySignal,
+}
+
+impl<'a> CapacityWaiter<'a> {
+    fn enter(signal: &'a CapacitySignal) -> Self {
+        signal.waiters.fetch_add(1, Ordering::SeqCst);
+        std::sync::atomic::fence(Ordering::SeqCst);
+        Self { signal }
+    }
+}
+
+impl Drop for CapacityWaiter<'_> {
+    fn drop(&mut self) {
+        self.signal.waiters.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A pending request's budget permit; it wakes one capacity waiter once the permit is released.
+struct CapacityPermit {
+    permit: Option<ResourcePermit>,
+    signal: Arc<CapacitySignal>,
+}
+
+impl Drop for CapacityPermit {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        self.signal.released();
+    }
+}
+
+/// One registration attempt: a final result, or a budget saturated in `BudgetDimension`.
+enum RegistrationAttempt {
+    Done(PendingRequestRegistrationResult),
+    Saturated(BudgetDimension),
 }
 
 enum PendingCompletion {
@@ -177,6 +236,7 @@ struct PendingRequestTableInner {
     #[cfg(test)]
     default_owner: PendingRequestOwner,
     budget: ResourceBudget,
+    capacity: Arc<CapacitySignal>,
     max_request_age: Duration,
     rejected_count: AtomicUsize,
     rejected_bytes: AtomicUsize,
@@ -300,6 +360,8 @@ impl Default for PendingRequestTable {
 impl PendingRequestTable {
     const DEFAULT_CAPACITY: usize = 65_536;
     const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
+    const INITIAL_ENTRY_CAPACITY: usize = 1_024;
+    const RATE_RETRY_INTERVAL: Duration = Duration::from_millis(1);
 
     pub fn new() -> Self {
         Self::with_limits(PendingRequestLimits::default())
@@ -353,12 +415,15 @@ impl PendingRequestTable {
         Ok(Self {
             inner: Arc::new(PendingRequestTableInner {
                 table_id,
-                entries: DashMap::with_capacity(max_count),
+                // A table sized for tens of thousands of requests usually holds a few; the map
+                // grows on demand instead of reserving every slot up front.
+                entries: DashMap::with_capacity(max_count.min(Self::INITIAL_ENTRY_CAPACITY)),
                 next_owner: AtomicU64::new(2),
                 next_reservation: AtomicU64::new(1),
                 #[cfg(test)]
                 default_owner: PendingRequestOwner::new(table_id, 1),
                 budget,
+                capacity: Arc::new(CapacitySignal::default()),
                 max_request_age,
                 rejected_count: AtomicUsize::new(0),
                 rejected_bytes: AtomicUsize::new(0),
@@ -425,31 +490,97 @@ impl PendingRequestTable {
         retained_bytes: usize,
         sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
     ) -> PendingRequestRegistrationResult {
+        match self.try_register(owner, opaque, deadline, retained_bytes, sender) {
+            RegistrationAttempt::Done(result) => result,
+            RegistrationAttempt::Saturated(dimension) => self.reject_saturated(dimension),
+        }
+    }
+
+    /// Registers like [`Self::register_for_owner_with_bytes`], but a full table makes the call
+    /// wait for a pending request to release capacity, until `deadline`.
+    ///
+    /// A wait that reaches the deadline reports
+    /// [`PendingRequestRegistrationResult::QueueSaturated`], the result an immediate rejection
+    /// has, and counts one rejection. The receiver belongs to the returned registration.
+    pub(crate) async fn register_for_owner_waiting(
+        &self,
+        owner: &PendingRequestOwner,
+        opaque: i32,
+        deadline: RequestDeadline,
+        retained_bytes: usize,
+    ) -> (
+        PendingRequestRegistrationResult,
+        tokio::sync::oneshot::Receiver<PendingRequestCompletion>,
+    ) {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        if let RegistrationAttempt::Done(result) = self.try_register(owner, opaque, deadline, retained_bytes, sender) {
+            return (result, receiver);
+        }
+        let signal = Arc::clone(&self.inner.capacity);
+        loop {
+            let released = signal.notify.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            let _waiter = CapacityWaiter::enter(&signal);
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let dimension = match self.try_register(owner, opaque, deadline, retained_bytes, sender) {
+                RegistrationAttempt::Done(result) => return (result, receiver),
+                RegistrationAttempt::Saturated(dimension) => dimension,
+            };
+            // The admission rate refills with time rather than on a release, so a rate-limited
+            // registration also retries after a short pause.
+            let wait = async {
+                match dimension {
+                    BudgetDimension::Rate => {
+                        let _ = tokio::time::timeout(Self::RATE_RETRY_INTERVAL, released).await;
+                    }
+                    BudgetDimension::Count | BudgetDimension::Bytes => released.await,
+                }
+            };
+            if deadline.timeout(wait).await.is_err() {
+                return (self.reject_saturated(dimension), receiver);
+            }
+        }
+    }
+
+    fn reject_saturated(&self, dimension: BudgetDimension) -> PendingRequestRegistrationResult {
+        match dimension {
+            BudgetDimension::Bytes => self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed),
+            BudgetDimension::Count | BudgetDimension::Rate => self.inner.rejected_count.fetch_add(1, Ordering::Relaxed),
+        };
+        PendingRequestRegistrationResult::QueueSaturated
+    }
+
+    fn try_register(
+        &self,
+        owner: &PendingRequestOwner,
+        opaque: i32,
+        deadline: RequestDeadline,
+        retained_bytes: usize,
+        sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
+    ) -> RegistrationAttempt {
         let deadline = deadline.capped(self.inner.max_request_age);
         if deadline.is_expired() {
-            return PendingRequestRegistrationResult::DeadlineExpired;
+            return RegistrationAttempt::Done(PendingRequestRegistrationResult::DeadlineExpired);
         }
         if owner.table_id != self.inner.table_id {
-            return PendingRequestRegistrationResult::OperationalFailure(connection_failed_without_source(
-                TransportStage::Closed,
+            return RegistrationAttempt::Done(PendingRequestRegistrationResult::OperationalFailure(
+                connection_failed_without_source(TransportStage::Closed),
             ));
         }
         if !owner.accepting.load(Ordering::Acquire) {
-            return PendingRequestRegistrationResult::SessionClosed;
+            return RegistrationAttempt::Done(PendingRequestRegistrationResult::SessionClosed);
         }
         let permit = match self.inner.budget.try_acquire_data(retained_bytes) {
-            Ok(permit) => permit,
+            Ok(permit) => CapacityPermit {
+                permit: Some(permit),
+                signal: Arc::clone(&self.inner.capacity),
+            },
             Err(error) => {
-                match error.dimension() {
-                    Some(BudgetDimension::Bytes) => {
-                        self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Some(BudgetDimension::Count | BudgetDimension::Rate) => {
-                        self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
-                    }
-                    None => return PendingRequestRegistrationResult::SessionClosed,
-                }
-                return PendingRequestRegistrationResult::QueueSaturated;
+                return match error.dimension() {
+                    Some(dimension) => RegistrationAttempt::Saturated(dimension),
+                    None => RegistrationAttempt::Done(PendingRequestRegistrationResult::SessionClosed),
+                };
             }
         };
         let reservation = self.inner.next_reservation.fetch_add(1, Ordering::Relaxed);
@@ -488,9 +619,9 @@ impl PendingRequestTable {
             if let Some(pending) = self.take_token(token) {
                 pending.complete(PendingRequestCompletion::SessionClosed);
             }
-            return PendingRequestRegistrationResult::SessionClosed;
+            return RegistrationAttempt::Done(PendingRequestRegistrationResult::SessionClosed);
         }
-        result
+        RegistrationAttempt::Done(result)
     }
 
     #[cfg(test)]
