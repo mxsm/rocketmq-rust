@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Backend-neutral contracts for the legacy Remoting ingress.
+//! Request classification and handler contracts for the legacy Remoting ingress.
 //!
-//! Wire decoding and TCP lifecycle remain facade responsibilities. This ingress module
-//! owns the stable request classification and request handler used after a facade
-//! has decoded a canonical protocol command.
+//! This ingress module owns the stable request classification and the request handler
+//! contract used after a facade has decoded a canonical protocol command. Classification
+//! selects a canonical operation; it does not execute the request. The application facade
+//! owns wire decoding, the TCP lifecycle, and the actual dispatch of decoded commands.
 
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
