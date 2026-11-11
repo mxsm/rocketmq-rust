@@ -6,7 +6,7 @@ Backend-neutral service contracts, protocol bindings, and ingress/session state 
 
 - [`contracts`](src/contracts.rs) defines route, metadata, message, consumer, assignment, and transaction service ports.
 - [`processor`](src/processor.rs), [`message`](src/message.rs), and [`context`](src/context.rs) define processing inputs, messages, endpoints, and authenticated/TLS context.
-- [`ingress`](src/ingress) includes remoting request classification, dispatch, backend contracts, and status mapping.
+- [`ingress`](src/ingress) provides Remoting request classification, handler contracts, and status mapping.
 - [`session`](src/session.rs), [`receipt_renewal`](src/receipt_renewal.rs), and [`drain`](src/drain.rs) track sessions, receipt ownership/renewal, and bounded draining.
 - [`settings`](src/settings.rs), [`config`](src/config.rs), and [`status`](src/status.rs) define configuration and client-visible settings/status values.
 
