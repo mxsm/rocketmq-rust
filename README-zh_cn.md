@@ -1,6 +1,6 @@
 <p align="center">
     <img src="resources/RocketMQ-Rust.png" width="30%" height="auto" alt="RocketMQ-Rust 标志"/>
-    <img src="resources/logo.png" width="30%" height="auto" alt="RocketMQ-Rust 字标"/>
+    <img src="resources/logo-animated-transparent.gif" width="50%" height="auto" alt="RocketMQ-Rust 动态字标"/>
 </p>
 
 <div align="center">

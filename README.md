@@ -1,6 +1,6 @@
 <p align="center">
     <img src="resources/RocketMQ-Rust.png" width="30%" height="auto" alt="RocketMQ-Rust logo"/>
-    <img src="resources/logo.png" width="30%" height="auto" alt="RocketMQ-Rust wordmark"/>
+    <img src="resources/logo-animated-transparent.gif" width="30%" height="auto" alt="RocketMQ-Rust animated wordmark"/>
 </p>
 
 <div align="center">
