@@ -44,7 +44,10 @@ pub trait ProxyRemotingRequestHandler: Send + Sync {
     /// without introducing a reverse response-to-command adapter.
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, Self::Response>;
 
-    /// Drains backend-owned work before its service task group is closed.
+    /// Drains work owned by this handler within the supplied shutdown deadline.
+    ///
+    /// The default implementation is a no-op that returns success. The application
+    /// invokes this hook before shutting down the dependency service task group.
     fn shutdown_until(&self, _deadline: ShutdownDeadline) -> ProxyServiceFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
