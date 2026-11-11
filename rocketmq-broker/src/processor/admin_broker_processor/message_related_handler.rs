@@ -237,7 +237,9 @@ impl MessageRelatedHandler {
             }
         }
 
-        let Some(iter) = consume_queue.iterate_from(request_header.index) else {
+        // The count bounds the read: an unbounded one copies the rest of the active ConsumeQueue
+        // file for a query of a few units.
+        let Some(iter) = consume_queue.iterate_from_with_count(request_header.index, request_header.count) else {
             return Ok(Some(response.set_remark(format!(
                 "Index {} of {}@{} is not exist!",
                 request_header.index, request_header.queue_id, request_header.topic
@@ -705,6 +707,83 @@ mod tests {
         assert_eq!(body.filter_data, Some(CheetahString::from_static_str("null")));
         assert_eq!(body.subscription_data.expect("subscription data").topic, "topic-a");
         assert_eq!(body.queue_data.expect("queue data").len(), 1);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn query_consume_queue_returns_count_units_from_the_index() {
+        let mut runtime = new_test_runtime("query-consume-queue-window").await;
+        runtime
+            .start_message_store_for_test()
+            .await
+            .expect("start message store");
+        let admin = runtime.admin_runtime_for_test();
+        let topic = CheetahString::from_static_str("topic-window");
+        let _ = admin
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-window", 1, 1), 0);
+        let consume_queue = admin
+            .message_store()
+            .unwrap()
+            .find_consume_queue(&topic, 0)
+            .expect("consume queue should exist");
+        for queue_offset in 0_i64..4 {
+            consume_queue
+                .write()
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset: 128 * (queue_offset + 1),
+                    msg_size: 64,
+                    store_timestamp: 1,
+                    consume_queue_offset: queue_offset,
+                    success: true,
+                    ..Default::default()
+                });
+        }
+
+        let handler = MessageRelatedHandler::new();
+        let query = |index: i64, count: i32| {
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::QueryConsumeQueue,
+                QueryConsumeQueueRequestHeader {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    index,
+                    count,
+                    consumer_group: None,
+                    topic_request_header: None,
+                },
+            );
+            request.make_custom_header_to_net();
+            request
+        };
+        let mut physic_offsets = Vec::new();
+        for (index, count) in [(1, 2), (2, 10), (0, 0)] {
+            let mut request = query(index, count);
+            let mut response = handler
+                .query_consume_queue(&admin, RequestCode::QueryConsumeQueue, &mut request)
+                .await
+                .expect("query consume queue should succeed")
+                .expect("query consume queue should return response");
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+            let body = QueryConsumeQueueResponseBody::decode(
+                response
+                    .take_body()
+                    .expect("query consume queue response should contain body")
+                    .as_ref(),
+            )
+            .expect("decode query consume queue body");
+            physic_offsets.push(
+                body.queue_data
+                    .expect("queue data")
+                    .iter()
+                    .map(|data| data.physic_offset)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(physic_offsets, vec![vec![256, 384], vec![384, 512], vec![]]);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
