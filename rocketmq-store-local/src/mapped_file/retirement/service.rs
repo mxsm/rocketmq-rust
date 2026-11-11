@@ -250,21 +250,22 @@ struct ManagedLifecycleRuntimeInner {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Controls which requests may enter the managed lifecycle service.
 enum RuntimeAdmission {
-    Running,
-    Shutdown,
-    StoreDestroy,
+    Open,
+    ClosedForShutdown,
+    StoreDestroyOnly,
 }
 
 impl RuntimeAdmission {
     fn enter_store_destroy(&mut self) -> bool {
         match self {
-            Self::Running => false,
-            Self::Shutdown => {
-                *self = Self::StoreDestroy;
+            Self::Open => false,
+            Self::ClosedForShutdown => {
+                *self = Self::StoreDestroyOnly;
                 true
             }
-            Self::StoreDestroy => true,
+            Self::StoreDestroyOnly => true,
         }
     }
 }
@@ -299,7 +300,7 @@ impl ManagedLifecycleRuntime {
             inner: Arc::new(Mutex::new(ManagedLifecycleRuntimeInner {
                 _session: session,
                 core,
-                admission: RuntimeAdmission::Running,
+                admission: RuntimeAdmission::Open,
                 queue_generations: Vec::new(),
             })),
         }
@@ -352,13 +353,13 @@ impl ManagedLifecycleRuntime {
 
     /// Stops admission of new durable intents while preserving replayable backlog authority.
     pub fn begin_shutdown(&self) {
-        self.inner.lock().admission = RuntimeAdmission::Shutdown;
+        self.inner.lock().admission = RuntimeAdmission::ClosedForShutdown;
     }
 
     /// Durably submits every currently active member of every tracked managed queue.
     ///
-    /// The simple lifecycle gate permits only `Shutdown -> StoreDestroy`; retries remain in
-    /// `StoreDestroy`. This function performs blocking ledger I/O and must run inside one Store
+    /// The simple lifecycle gate permits only `ClosedForShutdown -> StoreDestroyOnly`; retries
+    /// remain in `StoreDestroyOnly`. This function performs blocking ledger I/O and must run inside one Store
     /// storage-IO operation.
     pub fn submit_store_destroy_retirements(&self) -> Result<Option<usize>, StoreError> {
         let mut inner = self.inner.lock();
@@ -414,7 +415,7 @@ impl ManagedLifecycleRuntime {
         retirement_nonce: [u8; 16],
     ) -> Result<Option<ManagedRetirementSubmission>, StoreError> {
         let mut inner = self.inner.lock();
-        if inner.admission != RuntimeAdmission::Running {
+        if inner.admission != RuntimeAdmission::Open {
             return Ok(None);
         }
         project_retirement_submission(

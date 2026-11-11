@@ -211,7 +211,7 @@ impl ManagedLifecycleRuntime {
         request: ManagedIncarnationCreateRequest,
     ) -> Result<Option<ManagedIncarnationCreation>, StoreError> {
         let mut inner = self.inner.lock();
-        if inner.admission != super::RuntimeAdmission::Running {
+        if inner.admission != super::RuntimeAdmission::Open {
             return Ok(None);
         }
         match inner.core.create_mapped_file(queue, request) {
