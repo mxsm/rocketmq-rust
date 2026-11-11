@@ -598,7 +598,7 @@ mod tests {
     use rocketmq_runtime::common::time_utils::current_millis;
 
     use super::*;
-    use crate::base::backend_ops::MessageStoreEngine;
+    use crate::base::message_store_engine::MessageStoreEngine;
     use crate::base::message_store_reader::MessageStoreReader;
     use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::ha_client::HAClient;

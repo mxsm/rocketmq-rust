@@ -1115,7 +1115,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::base::backend_ops::MessageStoreEngine;
+    use crate::base::message_store_engine::MessageStoreEngine;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::ha::default_ha_connection::decode_transfer_header;
     use crate::ha::default_ha_connection::encode_transfer_header;
