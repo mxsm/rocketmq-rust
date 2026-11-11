@@ -91,7 +91,7 @@ pub struct ProxyContextWithPrincipal<P> {
 /// Principal-free Core context used by neutral services and tests.
 pub type ProxyContext = ProxyContextWithPrincipal<()>;
 
-/// Owned metadata captured once by an ingress adapter before backend dispatch.
+/// Owned request metadata captured once by an ingress adapter before request dispatch.
 /// Principal proofs are attached separately after authentication.
 #[derive(Debug, Clone)]
 pub struct ProxyRequestMetadata {
