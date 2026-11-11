@@ -269,10 +269,10 @@ pub trait ConsumerService: Send + Sync {
 
 /// Transaction contract: completes transactional send operations.
 pub trait TransactionService: Send + Sync {
-    /// Returns the backend-owned producer group used for transactional sends.
+    /// Returns the producer group selected by the transaction service for transactional sends, if provided.
     ///
     /// Ingress uses this opaque value only to correlate a later end-transaction
-    /// request. The naming policy remains inside the active backend adapter.
+    /// request. The naming policy belongs to the transaction service implementation.
     fn transaction_producer_group(&self, _context: &ProxyContext) -> Option<String> {
         None
     }
