@@ -1,6 +1,6 @@
 # rocketmq-proxy-core
 
-Backend-neutral service contracts, protocol bindings, and ingress/session state for RocketMQ Proxy. The application entry point and listeners are assembled in [rocketmq-proxy](../rocketmq-proxy/README.md).
+Shared service contracts, protocol bindings, and ingress/session state for RocketMQ Proxy. The application entry point and listeners are assembled in [rocketmq-proxy](../rocketmq-proxy/README.md).
 
 ## Public surface
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Backend-neutral contracts shared by Proxy ingress and adapters.
+//! Shared service contracts consumed by Proxy ingress and implemented by service adapters.
 //!
 //! This module is the dependency root for route, metadata, assignment, message,
 //! consumer, transaction, and service-manager interfaces. It must not import
