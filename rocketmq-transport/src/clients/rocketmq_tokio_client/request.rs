@@ -372,8 +372,8 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                         rejection.stage(),
                         OutboundRequestStage::Writing | OutboundRequestStage::AwaitingResponse
                     )
+                    && client.retire_after_timeout_if_silent(start).await
                 {
-                    client.retire_after_timeout().await;
                     self.remove_cached_session_if_matches(&identity, &client);
                 }
                 Ok(OutboundRequestResult::Rejected(rejection))
@@ -384,8 +384,8 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     error.descriptor().code(),
                     code if code == rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code()
                         || code == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
-                ) {
-                    client.retire_after_timeout().await;
+                ) && client.retire_after_timeout_if_silent(start).await
+                {
                     self.remove_cached_session_if_matches(&identity, &client);
                 }
                 Err(error)

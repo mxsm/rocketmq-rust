@@ -115,16 +115,25 @@ pub struct PendingRequestToken {
 
 /// A single physical connection's request-correlation generation.
 ///
-/// Owners are never reused within a table. Once an owner is retired by close or
-/// timeout, callers must create a new connection and owner before registering
-/// more requests. This prevents a late response from completing a request on a
-/// replacement connection without retaining an unbounded opaque tombstone set.
+/// Owners are never reused within a table. Once an owner is retired, callers
+/// must create a new connection and owner before registering more requests, so
+/// a late response on the old connection cannot complete a request on its
+/// replacement.
+///
+/// A request timeout does not retire its owner. Its entry leaves the table, so a
+/// late response for it finds nothing to complete. It could only complete a
+/// newer request that reused its opaque. Opaques come from one process-wide
+/// 32-bit counter and each retry takes a new one, so reuse within the table's
+/// 300 s maximum request age would take over ten million requests per second. The
+/// transport retires a connection after a timeout only when it has stopped
+/// responding.
 #[derive(Debug, Clone)]
 pub struct PendingRequestOwner {
     table_id: u64,
     id: u64,
     accepting: Arc<AtomicBool>,
     completion: Arc<tokio::sync::Notify>,
+    responses: Arc<ResponseClock>,
 }
 
 impl PendingRequestOwner {
@@ -134,6 +143,7 @@ impl PendingRequestOwner {
             id,
             accepting: Arc::new(AtomicBool::new(true)),
             completion: Arc::new(tokio::sync::Notify::new()),
+            responses: Arc::new(ResponseClock::new()),
         }
     }
 
@@ -143,6 +153,44 @@ impl PendingRequestOwner {
 
     pub(crate) fn is_accepting(&self) -> bool {
         self.accepting.load(Ordering::Acquire)
+    }
+
+    /// Whether the connection delivered any response at or after `instant`, including a late one
+    /// for a request that already settled.
+    ///
+    /// A request that times out on a connection still delivering responses was slow, not stranded
+    /// on a dead connection.
+    pub(crate) fn responded_since(&self, instant: tokio::time::Instant) -> bool {
+        self.responses.since(instant)
+    }
+}
+
+/// When a connection last delivered a response.
+#[derive(Debug)]
+struct ResponseClock {
+    origin: tokio::time::Instant,
+    /// Microseconds after `origin` of the latest response, plus one; zero until the first.
+    latest: AtomicU64,
+}
+
+impl ResponseClock {
+    fn new() -> Self {
+        Self {
+            origin: tokio::time::Instant::now(),
+            latest: AtomicU64::new(0),
+        }
+    }
+
+    fn record(&self) {
+        let micros = u64::try_from(self.origin.elapsed().as_micros()).unwrap_or(u64::MAX - 1);
+        self.latest.fetch_max(micros.saturating_add(1), Ordering::AcqRel);
+    }
+
+    fn since(&self, instant: tokio::time::Instant) -> bool {
+        match self.latest.load(Ordering::Acquire) {
+            0 => false,
+            latest => self.origin + Duration::from_micros(latest - 1) >= instant,
+        }
     }
 }
 
@@ -638,6 +686,7 @@ impl PendingRequestTable {
         if owner.table_id != self.inner.table_id {
             return PendingResponseDisposition::ForeignOwner;
         }
+        owner.responses.record();
         let Some(pending) = self.take_key(PendingRequestKey {
             owner_id: owner.id,
             opaque,
@@ -760,24 +809,18 @@ impl PendingRequestTable {
 
     /// Completes every request whose registered absolute response deadline has elapsed.
     pub fn expire_due(&self, now: tokio::time::Instant) -> usize {
-        let expired: Vec<(PendingRequestToken, PendingRequestOwner)> = self
+        let expired: Vec<PendingRequestToken> = self
             .inner
             .entries
             .iter()
             .filter(|entry| entry.is_expired(now))
-            .map(|entry| {
-                (
-                    PendingRequestToken {
-                        key: *entry.key(),
-                        reservation: entry.reservation,
-                    },
-                    entry.owner.clone(),
-                )
+            .map(|entry| PendingRequestToken {
+                key: *entry.key(),
+                reservation: entry.reservation,
             })
             .collect();
         let mut completed = 0;
-        for (token, owner) in expired {
-            owner.retire();
+        for token in expired {
             if self.complete_token(token, PendingRequestCompletion::DeadlineExpired) {
                 completed += 1;
             }
@@ -862,7 +905,6 @@ impl PendingRequestGuard {
             .expect("active pending request guard must have a token");
         let error = Arc::clone(&source);
         if let Some(pending) = self.table.take_token(token) {
-            pending.owner.retire();
             pending.complete(PendingRequestCompletion::OperationalFailure(source));
         }
         error

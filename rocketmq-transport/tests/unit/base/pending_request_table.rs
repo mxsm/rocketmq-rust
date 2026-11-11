@@ -177,7 +177,7 @@ async fn operational_completion_reuses_the_original_canonical_error() {
 }
 
 #[tokio::test]
-async fn retired_opaque_cannot_be_reused_by_a_late_response() {
+async fn timed_out_request_keeps_its_owner_and_its_late_response_completes_nothing() {
     let table = PendingRequestTable::new();
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
     let first = registered(table.register(9, RequestDeadline::from_timeout_millis(1), first_sender));
@@ -191,19 +191,27 @@ async fn retired_opaque_cannot_be_reused_by_a_late_response() {
     ));
     drop(first);
 
-    let (second_sender, _second_receiver) = tokio::sync::oneshot::channel();
-    assert!(is_rejected(&table.register(
-        9,
-        RequestDeadline::from_timeout_millis(3_000),
-        second_sender,
-    )));
+    let (second_sender, second_receiver) = tokio::sync::oneshot::channel();
+    let second = registered(table.register(10, RequestDeadline::from_timeout_millis(3_000), second_sender));
     assert_eq!(
         table.complete_response(
             9,
-            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
         ),
         PendingResponseDisposition::Late
     );
+    assert_eq!(
+        table.complete_response(
+            10,
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+        ),
+        PendingResponseDisposition::Completed
+    );
+    assert_eq!(
+        response(second_receiver.await.unwrap()).code(),
+        ResponseCode::Success.to_i32()
+    );
+    drop(second);
 }
 
 #[tokio::test]
@@ -306,24 +314,24 @@ async fn closing_one_connection_owner_does_not_complete_another_owners_request()
 }
 
 #[tokio::test]
-async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_response() {
+async fn closed_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_response() {
     let table = PendingRequestTable::new();
     let retired_owner = table.new_owner();
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
     let first = registered(table.register_for_owner(
         &retired_owner,
         29,
-        RequestDeadline::from_timeout_millis(1),
+        RequestDeadline::from_timeout_millis(3_000),
         first_sender,
     ));
 
     assert_eq!(
-        table.expire_due(tokio::time::Instant::now() + Duration::from_millis(2)),
+        table.close_owner(&retired_owner, || PendingRequestCompletion::SessionClosed),
         1
     );
     assert!(matches!(
         first_receiver.await.unwrap(),
-        PendingRequestCompletion::DeadlineExpired
+        PendingRequestCompletion::SessionClosed
     ));
     drop(first);
     let (reused_sender, _reused_receiver) = tokio::sync::oneshot::channel();
@@ -727,4 +735,44 @@ async fn waiting_registration_retries_when_the_admission_rate_refills() {
         1,
         "only the immediate registration was rejected"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_reports_whether_its_connection_responded_since_an_instant() {
+    let table = PendingRequestTable::new();
+    let owner = table.new_owner();
+    let before = tokio::time::Instant::now();
+    assert!(!owner.responded_since(before), "no response has arrived yet");
+
+    tokio::time::advance(Duration::from_millis(5)).await;
+    let (sender, _receiver) = tokio::sync::oneshot::channel();
+    let _guard = registered(table.register_for_owner(&owner, 1, RequestDeadline::from_timeout_millis(3_000), sender));
+    assert_eq!(
+        table.complete_response_for_owner(
+            &owner,
+            1,
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+        ),
+        PendingResponseDisposition::Completed
+    );
+    assert!(owner.responded_since(before));
+
+    tokio::time::advance(Duration::from_millis(5)).await;
+    let after = tokio::time::Instant::now();
+    assert!(!owner.responded_since(after));
+    assert_eq!(
+        table.complete_response_for_owner(
+            &owner,
+            99,
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+        ),
+        PendingResponseDisposition::Late
+    );
+    assert!(
+        owner.responded_since(after),
+        "a late response still shows the connection answers"
+    );
+
+    let other = table.new_owner();
+    assert!(!other.responded_since(before), "responses are tracked per connection");
 }
