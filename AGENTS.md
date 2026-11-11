@@ -85,6 +85,13 @@ build standalone Cargo or Node projects; follow the matching local guide when wo
   can panic needs a documented invariant or a fallible companion API; tests may use assertions and unwraps.
 - Keep unsafe regions minimal with an immediately preceding `// SAFETY:` explanation.
   Safe wrappers establish their own invariants; caller obligations require an unsafe API and safety contract.
+- `unsafe` may remove a measured hot-path cost, such as a copy, a lock, or a bounds check, when no safe
+  design comes close. Such a change must prove both points in its PR:
+  - **Benefit:** a reproducible before/after benchmark or A/B run on the affected path.
+  - **Soundness:** a written argument for each invariant relied on (aliasing, lifetimes, cross-thread
+    visibility and ordering), plus tests that exercise them: concurrent stress with content checks,
+    fault injection, and Miri or loom where they can run.
+  Keep the unsafe code behind a small safe API, and drop the change if the gain does not hold.
 - Production entrypoints own their runtime through `RuntimeOwner`. Own background work through an injected
   `ChildServiceContext`, a parent `TaskGroup`, or an established lifecycle owner; shutdown cancels and awaits
   owned work. Route blocking work through `BlockingExecutor` or an established top-level boundary; do not add
