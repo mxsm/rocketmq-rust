@@ -17,6 +17,7 @@
 use std::any::Any;
 use std::any::TypeId;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -157,20 +158,41 @@ struct RequestLifecycle {
     session: SessionStateView,
     parent_task_group_id: TaskGroupId,
     parent_cancellation: CancellationToken,
+    /// For a network request, the session's request stop token: a child of
+    /// `parent_cancellation` that the session cancels whenever it publishes its close. Waiting on
+    /// it alone replaces waiting on both session watch channels and the parent token, whose
+    /// waiter lists every request of the session registers with.
+    session_stop: Option<CancellationToken>,
 }
 
 impl RequestControlView {
+    /// Creates a view that waits on the session channels and the parent token directly.
+    #[cfg(test)]
+    pub(crate) fn from_meta(meta: &RequestMeta, session: SessionStateView, parent_task_group: &TaskGroup) -> Self {
+        Self::from_meta_with_session_stop(meta, session, parent_task_group, None)
+    }
+
     /// Creates an observer view from the canonical metadata and its lifecycle owners.
     ///
     /// The deadline is copied directly from [`RequestMeta`] so every request
     /// layer observes the same absolute expiry instant and original budget.
-    pub(crate) fn from_meta(meta: &RequestMeta, session: SessionStateView, parent_task_group: &TaskGroup) -> Self {
+    ///
+    /// With `session_stop`, the waits observe that token instead of the session channels and
+    /// the parent token. It must be a child of `parent_task_group`'s token that is cancelled
+    /// whenever `session` publishes its close or loses its close publisher.
+    pub(crate) fn from_meta_with_session_stop(
+        meta: &RequestMeta,
+        session: SessionStateView,
+        parent_task_group: &TaskGroup,
+        session_stop: Option<CancellationToken>,
+    ) -> Self {
         Self {
             deadline: meta.deadline(),
             lifecycle: Arc::new(RequestLifecycle {
                 session,
                 parent_task_group_id: parent_task_group.id(),
                 parent_cancellation: parent_task_group.cancellation_token(),
+                session_stop,
             }),
         }
     }
@@ -231,14 +253,40 @@ impl RequestControlView {
     ///
     /// This method only observes lifecycle state; it cannot cause any of the
     /// transitions it waits for.
-    pub async fn cancelled(&self) {
+    pub fn cancelled(&self) -> impl Future<Output = ()> + '_ {
+        self.stopped(self.deadline)
+    }
+
+    /// Waits for an external lifecycle stop without observing the request deadline.
+    ///
+    /// Original one-way requests use this narrower waiter so an admitted
+    /// processor timeout can produce and consume its owned deadline plan
+    /// through the normal one-way policy before terminal completion.
+    pub(crate) fn parent_or_session_cancelled(&self) -> impl Future<Output = ()> + '_ {
+        self.stopped(None)
+    }
+
+    async fn stopped(&self, deadline: Option<RequestDeadline>) {
         let RequestLifecycle {
             session,
             parent_cancellation,
+            session_stop,
             ..
         } = &*self.lifecycle;
 
-        match self.deadline {
+        if let Some(session_stop) = session_stop {
+            match deadline {
+                Some(deadline) => {
+                    tokio::select! {
+                        _ = deadline.timeout(std::future::pending::<()>()) => {}
+                        () = session_stop.cancelled() => {}
+                    }
+                }
+                None => session_stop.cancelled().await,
+            }
+            return;
+        }
+        match deadline {
             Some(deadline) => {
                 tokio::select! {
                     _ = deadline.timeout(std::future::pending::<()>()) => {}
@@ -252,23 +300,6 @@ impl RequestControlView {
                     _ = parent_cancellation.cancelled() => {}
                 }
             }
-        }
-    }
-
-    /// Waits for an external lifecycle stop without observing the request deadline.
-    ///
-    /// Original one-way requests use this narrower waiter so an admitted
-    /// processor timeout can produce and consume its owned deadline plan
-    /// through the normal one-way policy before terminal completion.
-    pub(crate) async fn parent_or_session_cancelled(&self) {
-        let RequestLifecycle {
-            session,
-            parent_cancellation,
-            ..
-        } = &*self.lifecycle;
-        tokio::select! {
-            _ = session.closed() => {}
-            _ = parent_cancellation.cancelled() => {}
         }
     }
 }
@@ -455,6 +486,54 @@ mod tests {
         assert!(!session_observer.is_closed());
         assert_eq!(*state_tx.borrow(), ConnectionState::Healthy);
         assert!(!*closed_tx.borrow());
+
+        let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn request_control_with_a_session_stop_ends_on_that_stop_its_parent_or_its_deadline() {
+        let runtime = RuntimeContext::from_current("request-control-session-stop");
+        let parent = runtime
+            .service_context("request-control-session-stop")
+            .task_group()
+            .clone();
+
+        let (session, _state_tx, _closed_tx) = session_view();
+        let session_stop = parent.cancellation_token().child_token();
+        let closing = RequestControlView::from_meta_with_session_stop(
+            &RequestMeta::new(Instant::now(), None),
+            session,
+            &parent,
+            Some(session_stop.clone()),
+        );
+        assert!(tokio::time::timeout(Duration::from_secs(1), closing.cancelled())
+            .await
+            .is_err());
+        session_stop.cancel();
+        closing.cancelled().await;
+        closing.parent_or_session_cancelled().await;
+
+        let (session, _state_tx, _closed_tx) = session_view();
+        let deadline = RequestDeadline::after(Duration::from_secs(5));
+        let expiring = RequestControlView::from_meta_with_session_stop(
+            &RequestMeta::new(Instant::now(), Some(deadline)),
+            session,
+            &parent,
+            Some(parent.cancellation_token().child_token()),
+        );
+        tokio::time::advance(Duration::from_secs(5)).await;
+        expiring.cancelled().await;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), expiring.parent_or_session_cancelled())
+                .await
+                .is_err(),
+            "the narrower wait ignores the deadline"
+        );
+
+        parent.cancel();
+        expiring.parent_or_session_cancelled().await;
+        assert!(expiring.is_cancelled());
 
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
