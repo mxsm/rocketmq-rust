@@ -2827,23 +2827,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/internal/v1/capability-verifications": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** @description Private workload listener only. Requires the dedicated capability_verifier_service OIDC role and authorized tenant/cluster. UI, Connector, model and execution identities cannot write these append-only records; development authentication cannot write production facts. The source report is never fetched. Execution authority is unchanged. */
-        post: operations["recordCapabilityVerification"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -18936,51 +18919,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
-            };
-        };
-    };
-    recordCapabilityVerification: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CapabilityQualityProjection__CapabilityVerificationRequest"];
-            };
-        };
-        responses: {
-            /** @description Immutable report, with server-owned identity and recording time; an identical report retry returns its original identity. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CapabilityQualityProjection__CapabilityVerificationRecord"];
-                };
-            };
-            /** @description Invalid version, scope, time, provenance or unqualified production proof */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Caller is not an authorized dedicated OIDC verifier */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The report digest already identifies a different immutable assessment */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };

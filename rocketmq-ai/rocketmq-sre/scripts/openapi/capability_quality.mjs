@@ -30,16 +30,6 @@ export function extendCapabilityQuality({ document, schemas, qualitySchema }) {
   get.responses["200"] = { description: "Legacy coverage plus independently sourced read-only capability facts",
     content: { "application/json": { schema: { type: "object", additionalProperties: true,
       properties: { quality: { $ref: `#/components/schemas/${prefix}` } } } } } };
-  document.paths["/internal/v1/capability-verifications"] = { post: {
-    operationId: "recordCapabilityVerification",
-    description: "Private workload listener only. Requires the dedicated capability_verifier_service OIDC role and authorized tenant/cluster. UI, Connector, model and execution identities cannot write these append-only records; development authentication cannot write production facts. The source report is never fetched. Execution authority is unchanged.",
-    requestBody: { required: true, content: { "application/json": { schema: { $ref: `#/components/schemas/${prefix}__CapabilityVerificationRequest` } } } },
-    responses: {
-      "200": { description: "Immutable report, with server-owned identity and recording time; an identical report retry returns its original identity.",
-        content: { "application/json": { schema: { $ref: `#/components/schemas/${prefix}__CapabilityVerificationRecord` } } } },
-      "400": { description: "Invalid version, scope, time, provenance or unqualified production proof" },
-      "403": { description: "Caller is not an authorized dedicated OIDC verifier" },
-      "409": { description: "The report digest already identifies a different immutable assessment" }
-    }
-  } };
+  // Verification ingestion belongs to the private workload listener, including in previously generated documents.
+  delete document.paths["/internal/v1/capability-verifications"];
 }
