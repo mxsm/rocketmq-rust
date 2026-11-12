@@ -209,6 +209,7 @@ impl DynamicBudgetKey {
             let released = self.inner.budget.capacity_notify().notified();
             tokio::pin!(released);
             released.as_mut().enable();
+            let _capacity_waiter = self.inner.budget.capacity_notify().register_waiter();
             // Re-check after registering the waiter, so a release that happened
             // in between is not lost.
             let snapshot = self.inner.budget.snapshot();

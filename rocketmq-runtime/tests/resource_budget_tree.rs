@@ -853,6 +853,67 @@ async fn cancelled_waiter_and_panicking_owner_restore_metrics_and_permits() {
 }
 
 #[tokio::test]
+async fn receiver_on_a_dynamic_budget_wakes_when_the_budget_closes() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let key = tree
+        .root()
+        .register_dynamic_child("session", limit(2, 32, FullPolicy::Reject))
+        .expect("dynamic key");
+    let queue = BudgetedQueue::<&str>::new(key.budget());
+    let receiving_queue = queue.clone();
+    let receiver = tokio::spawn(async move { receiving_queue.recv().await });
+    tokio::task::yield_now().await;
+    assert!(
+        !receiver.is_finished(),
+        "an empty open queue keeps its receiver waiting"
+    );
+
+    // Unrelated capacity changes in the tree do not end the wait.
+    drop(tree.root().try_acquire_data(8).expect("root permit"));
+    tokio::task::yield_now().await;
+    assert!(!receiver.is_finished());
+
+    key.close();
+    let received = tokio::time::timeout(Duration::from_secs(10), receiver)
+        .await
+        .expect("closing the budget wakes the receiver")
+        .expect("receiver task");
+    assert_eq!(received, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn waiting_push_never_misses_a_release_from_another_thread() {
+    let tree = ResourceBudgetTree::new("handoff", limit(1, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
+    let queue = BudgetedQueue::new(tree.root());
+    for round in 0..2_000 {
+        accepted(queue.try_push_data(round, 1));
+        let waiting_queue = queue.clone();
+        let waiter = tokio::spawn(async move {
+            waiting_queue
+                .push_until(
+                    round + 1_000_000,
+                    1,
+                    BudgetClass::Data,
+                    tokio::time::Instant::now() + Duration::from_secs(10),
+                )
+                .await
+        });
+        // The release races the waiter's registration on another thread. A lost wakeup leaves
+        // the waiter parked until its deadline.
+        let releasing_queue = queue.clone();
+        std::thread::spawn(move || assert_eq!(releasing_queue.try_pop(), Some(round)))
+            .join()
+            .expect("release thread");
+        assert!(
+            matches!(waiter.await.expect("join waiter"), QueueEnqueueStatus::Enqueued),
+            "round {round}: the waiter must take the released capacity"
+        );
+        assert_eq!(queue.try_pop(), Some(round + 1_000_000));
+    }
+    assert_eq!(queue.snapshot().reserved_count, 0);
+}
+
+#[tokio::test]
 async fn retiring_a_dynamic_key_waits_for_the_real_reservation() {
     let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
     let key = tree
