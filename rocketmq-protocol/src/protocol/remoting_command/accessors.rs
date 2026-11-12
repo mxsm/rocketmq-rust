@@ -191,6 +191,26 @@ impl RemotingCommand {
         self.ext_fields.as_map()
     }
 
+    /// Returns one extension field without building the map that [`Self::ext_fields`] returns
+    /// for a decoded command.
+    ///
+    /// When the header repeats `key`, the last occurrence is returned, as in that map. Each call
+    /// walks the fields; see [`Self::for_each_ext_field`] for reading several.
+    #[inline]
+    pub fn ext_field(&self, key: &str) -> Option<&str> {
+        self.ext_fields.get(key)
+    }
+
+    /// Visits every extension field without building the map that [`Self::ext_fields`] returns
+    /// for a decoded command.
+    ///
+    /// A key that the received header repeats is visited once per occurrence; that map keeps
+    /// only the last one. Each call walks every field, so a caller that needs several fields
+    /// should read them in one visit rather than through repeated [`Self::ext_field`] calls.
+    pub fn for_each_ext_field<'a>(&'a self, mut visitor: impl FnMut(&'a str, &'a str)) {
+        self.ext_fields.for_each(&mut visitor);
+    }
+
     #[inline]
     pub fn body(&self) -> Option<&Bytes> {
         self.body.as_ref()

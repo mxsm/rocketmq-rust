@@ -139,16 +139,31 @@ struct SendCompletionFacts {
 
 impl SendCompletionFacts {
     fn capture(request: &RemotingCommand, policy: Arc<SendMessagePolicy>) -> Self {
-        let binding = HashMap::new();
-        let ext_fields = request.ext_fields().unwrap_or(&binding);
+        // One walk over the header: a send header is otherwise never turned into a field map.
+        // As in that map, the last occurrence of a repeated field wins.
+        let (mut owner, mut auth_type, mut owner_parent, mut owner_self) = (None, None, None, None);
+        request.for_each_ext_field(|key, value| {
+            let slot = if key == BrokerStatsManager::COMMERCIAL_OWNER {
+                &mut owner
+            } else if key == BrokerStatsManager::ACCOUNT_AUTH_TYPE {
+                &mut auth_type
+            } else if key == BrokerStatsManager::ACCOUNT_OWNER_PARENT {
+                &mut owner_parent
+            } else if key == BrokerStatsManager::ACCOUNT_OWNER_SELF {
+                &mut owner_self
+            } else {
+                return;
+            };
+            *slot = Some(value);
+        });
         Self {
             policy,
             opaque: request.opaque(),
             body_len: request.body().as_ref().map_or(0, |body| body.len() as i32),
-            owner: ext_fields.get(BrokerStatsManager::COMMERCIAL_OWNER).cloned(),
-            auth_type: ext_fields.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE).cloned(),
-            owner_parent: ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT).cloned(),
-            owner_self: ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_SELF).cloned(),
+            owner: owner.map(CheetahString::from),
+            auth_type: auth_type.map(CheetahString::from),
+            owner_parent: owner_parent.map(CheetahString::from),
+            owner_self: owner_self.map(CheetahString::from),
         }
     }
 }
@@ -2072,10 +2087,8 @@ where
         send_message_context.born_time_stamp(request_header.born_timestamp);
         send_message_context.request_time_stamp(time_utils::current_millis() as i64);
 
-        if let Some(owner) = request.ext_fields() {
-            if let Some(value) = owner.get(BrokerStatsManager::COMMERCIAL_OWNER) {
-                send_message_context.commercial_owner(value.clone());
-            }
+        if let Some(value) = request.ext_field(BrokerStatsManager::COMMERCIAL_OWNER) {
+            send_message_context.commercial_owner(CheetahString::from(value));
         }
         let properties = enrich_parsed_send_message_request_properties(
             request_header,

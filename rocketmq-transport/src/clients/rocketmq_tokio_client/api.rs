@@ -90,8 +90,7 @@ where
         Ok(self)
     }
 
-    /// Sets how many requests may await a response at once, at least one; the default is
-    /// [`DEFAULT_MAX_PENDING_REQUESTS`].
+    /// Sets how many requests may await a response at once, at least one; the default is 65,535.
     ///
     /// A request beyond the limit waits for a slot until its deadline, and is rejected as
     /// saturated only then. Pending requests also stay within the table's retained-byte limit.

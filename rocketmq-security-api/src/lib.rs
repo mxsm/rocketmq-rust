@@ -158,12 +158,27 @@ impl fmt::Debug for PeerInfo {
     }
 }
 
+/// Header fields of a [`SecurityRequestView`], produced when a policy first reads them.
+///
+/// A transport can implement this over a request whose fields are still in their encoded form,
+/// so a policy that never calls [`SecurityRequestView::fields`] does not pay for building them.
+pub trait HeaderFields: Sync {
+    /// Returns the request's header fields.
+    fn fields(&self) -> &HashMap<CheetahString, CheetahString>;
+}
+
+impl HeaderFields for HashMap<CheetahString, CheetahString> {
+    fn fields(&self) -> &HashMap<CheetahString, CheetahString> {
+        self
+    }
+}
+
 /// Minimal borrowed projection of an inbound or outbound request.
 #[derive(Clone, Copy)]
 pub struct SecurityRequestView<'a> {
     code: i32,
     version: i32,
-    fields: &'a HashMap<CheetahString, CheetahString>,
+    fields: &'a dyn HeaderFields,
     body: Option<&'a [u8]>,
     peer: Option<&'a PeerInfo>,
 }
@@ -174,6 +189,24 @@ impl<'a> SecurityRequestView<'a> {
         code: i32,
         version: i32,
         fields: &'a HashMap<CheetahString, CheetahString>,
+        body: Option<&'a [u8]>,
+        peer: Option<&'a PeerInfo>,
+    ) -> Self {
+        Self {
+            code,
+            version,
+            fields,
+            body,
+            peer,
+        }
+    }
+
+    /// Creates a view whose header fields are produced by `fields` on the first call to
+    /// [`Self::fields`].
+    pub fn with_header_fields(
+        code: i32,
+        version: i32,
+        fields: &'a dyn HeaderFields,
         body: Option<&'a [u8]>,
         peer: Option<&'a PeerInfo>,
     ) -> Self {
@@ -198,7 +231,8 @@ impl<'a> SecurityRequestView<'a> {
 
     /// Returns the fields.
     pub fn fields(&self) -> &'a HashMap<CheetahString, CheetahString> {
-        self.fields
+        let fields: &'a dyn HeaderFields = self.fields;
+        fields.fields()
     }
 
     /// Returns the body.
@@ -217,7 +251,7 @@ impl fmt::Debug for SecurityRequestView<'_> {
         f.debug_struct("SecurityRequestView")
             .field("code", &self.code)
             .field("version", &self.version)
-            .field("field_count", &self.fields.len())
+            .field("field_count", &self.fields().len())
             .field("body_len", &self.body.map(<[u8]>::len))
             .field("peer", &self.peer)
             .finish()

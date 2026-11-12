@@ -28,6 +28,7 @@ use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthenticatedRequestContext;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::AuthorizationDenial;
+use rocketmq_security_api::HeaderFields;
 use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::RequestContext;
 use rocketmq_security_api::RequestPolicy;
@@ -80,6 +81,36 @@ fn request_view_borrows_payload_and_redacts_sensitive_debug_data() {
     assert!(!debug.contains("credential-value"));
     assert!(!debug.contains("secret-body"));
     assert!(debug.contains("body_len"));
+}
+
+struct CountedFields {
+    fields: HashMap<CheetahString, CheetahString>,
+    reads: AtomicU64,
+}
+
+impl HeaderFields for CountedFields {
+    fn fields(&self) -> &HashMap<CheetahString, CheetahString> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        &self.fields
+    }
+}
+
+#[test]
+fn lazy_request_view_reads_header_fields_only_when_asked() {
+    let source = CountedFields {
+        fields: HashMap::from([(CheetahString::from("topic"), CheetahString::from("orders"))]),
+        reads: AtomicU64::new(0),
+    };
+    let body = b"body".to_vec();
+    let view = SecurityRequestView::with_header_fields(10, 1, &source, Some(&body), None);
+
+    assert_eq!(view.code(), 10);
+    assert_eq!(view.version(), 1);
+    assert_eq!(view.body(), Some(body.as_slice()));
+    assert_eq!(source.reads.load(Ordering::Relaxed), 0);
+
+    assert!(std::ptr::eq(view.fields(), &source.fields));
+    assert_eq!(source.reads.load(Ordering::Relaxed), 1);
 }
 
 struct AllowAuthenticated;
