@@ -156,6 +156,10 @@ impl AuthService {
             AuthMode::Oidc { keys, .. } => !keys.read().await.keys.is_empty(),
         }
     }
+
+    pub(crate) fn is_development(&self) -> bool {
+        matches!(self.mode.as_ref(), AuthMode::Development { .. })
+    }
 }
 
 fn authorize_development(

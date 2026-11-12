@@ -116,4 +116,22 @@ describe("global workspace scope", () => {
     expect(screen.getByTestId("workspace")).toBeEmptyDOMElement();
     expect(screen.getByTestId("invalid")).toHaveTextContent("true");
   });
+
+  it("clears evidence, saved revision and canonical target bindings on a new global selection", async () => {
+    const user = userEvent.setup();
+    render(
+      <Fixture initial={`/coverage?cluster_id=${A}&investigation_id=saved-investigation&revision_id=saved-revision&resource=store-pressure/broker-a&evidence_id=saved-evidence&tab=facts`} />,
+    );
+    await user.click(screen.getByRole("button", { name: "set scope" }));
+    const location = new URL(
+      screen.getByTestId("location").textContent ?? "",
+      "http://router.local",
+    );
+    expect(location.searchParams.get("cluster_id")).toBe(B);
+    expect(location.searchParams.get("resource_kind")).toBe("topic");
+    expect(location.searchParams.get("tab")).toBe("facts");
+    for (const key of ["evidence_id", "investigation_id", "revision_id", "resource"]) {
+      expect(location.searchParams.has(key)).toBe(false);
+    }
+  });
 });

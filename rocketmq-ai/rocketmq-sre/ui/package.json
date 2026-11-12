@@ -13,6 +13,7 @@
     "lint": "eslint . --max-warnings=0",
     "test": "vitest",
     "test:e2e:security": "playwright test e2e/conversation-security.spec.ts",
+    "test:e2e:evidence": "playwright test --config playwright.http.config.ts",
     "build": "tsc && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3004"
   },

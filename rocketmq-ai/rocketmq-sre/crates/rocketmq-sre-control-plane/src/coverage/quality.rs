@@ -99,6 +99,7 @@ pub(super) fn project(
             };
             DiagnosticPackQuality {
                 pack_id: pack.qualified_id(),
+                pack_version: pack.version().to_string(),
                 layers: CapabilityLayers {
                     registered: fact(
                         CapabilityFactStatus::Present,
@@ -156,6 +157,7 @@ pub(super) fn project(
         schema_version: "rocketmq-sre.capability-quality.v1".to_owned(),
         tenant_id,
         cluster_id,
+        resource: None,
         investigation_id: None,
         revision_id: None,
         observed_at: now,
@@ -359,6 +361,7 @@ fn fact(
         reason_code: reason.to_owned(),
         source_ref: source.to_owned(),
         observed_at,
+        verification: None,
     }
 }
 

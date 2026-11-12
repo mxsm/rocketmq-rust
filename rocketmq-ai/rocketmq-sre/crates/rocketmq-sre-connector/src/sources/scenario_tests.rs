@@ -183,7 +183,9 @@ fn latency_ha_keeps_histograms_and_nullable_ack_fields_partial_then_rejects_stal
         CanonicalProjection::MetricDiagnostics(MetricDiagnosticProfile::SendLatency),
     )
     .unwrap();
-    assert_eq!(metric.content["summary"]["window_delta"], 1.0);
+    assert_eq!(metric.content["histogram_buckets"][0]["latest_count"], 3.0);
+    assert_eq!(metric.content["quantile_status"], "not_evaluated");
+    assert!(metric.content.get("summary").is_none());
     assert!(metric.content.get("store_slow").is_none());
     let ha = projection::apply(
         broker(),

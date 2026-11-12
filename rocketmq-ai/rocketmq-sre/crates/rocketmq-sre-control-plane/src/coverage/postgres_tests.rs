@@ -298,6 +298,14 @@ async fn coverage_quality_preserves_tenant_cluster_observation_order_and_legacy_
     assert_eq!(pack["requirements"][0]["evidence_ids"], json!([]));
     // The latest-per-resource scan is bounded. Excluded signals are unknown,
     // rather than reported absent or filled by an older retained sample.
+    let target_resource = "consumer-lag/group/targeted";
+    let target_at = Utc::now();
+    let mut target=EvidenceSnapshot::capture(EvidenceQuery {
+        query_id:QueryId::new(),correlation_id:CorrelationId::new(),tenant_id:tenant,cluster_id:a,
+        source:"rocketmq-mcp".to_owned(),resource:target_resource.to_owned(),time_range:TimeRange::new(target_at,target_at).unwrap(),
+    },current_evidence_schema(),target_at,EvidenceContent::Inline(json!({"total_lag":10,"lag_slope_per_min":1,"queue_skew_ratio":1,"consume_rate_per_sec":5,"produce_rate_per_sec":6}))).unwrap();
+    target.exposure = EvidenceExposure::McpTool;
+    let target = service.persist_cluster(&auth, target).await.unwrap();
     for index in 0..65 {
         let observed = Utc::now();
         let sample = EvidenceSnapshot::capture(
@@ -329,6 +337,24 @@ async fn coverage_quality_preserves_tenant_cluster_observation_order_and_legacy_
         .unwrap();
     assert_eq!(pack["requirements"][0]["quality"], "unknown");
     assert!(pack["requirements"][0]["evidence_ids"].as_array().unwrap().is_empty());
+    let response = router
+        .clone()
+        .oneshot(request_uri(format!(
+            "/v1/capabilities/coverage?cluster_id={a}&resource={target_resource}"
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: Value = serde_json::from_slice(&to_bytes(response.into_body(), 2 * 1024 * 1024).await.unwrap()).unwrap();
+    assert_eq!(value["quality"]["partial"], false);
+    let pack = value["quality"]["packs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pack| pack["pack_id"] == "consumer-lag.v2")
+        .unwrap();
+    assert_eq!(pack["requirements"][0]["quality"], "available");
+    assert_eq!(pack["requirements"][0]["evidence_ids"], json!([target.evidence_id]));
     let investigations = vec![investigation.as_uuid(), other_investigation.as_uuid()];
     let conversations = vec![conversation.as_uuid(), other_conversation.as_uuid()];
     for statement in [
@@ -386,7 +412,7 @@ async fn coverage_quality_preserves_tenant_cluster_observation_order_and_legacy_
     }
 }
 
-async fn seed_revision(
+pub(super) async fn seed_revision(
     repository: &PostgresRepository,
     auth: &AuthContext,
     cluster: ClusterId,

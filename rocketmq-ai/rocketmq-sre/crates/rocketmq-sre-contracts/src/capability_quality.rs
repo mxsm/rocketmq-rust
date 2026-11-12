@@ -16,7 +16,7 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{ClusterId, DiagnosisRevisionId, EvidenceId, InvestigationId, TenantId};
+use crate::{CapabilityVerificationRecord, ClusterId, DiagnosisRevisionId, EvidenceId, InvestigationId, TenantId};
 
 /// Primitive shape required by a compiled diagnostic predicate.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
@@ -51,6 +51,9 @@ pub struct CapabilityFact {
     pub reason_code: String,
     pub source_ref: String,
     pub observed_at: Option<DateTime<Utc>>,
+    /// Exact controlled report behind a verification fact, including its scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<CapabilityVerificationRecord>,
 }
 
 /// Registration, implementation, deployment, observation and verification stay independent.
@@ -78,9 +81,10 @@ pub enum DiagnosticEvidenceQuality {
 
 /// IDs identify the exact stored sample that produced this assessment.
 ///
-/// This cluster projection does not bind a diagnosis revision. A consumer
-/// showing revision quality must intersect these IDs with that revision's
-/// saved references and verify its resource and time scope.
+/// An unbound cluster projection does not establish revision membership.
+/// Consumers showing revision quality must require the requested investigation
+/// and revision binding, intersect these IDs with saved references, and verify
+/// resource and time scope.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 pub struct DiagnosticRequirementQuality {
     pub id: String,
@@ -100,6 +104,9 @@ pub struct DiagnosticRequirementQuality {
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 pub struct DiagnosticPackQuality {
     pub pack_id: String,
+    /// Exact compiled implementation version; absent legacy values remain unknown.
+    #[serde(default)]
+    pub pack_version: String,
     pub layers: CapabilityLayers,
     pub requirements: Vec<DiagnosticRequirementQuality>,
 }
@@ -123,6 +130,9 @@ pub struct CapabilityQualityProjection {
     pub schema_version: String,
     pub tenant_id: TenantId,
     pub cluster_id: Option<ClusterId>,
+    /// Explicit canonical Evidence target; absent means the cluster overview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
     pub investigation_id: Option<InvestigationId>,
     pub revision_id: Option<DiagnosisRevisionId>,
     pub observed_at: DateTime<Utc>,

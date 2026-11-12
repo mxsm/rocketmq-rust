@@ -57,6 +57,16 @@ Dashboard mutation API。
 现有 `/v1/capabilities/coverage` endpoint 与 legacy 字段保留；省略集群选择器时，
 服务端确定选择一个授权集群，修复原来混合多个集群记录的行为。
 
+测试与生产验证事实可附带受控验证记录。选中对应单元格后，可核对验证环境、
+方式、结果、精确诊断包版本、适用资源、采样时间窗、有效期、来源和验证身份；
+审计详情保留记录 ID、报告摘要、I/R 绑定及 Evidence 引用。UI 只读呈现，普通会话
+不能录入报告或授予资格；确定性合成样本不能证明生产验证，过期或撤销记录保持未知。
+验证事实与记录的租户、集群、诊断包及独立 `pack_version`、I/R 和资源必须一致；
+旧响应缺少可比较版本时保持未知，不从诊断包 ID 推导版本。不匹配事实的来源和时刻也会隐藏。
+调查中的“查看逐层覆盖”携带成对 I/R，并先核对调查对象范围；页面明确显示绑定修订。
+全局范围变化清除旧 I/R、证据和 canonical `resource` 查询。导航资源不会自动转换为
+Evidence 的 canonical 路径；无绑定的集群总览不会套用单资源验证记录。
+
 积压 + Store、发送延迟 + HA、路由变更 + 断连三条链，使用必须成对的
 `investigation_id`、`revision_id` 只读绑定保存修订，并验证响应绑定。只有当前
 修订的证据引用与信号要求交集进入链路；元数据还需符合身份、集群、来源、资源前缀、
@@ -104,6 +114,9 @@ Control Plane 受监督接口，不提供任意目标请求、配置补丁或 sh
 运行时配置优先于原有的 OIDC build arguments；构建参数仍兼容现有的自定义镜像。
 重新创建容器即可应用新的环境变量，配置响应禁止缓存。
 运行时配置仅包含上述字段，不接受认证模式、开发身份或 token。
+认证层订阅 OIDC `UserLoaded`、`UserUnloaded` 和 token 过期事件。相同身份续期
+更新后续 HTTP 凭据并保留工作区；身份或授权声明变化立即隔离旧页，首次会话读取的
+晚到结果不会覆盖更新的认证事件。
 
 Compose 与 Kind 开发 profile 会显式构建
 `VITE_SRE_AUTH_MODE=development` 的 UI，并注入固定的 Phase 00
@@ -120,6 +133,7 @@ npm run check:api
 npm run lint
 npm run test -- --run
 npm run test:e2e:security
+npm run test:e2e:evidence
 npm run build
 ```
 
@@ -127,6 +141,14 @@ npm run build
 的 provisional、`preview_reset`、安全终态、Evidence 引用和只读执行资格。
 完整脱敏报告由上层 `scripts/conversation-security-qualification.ps1` 生成，
 不写入 UI 项目目录。
+
+`test:e2e:evidence` 使用独立的 HTTP/OIDC Playwright 配置。API-shaped 合成
+fixture 只控制 HTTP 响应，应用仍通过真实 HTTP client 发送认证头和 AbortSignal。
+测试覆盖同调查两个修订的迟到质量、元数据与内容，以及续期、换身份、撤销授权、
+退出、抽屉关闭回焦和旧内容清理。OIDC 模块包装仅在该 spec 的浏览器路由中生效，
+向应用实际 UserManager 发标准合成事件；它不验证真实 IdP 刷新、签名或生产环境。
+不更改原有 mock 安全测试。HTTP 浏览器产物默认写系统临时目录，也可设置
+`ROCKETMQ_SRE_UI_HTTP_ARTIFACTS`；在 Docker 中执行时将该目录挂载到工作树外。
 
 本次工作区改动的聚焦回归可运行：
 

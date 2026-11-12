@@ -143,6 +143,29 @@ fn metric_diagnostics(raw: &Value, profile: MetricDiagnosticProfile) -> Result<P
             latest_values.push(value);
         }
     }
+    if profile == MetricDiagnosticProfile::SendLatency {
+        // Histogram buckets are cumulative counters. Adding buckets together
+        // double-counts observations and cannot establish any latency quantile.
+        let buckets = series
+            .iter()
+            .filter_map(|series| {
+                let samples = series.get("samples")?.as_array()?;
+                let latest = samples.last()?;
+                let count = sample_number(latest).filter(|count| *count >= 0.0)?;
+                Some(
+                    json!({"labels":series.get("labels"),"upper_bound":series.get("labels").and_then(|labels|labels.get("le")),
+                "latest_count":count,"observed_at":latest.get("observed_at")}),
+                )
+            })
+            .collect::<Vec<_>>();
+        return Ok(Projected {
+            observed: !buckets.is_empty(),
+            warning: "send_histogram_quantile_and_threshold_unavailable",
+            content: json!({"schema_version":DIAGNOSTIC_SCHEMA,"profile":metric_profile_name(profile),"metric":metric,
+                "measurement_kind":"cumulative_histogram_buckets","histogram_buckets":buckets,"sample_count":sample_count,
+                "quantile_status":"not_evaluated","threshold_status":"not_configured"}),
+        });
+    }
     let mut summary = Map::new();
     if let Some(value) = finite_sum(&latest_values) {
         summary.insert("latest_sum".to_owned(), number(value)?);

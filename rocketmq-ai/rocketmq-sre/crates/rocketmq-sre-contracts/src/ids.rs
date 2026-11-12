@@ -72,6 +72,10 @@ macro_rules! uuid_id {
 
 uuid_id!(IncidentId, "Stable identifier for an SRE incident.");
 uuid_id!(EvidenceId, "Stable identifier for an evidence snapshot.");
+uuid_id!(
+    CapabilityVerificationId,
+    "Stable identifier for an immutable capability verification record."
+);
 uuid_id!(QueryId, "Stable identifier for an evidence query.");
 uuid_id!(CorrelationId, "Identifier propagated across one logical SRE operation.");
 uuid_id!(ClusterId, "Internal identifier for an onboarded cluster.");

@@ -2827,6 +2827,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/v1/capability-verifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Private workload listener only. Requires the dedicated capability_verifier_service OIDC role and authorized tenant/cluster. UI, Connector, model and execution identities cannot write these append-only records; development authentication cannot write production facts. The source report is never fetched. Execution authority is unchanged. */
+        post: operations["recordCapabilityVerification"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7918,6 +7935,8 @@ export interface components {
             observed_at: string;
             packs: components["schemas"]["CapabilityQualityProjection__DiagnosticPackQuality"][];
             partial: boolean;
+            /** @description Explicit canonical Evidence target; absent means the cluster overview. */
+            resource?: string | null;
             revision_id?: components["schemas"]["CapabilityQualityProjection__DiagnosisRevisionId"] | null;
             scenarios: components["schemas"]["CapabilityQualityProjection__DiagnosticScenarioCoverage"][];
             schema_version: string;
@@ -7950,6 +7969,8 @@ export interface components {
             reason_code: string;
             source_ref: string;
             status: components["schemas"]["CapabilityQualityProjection__CapabilityFactStatus"];
+            /** @description Exact controlled report behind a verification fact, including its scope. */
+            verification?: components["schemas"]["CapabilityQualityProjection__CapabilityVerificationRecord"] | null;
         };
         /** @description Registration, implementation, deployment, observation and verification stay independent. */
         CapabilityQualityProjection__CapabilityLayers: {
@@ -7963,9 +7984,10 @@ export interface components {
         /**
          * @description IDs identify the exact stored sample that produced this assessment.
          *
-         *     This cluster projection does not bind a diagnosis revision. A consumer
-         *     showing revision quality must intersect these IDs with that revision's
-         *     saved references and verify its resource and time scope.
+         *     An unbound cluster projection does not establish revision membership.
+         *     Consumers showing revision quality must require the requested investigation
+         *     and revision binding, intersect these IDs with saved references, and verify
+         *     resource and time scope.
          */
         CapabilityQualityProjection__DiagnosticRequirementQuality: {
             evidence_ids: components["schemas"]["CapabilityQualityProjection__EvidenceId"][];
@@ -7986,6 +8008,11 @@ export interface components {
         CapabilityQualityProjection__DiagnosticPackQuality: {
             layers: components["schemas"]["CapabilityQualityProjection__CapabilityLayers"];
             pack_id: string;
+            /**
+             * @description Exact compiled implementation version; absent legacy values remain unknown.
+             * @default
+             */
+            pack_version: string;
             requirements: components["schemas"]["CapabilityQualityProjection__DiagnosticRequirementQuality"][];
         };
         /** @description A documented comparison of packs, never a claimed causal relationship between samples. */
@@ -8019,6 +8046,72 @@ export interface components {
          * @description Stable tenant boundary identifier.
          */
         CapabilityQualityProjection__TenantId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable capability verification record.
+         */
+        CapabilityQualityProjection__CapabilityVerificationId: string;
+        /**
+         * @description Independent validation environments, without any execution permission.
+         * @enum {string}
+         */
+        CapabilityQualityProjection__CapabilityVerificationLevel: "test" | "production";
+        /**
+         * @description How the verifier obtained the report; fixtures never establish production validation.
+         * @enum {string}
+         */
+        CapabilityQualityProjection__CapabilityVerificationMethod: "deterministic_fixture" | "live_read_only";
+        /**
+         * @description The latest source observation supersedes an earlier assessment in the same
+         *     scope. A non-passing outcome wins a tie; delivery order cannot restore a pass.
+         * @enum {string}
+         */
+        CapabilityQualityProjection__CapabilityVerificationOutcome: "passed" | "failed" | "inconclusive" | "revoked";
+        /** @description Immutable provenance. The authenticated issuer and recording time are server-owned. */
+        CapabilityQualityProjection__CapabilityVerificationRecord: {
+            assessment: components["schemas"]["CapabilityQualityProjection__CapabilityVerificationRequest"];
+            record_id: components["schemas"]["CapabilityQualityProjection__CapabilityVerificationId"];
+            /** Format: date-time */
+            recorded_at: string;
+            verified_by: string;
+        };
+        /**
+         * @description Bounded attestation accepted only from a dedicated verifier workload identity.
+         *
+         *     `resource` is an exact canonical Evidence resource, not an operator navigation
+         *     resource. Resource-scoped records cannot certify a cluster overview. The
+         *     investigation and revision identifiers must either both be present or absent.
+         *     `source_ref` identifies a report; the server never fetches the reference.
+         */
+        CapabilityQualityProjection__CapabilityVerificationRequest: {
+            cluster_id: components["schemas"]["CapabilityQualityProjection__ClusterId"];
+            /** @default [] */
+            evidence_ids: components["schemas"]["CapabilityQualityProjection__EvidenceId"][];
+            investigation_id?: components["schemas"]["CapabilityQualityProjection__InvestigationId"] | null;
+            level: components["schemas"]["CapabilityQualityProjection__CapabilityVerificationLevel"];
+            method: components["schemas"]["CapabilityQualityProjection__CapabilityVerificationMethod"];
+            /** Format: date-time */
+            observed_at: string;
+            outcome: components["schemas"]["CapabilityQualityProjection__CapabilityVerificationOutcome"];
+            pack_id: string;
+            pack_version: string;
+            report_digest: string;
+            resource?: string | null;
+            revision_id?: components["schemas"]["CapabilityQualityProjection__DiagnosisRevisionId"] | null;
+            schema_version: string;
+            source_ref: string;
+            tenant_id: components["schemas"]["CapabilityQualityProjection__TenantId"];
+            time_range: components["schemas"]["CapabilityQualityProjection__TimeRange"];
+            /** Format: date-time */
+            valid_until: string;
+        };
+        /** @description Inclusive time range requested from an evidence source. */
+        CapabilityQualityProjection__TimeRange: {
+            /** Format: date-time */
+            end: string;
+            /** Format: date-time */
+            start: string;
+        };
     };
     responses: {
         /** @description Successful scoped response */
@@ -8633,6 +8726,8 @@ export interface operations {
                 investigation_id?: string;
                 /** @description Supply both identifiers to evaluate only evidence saved in this authorized investigation revision. */
                 revision_id?: string;
+                /** @description Exact canonical Evidence resource. Navigation resources are not interchangeable. A resource paired with a revision must be a visible saved reference; resource verification never certifies the cluster overview. */
+                resource?: string;
             };
             header?: never;
             path?: never;
@@ -18841,6 +18936,51 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
+            };
+        };
+    };
+    recordCapabilityVerification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CapabilityQualityProjection__CapabilityVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable report, with server-owned identity and recording time; an identical report retry returns its original identity. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityQualityProjection__CapabilityVerificationRecord"];
+                };
+            };
+            /** @description Invalid version, scope, time, provenance or unqualified production proof */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller is not an authorized dedicated OIDC verifier */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The report digest already identifies a different immutable assessment */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

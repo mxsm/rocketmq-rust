@@ -84,6 +84,7 @@ pub(crate) struct PrometheusSource {
     base_url: Option<Url>,
     label_allowlist: BTreeSet<String>,
     max_time_range: std::time::Duration,
+    cluster_label: String,
 }
 
 impl PrometheusSource {
@@ -98,11 +99,24 @@ impl PrometheusSource {
             base_url,
             label_allowlist,
             max_time_range,
+            cluster_label: TELEMETRY_CLUSTER_LABEL.to_owned(),
         }
     }
 
     pub(crate) fn configured(&self) -> bool {
         self.base_url.is_some()
+    }
+
+    pub(crate) fn with_cluster_label(mut self, label: String) -> Result<Self, ConnectorError> {
+        validate_label(&label).map_err(|_| {
+            ConnectorError::configuration("Prometheus cluster label must be a literal label identifier")
+        })?;
+        if self.configured() {
+            require_label(&self.label_allowlist, &label)
+                .map_err(|_| ConnectorError::configuration("Prometheus cluster label must be allowlisted"))?;
+        }
+        self.cluster_label = label;
+        Ok(self)
     }
 
     #[allow(
@@ -154,16 +168,16 @@ impl PrometheusSource {
             .base_url
             .as_ref()
             .ok_or_else(|| ConnectorError::source("Prometheus source is not configured"))?;
-        require_label(&self.label_allowlist, TELEMETRY_CLUSTER_LABEL)?;
+        require_label(&self.label_allowlist, &self.cluster_label)?;
         let (kind, metric) = parse_resource(resource)?;
         validate_metric(metric)?;
         validate_identifier(cluster, "cluster")?;
-        let mut selector = vec![format!(r#"{TELEMETRY_CLUSTER_LABEL}="{cluster}""#)];
+        let mut selector = vec![format!(r#"{}="{cluster}""#, self.cluster_label)];
         for (label, value) in matchers {
             validate_label(label)?;
             require_label(&self.label_allowlist, label)?;
             validate_identifier(value, "Prometheus label value")?;
-            if label == TELEMETRY_CLUSTER_LABEL {
+            if label == &self.cluster_label {
                 return Err(ConnectorError::new(
                     ConnectorFailure::InvalidEvidenceQuery,
                     false,
@@ -207,6 +221,7 @@ impl PrometheusSource {
         }
         let body = bounded_response(response, max_bytes, deadline, cancel).await?;
         let value = parse_json(&body)?;
+        validate_series_scope(&value, cluster, &self.cluster_label, matchers)?;
         let projected = project_response(&value, kind, metric, start, end, max_rows, &self.label_allowlist)?;
         let mut output = SourceOutput::available(projected.content, projected.observed_at)
             .with_exposure(EvidenceExposure::PrometheusApi);
@@ -229,6 +244,39 @@ struct ProjectedPrometheus {
     observed_at: DateTime<Utc>,
     truncated: bool,
     non_numeric: bool,
+}
+
+fn validate_series_scope(
+    raw: &Value,
+    cluster: &str,
+    cluster_label: &str,
+    matchers: &[(String, String)],
+) -> Result<(), ConnectorError> {
+    let Some(series) = raw
+        .get("data")
+        .and_then(|data| data.get("result"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(());
+    };
+    // The HTTP body is already byte-bounded. Validate every returned identity,
+    // including empty series, before any subset is projected into Evidence.
+    for series in series {
+        let labels = series.get("metric").and_then(Value::as_object);
+        let matches = labels.is_some_and(|labels| {
+            labels.get(cluster_label).and_then(Value::as_str) == Some(cluster)
+                && matchers
+                    .iter()
+                    .all(|(label, value)| labels.get(label).and_then(Value::as_str) == Some(value.as_str()))
+        });
+        if !matches {
+            return Err(ConnectorError::capability(
+                ConnectorFailure::CapabilityMismatch,
+                "Prometheus series differs from the authorized cluster or canonical target",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[allow(
@@ -267,10 +315,11 @@ fn project_response(
 
     let mut remaining = max_rows.max(1);
     let mut series = Vec::with_capacity(result.len().min(max_rows));
-    let mut truncated = false;
+    let series_limit = max_rows.max(1);
+    let mut truncated = result.len() > series_limit;
     let mut non_numeric = false;
     let mut latest = None;
-    for raw_series in result {
+    for raw_series in result.iter().take(series_limit) {
         if remaining == 0 {
             truncated = true;
             break;
@@ -413,6 +462,13 @@ fn validate_metric(metric: &str) -> Result<(), ConnectorError> {
 
 fn metric_expression(metric: &str, selector: &str) -> String {
     let canonical = format!("{metric}{{{selector}}}");
+    if metric == "rocketmq_send_message_latency_bucket" {
+        // Current project exporters disable unit suffixes. Keep the historical
+        // millisecond-suffixed spelling as a fixed compatibility alias only.
+        return format!(
+            "{canonical} or rocketmq_rocketmq_send_message_latency_bucket{{{selector}}} or rocketmq_send_message_latency_milliseconds_bucket{{{selector}}} or rocketmq_rocketmq_send_message_latency_milliseconds_bucket{{{selector}}}"
+        );
+    }
     if metric.starts_with(ROCKETMQ_SERVICE_NAMESPACE_PREFIX) && !metric.starts_with("rocketmq_rocketmq_") {
         format!("{canonical} or {ROCKETMQ_SERVICE_NAMESPACE_PREFIX}{metric}{{{selector}}}")
     } else {
@@ -468,6 +524,34 @@ mod tests {
         assert!(validate_label("service.name").is_err());
         let start = Utc::now();
         assert_eq!(query_step(start, start + Duration::seconds(600), 240), 3);
+    }
+
+    #[test]
+    fn send_histogram_query_covers_current_and_legacy_exporter_names_with_the_same_target_scope() {
+        let expression = metric_expression(
+            "rocketmq_send_message_latency_bucket",
+            "rocketmq_cluster=\"local\",topic=\"orders\"",
+        );
+        assert_eq!(expression.matches("topic=\"orders\"").count(), 4);
+        assert!(expression.contains("rocketmq_send_message_latency_bucket{"));
+        assert!(expression.contains("rocketmq_send_message_latency_milliseconds_bucket{"));
+    }
+
+    #[test]
+    fn empty_series_cannot_hide_a_foreign_target_beyond_the_sample_budget() {
+        let raw = json!({"data":{"result":[
+            {"metric":{"cluster":"physical","topic":"orders"},"values":[]},
+            {"metric":{"cluster":"foreign","topic":"orders"},"values":[[1_700_000_000,"5"]]}
+        ]}});
+        assert!(
+            validate_series_scope(
+                &raw,
+                "physical",
+                "cluster",
+                &[("topic".to_owned(), "orders".to_owned())]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -612,6 +696,113 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn canonical_topic_query_rejects_foreign_topic_samples_before_capture() {
+        async fn fixture(Query(query): Query<BTreeMap<String, String>>) -> Json<Value> {
+            assert!(query["query"].contains("topic=\"orders\""));
+            Json(json!({"status":"success","data":{"resultType":"matrix","result":[{
+                "metric":{"rocketmq_cluster":"local","topic":"another-topic"},"values":[[1_700_000_000,"5"]]
+            }]}}))
+        }
+        let app = Router::new().fallback(get(fixture));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let source = PrometheusSource::new(
+            Client::new(),
+            Some(Url::parse(&format!("http://{address}/")).unwrap()),
+            BTreeSet::from([TELEMETRY_CLUSTER_LABEL.to_owned(), "topic".to_owned()]),
+            std::time::Duration::from_secs(600),
+        );
+        let at = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let error = source
+            .query_with_matchers(
+                "local",
+                "metrics/rocketmq_send_message_latency_milliseconds_bucket",
+                &[("topic".to_owned(), "orders".to_owned())],
+                at,
+                at + Duration::seconds(1),
+                10,
+                16 * 1024,
+                Utc::now() + Duration::seconds(5),
+                &CancelSignal::default(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.failure(), ConnectorFailure::CapabilityMismatch);
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn native_cluster_label_is_explicit_and_foreign_cluster_samples_are_rejected() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        async fn fixture(
+            State(foreign): State<Arc<AtomicBool>>,
+            Query(query): Query<BTreeMap<String, String>>,
+        ) -> Json<Value> {
+            assert!(query["query"].contains("cluster=\"physical-cluster\""));
+            assert!(!query["query"].contains("rocketmq_cluster="));
+            let cluster = if foreign.load(Ordering::SeqCst) {
+                "other-cluster"
+            } else {
+                "physical-cluster"
+            };
+            Json(json!({"status":"success","data":{"resultType":"matrix","result":[{
+                "metric":{"cluster":cluster,"topic":"orders","le":"+Inf"},"values":[[1_700_000_000,"5"]]
+            }]}}))
+        }
+        let foreign = Arc::new(AtomicBool::new(false));
+        let app = Router::new().fallback(get(fixture)).with_state(foreign.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let source = PrometheusSource::new(
+            Client::new(),
+            Some(Url::parse(&format!("http://{address}/")).unwrap()),
+            BTreeSet::from(["cluster".to_owned(), "topic".to_owned(), "le".to_owned()]),
+            std::time::Duration::from_secs(600),
+        )
+        .with_cluster_label("cluster".to_owned())
+        .unwrap();
+        let at = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for wrong in [false, true] {
+            foreign.store(wrong, Ordering::SeqCst);
+            let result = source
+                .query_with_matchers(
+                    "physical-cluster",
+                    "metrics/rocketmq_send_message_latency_bucket",
+                    &[("topic".to_owned(), "orders".to_owned())],
+                    at,
+                    at + Duration::seconds(1),
+                    10,
+                    16 * 1024,
+                    Utc::now() + Duration::seconds(5),
+                    &CancelSignal::default(),
+                )
+                .await;
+            if wrong {
+                assert_eq!(result.unwrap_err().failure(), ConnectorFailure::CapabilityMismatch);
+            } else {
+                assert_eq!(
+                    result.unwrap().content["series"][0]["labels"]["cluster"],
+                    "physical-cluster"
+                );
+            }
+        }
+        server.abort();
+        let _ = server.await;
+        assert!(
+            PrometheusSource::new(Client::new(), None, BTreeSet::new(), std::time::Duration::from_secs(1))
+                .with_cluster_label("cluster\"} or vector(1)".to_owned())
+                .is_err()
+        );
     }
 
     #[tokio::test]

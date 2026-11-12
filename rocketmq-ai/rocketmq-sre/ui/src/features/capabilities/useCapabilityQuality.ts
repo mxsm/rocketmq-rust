@@ -5,6 +5,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { useWorkspaceScope } from "@/context/WorkspaceScopeContext";
 import { useSreData } from "@/data/SreDataContext";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
+import { scopedCapabilityProjection } from "./capabilityVerification";
 
 export class CapabilityScopeError extends Error {}
 
@@ -27,11 +28,13 @@ export function useCapabilityQuality(binding?: CoverageRevisionBinding) {
         requestBinding,
       );
       const quality = matrix.quality;
+      // This hook requests cluster or saved-revision scope, never a canonical target.
       if (
         quality &&
         (quality.schema_version !== "rocketmq-sre.capability-quality.v1" ||
           quality.cluster_id !== scope.clusterId ||
           quality.tenant_id !== tenantId ||
+          quality.resource != null ||
           quality.execution_eligible !== false ||
           (requestBinding &&
             (quality.investigation_id !== investigationId ||
@@ -40,7 +43,10 @@ export function useCapabilityQuality(binding?: CoverageRevisionBinding) {
             (quality.investigation_id != null || quality.revision_id != null)))
       )
         throw new CapabilityScopeError();
-      return { quality, ownerIdentity: scope.identityKey };
+      return {
+        quality: quality ? scopedCapabilityProjection(quality) : undefined,
+        ownerIdentity: scope.identityKey,
+      };
     },
     [
       api,

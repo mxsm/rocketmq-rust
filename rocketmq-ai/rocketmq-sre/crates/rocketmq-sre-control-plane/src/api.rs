@@ -624,6 +624,8 @@ pub fn build_router(
 }
 
 struct ControlPlaneRouters {
+    #[cfg(test)]
+    state: AppState,
     public: Router,
     connector: Router,
     autonomy_operations: crate::autonomy::AutonomyOperationsService,
@@ -784,11 +786,16 @@ fn build_routers_with_auth(
             state.clone(),
             crate::read_audit::middleware,
         ));
+    #[cfg(test)]
+    let test_state = state.clone();
     let connector = connector_routes
         .merge(connector_control_routes)
         .merge(crate::phase1_api::connector_ingest_routes())
+        .merge(crate::coverage::verification_routes())
         .with_state(state);
     Ok(ControlPlaneRouters {
+        #[cfg(test)]
+        state: test_state,
         public,
         connector,
         autonomy_operations,
@@ -797,6 +804,30 @@ fn build_routers_with_auth(
         preventive_automation,
         slo,
     })
+}
+
+#[cfg(test)]
+pub(crate) fn capability_verification_test_state(
+    repository: PostgresRepository,
+) -> Result<AppState, ControlPlaneRequestFailure> {
+    let token: Arc<str> = Arc::from("capability-verification-test-signing-key-at-least-32-bytes");
+    let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(1024));
+    let model = ModelGatewayService::disabled(repository.clone());
+    Ok(build_routers_with_auth(
+        repository,
+        CapabilityDocuments::embedded()?,
+        token.clone(),
+        token.clone(),
+        token.clone(),
+        crate::supervised_execution::ExecutorSubmissionClient::disabled(),
+        AuthService::development(token),
+        EvidenceBlobStore::in_memory(65_536),
+        DashboardDeepLinkPolicy::disabled(),
+        model,
+        workflow,
+        None,
+    )?
+    .state)
 }
 
 /// Connects the production repository, binds the HTTP endpoint, and drains on
@@ -1084,6 +1115,8 @@ pub async fn run(
         })
         .map_err(ControlPlaneError::configuration_source)?;
     let ControlPlaneRouters {
+        #[cfg(test)]
+            state: _,
         public,
         connector,
         autonomy_operations: _,
@@ -1444,7 +1477,7 @@ fn authorize_mutation(headers: &HeaderMap, expected_token: &str) -> Result<(), C
     }
 }
 
-fn ensure_cluster_authorized(
+pub(crate) fn ensure_cluster_authorized(
     auth: &crate::auth::AuthContext,
     cluster: &Cluster,
 ) -> Result<(), ControlPlaneRequestFailure> {

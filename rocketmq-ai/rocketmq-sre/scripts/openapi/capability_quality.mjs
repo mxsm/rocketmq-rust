@@ -23,8 +23,23 @@ export function extendCapabilityQuality({ document, schemas, qualitySchema }) {
     schema: { type: "string", format: "uuid" } },
     ...["investigation_id", "revision_id"].map((name) => ({ name, in: "query", required: false,
       description: "Supply both identifiers to evaluate only evidence saved in this authorized investigation revision.",
-      schema: { type: "string", format: "uuid" } }))];
+      schema: { type: "string", format: "uuid" } })),
+    { name: "resource", in: "query", required: false,
+      description: "Exact canonical Evidence resource. Navigation resources are not interchangeable. A resource paired with a revision must be a visible saved reference; resource verification never certifies the cluster overview.",
+      schema: { type: "string", maxLength: 512 } }];
   get.responses["200"] = { description: "Legacy coverage plus independently sourced read-only capability facts",
     content: { "application/json": { schema: { type: "object", additionalProperties: true,
       properties: { quality: { $ref: `#/components/schemas/${prefix}` } } } } } };
+  document.paths["/internal/v1/capability-verifications"] = { post: {
+    operationId: "recordCapabilityVerification",
+    description: "Private workload listener only. Requires the dedicated capability_verifier_service OIDC role and authorized tenant/cluster. UI, Connector, model and execution identities cannot write these append-only records; development authentication cannot write production facts. The source report is never fetched. Execution authority is unchanged.",
+    requestBody: { required: true, content: { "application/json": { schema: { $ref: `#/components/schemas/${prefix}__CapabilityVerificationRequest` } } } },
+    responses: {
+      "200": { description: "Immutable report, with server-owned identity and recording time; an identical report retry returns its original identity.",
+        content: { "application/json": { schema: { $ref: `#/components/schemas/${prefix}__CapabilityVerificationRecord` } } } },
+      "400": { description: "Invalid version, scope, time, provenance or unqualified production proof" },
+      "403": { description: "Caller is not an authorized dedicated OIDC verifier" },
+      "409": { description: "The report digest already identifies a different immutable assessment" }
+    }
+  } };
 }

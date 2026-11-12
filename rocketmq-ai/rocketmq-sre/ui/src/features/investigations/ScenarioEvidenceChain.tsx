@@ -76,6 +76,12 @@ export function ScenarioEvidenceChain({
       : undefined;
   const matched =
     chain?.required.filter((slot) => slot.quality === "available").length ?? 0;
+  const matrixHref = revision
+    ? `/coverage?${new URLSearchParams({
+        investigation_id: revision.investigation_id,
+        revision_id: revision.id,
+      })}`
+    : "/coverage";
 
   return (
     <DataSurface
@@ -278,7 +284,7 @@ export function ScenarioEvidenceChain({
           </Link>
         </Button>
         <Button asChild size="sm" variant="ghost">
-          <Link to="/coverage">{m.openMatrix}</Link>
+          <Link to={matrixHref}>{m.openMatrix}</Link>
         </Button>
       </div>
     </DataSurface>
