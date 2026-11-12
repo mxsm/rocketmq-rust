@@ -30,6 +30,9 @@ pub struct MappedFileQueueRuntimeState {
     store_timestamp: Arc<AtomicU64>,
     closing: Arc<AtomicBool>,
     commit_lock: Arc<Mutex<()>>,
+    /// Start offset plus one of the next segment whose background preallocation was requested;
+    /// zero before the first request.
+    preallocation_requested: Arc<AtomicU64>,
 }
 
 impl Default for MappedFileQueueRuntimeState {
@@ -40,6 +43,7 @@ impl Default for MappedFileQueueRuntimeState {
             store_timestamp: Arc::new(AtomicU64::new(0)),
             closing: Arc::new(AtomicBool::new(false)),
             commit_lock: Arc::new(Mutex::new(())),
+            preallocation_requested: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -102,5 +106,23 @@ impl MappedFileQueueRuntimeState {
     #[doc(hidden)]
     pub fn commit_lock(&self) -> &Mutex<()> {
         self.commit_lock.as_ref()
+    }
+
+    /// Returns whether background preallocation of the segment starting at `next_offset` was
+    /// already requested.
+    ///
+    /// Every append past the preallocation threshold asks for the next segment, so the request
+    /// itself, which takes the commit lock and checks the free space of every root, is made once.
+    #[doc(hidden)]
+    pub fn preallocation_requested_for(&self, next_offset: u64) -> bool {
+        self.preallocation_requested.load(Ordering::Acquire) == next_offset.wrapping_add(1)
+    }
+
+    /// Records that background preallocation of the segment starting at `next_offset` needs no
+    /// further request.
+    #[doc(hidden)]
+    pub fn record_preallocation_requested(&self, next_offset: u64) {
+        self.preallocation_requested
+            .store(next_offset.wrapping_add(1), Ordering::Release);
     }
 }

@@ -500,7 +500,9 @@ fn get_last_mapped_file_for_append(
         let last_file =
             MappedFileQueueLastFile::new(file.get_file_from_offset(), file.get_wrote_position(), file.is_full());
         if mapped_files.allows_legacy_namespace_mutation() {
-            if let Some(next_offset) = plan_mapped_file_queue_preallocation(mapped_file_size, last_file) {
+            if let Some(next_offset) = plan_mapped_file_queue_preallocation(mapped_file_size, last_file)
+                .filter(|next_offset| !runtime_state.preallocation_requested_for(*next_offset))
+            {
                 trigger_mapped_file_preallocation(
                     mapped_files,
                     store_path,
@@ -545,6 +547,8 @@ fn trigger_mapped_file_preallocation(
         return;
     }
     let Some(service) = allocate_mapped_file_service else {
+        // Nothing preallocates segments of this queue; later appends need not ask again.
+        runtime_state.record_preallocation_requested(next_offset);
         return;
     };
     if !service.is_started() {
@@ -563,6 +567,9 @@ fn trigger_mapped_file_preallocation(
     };
     let next_file_path = root.join(offset_to_file_name(next_offset));
     service.submit_request_in_background(next_file_path.to_string_lossy().to_string(), mapped_file_size);
+    // One request per segment, as in Java. If the background allocation fails, the append that
+    // fills the current segment still creates the next one synchronously.
+    runtime_state.record_preallocation_requested(next_offset);
 }
 
 fn create_and_publish_mapped_file(
@@ -2330,6 +2337,62 @@ mod tests {
         assert_eq!(preallocated.get_file_from_offset(), mapped_file_size);
         assert!(next_file_path.exists());
 
+        service.shutdown().await;
+    }
+
+    /// Counts how often a CommitLog path set is asked for preallocation candidates.
+    #[derive(Debug, Default)]
+    struct CountingPreallocateInjector {
+        preallocate_checks: std::sync::atomic::AtomicUsize,
+    }
+
+    impl crate::log_file::commit_log_path_set::StoreFaultInjector for CountingPreallocateInjector {
+        fn should_fail(&self, point: StoreFaultPoint, _root: &Path) -> bool {
+            if point == StoreFaultPoint::Preallocate {
+                self.preallocate_checks
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn appends_past_the_preallocation_threshold_request_the_next_segment_once() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let mapped_file_size = 1024;
+        let injector = Arc::new(CountingPreallocateInjector::default());
+        let path_set = Arc::new(
+            CommitLogPathSet::try_new_with_fault_injector([temp_dir.path().to_path_buf()], [], 0, injector.clone())
+                .expect("path set"),
+        );
+        let root = path_set.primary_writable_root().to_path_buf();
+        let first_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(root.join(offset_to_file_name(0)).to_string_lossy().to_string()),
+                mapped_file_size,
+            )
+            .expect("first mapped file"),
+        );
+        first_file.set_wrote_position(820);
+        let service = AllocateMappedFileService::new_with_config(
+            None,
+            false,
+            false,
+            crate::runtime::test_scope("mapped-file-preallocation-once-test").mapped_file_allocation_budget(),
+        );
+        service.start();
+        let mut queue = MappedFileQueue::new_commit_log(path_set, mapped_file_size, Some(service.clone()));
+        queue.replace_mapped_files_exclusive(vec![first_file]);
+
+        for _ in 0..100 {
+            assert!(queue.get_last_mapped_file_mut_start_offset(0, true).is_some());
+        }
+
+        assert_eq!(
+            injector.preallocate_checks.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the free-space scan for the next segment runs once, not once per append"
+        );
         service.shutdown().await;
     }
 
