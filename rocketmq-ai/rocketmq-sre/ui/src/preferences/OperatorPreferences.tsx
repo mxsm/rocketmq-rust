@@ -2,21 +2,22 @@ import {
   createContext,
   type PropsWithChildren,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
 
 export type OperatorLocale = "zh-CN" | "en-US";
-export type OperatorTimeZone =
-  | "Asia/Shanghai"
-  | "Asia/Singapore"
-  | "UTC";
+export type OperatorTheme = "dark" | "light";
+export type OperatorTimeZone = "Asia/Shanghai" | "Asia/Singapore" | "UTC";
 
 interface OperatorPreferencesValue {
   locale: OperatorLocale;
   timeZone: OperatorTimeZone;
+  theme: OperatorTheme;
   setLocale: (locale: OperatorLocale) => void;
   setTimeZone: (timeZone: OperatorTimeZone) => void;
+  setTheme: (theme: OperatorTheme) => void;
   formatDateTime: (value: Date | string) => string;
 }
 
@@ -24,30 +25,42 @@ const STORAGE_KEY = "rocketmq-sre-operator-preferences.v1";
 const DEFAULT_PREFERENCES = {
   locale: "zh-CN" as OperatorLocale,
   timeZone: "Asia/Shanghai" as OperatorTimeZone,
+  theme: "dark" as OperatorTheme,
 };
 
-const OperatorPreferencesContext =
-  createContext<OperatorPreferencesValue | undefined>(undefined);
+const OperatorPreferencesContext = createContext<
+  OperatorPreferencesValue | undefined
+>(undefined);
 
-export function OperatorPreferencesProvider({
-  children,
-}: PropsWithChildren) {
+export function OperatorPreferencesProvider({ children }: PropsWithChildren) {
   const initial = useMemo(readPreferences, []);
   const [locale, setLocaleState] = useState<OperatorLocale>(initial.locale);
   const [timeZone, setTimeZoneState] = useState<OperatorTimeZone>(
     initial.timeZone,
   );
+  const [theme, setThemeState] = useState<OperatorTheme>(initial.theme);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    return () => {
+      delete document.documentElement.dataset.theme;
+    };
+  }, [theme]);
   const value = useMemo<OperatorPreferencesValue>(
     () => ({
       locale,
       timeZone,
+      theme,
       setLocale: (next) => {
         setLocaleState(next);
-        writePreferences(next, timeZone);
+        writePreferences(next, timeZone, theme);
       },
       setTimeZone: (next) => {
         setTimeZoneState(next);
-        writePreferences(locale, next);
+        writePreferences(locale, next, theme);
+      },
+      setTheme: (next) => {
+        setThemeState(next);
+        writePreferences(locale, timeZone, next);
       },
       formatDateTime: (input) =>
         new Date(input).toLocaleString(locale, {
@@ -55,7 +68,7 @@ export function OperatorPreferencesProvider({
           timeZone,
         }),
     }),
-    [locale, timeZone],
+    [locale, theme, timeZone],
   );
 
   return (
@@ -82,6 +95,7 @@ function readPreferences() {
     ) as {
       locale?: string;
       timeZone?: string;
+      theme?: string;
     };
     return {
       locale: isLocale(stored.locale)
@@ -90,6 +104,7 @@ function readPreferences() {
       timeZone: isTimeZone(stored.timeZone)
         ? stored.timeZone
         : DEFAULT_PREFERENCES.timeZone,
+      theme: stored.theme === "light" ? ("light" as const) : ("dark" as const),
     };
   } catch {
     return DEFAULT_PREFERENCES;
@@ -99,11 +114,16 @@ function readPreferences() {
 function writePreferences(
   locale: OperatorLocale,
   timeZone: OperatorTimeZone,
+  theme: OperatorTheme,
 ) {
-  window.localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({ locale, timeZone }),
-  );
+  try {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ locale, timeZone, theme }),
+    );
+  } catch {
+    // Restricted browser storage must not prevent in-session preferences.
+  }
 }
 
 function isLocale(value: string | undefined): value is OperatorLocale {
@@ -112,8 +132,6 @@ function isLocale(value: string | undefined): value is OperatorLocale {
 
 function isTimeZone(value: string | undefined): value is OperatorTimeZone {
   return (
-    value === "Asia/Shanghai" ||
-    value === "Asia/Singapore" ||
-    value === "UTC"
+    value === "Asia/Shanghai" || value === "Asia/Singapore" || value === "UTC"
   );
 }

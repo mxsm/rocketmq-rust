@@ -8,7 +8,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type {
@@ -27,6 +27,7 @@ import { ReadOnlyBoundary } from "@/components/ReadOnlyBoundary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSreData } from "@/data/SreDataContext";
+import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useClusterScope } from "@/hooks/useClusterScope";
 
@@ -54,6 +55,8 @@ export function IncidentPostmortemPage() {
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<string>();
+  const createAbort = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => createAbort.current?.abort(), []);
   const load = useCallback(
     (signal: AbortSignal) => api.getIncident(incidentId, signal),
     [api, incidentId],
@@ -61,21 +64,27 @@ export function IncidentPostmortemPage() {
   const resource = useAsyncResource(load);
 
   const create = async () => {
+    if (creating) return;
     setCreating(true);
     setMessage(undefined);
+    const controller = new AbortController();
+    createAbort.current = controller;
     try {
       const postmortem = await api.createPostmortem(incidentId, {
         operator_notes: [],
-      });
+      }, controller.signal);
+      if (controller.signal.aborted) return;
       navigate(`/postmortems/${postmortem.postmortem.id}`);
     } catch {
+      if (controller.signal.aborted) return;
       setMessage("复盘草稿生成失败；没有执行任何 RocketMQ 变更。");
     } finally {
-      setCreating(false);
+      if (!controller.signal.aborted) setCreating(false);
     }
   };
 
   return (
+    <ObjectScopeBoundary object={resource.data?.incident}>
     <div className="page">
       <Button asChild className="back-link" variant="ghost">
         <Link to={`/incidents/${incidentId}`}>
@@ -148,6 +157,7 @@ export function IncidentPostmortemPage() {
         </div>
       )}
     </div>
+    </ObjectScopeBoundary>
   );
 }
 
@@ -220,6 +230,7 @@ export function PostmortemDetailPage() {
   };
 
   return (
+    <ObjectScopeBoundary object={resource.data?.postmortem}>
     <div className="page">
       <Button asChild className="back-link" variant="ghost">
         <Link to="/incidents">
@@ -429,6 +440,7 @@ export function PostmortemDetailPage() {
         </>
       )}
     </div>
+    </ObjectScopeBoundary>
   );
 }
 

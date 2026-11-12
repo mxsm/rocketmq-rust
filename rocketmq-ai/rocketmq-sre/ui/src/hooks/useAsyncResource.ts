@@ -11,18 +11,26 @@ export function useAsyncResource<T>(
   load: (signal: AbortSignal) => Promise<T>,
 ): AsyncResource<T> {
   const [version, setVersion] = useState(0);
-  const [data, setData] = useState<T>();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>();
+  const [result, setResult] = useState<{
+    owner: typeof load;
+    version: number;
+    data?: T;
+    error?: unknown;
+    loading: boolean;
+  }>();
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setError(undefined);
+    setResult((previous) => ({
+      owner: load,
+      version,
+      loading: true,
+      data: previous?.owner === load ? previous.data : undefined,
+    }));
     void load(controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) {
-          setData(value);
+          setResult({ owner: load, version, data: value, loading: false });
         }
       })
       .catch((reason: unknown) => {
@@ -30,12 +38,13 @@ export function useAsyncResource<T>(
           !controller.signal.aborted &&
           !(reason instanceof DOMException && reason.name === "AbortError")
         ) {
-          setError(reason);
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoading(false);
+          setResult((previous) => ({
+            owner: load,
+            version,
+            error: reason,
+            loading: false,
+            data: previous?.owner === load ? previous.data : undefined,
+          }));
         }
       });
     return () => controller.abort();
@@ -45,5 +54,12 @@ export function useAsyncResource<T>(
     setVersion((current) => current + 1);
   }, []);
 
-  return { data, loading, error, reload };
+  // A changed request must hide the previous result during render, before effects run.
+  const current = result?.owner === load ? result : undefined;
+  return {
+    data: current?.data,
+    loading: current?.version === version ? current.loading : true,
+    error: current?.error,
+    reload,
+  };
 }

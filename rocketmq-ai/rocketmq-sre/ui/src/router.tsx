@@ -11,6 +11,8 @@ import {
   useState,
 } from "react";
 
+import { inheritWorkspaceSearch } from "@/context/workspaceScope";
+
 export type To =
   | string
   | {
@@ -91,6 +93,8 @@ export function RouterProvider({ router }: { router: BrowserRouter }) {
       } else {
         window.history.pushState(null, "", href);
       }
+      // Child mount effects may navigate before this provider's event effect.
+      setLocation(readBrowserLocation());
       window.dispatchEvent(new Event(NAVIGATION_EVENT));
     },
     [location],
@@ -455,6 +459,7 @@ function resolveInternalHref(target: To, location: Location): string {
   ) {
     throw new Error("router navigation target crosses the application origin");
   }
+  resolved.search = inheritWorkspaceSearch(location.search, resolved.search, resolved.pathname);
   return `${normalizePathname(resolved.pathname)}${resolved.search}${resolved.hash}`;
 }
 

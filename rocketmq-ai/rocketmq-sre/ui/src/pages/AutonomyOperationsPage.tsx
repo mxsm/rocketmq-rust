@@ -68,6 +68,7 @@ export function AutonomyOperationsPage() {
   const [period, setPeriod] =
     useState<AutonomyReportPeriod>("weekly");
   const [clusterId, setClusterId] = useState(ALL_CLUSTERS);
+  const [operationsView, setOperationsView] = useState("effectiveness");
   const [outcomeClass, setOutcomeClass] = useState<
     AutonomyOutcomeClass | typeof ALL_OUTCOMES
   >(ALL_OUTCOMES);
@@ -320,7 +321,8 @@ export function AutonomyOperationsPage() {
 
           <Tabs
             className="autonomy-operations-tabs"
-            defaultValue="effectiveness"
+            onValueChange={setOperationsView}
+            value={operationsView}
           >
             <TabsList aria-label="自治运营视图">
               <TabsTrigger value="effectiveness">

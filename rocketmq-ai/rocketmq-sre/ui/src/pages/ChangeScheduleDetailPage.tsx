@@ -33,6 +33,7 @@ import {
   ScheduleStatusBadge,
 } from "@/features/change-management/ChangeWorkspace";
 import { formatChangeTimestamp } from "@/features/change-management/changePresentation";
+import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 
 const liveStatuses = new Set<ChangeSchedule["status"]>([
   "scheduled",
@@ -147,6 +148,7 @@ export function ChangeScheduleDetailPage() {
   const request = { reason: reason.trim() };
 
   return (
+    <ObjectScopeBoundary object={schedule}>
     <div className="page change-page schedule-detail-page">
       <PageHeader
         eyebrow="P3-11 · SCHEDULE DETAIL"
@@ -366,6 +368,7 @@ export function ChangeScheduleDetailPage() {
         </aside>
       </div>
     </div>
+    </ObjectScopeBoundary>
   );
 }
 

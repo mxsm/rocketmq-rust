@@ -5,11 +5,12 @@ import type {
   CoverageMatrix,
   EvidenceRow,
 } from "@/api/types";
+import { DEMO_TENANT_ID } from "./phase1Demo";
 
 export const demoClusters: ClusterSummary[] = [
   {
     id: "10000000-0000-4000-8000-000000000001",
-    tenant_id: "platform-core",
+    tenant_id: DEMO_TENANT_ID,
     external_cluster_key: "rmq-prod-cn",
     environment: "生产",
     region: "cn-shanghai",
@@ -23,7 +24,7 @@ export const demoClusters: ClusterSummary[] = [
   },
   {
     id: "10000000-0000-4000-8000-000000000002",
-    tenant_id: "messaging-dev",
+    tenant_id: DEMO_TENANT_ID,
     external_cluster_key: "rmq-staging",
     environment: "预发",
     region: "cn-hangzhou",
@@ -37,7 +38,7 @@ export const demoClusters: ClusterSummary[] = [
   },
   {
     id: "10000000-0000-4000-8000-000000000003",
-    tenant_id: "disaster-recovery",
+    tenant_id: DEMO_TENANT_ID,
     external_cluster_key: "rmq-dr",
     environment: "容灾",
     region: "cn-beijing",

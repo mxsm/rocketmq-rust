@@ -79,8 +79,13 @@ const InspectionsPage = lazy(() =>
   })),
 );
 const InvestigationDetailPage = lazy(() =>
-  import("./pages/WorkflowPages").then((module) => ({
-    default: module.InvestigationDetailPage,
+  import("./pages/InvestigationWorkspacePage").then((module) => ({
+    default: module.InvestigationWorkspacePage,
+  })),
+);
+const InvestigationsPage = lazy(() =>
+  import("./pages/InvestigationsPage").then((module) => ({
+    default: module.InvestigationsPage,
   })),
 );
 const ForecastPage = lazy(() =>
@@ -225,6 +230,10 @@ const router = createBrowserRouter([
       {
         path: "conversations/:conversationId",
         element: <ConversationDetailPage />,
+      },
+      {
+        path: "investigations",
+        element: <InvestigationsPage />,
       },
       {
         path: "investigations/:investigationId",
