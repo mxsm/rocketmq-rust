@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(test)]
+
 //! Deterministic public-wire / read-adapter to Core regressions. These fixtures
 //! exercise missing signal boundaries; they do not assert live qualification.
 

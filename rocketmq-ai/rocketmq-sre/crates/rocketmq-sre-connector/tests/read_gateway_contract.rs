@@ -15,6 +15,14 @@
 use std::fs;
 use std::path::Path;
 
+fn is_test_only_source(source: &str) -> bool {
+    source
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("//"))
+        == Some("#![cfg(test)]")
+}
+
 fn adapter_bypasses(root: &Path) -> Vec<String> {
     let source_root = root.join("src");
     let allowed = [
@@ -51,6 +59,10 @@ fn adapter_bypasses(root: &Path) -> Vec<String> {
                 continue;
             }
             let source = fs::read_to_string(&path).expect("connector source");
+            // A leading inner cfg excludes the complete file from production, regardless of its name.
+            if is_test_only_source(&source) {
+                continue;
+            }
             for marker in forbidden {
                 if source.contains(marker) {
                     findings.push(format!("{relative}:{marker}"));
@@ -59,6 +71,19 @@ fn adapter_bypasses(root: &Path) -> Vec<String> {
         }
     }
     findings
+}
+
+#[test]
+fn only_a_leading_file_level_test_cfg_excludes_adapter_fixtures() {
+    assert!(is_test_only_source("// License\n\n#![cfg(test)]\nMcpSource"));
+    for source in [
+        "McpSource",
+        "#[cfg(test)]\nmod tests {}\nMcpSource",
+        "/*\n#![cfg(test)]\n*/\nMcpSource",
+        "const TEXT: &str = r#\"\n#![cfg(test)]\n\"#;\nMcpSource",
+    ] {
+        assert!(!is_test_only_source(source), "production source was excluded: {source}");
+    }
 }
 
 #[test]
