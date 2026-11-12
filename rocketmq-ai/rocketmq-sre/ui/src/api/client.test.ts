@@ -12,6 +12,17 @@ afterEach(() => {
 });
 
 describe("stateLabel", () => {
+  it("encodes optional cluster and saved-revision coverage scope without changing the legacy call", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const api = createHttpSreApi({ token: "test", tenantId: "tenant", clusterIds: ["cluster/id"], subject: "reader", roles: ["rocketmq:read"] });
+    await api.getCoverage();
+    await api.getCoverage(undefined, "cluster/id", { investigationId: "investigation/id", revisionId: "revision/id" });
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/v1/capabilities/coverage");
+    const target = new URL(String(fetchMock.mock.calls[1][0]), "http://localhost");
+    expect(target.searchParams.get("cluster_id")).toBe("cluster/id");
+    expect(target.searchParams.get("investigation_id")).toBe("investigation/id");
+    expect(target.searchParams.get("revision_id")).toBe("revision/id");
+  });
   it("renders every onboarding state without exposing implementation names", () => {
     expect(stateLabel("pending")).toBe("待接入");
     expect(stateLabel("handshaking")).toBe("握手中");

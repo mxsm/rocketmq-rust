@@ -20,6 +20,7 @@ use chrono::Utc;
 use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
 use rocketmq_admin_core::core::broker::ListBrokersRequest;
 use rocketmq_admin_core::core::broker::QueryBrokerDiagnosticsRequest;
+use rocketmq_admin_core::core::broker::QueryBrokerDiagnosticsTargetRequest;
 use rocketmq_admin_core::core::client_connection::ClientConnectionQueryAdmin;
 use rocketmq_admin_core::core::client_connection::ListProducerConnectionsRequest;
 use rocketmq_admin_core::core::client_connection::ListProducerConnectionsResult;
@@ -51,6 +52,24 @@ use super::common::validate_identifier;
 use crate::ConnectorError;
 use crate::ConnectorFailure;
 use crate::config::AdminSourceConfig;
+
+fn broker_diagnostics_target(resource: &str) -> Option<(&str, bool)> {
+    [
+        "broker/diagnostics/",
+        "store/health/",
+        "store/recovery/",
+        "store/background-index/",
+        "store/rocksdb/",
+        "store/tiered/",
+        "auth/diagnostics/",
+    ]
+    .into_iter()
+    .find_map(|prefix| {
+        resource
+            .strip_prefix(prefix)
+            .map(|target| (target, prefix == "auth/diagnostics/"))
+    })
+}
 
 struct AdminState {
     runtime: Option<Arc<ClientRuntime>>,
@@ -146,7 +165,30 @@ impl AdminQuerySource {
             .as_mut()
             .ok_or_else(|| ConnectorError::source("read-only Admin source is not configured or ready"))?;
 
-        let value = if resource == "admin/brokers" || resource == "brokers" {
+        let value = if let Some((broker_name, security_profile)) = broker_diagnostics_target(resource) {
+            let request = QueryBrokerDiagnosticsTargetRequest::try_new(cluster, broker_name)
+                .map_err(ConnectorError::source_error)?;
+            let result = bounded_admin(
+                deadline,
+                cancel,
+                session.query_broker_diagnostics_target_with_evidence(&request),
+                "read-only exact Broker diagnostics query failed",
+            )
+            .await?;
+            let mut diagnostics = result.data;
+            diagnostics.partial |= result.partial;
+            let mut output = if security_profile {
+                super::auth_security_diagnostics::project(diagnostics)?
+            } else {
+                super::broker_store_diagnostics::project(diagnostics)?
+            };
+            if result.partial {
+                output.partial = true;
+                output.coverage = rocketmq_sre_contracts::CoverageStatus::Partial;
+            }
+            output.warnings.extend(result.warnings);
+            return Ok(output);
+        } else if resource == "admin/brokers" || resource == "brokers" {
             let request = ListBrokersRequest::try_new(cluster).map_err(ConnectorError::source_error)?;
             serialize(
                 bounded_admin(

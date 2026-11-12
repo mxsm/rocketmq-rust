@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { App } from "@/App";
@@ -8,7 +8,7 @@ import type {
   InvestigationDiagnosisRevision,
   InvestigationView,
 } from "@/api/types";
-import { demoClusters } from "@/data/demo";
+import { demoClusters, demoCoverage } from "@/data/demo";
 import {
   DEMO_CLUSTER_ID,
   DEMO_TENANT_ID,
@@ -125,6 +125,7 @@ describe("investigation workspace and evidence navigation", () => {
     window.sessionStorage.clear();
     state.api = {
       getInvestigation: vi.fn().mockResolvedValue(fixture()),
+      getCoverage: vi.fn().mockResolvedValue(demoCoverage),
       getEvidence: vi.fn().mockResolvedValue(evidence()),
       getEvidenceContent: vi.fn().mockResolvedValue({
         visible_connections: 3,
@@ -168,23 +169,18 @@ describe("investigation workspace and evidence navigation", () => {
         window.location.origin,
       ).searchParams.get("cluster_id"),
     ).toBe(DEMO_CLUSTER_ID);
-    const evidenceLink = await screen.findByRole("link", {
-      name: "在证据浏览器查看脱敏内容",
-    });
-    expect(
-      new URL(
-        evidenceLink.getAttribute("href") ?? "",
-        window.location.origin,
-      ).searchParams.get("evidence_id"),
-    ).toBe(EVIDENCE);
-    expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
-    const auditDetails = screen.getAllByText("审计详情");
+    expect(state.api.getEvidence).not.toHaveBeenCalled();
     expect(screen.getByText("turn")).not.toBeVisible();
-    expect(screen.getByText(evidence().content_hash)).not.toBeVisible();
-    await user.click(auditDetails[0]);
+    await user.click(screen.getByText("审计详情"));
     expect(screen.getByText("turn")).toBeVisible();
-    await user.click(auditDetails[1]);
-    expect(screen.getByText(evidence().content_hash)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "查看证据" }));
+    const drawer = await screen.findByRole("dialog", { name: "证据详情" });
+    expect(await within(drawer).findByText("rocketmq-mcp")).toBeVisible();
+    expect(window.location.pathname).toBe(`/investigations/${INVESTIGATION}`);
+    expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
+    expect(within(drawer).getByText(evidence().content_hash)).not.toBeVisible();
+    await user.click(within(drawer).getByText("审计详情"));
+    expect(within(drawer).getByText(evidence().content_hash)).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /执行|暂停|预算/ }),
     ).not.toBeInTheDocument();
@@ -243,14 +239,16 @@ describe("investigation workspace and evidence navigation", () => {
     const user = userEvent.setup();
     open("/evidence", `&evidence_id=${EVIDENCE}`);
     expect(
-      await screen.findByText("rocketmq-mcp", { selector: "code" }),
+      await screen.findByRole("dialog", { name: "证据详情" }),
     ).toBeVisible();
     expect(state.api.getEvidence).toHaveBeenCalledWith(
       EVIDENCE,
       expect.any(AbortSignal),
     );
     expect(state.api.listEvidence).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "展开详情" }));
+    await user.click(
+      await screen.findByRole("button", { name: "读取脱敏内容" }),
+    );
     expect(await screen.findByText(/visible_connections/)).toHaveTextContent(
       "[redacted]",
     );
@@ -266,11 +264,9 @@ describe("investigation workspace and evidence navigation", () => {
     });
     open("/evidence", `&evidence_id=${EVIDENCE}`);
     expect(
-      await screen.findByText("指定证据不在当前范围内或当前身份无权读取"),
+      await screen.findByText("证据与当前租户、集群、资源或引用不一致"),
     ).toBeVisible();
-    expect(
-      screen.queryByText("rocketmq-mcp", { selector: "code" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("rocketmq-mcp")).not.toBeInTheDocument();
     expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
     expect(screen.queryByText("foreign-scope-marker")).not.toBeInTheDocument();
   });
@@ -288,7 +284,9 @@ describe("investigation workspace and evidence navigation", () => {
       },
     );
     open("/evidence", `&evidence_id=${EVIDENCE}`);
-    await user.click(await screen.findByRole("button", { name: "展开详情" }));
+    await user.click(
+      await screen.findByRole("button", { name: "读取脱敏内容" }),
+    );
     await waitFor(() =>
       expect(state.api.getEvidenceContent).toHaveBeenCalledTimes(1),
     );
@@ -299,5 +297,50 @@ describe("investigation workspace and evidence navigation", () => {
     expect(signal?.aborted).toBe(true);
     await act(async () => finish({ old_cluster_marker: "late content" }));
     expect(screen.queryByText(/old_cluster_marker/)).not.toBeInTheDocument();
+  });
+
+  it("paginates a thousand evidence records without mounting a viewer or fetching every item", async () => {
+    const user = userEvent.setup();
+    const items = Array.from({ length: 1000 }, (_, index) => ({
+      ...evidence(),
+      evidence_id: `40000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      source: `source-${index + 1}`,
+    }));
+    vi.mocked(state.api.listEvidence).mockResolvedValue({
+      items,
+      partial: false,
+      warnings: [],
+      observed_at: "2026-11-11T10:00:00Z",
+    });
+    open("/evidence");
+    expect(await screen.findByText("source-1")).toBeVisible();
+    expect(screen.getAllByRole("row").length).toBeLessThanOrEqual(51);
+    expect(screen.queryByText("source-51")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByText("source-51")).toBeVisible();
+    expect(screen.queryByText("source-1")).not.toBeInTheDocument();
+    expect(state.api.listEvidence).toHaveBeenCalledTimes(1);
+    expect(state.api.getEvidence).not.toHaveBeenCalled();
+    expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
+  });
+
+  it("preserves the list trigger and returns focus without reloading after drawer close", async () => {
+    const user = userEvent.setup();
+    vi.mocked(state.api.listEvidence).mockResolvedValue({
+      items: [evidence()],
+      partial: false,
+      warnings: [],
+      observed_at: evidence().observed_at,
+    });
+    open("/evidence");
+    const trigger = await screen.findByRole("button", { name: "查看证据" });
+    await user.click(trigger);
+    await screen.findByRole("button", { name: "读取脱敏内容" });
+    expect(screen.getAllByRole("row")).toHaveLength(2);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toBeInTheDocument();
+    expect(state.api.listEvidence).toHaveBeenCalledTimes(1);
   });
 });

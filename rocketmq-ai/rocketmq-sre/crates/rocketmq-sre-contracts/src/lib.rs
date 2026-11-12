@@ -26,6 +26,7 @@ mod audit;
 mod automation;
 mod autonomy;
 mod canonical;
+mod capability_quality;
 mod connector;
 mod correlation;
 mod critic;
@@ -115,6 +116,11 @@ pub use canonical::canonical_precondition_hash;
 pub use canonical::canonical_sha256;
 pub use canonical::encode_lower_hex;
 pub use canonical::is_sha256_digest;
+pub use capability_quality::{
+    CapabilityFact, CapabilityFactStatus, CapabilityLayers, CapabilityQualityProjection, DiagnosticEvidenceQuality,
+    DiagnosticPackQuality, DiagnosticRequirementQuality, DiagnosticScenarioCoverage, EvidenceFieldContract,
+    EvidenceFieldKind,
+};
 pub use connector::ConnectorCapabilityState;
 pub use connector::ConnectorHeartbeat;
 pub use connector::ConnectorQueryEnvelope;

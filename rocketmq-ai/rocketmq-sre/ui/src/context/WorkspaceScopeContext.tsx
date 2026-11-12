@@ -89,7 +89,10 @@ export function WorkspaceScopeProvider({ children }: PropsWithChildren) {
     (next: WorkspaceScope) => {
       if (!allowedClusters.some((cluster) => cluster.id === next.clusterId))
         return;
-      const search = projectWorkspaceSearch(location.search, next);
+      const projected = new URLSearchParams(projectWorkspaceSearch(location.search, next));
+      // A selected evidence reference belongs to the previous scope, not the new one.
+      projected.delete("evidence_id");
+      const search = `?${projected.toString()}`;
       if (
         parseAbsoluteWindow(search) === "invalid" ||
         parseReadOnlyUrlContext(

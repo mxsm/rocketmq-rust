@@ -64,6 +64,7 @@ import {
 } from "./phase4AutonomyDemo";
 import { phase4AutonomyScopes } from "./phase4AutonomySettingsDemo";
 import { createModelLifecycleMock } from "./modelLifecycleMock";
+import { createEvidenceQualityDemo, demoCapabilityQuality } from "./evidenceQualityDemo";
 import { phase4ModelCapabilities } from "./phase4ModelDemo";
 import {
   demoIncidentOperations,
@@ -225,14 +226,15 @@ function mockDiagnosticPack(resource: string) {
 }
 
 export function createMockSreApi(auth?: ApiRequestContext): SreApi {
+  const qualityDemo = createEvidenceQualityDemo();
   const clusters = clone(demoClusters);
   const conversations = clone(phase1Conversations.items);
   const conversationTurns = new Map<string, ConversationTurnView[]>();
-  const investigations = clone(phase1Investigations.items);
+  const investigations = [...clone(phase1Investigations.items), ...qualityDemo.investigations];
   const incidents = clone(phase1Incidents.items);
   const inspections = clone(phase1Inspections.items);
   const recommendations = clone(phase1Recommendations.items);
-  const evidence = clone(phase1Evidence.items);
+  const evidence = [...clone(phase1Evidence.items), ...qualityDemo.evidence];
   const postmortems = mockPostmortems;
   const actionItems = mockActionItems;
   const incidentOperations = clone(demoIncidentOperations);
@@ -317,9 +319,14 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         ],
       };
     },
-    getCoverage: async (signal) => {
+    getCoverage: async (signal, clusterId, binding) => {
       await wait(signal);
-      return clone(demoCoverage);
+      if (clusterId) scope(clusterId);
+      const view = binding ? investigations.find((item) => item.investigation.id === binding.investigationId && item.investigation.cluster_id === clusterId && item.investigation.tenant_id === (auth?.tenantId ?? DEMO_TENANT_ID)) : undefined;
+      const revision = binding ? view?.diagnosis_revisions.find((item) => item.id === binding.revisionId) : undefined;
+      if (binding && (!clusterId || !view || !revision)) throw new ApiError(404, "diagnosis_revision_not_found", "diagnosis revision was not found in the authorized cluster");
+      const boundEvidence = revision ? evidence.filter((item) => revision.evidence_ids.includes(item.evidence_id)) : evidence;
+      return { ...clone(demoCoverage), quality: { ...demoCapabilityQuality(clusterId, auth?.tenantId ?? DEMO_TENANT_ID, boundEvidence), investigation_id: binding?.investigationId ?? null, revision_id: binding?.revisionId ?? null } };
     },
     getHealth: async (signal) => {
       await wait(signal);

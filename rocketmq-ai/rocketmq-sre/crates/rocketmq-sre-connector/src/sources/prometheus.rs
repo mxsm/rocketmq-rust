@@ -287,10 +287,17 @@ fn project_response(
         .ok_or_else(|| ConnectorError::source("Prometheus series samples are invalid"))?;
         let available = raw_samples.len();
         let mut samples = Vec::with_capacity(available.min(remaining));
+        let mut previous_observation = None;
         for sample in raw_samples.iter().take(remaining) {
             remaining = remaining.saturating_sub(1);
             match project_sample(sample)? {
                 Some((observed_at, value)) => {
+                    if previous_observation.is_some_and(|previous| previous >= observed_at) {
+                        return Err(ConnectorError::source(
+                            "Prometheus sample observations are not strictly increasing",
+                        ));
+                    }
+                    previous_observation = Some(observed_at);
                     latest = Some(latest.map_or(observed_at, |current: DateTime<Utc>| current.max(observed_at)));
                     samples.push(json!({
                         "observed_at": observed_at,
@@ -580,6 +587,31 @@ mod tests {
             projected.content["series"][0]["samples"].as_array().map(Vec::len),
             Some(0)
         );
+    }
+
+    #[test]
+    fn out_of_order_or_duplicate_observations_cannot_produce_a_false_latest_or_window_delta() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for timestamps in [
+            [start.timestamp() + 1, start.timestamp()],
+            [start.timestamp(), start.timestamp()],
+        ] {
+            let raw = json!({"status":"success","data":{"resultType":"matrix","result":[{
+                "metric":{"rocketmq_cluster":"local"},"values":[[timestamps[0],"9"],[timestamps[1],"4"]]
+            }]}});
+            assert!(
+                project_response(
+                    &raw,
+                    PrometheusQueryKind::Range,
+                    "rocketmq_rpc_latency_count",
+                    start,
+                    start + Duration::seconds(2),
+                    10,
+                    &BTreeSet::new()
+                )
+                .is_err()
+            );
+        }
     }
 
     #[tokio::test]

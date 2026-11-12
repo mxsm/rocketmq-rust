@@ -329,6 +329,43 @@ impl PostgresRepository {
             partial,
         })
     }
+
+    pub(crate) async fn coverage_evidence(
+        &self,
+        auth: &AuthContext,
+        cluster_id: ClusterId,
+    ) -> Result<(Vec<EvidenceSnapshot>, bool), ControlPlaneRequestFailure> {
+        if !auth.clusters.contains(&cluster_id) {
+            return Err(ControlPlaneRequestFailure::forbidden(
+                "cluster_not_allowed",
+                "coverage cluster is outside the authenticated scope",
+            ));
+        }
+        // Observation order, rather than arrival order, selects the latest sample.
+        // No object-store fan-out is performed by the coverage read operation.
+        const LIMIT: usize = 64;
+        let rows = sqlx::query(evidence_query(
+            " WHERE e.tenant_id = $1 AND e.cluster_id = $2
+                AND e.id IN (
+                    SELECT DISTINCT ON (source, resource) id FROM evidence_snapshots
+                    WHERE tenant_id = $1 AND cluster_id = $2
+                        AND (expires_at IS NULL OR expires_at > NOW())
+                    ORDER BY source, resource, observed_at DESC, collected_at DESC, id DESC
+                )
+              ORDER BY e.observed_at DESC, e.id DESC LIMIT 65",
+        ))
+        .bind(auth.tenant_id.as_uuid())
+        .bind(cluster_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await?;
+        let partial = rows.len() > LIMIT;
+        let snapshots = rows
+            .iter()
+            .take(LIMIT)
+            .map(evidence_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((snapshots, partial))
+    }
 }
 
 fn evidence_expires_at(collected_at: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {

@@ -712,6 +712,10 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
 fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalError> {
     Ok(vec![
         (
+            "capability-quality-projection.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::CapabilityQualityProjection))?,
+        ),
+        (
             "evidence-query.schema.json",
             serde_json::to_value(schema_for!(EvidenceQuery))?,
         ),
@@ -1093,6 +1097,10 @@ signals:
     #[test]
     fn committed_schema_fixtures_match_public_contracts() {
         let committed = [
+            (
+                "capability-quality-projection.schema.json",
+                include_str!("../../../schemas/capability-quality-projection.schema.json"),
+            ),
             (
                 "evidence-query.schema.json",
                 include_str!("../../../schemas/evidence-query.schema.json"),

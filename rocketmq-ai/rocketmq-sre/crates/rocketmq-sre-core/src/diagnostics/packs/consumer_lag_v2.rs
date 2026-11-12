@@ -92,6 +92,26 @@ impl DiagnosticPack for ConsumerLagV2 {
         OPTIONAL
     }
 
+    fn evidence_fields(&self, requirement_key: &str) -> Vec<rocketmq_sre_contracts::EvidenceFieldContract> {
+        use rocketmq_sre_contracts::{EvidenceFieldContract, EvidenceFieldKind};
+        if requirement_key != "consumer-lag" {
+            return Vec::new();
+        }
+        [
+            "total_lag",
+            "lag_slope_per_min",
+            "queue_skew_ratio",
+            "consume_rate_per_sec",
+            "produce_rate_per_sec",
+        ]
+        .into_iter()
+        .map(|path| EvidenceFieldContract {
+            path: path.to_owned(),
+            kind: EvidenceFieldKind::Number,
+        })
+        .collect()
+    }
+
     fn rule_codes(&self) -> &'static [&'static str] {
         RULES
     }

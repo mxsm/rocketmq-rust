@@ -243,6 +243,14 @@ pub trait DiagnosticPack: fmt::Debug + Send + Sync {
     /// Evidence that improves attribution or provides counter-evidence.
     fn optional_evidence(&self) -> &'static [EvidenceRequirement];
 
+    /// Primitive fields required by the compiled predicates for this evidence key.
+    ///
+    /// An empty contract means field-level sufficiency is unknown. It must not
+    /// be interpreted as a requirement that can be satisfied without evidence.
+    fn evidence_fields(&self, _requirement_key: &str) -> Vec<rocketmq_sre_contracts::EvidenceFieldContract> {
+        Vec::new()
+    }
+
     /// Stable reason codes emitted by this pack.
     fn rule_codes(&self) -> &'static [&'static str];
 

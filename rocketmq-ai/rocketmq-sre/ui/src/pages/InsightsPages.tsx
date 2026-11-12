@@ -2,10 +2,6 @@ import {
   ArrowRight,
   BookOpenCheck,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  DatabaseZap,
-  FileJson,
   Fingerprint,
   Search,
   TriangleAlert,
@@ -13,19 +9,13 @@ import {
 import {
   type FormEvent,
   useCallback,
-  useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
-import { useSearchParams } from "react-router-dom";
 
 import type {
-  EvidenceCollectionStatus,
-  EvidenceRecord,
   KnowledgeReviewStatus,
 } from "@/api/types";
-import { useAuth } from "@/auth/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import {
   ClusterScopeSelect,
@@ -42,12 +32,6 @@ import { useSreData } from "@/data/SreDataContext";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useClusterScope } from "@/hooks/useClusterScope";
 
-const evidenceVariants = {
-  complete: "success",
-  partial: "warning",
-  unavailable: "destructive",
-} as const;
-
 const knowledgeVariants: Record<
   KnowledgeReviewStatus,
   "success" | "warning" | "secondary" | "destructive"
@@ -59,311 +43,7 @@ const knowledgeVariants: Record<
   expired: "destructive",
 };
 
-export function EvidenceExplorerPage() {
-  const { api } = useSreData();
-  const auth = useAuth();
-  const scope = useClusterScope();
-  const [params, setParams] = useSearchParams();
-  const evidenceId = params.get("evidence_id");
-  const requestedResource = scope.urlContext?.resourceKind && scope.urlContext.resourceKind !== "cluster"
-    ? `${scope.urlContext.resourceKind}/${scope.urlContext.resourceKey}` : undefined;
-  const [search, setSearch] = useState("");
-  const [status, setStatus] =
-    useState<EvidenceCollectionStatus | "all">("all");
-  const load = useCallback(
-    async (signal: AbortSignal) => {
-      if (!scope.clusterId) return { items: [], partial: false, warnings: [], observed_at: "" };
-      if (!evidenceId) return api.listEvidence(scope.clusterId, signal);
-      const evidence = await api.getEvidence(evidenceId, signal);
-      if (evidence.evidence_id !== evidenceId || evidence.cluster_id !== scope.clusterId
-        || evidence.tenant_id !== auth.session?.tenantId || (requestedResource && evidence.resource !== requestedResource)) {
-        return { items: [], partial: false, warnings: [], observed_at: "" };
-      }
-      return { items: [evidence], partial: evidence.partial, warnings: evidence.warnings ?? [], observed_at: evidence.observed_at };
-    },
-    [api, auth.session?.tenantId, evidenceId, requestedResource, scope.clusterId],
-  );
-  const resource = useAsyncResource(load);
-  const filtered = useMemo(
-    () =>
-      (resource.data?.items ?? []).filter((item) => {
-        const query = search.trim().toLocaleLowerCase();
-        return (
-          item.cluster_id === scope.clusterId &&
-          item.tenant_id === auth.session?.tenantId &&
-          (!requestedResource || item.resource === requestedResource) &&
-          (!evidenceId || item.evidence_id === evidenceId) &&
-          (status === "all" || evidenceStatus(item) === status) &&
-          (!query ||
-            item.source.toLocaleLowerCase().includes(query) ||
-            item.resource.toLocaleLowerCase().includes(query) ||
-            item.correlation_id.toLocaleLowerCase().includes(query))
-        );
-      }),
-    [auth.session?.tenantId, evidenceId, requestedResource, resource.data?.items, scope.clusterId, search, status],
-  );
-
-  return (
-    <div className="page">
-      <PageHeader
-        eyebrow="CANONICAL EVIDENCE EXPLORER"
-        title="证据浏览器"
-        description="按来源、资源、correlation id 与完整性搜索 Canonical Evidence；restricted 字段只显示脱敏摘要。"
-        actions={
-          <ClusterScopeSelect
-            clusters={scope.clusters}
-            value={scope.clusterId}
-            onChange={scope.setClusterId}
-          />
-        }
-      />
-      <ReadOnlyBoundary compact />
-      <PartialNotice envelope={resource.data} />
-      {evidenceId && <div className="inline-alert" role="status">
-        <span>正在定位调查引用的证据。</span>
-        <Button onClick={() => { const next = new URLSearchParams(params); next.delete("evidence_id"); setParams(next); }} size="sm" variant="ghost">查看当前范围全部证据</Button>
-      </div>}
-      <DataSurface
-        title="Evidence Snapshot"
-        description="Hash 覆盖 schema、来源、资源、时间范围和内容；采集元数据不影响内容寻址。"
-        meta={<span>{filtered.length} 条</span>}
-      >
-        <div className="filter-bar">
-          <label className="search-field">
-            <Search size={14} />
-            <span className="sr-only">搜索证据</span>
-            <input
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="source / resource / correlation id"
-              type="search"
-              value={search}
-            />
-          </label>
-          <label>
-            <span className="sr-only">证据状态</span>
-            <select
-              className="native-select"
-              onChange={(event) =>
-                setStatus(
-                  event.target.value as EvidenceCollectionStatus | "all",
-                )
-              }
-              value={status}
-            >
-              <option value="all">全部完整性</option>
-              <option value="complete">complete</option>
-              <option value="partial">partial</option>
-              <option value="unavailable">unavailable</option>
-            </select>
-          </label>
-        </div>
-        <DataState
-          loading={resource.loading}
-          error={resource.error}
-          empty={!resource.loading && filtered.length === 0}
-          onRetry={resource.reload}
-          emptyTitle={evidenceId ? "指定证据不在当前范围内或当前身份无权读取" : "没有匹配的 Evidence"}
-          emptyDescription={evidenceId ? "请核对证据引用和全局集群、资源范围；界面不会切换到其他集群查询。" : undefined}
-        />
-        {!resource.loading && !resource.error && filtered.length > 0 && (
-          <div className="evidence-card-list">
-            {filtered.map((item) => (
-              <EvidenceCard evidence={item} key={item.evidence_id} />
-            ))}
-          </div>
-        )}
-      </DataSurface>
-    </div>
-  );
-}
-
-function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
-  const { api } = useSreData();
-  const [expanded, setExpanded] = useState(false);
-  const [detail, setDetail] = useState<EvidenceRecord>();
-  const [content, setContent] = useState<unknown>();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>();
-  const pending = useRef<AbortController | undefined>(undefined);
-  useEffect(() => () => pending.current?.abort(), []);
-  const status = evidenceStatus(evidence);
-  const snapshot = detail ?? evidence;
-  const warnings = snapshot.warnings ?? [];
-  const expand = async () => {
-    const nextExpanded = !expanded;
-    setExpanded(nextExpanded);
-    if (!nextExpanded) { pending.current?.abort(); return; }
-    if (detail) {
-      return;
-    }
-    setLoading(true);
-    setError(undefined);
-    const controller = new AbortController();
-    pending.current = controller;
-    try {
-      const nextDetail = await api.getEvidence(evidence.evidence_id, controller.signal);
-      if (controller.signal.aborted) return;
-      if (nextDetail.evidence_id !== evidence.evidence_id || nextDetail.tenant_id !== evidence.tenant_id
-        || nextDetail.cluster_id !== evidence.cluster_id || nextDetail.resource !== evidence.resource) {
-        throw new Error("evidence_scope_mismatch");
-      }
-      const nextContent = await api.getEvidenceContent(evidence.evidence_id, controller.signal);
-      if (controller.signal.aborted) return;
-      setDetail(nextDetail);
-      setContent(nextContent);
-    } catch {
-      if (controller.signal.aborted) return;
-      setError(
-        "证据详情暂不可用；不会用列表摘要替代缺失的原始内容。",
-      );
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  };
-
-  return (
-    <article>
-      <header>
-        <div>
-          <DatabaseZap size={16} />
-          <strong>{sourceLabel(snapshot.source)}</strong>
-          <code>{snapshot.source}</code>
-        </div>
-        <Badge variant={evidenceVariants[status]}>{status}</Badge>
-        <Button
-          aria-expanded={expanded}
-          onClick={() => void expand()}
-          size="sm"
-          variant="ghost"
-        >
-          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          {expanded ? "收起详情" : "展开详情"}
-        </Button>
-      </header>
-      <DefinitionGrid
-        items={[
-          { label: "资源", value: snapshot.resource },
-          {
-            label: "观测时间",
-            value: formatTime(snapshot.observed_at),
-          },
-          {
-            label: "新鲜度",
-            value: `${snapshot.freshness_seconds}s`,
-          },
-          {
-            label: "敏感级别",
-            value: snapshot.sensitivity,
-          },
-          {
-            label: "Exposure",
-            value: snapshot.exposure,
-          },
-          {
-            label: "Correlation",
-            value: snapshot.correlation_id,
-            mono: true,
-          },
-          {
-            label: "Content hash",
-            value: snapshot.content_hash,
-            mono: true,
-          },
-        ]}
-      />
-      {expanded && (
-        <div className="evidence-detail">
-          {loading ? (
-            <div className="state-message">正在读取有界 Evidence 内容…</div>
-          ) : error ? (
-            <div className="inline-alert warning">{error}</div>
-          ) : (
-            <>
-              <DefinitionGrid
-                items={[
-                  {
-                    label: "Schema",
-                    value: `${snapshot.schema.family}.v${snapshot.schema.major}.${snapshot.schema.minor}`,
-                    mono: true,
-                  },
-                  {
-                    label: "Query ID",
-                    value: snapshot.query_id,
-                    mono: true,
-                  },
-                  {
-                    label: "Coverage",
-                    value: snapshot.coverage,
-                  },
-                  {
-                    label: "存储",
-                    value: snapshot.content.storage,
-                  },
-                  {
-                    label: "时间范围开始",
-                    value: formatTime(snapshot.time_range.start),
-                  },
-                  {
-                    label: "时间范围结束",
-                    value: formatTime(snapshot.time_range.end),
-                  },
-                ]}
-              />
-              <div className="evidence-content">
-                <div>
-                  <FileJson size={15} />
-                  <strong>已校验内容</strong>
-                  <span>敏感键在浏览器中再次脱敏并限制为 8 KiB。</span>
-                </div>
-                <pre>{safeEvidenceJson(content)}</pre>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-      {warnings.length > 0 && (
-        <footer>
-          <TriangleAlert size={13} />
-          {warnings.join("；")}
-        </footer>
-      )}
-    </article>
-  );
-}
-
-function evidenceStatus(
-  evidence: EvidenceRecord,
-): EvidenceCollectionStatus {
-  if (evidence.coverage === "missing") {
-    return "unavailable";
-  }
-  if (evidence.partial || evidence.coverage !== "available") {
-    return "partial";
-  }
-  return "complete";
-}
-
-function sourceLabel(source: string) {
-  return source
-    .split(/[._/-]/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toLocaleUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function safeEvidenceJson(value: unknown) {
-  const sensitive =
-    /(^|_)(body|payload|token|secret|password|credential|private_key|tls|acl)($|_)/i;
-  const serialized =
-    JSON.stringify(
-      value ?? { status: "missing" },
-      (key, item) => (sensitive.test(key) ? "[redacted]" : item),
-      2,
-    ) ?? "missing";
-  return serialized.length > 8_192
-    ? `${serialized.slice(0, 8_192)}\n… truncated`
-    : serialized;
-}
+export { EvidenceExplorerPage } from "./EvidenceExplorerPage";
 
 export function MessageJourneyPage() {
   const { api } = useSreData();
