@@ -141,6 +141,8 @@ jobs:
 
       - name: Test PostgreSQL repositories
         # Live S3 and model-provider qualifications require separately injected credentials.
+        env:
+          ROCKETMQ_SRE_OBJECT_STORE_LOCAL_PATH: ${{ runner.temp }}/rocketmq-sre-evidence
         run: |
           cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked \
             -p rocketmq-sre-control-plane -- --ignored \
