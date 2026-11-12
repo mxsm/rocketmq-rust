@@ -22,6 +22,12 @@ Connector inventory, fleet/governance, releases/DR, notifications and FinOps.
 These are serializable contracts, not implementations of those services. The
 public exports are listed in [src/lib.rs](src/lib.rs).
 
+D13 also publishes independent investigation run, step, command and hypothesis
+assessment contracts. Their schemas and generated TypeScript types are design
+contracts; run HTTP routes and the durable D14 coordinator are not implemented.
+See [Investigation run contracts](../../docs/investigation-run-contract.md) for
+the generation chain and runtime obligations.
+
 ## Dependency boundary
 
 This crate is deliberately data-only. It has no networking, async runtime,

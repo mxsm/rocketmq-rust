@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "InvestigationCommandId": {
+      "description": "Stable identifier for one investigation control command.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationControlEpoch": {
+      "description": "Control generation, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationRevision": {
+      "description": "Monotonic run revision, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationRunId": {
+      "description": "Stable identifier for one bounded investigation run.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationRunStatus": {
+      "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+      "enum": [
+        "queued",
+        "running",
+        "pausing",
+        "paused",
+        "needs_evidence",
+        "completed",
+        "inconclusive",
+        "cancelling",
+        "cancelled",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable result of an accepted command. Replay does not reapply its old status.",
+  "properties": {
+    "actor_subject": {
+      "type": "string"
+    },
+    "applied_revision": {
+      "$ref": "#/$defs/InvestigationRevision"
+    },
+    "command_id": {
+      "$ref": "#/$defs/InvestigationCommandId"
+    },
+    "control_epoch": {
+      "$ref": "#/$defs/InvestigationControlEpoch"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "request_digest": {
+      "type": "string"
+    },
+    "run_id": {
+      "$ref": "#/$defs/InvestigationRunId"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/InvestigationRunStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "command_id",
+    "tenant_id",
+    "actor_subject",
+    "run_id",
+    "idempotency_key",
+    "request_digest",
+    "applied_revision",
+    "control_epoch",
+    "status",
+    "recorded_at"
+  ],
+  "title": "InvestigationCommandReceipt",
+  "type": "object"
+}

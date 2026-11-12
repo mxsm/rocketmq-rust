@@ -1,0 +1,441 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationBudgetCost": {
+      "additionalProperties": false,
+      "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+      "properties": {
+        "evidence_items": {
+          "format": "uint64",
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model_calls": {
+          "format": "uint64",
+          "maximum": 8,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_bytes": {
+          "format": "uint64",
+          "maximum": 4194304,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read_queries": {
+          "format": "uint64",
+          "maximum": 12,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "read_queries",
+        "model_calls",
+        "evidence_items",
+        "output_bytes"
+      ],
+      "type": "object"
+    },
+    "InvestigationControlEpoch": {
+      "description": "Control generation, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationId": {
+      "description": "Stable identifier for a multi-step investigation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationPackRef": {
+      "additionalProperties": false,
+      "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+      "properties": {
+        "pack_id": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack_id",
+        "pack_version"
+      ],
+      "type": "object"
+    },
+    "InvestigationResource": {
+      "additionalProperties": false,
+      "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "InvestigationResultDisposition": {
+      "enum": [
+        "applied",
+        "superseded"
+      ],
+      "type": "string"
+    },
+    "InvestigationRevision": {
+      "description": "Monotonic run revision, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationRunId": {
+      "description": "Stable identifier for one bounded investigation run.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationRunScope": {
+      "additionalProperties": false,
+      "description": "Immutable authority boundary and requested absolute observation window.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "investigation_id": {
+          "$ref": "#/$defs/InvestigationId"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "time_range": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "cluster_id",
+        "investigation_id",
+        "time_range"
+      ],
+      "type": "object"
+    },
+    "InvestigationStepAttempt": {
+      "additionalProperties": false,
+      "properties": {
+        "admitted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "admitted_revision": {
+          "$ref": "#/$defs/InvestigationRevision"
+        },
+        "control_epoch": {
+          "$ref": "#/$defs/InvestigationControlEpoch"
+        },
+        "disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationResultDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/StepAttemptId"
+        },
+        "reservation": {
+          "$ref": "#/$defs/InvestigationBudgetCost"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationStepResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "control_epoch",
+        "admitted_revision",
+        "admitted_at",
+        "reservation"
+      ],
+      "type": "object"
+    },
+    "InvestigationStepFailure": {
+      "enum": [
+        "source_unavailable",
+        "evidence_insufficient",
+        "model_unavailable",
+        "deadline_exceeded"
+      ],
+      "type": "string"
+    },
+    "InvestigationStepId": {
+      "description": "Stable identity for one read-only investigation step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationStepKind": {
+      "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "collect_evidence",
+              "type": "string"
+            },
+            "requirement_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "requirement_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_ids": {
+              "items": {
+                "$ref": "#/$defs/EvidenceId"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "evaluate_rules",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_ids": {
+              "items": {
+                "$ref": "#/$defs/EvidenceId"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "explain_evidence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence_ids"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InvestigationStepOutcome": {
+      "oneOf": [
+        {
+          "enum": [
+            "succeeded",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "cancelled_acknowledged",
+          "description": "Worker settlement with final usage; it does not assert that a remote RPC was withdrawn.",
+          "type": "string"
+        }
+      ]
+    },
+    "InvestigationStepResult": {
+      "additionalProperties": false,
+      "description": "Final observation and actual usage for exactly one admitted attempt.\n\nThe worker must join/cancel its owned read and know final consumption before\nacknowledging cancellation. No raw result, credentials or message body is carried.",
+      "properties": {
+        "actual_cost": {
+          "$ref": "#/$defs/InvestigationBudgetCost"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/StepAttemptId"
+        },
+        "control_epoch": {
+          "$ref": "#/$defs/InvestigationControlEpoch"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationStepFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/InvestigationStepOutcome"
+        },
+        "run_id": {
+          "$ref": "#/$defs/InvestigationRunId"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "step_id": {
+          "$ref": "#/$defs/InvestigationStepId"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "step_id",
+        "attempt_id",
+        "control_epoch",
+        "outcome",
+        "evidence_ids",
+        "actual_cost",
+        "finished_at"
+      ],
+      "type": "object"
+    },
+    "InvestigationStepSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "pack": {
+          "$ref": "#/$defs/InvestigationPackRef"
+        },
+        "scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        },
+        "work": {
+          "$ref": "#/$defs/InvestigationStepKind"
+        }
+      },
+      "required": [
+        "scope",
+        "pack",
+        "work"
+      ],
+      "type": "object"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "StepAttemptId": {
+      "description": "Stable identifier for one admitted investigation step attempt.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TimeRange": {
+      "description": "Inclusive time range requested from an evidence source.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Logical work identity remains stable across bounded retries and restarts.",
+  "properties": {
+    "attempts": {
+      "items": {
+        "$ref": "#/$defs/InvestigationStepAttempt"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/InvestigationStepId"
+    },
+    "spec": {
+      "$ref": "#/$defs/InvestigationStepSpec"
+    }
+  },
+  "required": [
+    "id",
+    "spec",
+    "attempts"
+  ],
+  "title": "InvestigationStep",
+  "type": "object"
+}

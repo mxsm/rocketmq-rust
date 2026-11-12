@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { extendBoundedAutonomySettings } from "./openapi/bounded_autonomy_settings.mjs";
 import { extendModelCapabilities } from "./openapi/model_capabilities.mjs";
 import { extendCapabilityQuality } from "./openapi/capability_quality.mjs";
+import { extendInvestigationRunContracts } from "./openapi/investigation_run.mjs";
 import { extendOperationsAnalytics } from "./openapi/operations_analytics.mjs";
 import { extendPhase5FleetAndDr } from "./openapi/phase5_fleet_dr.mjs";
 import { extendPhase5GovernanceAndFinOps } from "./openapi/phase5_governance_finops.mjs";
@@ -113,6 +114,11 @@ extendBoundedAutonomySettings({
 });
 extendModelCapabilities({ document, schemas });
 extendCapabilityQuality({ document, schemas, qualitySchema: JSON.parse(readFileSync(join(root, "schemas", "capability-quality-projection.schema.json"), "utf8")) });
+extendInvestigationRunContracts({
+  schemas,
+  readSchema: (filename) =>
+    JSON.parse(readFileSync(join(root, "schemas", filename), "utf8")),
+});
 
 const phase5Prefixes = [
   ["/v1/fleet/", "Fleet"],

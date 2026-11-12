@@ -40,9 +40,15 @@ mod fencing;
 mod finops;
 mod fleet;
 mod governance;
+mod hypothesis_assessment;
 mod ids;
 mod incident;
 mod integration;
+mod investigation_command;
+mod investigation_counter;
+mod investigation_run;
+mod investigation_run_error;
+mod investigation_step;
 mod notification;
 mod operations;
 mod operator_workbench;
@@ -268,6 +274,7 @@ pub use governance::GovernanceObjectKind;
 pub use governance::GovernanceSignature;
 pub use governance::GovernanceSignaturePayload;
 pub use governance::GovernanceVersion;
+pub use hypothesis_assessment::{HypothesisAssessment, HypothesisAssessmentConclusion, InvestigationStopReason};
 pub use ids::ActionItemId;
 pub use ids::ActionPlanId;
 pub use ids::AlertEventId;
@@ -354,6 +361,7 @@ pub use ids::TenantId;
 pub use ids::TimelineEventId;
 pub use ids::TopologyEdgeId;
 pub use ids::TopologySnapshotId;
+pub use ids::{HypothesisAssessmentId, InvestigationCommandId, InvestigationRunId, InvestigationStepId, StepAttemptId};
 pub use incident::Incident;
 pub use incident::IncidentStatus;
 pub use incident::IncidentTransition;
@@ -377,6 +385,23 @@ pub use integration::IntegrationSpiCapability;
 pub use integration::IntegrationTarget;
 pub use integration::ItsmTicketLink;
 pub use integration::ReleasePipelineEvent;
+pub use investigation_command::{
+    CreateInvestigationRunRequest, CreateInvestigationRunResponse, InvestigationCommand,
+    InvestigationCommandClassification, InvestigationCommandReceipt, InvestigationCommandRequest,
+    InvestigationRefinement,
+};
+pub use investigation_counter::{InvestigationControlEpoch, InvestigationRevision};
+pub use investigation_run::{
+    INVESTIGATION_RUN_SCHEMA_VERSION, InvestigationBudget, InvestigationBudgetCost, InvestigationEvidenceContext,
+    InvestigationPackRef, InvestigationRequirementRef, InvestigationResource, InvestigationRun,
+    InvestigationRunContext, InvestigationRunPermission, InvestigationRunScope, InvestigationRunStatus,
+};
+pub use investigation_run_error::InvestigationRunFailure;
+pub use investigation_step::{
+    InvestigationResultAcceptance, InvestigationResultDisposition, InvestigationStep, InvestigationStepAdmission,
+    InvestigationStepAttempt, InvestigationStepFailure, InvestigationStepKind, InvestigationStepOutcome,
+    InvestigationStepResult, InvestigationStepSpec,
+};
 pub use notification::NotificationChannel;
 pub use notification::NotificationDelivery;
 pub use notification::NotificationDeliveryStatus;
