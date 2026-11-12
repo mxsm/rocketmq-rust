@@ -427,7 +427,7 @@ mod tests {
             at(),
             &[pack],
             &states,
-            &[evidence.clone()],
+            std::slice::from_ref(&evidence),
             false,
         );
         let pack = &result.packs[0];

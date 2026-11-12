@@ -371,7 +371,7 @@ async fn postgres_verification_records_enforce_proof_scope_identity_expiry_and_s
         .find(|pack| pack.pack_id == "consumer-lag.v2")
         .unwrap();
     assert_eq!(
-        projection::evaluate(&expired, &context, pack, &[sample.clone()])
+        projection::evaluate(&expired, &context, pack, std::slice::from_ref(&sample))
             .unwrap()
             .reason_code,
         "verification_record_expired"

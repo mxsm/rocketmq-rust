@@ -144,18 +144,17 @@ fn applies(
             if resource != selected {
                 return false;
             }
-        } else if context.revision_id.is_none() {
-            return false;
-        } else if !pack
-            .requirements
-            .iter()
-            .filter(|requirement| requirement.required)
-            .flat_map(|requirement| &requirement.evidence_ids)
-            .any(|id| {
-                evidence
-                    .iter()
-                    .any(|snapshot| snapshot.evidence_id == *id && snapshot.resource == *resource)
-            })
+        } else if context.revision_id.is_none()
+            || !pack
+                .requirements
+                .iter()
+                .filter(|requirement| requirement.required)
+                .flat_map(|requirement| &requirement.evidence_ids)
+                .any(|id| {
+                    evidence
+                        .iter()
+                        .any(|snapshot| snapshot.evidence_id == *id && snapshot.resource == *resource)
+                })
         {
             return false;
         }
