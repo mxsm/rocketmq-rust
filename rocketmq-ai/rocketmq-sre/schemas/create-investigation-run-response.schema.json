@@ -1,0 +1,801 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DiagnosisRevisionId": {
+      "description": "Stable identifier for an immutable diagnosis revision.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "HypothesisAssessment": {
+      "additionalProperties": false,
+      "description": "Evidence-bound advisory assessment on an existing immutable diagnosis revision.\n\nNo execution-eligibility field exists: this object cannot grant execution.",
+      "properties": {
+        "conclusion": {
+          "$ref": "#/$defs/HypothesisAssessmentConclusion"
+        },
+        "control_epoch": {
+          "$ref": "#/$defs/InvestigationControlEpoch"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "diagnosis_revision_id": {
+          "$ref": "#/$defs/DiagnosisRevisionId"
+        },
+        "id": {
+          "$ref": "#/$defs/HypothesisAssessmentId"
+        },
+        "run_id": {
+          "$ref": "#/$defs/InvestigationRunId"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "run_id",
+        "scope",
+        "control_epoch",
+        "diagnosis_revision_id",
+        "conclusion",
+        "summary",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "HypothesisAssessmentConclusion": {
+      "description": "Advisory conclusions reference saved Evidence, never an inferred timestamp relation.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "counter_evidence_ids": {
+              "items": {
+                "$ref": "#/$defs/EvidenceId"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "root_cause",
+              "type": "string"
+            },
+            "statement": {
+              "type": "string"
+            },
+            "supporting_evidence_ids": {
+              "items": {
+                "$ref": "#/$defs/EvidenceId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "statement",
+            "supporting_evidence_ids",
+            "counter_evidence_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "healthy",
+              "type": "string"
+            },
+            "supporting_evidence_ids": {
+              "items": {
+                "$ref": "#/$defs/EvidenceId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "supporting_evidence_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "considered_evidence_ids": {
+              "items": {
+                "$ref": "#/$defs/EvidenceId"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "inconclusive",
+              "type": "string"
+            },
+            "missing_requirements": {
+              "items": {
+                "$ref": "#/$defs/InvestigationRequirementRef"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "$ref": "#/$defs/InvestigationStopReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason",
+            "considered_evidence_ids",
+            "missing_requirements"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HypothesisAssessmentId": {
+      "description": "Stable identifier for one evidence-bound hypothesis assessment.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationBudget": {
+      "additionalProperties": false,
+      "description": "Hard limits: retries are admissions and cannot create a fresh budget.",
+      "properties": {
+        "limit": {
+          "$ref": "#/$defs/InvestigationBudgetCost"
+        },
+        "max_attempts_per_step": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_in_flight": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_query_retries": {
+          "format": "uint8",
+          "maximum": 2,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_steps": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "limit",
+        "max_steps",
+        "max_in_flight",
+        "max_attempts_per_step",
+        "max_query_retries"
+      ],
+      "type": "object"
+    },
+    "InvestigationBudgetCost": {
+      "additionalProperties": false,
+      "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+      "properties": {
+        "evidence_items": {
+          "format": "uint64",
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model_calls": {
+          "format": "uint64",
+          "maximum": 8,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_bytes": {
+          "format": "uint64",
+          "maximum": 4194304,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read_queries": {
+          "format": "uint64",
+          "maximum": 12,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "read_queries",
+        "model_calls",
+        "evidence_items",
+        "output_bytes"
+      ],
+      "type": "object"
+    },
+    "InvestigationControlEpoch": {
+      "description": "Control generation, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationId": {
+      "description": "Stable identifier for a multi-step investigation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationPackRef": {
+      "additionalProperties": false,
+      "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+      "properties": {
+        "pack_id": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack_id",
+        "pack_version"
+      ],
+      "type": "object"
+    },
+    "InvestigationRequirementRef": {
+      "additionalProperties": false,
+      "description": "Fixed collector requirement resolved by the server from a compiled pack.",
+      "properties": {
+        "pack": {
+          "$ref": "#/$defs/InvestigationPackRef"
+        },
+        "requirement_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack",
+        "requirement_id"
+      ],
+      "type": "object"
+    },
+    "InvestigationResource": {
+      "additionalProperties": false,
+      "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "InvestigationResultDisposition": {
+      "enum": [
+        "applied",
+        "superseded"
+      ],
+      "type": "string"
+    },
+    "InvestigationRevision": {
+      "description": "Monotonic run revision, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationRun": {
+      "additionalProperties": false,
+      "description": "Durable read model for bounded read-only work. No deployed run route exists in D13.",
+      "properties": {
+        "assessments": {
+          "items": {
+            "$ref": "#/$defs/HypothesisAssessment"
+          },
+          "type": "array"
+        },
+        "budget": {
+          "$ref": "#/$defs/InvestigationBudget"
+        },
+        "control_epoch": {
+          "$ref": "#/$defs/InvestigationControlEpoch"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "created_by_subject": {
+          "type": "string"
+        },
+        "deadline": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "effective_packs": {
+          "items": {
+            "$ref": "#/$defs/InvestigationPackRef"
+          },
+          "type": "array"
+        },
+        "effective_scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/InvestigationRunId"
+        },
+        "initial_packs": {
+          "items": {
+            "$ref": "#/$defs/InvestigationPackRef"
+          },
+          "type": "array"
+        },
+        "initial_scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        },
+        "revision": {
+          "$ref": "#/$defs/InvestigationRevision"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/InvestigationRunStatus"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/InvestigationStep"
+          },
+          "type": "array"
+        },
+        "supplied_evidence_ids": {
+          "description": "Imported, already saved references consume the same distinct-Evidence budget.",
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "initial_scope",
+        "effective_scope",
+        "initial_packs",
+        "effective_packs",
+        "status",
+        "revision",
+        "control_epoch",
+        "budget",
+        "deadline",
+        "steps",
+        "evidence_ids",
+        "supplied_evidence_ids",
+        "assessments",
+        "created_by_subject",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "InvestigationRunId": {
+      "description": "Stable identifier for one bounded investigation run.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationRunScope": {
+      "additionalProperties": false,
+      "description": "Immutable authority boundary and requested absolute observation window.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "investigation_id": {
+          "$ref": "#/$defs/InvestigationId"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "time_range": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "cluster_id",
+        "investigation_id",
+        "time_range"
+      ],
+      "type": "object"
+    },
+    "InvestigationRunStatus": {
+      "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+      "enum": [
+        "queued",
+        "running",
+        "pausing",
+        "paused",
+        "needs_evidence",
+        "completed",
+        "inconclusive",
+        "cancelling",
+        "cancelled",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "InvestigationStep": {
+      "additionalProperties": false,
+      "description": "Logical work identity remains stable across bounded retries and restarts.",
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/InvestigationStepAttempt"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/InvestigationStepId"
+        },
+        "spec": {
+          "$ref": "#/$defs/InvestigationStepSpec"
+        }
+      },
+      "required": [
+        "id",
+        "spec",
+        "attempts"
+      ],
+      "type": "object"
+    },
+    "InvestigationStepAttempt": {
+      "additionalProperties": false,
+      "properties": {
+        "admitted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "admitted_revision": {
+          "$ref": "#/$defs/InvestigationRevision"
+        },
+        "control_epoch": {
+          "$ref": "#/$defs/InvestigationControlEpoch"
+        },
+        "disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationResultDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/StepAttemptId"
+        },
+        "reservation": {
+          "$ref": "#/$defs/InvestigationBudgetCost"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationStepResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "control_epoch",
+        "admitted_revision",
+        "admitted_at",
+        "reservation"
+      ],
+      "type": "object"
+    },
+    "InvestigationStepFailure": {
+      "enum": [
+        "source_unavailable",
+        "evidence_insufficient",
+        "model_unavailable",
+        "deadline_exceeded"
+      ],
+      "type": "string"
+    },
+    "InvestigationStepId": {
+      "description": "Stable identity for one read-only investigation step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationStepKind": {
+      "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "collect_evidence",
+              "type": "string"
+            },
+            "requirement_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "requirement_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_ids": {
+              "items": {
+                "$ref": "#/$defs/EvidenceId"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "evaluate_rules",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence_ids"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_ids": {
+              "items": {
+                "$ref": "#/$defs/EvidenceId"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "explain_evidence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence_ids"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InvestigationStepOutcome": {
+      "oneOf": [
+        {
+          "enum": [
+            "succeeded",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "cancelled_acknowledged",
+          "description": "Worker settlement with final usage; it does not assert that a remote RPC was withdrawn.",
+          "type": "string"
+        }
+      ]
+    },
+    "InvestigationStepResult": {
+      "additionalProperties": false,
+      "description": "Final observation and actual usage for exactly one admitted attempt.\n\nThe worker must join/cancel its owned read and know final consumption before\nacknowledging cancellation. No raw result, credentials or message body is carried.",
+      "properties": {
+        "actual_cost": {
+          "$ref": "#/$defs/InvestigationBudgetCost"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/StepAttemptId"
+        },
+        "control_epoch": {
+          "$ref": "#/$defs/InvestigationControlEpoch"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationStepFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/InvestigationStepOutcome"
+        },
+        "run_id": {
+          "$ref": "#/$defs/InvestigationRunId"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "step_id": {
+          "$ref": "#/$defs/InvestigationStepId"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "step_id",
+        "attempt_id",
+        "control_epoch",
+        "outcome",
+        "evidence_ids",
+        "actual_cost",
+        "finished_at"
+      ],
+      "type": "object"
+    },
+    "InvestigationStepSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "pack": {
+          "$ref": "#/$defs/InvestigationPackRef"
+        },
+        "scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        },
+        "work": {
+          "$ref": "#/$defs/InvestigationStepKind"
+        }
+      },
+      "required": [
+        "scope",
+        "pack",
+        "work"
+      ],
+      "type": "object"
+    },
+    "InvestigationStopReason": {
+      "description": "Explicit stop reasons do not imply a root cause was established.",
+      "enum": [
+        "evidence_insufficient",
+        "budget_exhausted",
+        "deadline_exceeded",
+        "no_progress",
+        "model_unavailable",
+        "source_unavailable"
+      ],
+      "type": "string"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "StepAttemptId": {
+      "description": "Stable identifier for one admitted investigation step attempt.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TimeRange": {
+      "description": "Inclusive time range requested from an evidence source.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Original creation response and its actor-bound receipt, retained for exact replay.",
+  "properties": {
+    "actor_subject": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "replayed": {
+      "type": "boolean"
+    },
+    "request_digest": {
+      "type": "string"
+    },
+    "run": {
+      "$ref": "#/$defs/InvestigationRun"
+    }
+  },
+  "required": [
+    "run",
+    "actor_subject",
+    "idempotency_key",
+    "request_digest",
+    "replayed"
+  ],
+  "title": "CreateInvestigationRunResponse",
+  "type": "object"
+}

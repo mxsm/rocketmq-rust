@@ -2,6 +2,17 @@ import type { components as GeneratedComponents } from "./generated";
 
 type ApiSchemas = GeneratedComponents["schemas"];
 
+// D13 publishes data contracts only; run transport and coordination belong to D14.
+export type InvestigationRun = ApiSchemas["InvestigationRun"];
+export type CreateInvestigationRunRequest = ApiSchemas["CreateInvestigationRunRequest"];
+export type CreateInvestigationRunResponse = ApiSchemas["CreateInvestigationRunResponse"];
+export type InvestigationCommandRequest = ApiSchemas["InvestigationCommandRequest"];
+export type InvestigationCommandReceipt = ApiSchemas["InvestigationCommandReceipt"];
+export type InvestigationStep = ApiSchemas["InvestigationStep"];
+export type InvestigationStepResult = ApiSchemas["InvestigationStepResult"];
+export type HypothesisAssessment = ApiSchemas["HypothesisAssessment"];
+export type InvestigationRunFailure = ApiSchemas["InvestigationRunFailure"];
+
 export type Phase2ContractManifest =
   ApiSchemas["Phase2ContractManifest"];
 export type ClusterHealthReport = ApiSchemas["ClusterHealthReport"];

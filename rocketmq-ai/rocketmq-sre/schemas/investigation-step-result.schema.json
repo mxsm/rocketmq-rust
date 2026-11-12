@@ -1,0 +1,150 @@
+{
+  "$defs": {
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationBudgetCost": {
+      "additionalProperties": false,
+      "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+      "properties": {
+        "evidence_items": {
+          "format": "uint64",
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model_calls": {
+          "format": "uint64",
+          "maximum": 8,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_bytes": {
+          "format": "uint64",
+          "maximum": 4194304,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read_queries": {
+          "format": "uint64",
+          "maximum": 12,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "read_queries",
+        "model_calls",
+        "evidence_items",
+        "output_bytes"
+      ],
+      "type": "object"
+    },
+    "InvestigationControlEpoch": {
+      "description": "Control generation, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationRunId": {
+      "description": "Stable identifier for one bounded investigation run.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationStepFailure": {
+      "enum": [
+        "source_unavailable",
+        "evidence_insufficient",
+        "model_unavailable",
+        "deadline_exceeded"
+      ],
+      "type": "string"
+    },
+    "InvestigationStepId": {
+      "description": "Stable identity for one read-only investigation step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationStepOutcome": {
+      "oneOf": [
+        {
+          "enum": [
+            "succeeded",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "cancelled_acknowledged",
+          "description": "Worker settlement with final usage; it does not assert that a remote RPC was withdrawn.",
+          "type": "string"
+        }
+      ]
+    },
+    "StepAttemptId": {
+      "description": "Stable identifier for one admitted investigation step attempt.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Final observation and actual usage for exactly one admitted attempt.\n\nThe worker must join/cancel its owned read and know final consumption before\nacknowledging cancellation. No raw result, credentials or message body is carried.",
+  "properties": {
+    "actual_cost": {
+      "$ref": "#/$defs/InvestigationBudgetCost"
+    },
+    "attempt_id": {
+      "$ref": "#/$defs/StepAttemptId"
+    },
+    "control_epoch": {
+      "$ref": "#/$defs/InvestigationControlEpoch"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "failure": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InvestigationStepFailure"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "finished_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "outcome": {
+      "$ref": "#/$defs/InvestigationStepOutcome"
+    },
+    "run_id": {
+      "$ref": "#/$defs/InvestigationRunId"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "step_id": {
+      "$ref": "#/$defs/InvestigationStepId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "step_id",
+    "attempt_id",
+    "control_epoch",
+    "outcome",
+    "evidence_ids",
+    "actual_cost",
+    "finished_at"
+  ],
+  "title": "InvestigationStepResult",
+  "type": "object"
+}

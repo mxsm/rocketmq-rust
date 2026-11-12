@@ -32680,6 +32680,3324 @@
           "end"
         ],
         "type": "object"
+      },
+      "InvestigationRun": {
+        "additionalProperties": false,
+        "description": "Durable read model for bounded read-only work. No deployed run route exists in D13.",
+        "properties": {
+          "assessments": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__HypothesisAssessment"
+            },
+            "type": "array"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationBudget"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationControlEpoch"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by_subject": {
+            "type": "string"
+          },
+          "deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "effective_packs": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__InvestigationPackRef"
+            },
+            "type": "array"
+          },
+          "effective_scope": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunScope"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunId"
+          },
+          "initial_packs": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__InvestigationPackRef"
+            },
+            "type": "array"
+          },
+          "initial_scope": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunScope"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRevision"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunStatus"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__InvestigationStep"
+            },
+            "type": "array"
+          },
+          "supplied_evidence_ids": {
+            "description": "Imported, already saved references consume the same distinct-Evidence budget.",
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "initial_scope",
+          "effective_scope",
+          "initial_packs",
+          "effective_packs",
+          "status",
+          "revision",
+          "control_epoch",
+          "budget",
+          "deadline",
+          "steps",
+          "evidence_ids",
+          "supplied_evidence_ids",
+          "assessments",
+          "created_by_subject",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "InvestigationRun",
+        "type": "object"
+      },
+      "InvestigationRun__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__DiagnosisRevisionId": {
+        "description": "Stable identifier for an immutable diagnosis revision.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__HypothesisAssessment": {
+        "additionalProperties": false,
+        "description": "Evidence-bound advisory assessment on an existing immutable diagnosis revision.\n\nNo execution-eligibility field exists: this object cannot grant execution.",
+        "properties": {
+          "conclusion": {
+            "$ref": "#/components/schemas/InvestigationRun__HypothesisAssessmentConclusion"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationControlEpoch"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "diagnosis_revision_id": {
+            "$ref": "#/components/schemas/InvestigationRun__DiagnosisRevisionId"
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationRun__HypothesisAssessmentId"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunScope"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "run_id",
+          "scope",
+          "control_epoch",
+          "diagnosis_revision_id",
+          "conclusion",
+          "summary",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__HypothesisAssessmentConclusion": {
+        "description": "Advisory conclusions reference saved Evidence, never an inferred timestamp relation.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "counter_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "root_cause",
+                "type": "string"
+              },
+              "statement": {
+                "type": "string"
+              },
+              "supporting_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "statement",
+              "supporting_evidence_ids",
+              "counter_evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "healthy",
+                "type": "string"
+              },
+              "supporting_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "supporting_evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "considered_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "inconclusive",
+                "type": "string"
+              },
+              "missing_requirements": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRun__InvestigationRequirementRef"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/InvestigationRun__InvestigationStopReason"
+              }
+            },
+            "required": [
+              "kind",
+              "reason",
+              "considered_evidence_ids",
+              "missing_requirements"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "InvestigationRun__HypothesisAssessmentId": {
+        "description": "Stable identifier for one evidence-bound hypothesis assessment.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationBudget": {
+        "additionalProperties": false,
+        "description": "Hard limits: retries are admissions and cannot create a fresh budget.",
+        "properties": {
+          "limit": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationBudgetCost"
+          },
+          "max_attempts_per_step": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_in_flight": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_query_retries": {
+            "format": "uint8",
+            "maximum": 2,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_steps": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "max_steps",
+          "max_in_flight",
+          "max_attempts_per_step",
+          "max_query_retries"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationBudgetCost": {
+        "additionalProperties": false,
+        "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+        "properties": {
+          "evidence_items": {
+            "format": "uint64",
+            "maximum": 256,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_calls": {
+            "format": "uint64",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "read_queries": {
+            "format": "uint64",
+            "maximum": 12,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_queries",
+          "model_calls",
+          "evidence_items",
+          "output_bytes"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationRequirementRef": {
+        "additionalProperties": false,
+        "description": "Fixed collector requirement resolved by the server from a compiled pack.",
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationPackRef"
+          },
+          "requirement_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack",
+          "requirement_id"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/InvestigationRun__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationResultDisposition": {
+        "enum": [
+          "applied",
+          "superseded"
+        ],
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationRevision": {
+        "description": "Monotonic run revision, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/InvestigationRun__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRun__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationRun__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/InvestigationRun__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationRunStatus": {
+        "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+        "enum": [
+          "queued",
+          "running",
+          "pausing",
+          "paused",
+          "needs_evidence",
+          "completed",
+          "inconclusive",
+          "cancelling",
+          "cancelled",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationStep": {
+        "additionalProperties": false,
+        "description": "Logical work identity remains stable across bounded retries and restarts.",
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__InvestigationStepAttempt"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationStepId"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationStepSpec"
+          }
+        },
+        "required": [
+          "id",
+          "spec",
+          "attempts"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationStepAttempt": {
+        "additionalProperties": false,
+        "properties": {
+          "admitted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "admitted_revision": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRevision"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationControlEpoch"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRun__InvestigationResultDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationRun__StepAttemptId"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationBudgetCost"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRun__InvestigationStepResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "control_epoch",
+          "admitted_revision",
+          "admitted_at",
+          "reservation"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationStepFailure": {
+        "enum": [
+          "source_unavailable",
+          "evidence_insufficient",
+          "model_unavailable",
+          "deadline_exceeded"
+        ],
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationStepId": {
+        "description": "Stable identity for one read-only investigation step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationStepKind": {
+        "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "collect_evidence",
+                "type": "string"
+              },
+              "requirement_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "requirement_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "evaluate_rules",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "explain_evidence",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "evidence_ids"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "InvestigationRun__InvestigationStepOutcome": {
+        "oneOf": [
+          {
+            "enum": [
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "cancelled_acknowledged",
+            "description": "Worker settlement with final usage; it does not assert that a remote RPC was withdrawn.",
+            "type": "string"
+          }
+        ]
+      },
+      "InvestigationRun__InvestigationStepResult": {
+        "additionalProperties": false,
+        "description": "Final observation and actual usage for exactly one admitted attempt.\n\nThe worker must join/cancel its owned read and know final consumption before\nacknowledging cancellation. No raw result, credentials or message body is carried.",
+        "properties": {
+          "actual_cost": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationBudgetCost"
+          },
+          "attempt_id": {
+            "$ref": "#/components/schemas/InvestigationRun__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationControlEpoch"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+            },
+            "type": "array"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRun__InvestigationStepFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationStepOutcome"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationStepId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "step_id",
+          "attempt_id",
+          "control_epoch",
+          "outcome",
+          "evidence_ids",
+          "actual_cost",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationStepSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationPackRef"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunScope"
+          },
+          "work": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationStepKind"
+          }
+        },
+        "required": [
+          "scope",
+          "pack",
+          "work"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationStopReason": {
+        "description": "Explicit stop reasons do not imply a root cause was established.",
+        "enum": [
+          "evidence_insufficient",
+          "budget_exhausted",
+          "deadline_exceeded",
+          "no_progress",
+          "model_unavailable",
+          "source_unavailable"
+        ],
+        "type": "string"
+      },
+      "InvestigationRun__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "InvestigationRun__StepAttemptId": {
+        "description": "Stable identifier for one admitted investigation step attempt.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunRequest": {
+        "additionalProperties": false,
+        "description": "Proposed creation body. D13 exports a contract, not an HTTP operation.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__InvestigationBudget"
+          },
+          "deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "packs": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunRequest__InvestigationPackRef"
+            },
+            "type": "array"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__InvestigationRunScope"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "scope",
+          "packs",
+          "budget",
+          "deadline",
+          "idempotency_key"
+        ],
+        "title": "CreateInvestigationRunRequest",
+        "type": "object"
+      },
+      "CreateInvestigationRunRequest__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunRequest__InvestigationBudget": {
+        "additionalProperties": false,
+        "description": "Hard limits: retries are admissions and cannot create a fresh budget.",
+        "properties": {
+          "limit": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__InvestigationBudgetCost"
+          },
+          "max_attempts_per_step": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_in_flight": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_query_retries": {
+            "format": "uint8",
+            "maximum": 2,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_steps": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "max_steps",
+          "max_in_flight",
+          "max_attempts_per_step",
+          "max_query_retries"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunRequest__InvestigationBudgetCost": {
+        "additionalProperties": false,
+        "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+        "properties": {
+          "evidence_items": {
+            "format": "uint64",
+            "maximum": 256,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_calls": {
+            "format": "uint64",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "read_queries": {
+            "format": "uint64",
+            "maximum": 12,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_queries",
+          "model_calls",
+          "evidence_items",
+          "output_bytes"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunRequest__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunRequest__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunRequest__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunRequest__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunRequest__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunRequest__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/CreateInvestigationRunRequest__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunRequest__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "CreateInvestigationRunRequest__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunRequest__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse": {
+        "additionalProperties": false,
+        "description": "Original creation response and its actor-bound receipt, retained for exact replay.",
+        "properties": {
+          "actor_subject": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "request_digest": {
+            "type": "string"
+          },
+          "run": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRun"
+          }
+        },
+        "required": [
+          "run",
+          "actor_subject",
+          "idempotency_key",
+          "request_digest",
+          "replayed"
+        ],
+        "title": "CreateInvestigationRunResponse",
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__DiagnosisRevisionId": {
+        "description": "Stable identifier for an immutable diagnosis revision.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__HypothesisAssessment": {
+        "additionalProperties": false,
+        "description": "Evidence-bound advisory assessment on an existing immutable diagnosis revision.\n\nNo execution-eligibility field exists: this object cannot grant execution.",
+        "properties": {
+          "conclusion": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__HypothesisAssessmentConclusion"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationControlEpoch"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "diagnosis_revision_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__DiagnosisRevisionId"
+          },
+          "id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__HypothesisAssessmentId"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunScope"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "run_id",
+          "scope",
+          "control_epoch",
+          "diagnosis_revision_id",
+          "conclusion",
+          "summary",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__HypothesisAssessmentConclusion": {
+        "description": "Advisory conclusions reference saved Evidence, never an inferred timestamp relation.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "counter_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "root_cause",
+                "type": "string"
+              },
+              "statement": {
+                "type": "string"
+              },
+              "supporting_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "statement",
+              "supporting_evidence_ids",
+              "counter_evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "healthy",
+                "type": "string"
+              },
+              "supporting_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "supporting_evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "considered_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "inconclusive",
+                "type": "string"
+              },
+              "missing_requirements": {
+                "items": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRequirementRef"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStopReason"
+              }
+            },
+            "required": [
+              "kind",
+              "reason",
+              "considered_evidence_ids",
+              "missing_requirements"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CreateInvestigationRunResponse__HypothesisAssessmentId": {
+        "description": "Stable identifier for one evidence-bound hypothesis assessment.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationBudget": {
+        "additionalProperties": false,
+        "description": "Hard limits: retries are admissions and cannot create a fresh budget.",
+        "properties": {
+          "limit": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationBudgetCost"
+          },
+          "max_attempts_per_step": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_in_flight": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_query_retries": {
+            "format": "uint8",
+            "maximum": 2,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_steps": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "max_steps",
+          "max_in_flight",
+          "max_attempts_per_step",
+          "max_query_retries"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationBudgetCost": {
+        "additionalProperties": false,
+        "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+        "properties": {
+          "evidence_items": {
+            "format": "uint64",
+            "maximum": 256,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_calls": {
+            "format": "uint64",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "read_queries": {
+            "format": "uint64",
+            "maximum": 12,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_queries",
+          "model_calls",
+          "evidence_items",
+          "output_bytes"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationRequirementRef": {
+        "additionalProperties": false,
+        "description": "Fixed collector requirement resolved by the server from a compiled pack.",
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationPackRef"
+          },
+          "requirement_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack",
+          "requirement_id"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationResultDisposition": {
+        "enum": [
+          "applied",
+          "superseded"
+        ],
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationRevision": {
+        "description": "Monotonic run revision, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationRun": {
+        "additionalProperties": false,
+        "description": "Durable read model for bounded read-only work. No deployed run route exists in D13.",
+        "properties": {
+          "assessments": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__HypothesisAssessment"
+            },
+            "type": "array"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationBudget"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationControlEpoch"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by_subject": {
+            "type": "string"
+          },
+          "deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "effective_packs": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationPackRef"
+            },
+            "type": "array"
+          },
+          "effective_scope": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunScope"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunId"
+          },
+          "initial_packs": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationPackRef"
+            },
+            "type": "array"
+          },
+          "initial_scope": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunScope"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRevision"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunStatus"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStep"
+            },
+            "type": "array"
+          },
+          "supplied_evidence_ids": {
+            "description": "Imported, already saved references consume the same distinct-Evidence budget.",
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "initial_scope",
+          "effective_scope",
+          "initial_packs",
+          "effective_packs",
+          "status",
+          "revision",
+          "control_epoch",
+          "budget",
+          "deadline",
+          "steps",
+          "evidence_ids",
+          "supplied_evidence_ids",
+          "assessments",
+          "created_by_subject",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationRunStatus": {
+        "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+        "enum": [
+          "queued",
+          "running",
+          "pausing",
+          "paused",
+          "needs_evidence",
+          "completed",
+          "inconclusive",
+          "cancelling",
+          "cancelled",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationStep": {
+        "additionalProperties": false,
+        "description": "Logical work identity remains stable across bounded retries and restarts.",
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepAttempt"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepId"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepSpec"
+          }
+        },
+        "required": [
+          "id",
+          "spec",
+          "attempts"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationStepAttempt": {
+        "additionalProperties": false,
+        "properties": {
+          "admitted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "admitted_revision": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRevision"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationControlEpoch"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationResultDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__StepAttemptId"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationBudgetCost"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "control_epoch",
+          "admitted_revision",
+          "admitted_at",
+          "reservation"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationStepFailure": {
+        "enum": [
+          "source_unavailable",
+          "evidence_insufficient",
+          "model_unavailable",
+          "deadline_exceeded"
+        ],
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationStepId": {
+        "description": "Stable identity for one read-only investigation step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationStepKind": {
+        "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "collect_evidence",
+                "type": "string"
+              },
+              "requirement_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "requirement_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "evaluate_rules",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "explain_evidence",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "evidence_ids"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CreateInvestigationRunResponse__InvestigationStepOutcome": {
+        "oneOf": [
+          {
+            "enum": [
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "cancelled_acknowledged",
+            "description": "Worker settlement with final usage; it does not assert that a remote RPC was withdrawn.",
+            "type": "string"
+          }
+        ]
+      },
+      "CreateInvestigationRunResponse__InvestigationStepResult": {
+        "additionalProperties": false,
+        "description": "Final observation and actual usage for exactly one admitted attempt.\n\nThe worker must join/cancel its owned read and know final consumption before\nacknowledging cancellation. No raw result, credentials or message body is carried.",
+        "properties": {
+          "actual_cost": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationBudgetCost"
+          },
+          "attempt_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationControlEpoch"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+            },
+            "type": "array"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepOutcome"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "step_id",
+          "attempt_id",
+          "control_epoch",
+          "outcome",
+          "evidence_ids",
+          "actual_cost",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationStepSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationPackRef"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunScope"
+          },
+          "work": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepKind"
+          }
+        },
+        "required": [
+          "scope",
+          "pack",
+          "work"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationStopReason": {
+        "description": "Explicit stop reasons do not imply a root cause was established.",
+        "enum": [
+          "evidence_insufficient",
+          "budget_exhausted",
+          "deadline_exceeded",
+          "no_progress",
+          "model_unavailable",
+          "source_unavailable"
+        ],
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__StepAttemptId": {
+        "description": "Stable identifier for one admitted investigation step attempt.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "InvestigationCommandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationCommand"
+          },
+          "command_id": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationCommandId"
+          },
+          "expected_revision": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationRevision"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "command_id",
+          "run_id",
+          "expected_revision",
+          "idempotency_key",
+          "reason",
+          "command"
+        ],
+        "title": "InvestigationCommandRequest",
+        "type": "object"
+      },
+      "InvestigationCommandRequest__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationCommandRequest__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationCommandRequest__InvestigationCommand": {
+        "description": "No arbitrary tool, URL, shell, prompt, or JSON patch is accepted here.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "pause",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "resume",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "steer",
+                "type": "string"
+              },
+              "refinement": {
+                "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationRefinement"
+              }
+            },
+            "required": [
+              "kind",
+              "refinement"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "InvestigationCommandRequest__InvestigationCommandId": {
+        "description": "Stable identifier for one investigation control command.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationCommandRequest__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationCommandRequest__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "InvestigationCommandRequest__InvestigationRefinement": {
+        "additionalProperties": false,
+        "description": "Typed operator refinement. It never resets the deadline or remaining budget.",
+        "properties": {
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationCommandRequest__EvidenceId"
+            },
+            "type": "array"
+          },
+          "packs": {
+            "description": "Order is meaningful: it expresses priority among the remaining packs.",
+            "items": {
+              "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationPackRef"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationRunScope"
+          }
+        },
+        "required": [
+          "scope",
+          "packs",
+          "evidence_ids"
+        ],
+        "type": "object"
+      },
+      "InvestigationCommandRequest__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "InvestigationCommandRequest__InvestigationRevision": {
+        "description": "Monotonic run revision, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationCommandRequest__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationCommandRequest__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationCommandRequest__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/InvestigationCommandRequest__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "InvestigationCommandRequest__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "InvestigationCommandRequest__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationCommandRequest__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "InvestigationCommandReceipt": {
+        "additionalProperties": false,
+        "description": "Immutable result of an accepted command. Replay does not reapply its old status.",
+        "properties": {
+          "actor_subject": {
+            "type": "string"
+          },
+          "applied_revision": {
+            "$ref": "#/components/schemas/InvestigationCommandReceipt__InvestigationRevision"
+          },
+          "command_id": {
+            "$ref": "#/components/schemas/InvestigationCommandReceipt__InvestigationCommandId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationCommandReceipt__InvestigationControlEpoch"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "request_digest": {
+            "type": "string"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationCommandReceipt__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvestigationCommandReceipt__InvestigationRunStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationCommandReceipt__TenantId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "command_id",
+          "tenant_id",
+          "actor_subject",
+          "run_id",
+          "idempotency_key",
+          "request_digest",
+          "applied_revision",
+          "control_epoch",
+          "status",
+          "recorded_at"
+        ],
+        "title": "InvestigationCommandReceipt",
+        "type": "object"
+      },
+      "InvestigationCommandReceipt__InvestigationCommandId": {
+        "description": "Stable identifier for one investigation control command.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationCommandReceipt__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationCommandReceipt__InvestigationRevision": {
+        "description": "Monotonic run revision, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationCommandReceipt__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationCommandReceipt__InvestigationRunStatus": {
+        "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+        "enum": [
+          "queued",
+          "running",
+          "pausing",
+          "paused",
+          "needs_evidence",
+          "completed",
+          "inconclusive",
+          "cancelling",
+          "cancelled",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "InvestigationCommandReceipt__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStep": {
+        "additionalProperties": false,
+        "description": "Logical work identity remains stable across bounded retries and restarts.",
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationStep__InvestigationStepAttempt"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationStepId"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationStepSpec"
+          }
+        },
+        "required": [
+          "id",
+          "spec",
+          "attempts"
+        ],
+        "title": "InvestigationStep",
+        "type": "object"
+      },
+      "InvestigationStep__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStep__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStep__InvestigationBudgetCost": {
+        "additionalProperties": false,
+        "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+        "properties": {
+          "evidence_items": {
+            "format": "uint64",
+            "maximum": 256,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_calls": {
+            "format": "uint64",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "read_queries": {
+            "format": "uint64",
+            "maximum": 12,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_queries",
+          "model_calls",
+          "evidence_items",
+          "output_bytes"
+        ],
+        "type": "object"
+      },
+      "InvestigationStep__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationStep__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStep__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "InvestigationStep__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/InvestigationStep__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "InvestigationStep__InvestigationResultDisposition": {
+        "enum": [
+          "applied",
+          "superseded"
+        ],
+        "type": "string"
+      },
+      "InvestigationStep__InvestigationRevision": {
+        "description": "Monotonic run revision, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationStep__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStep__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/InvestigationStep__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationStep__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationStep__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/InvestigationStep__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "InvestigationStep__InvestigationStepAttempt": {
+        "additionalProperties": false,
+        "properties": {
+          "admitted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "admitted_revision": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationRevision"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationControlEpoch"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationStep__InvestigationResultDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationStep__StepAttemptId"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationBudgetCost"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationStep__InvestigationStepResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "control_epoch",
+          "admitted_revision",
+          "admitted_at",
+          "reservation"
+        ],
+        "type": "object"
+      },
+      "InvestigationStep__InvestigationStepFailure": {
+        "enum": [
+          "source_unavailable",
+          "evidence_insufficient",
+          "model_unavailable",
+          "deadline_exceeded"
+        ],
+        "type": "string"
+      },
+      "InvestigationStep__InvestigationStepId": {
+        "description": "Stable identity for one read-only investigation step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStep__InvestigationStepKind": {
+        "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "collect_evidence",
+                "type": "string"
+              },
+              "requirement_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "requirement_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationStep__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "evaluate_rules",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationStep__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "explain_evidence",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "evidence_ids"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "InvestigationStep__InvestigationStepOutcome": {
+        "oneOf": [
+          {
+            "enum": [
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "cancelled_acknowledged",
+            "description": "Worker settlement with final usage; it does not assert that a remote RPC was withdrawn.",
+            "type": "string"
+          }
+        ]
+      },
+      "InvestigationStep__InvestigationStepResult": {
+        "additionalProperties": false,
+        "description": "Final observation and actual usage for exactly one admitted attempt.\n\nThe worker must join/cancel its owned read and know final consumption before\nacknowledging cancellation. No raw result, credentials or message body is carried.",
+        "properties": {
+          "actual_cost": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationBudgetCost"
+          },
+          "attempt_id": {
+            "$ref": "#/components/schemas/InvestigationStep__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationControlEpoch"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationStep__EvidenceId"
+            },
+            "type": "array"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationStep__InvestigationStepFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationStepOutcome"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationStepId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "step_id",
+          "attempt_id",
+          "control_epoch",
+          "outcome",
+          "evidence_ids",
+          "actual_cost",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "InvestigationStep__InvestigationStepSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationPackRef"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationRunScope"
+          },
+          "work": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationStepKind"
+          }
+        },
+        "required": [
+          "scope",
+          "pack",
+          "work"
+        ],
+        "type": "object"
+      },
+      "InvestigationStep__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "InvestigationStep__StepAttemptId": {
+        "description": "Stable identifier for one admitted investigation step attempt.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStep__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStep__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "InvestigationStepResult": {
+        "additionalProperties": false,
+        "description": "Final observation and actual usage for exactly one admitted attempt.\n\nThe worker must join/cancel its owned read and know final consumption before\nacknowledging cancellation. No raw result, credentials or message body is carried.",
+        "properties": {
+          "actual_cost": {
+            "$ref": "#/components/schemas/InvestigationStepResult__InvestigationBudgetCost"
+          },
+          "attempt_id": {
+            "$ref": "#/components/schemas/InvestigationStepResult__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationStepResult__InvestigationControlEpoch"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationStepResult__EvidenceId"
+            },
+            "type": "array"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationStepResult__InvestigationStepFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/InvestigationStepResult__InvestigationStepOutcome"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationStepResult__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/InvestigationStepResult__InvestigationStepId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "step_id",
+          "attempt_id",
+          "control_epoch",
+          "outcome",
+          "evidence_ids",
+          "actual_cost",
+          "finished_at"
+        ],
+        "title": "InvestigationStepResult",
+        "type": "object"
+      },
+      "InvestigationStepResult__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStepResult__InvestigationBudgetCost": {
+        "additionalProperties": false,
+        "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+        "properties": {
+          "evidence_items": {
+            "format": "uint64",
+            "maximum": 256,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_calls": {
+            "format": "uint64",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "read_queries": {
+            "format": "uint64",
+            "maximum": 12,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_queries",
+          "model_calls",
+          "evidence_items",
+          "output_bytes"
+        ],
+        "type": "object"
+      },
+      "InvestigationStepResult__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationStepResult__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStepResult__InvestigationStepFailure": {
+        "enum": [
+          "source_unavailable",
+          "evidence_insufficient",
+          "model_unavailable",
+          "deadline_exceeded"
+        ],
+        "type": "string"
+      },
+      "InvestigationStepResult__InvestigationStepId": {
+        "description": "Stable identity for one read-only investigation step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationStepResult__InvestigationStepOutcome": {
+        "oneOf": [
+          {
+            "enum": [
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "cancelled_acknowledged",
+            "description": "Worker settlement with final usage; it does not assert that a remote RPC was withdrawn.",
+            "type": "string"
+          }
+        ]
+      },
+      "InvestigationStepResult__StepAttemptId": {
+        "description": "Stable identifier for one admitted investigation step attempt.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment": {
+        "additionalProperties": false,
+        "description": "Evidence-bound advisory assessment on an existing immutable diagnosis revision.\n\nNo execution-eligibility field exists: this object cannot grant execution.",
+        "properties": {
+          "conclusion": {
+            "$ref": "#/components/schemas/HypothesisAssessment__HypothesisAssessmentConclusion"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/HypothesisAssessment__InvestigationControlEpoch"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "diagnosis_revision_id": {
+            "$ref": "#/components/schemas/HypothesisAssessment__DiagnosisRevisionId"
+          },
+          "id": {
+            "$ref": "#/components/schemas/HypothesisAssessment__HypothesisAssessmentId"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/HypothesisAssessment__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/HypothesisAssessment__InvestigationRunScope"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "run_id",
+          "scope",
+          "control_epoch",
+          "diagnosis_revision_id",
+          "conclusion",
+          "summary",
+          "created_at"
+        ],
+        "title": "HypothesisAssessment",
+        "type": "object"
+      },
+      "HypothesisAssessment__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment__DiagnosisRevisionId": {
+        "description": "Stable identifier for an immutable diagnosis revision.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment__HypothesisAssessmentConclusion": {
+        "description": "Advisory conclusions reference saved Evidence, never an inferred timestamp relation.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "counter_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/HypothesisAssessment__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "root_cause",
+                "type": "string"
+              },
+              "statement": {
+                "type": "string"
+              },
+              "supporting_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/HypothesisAssessment__EvidenceId"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "statement",
+              "supporting_evidence_ids",
+              "counter_evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "healthy",
+                "type": "string"
+              },
+              "supporting_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/HypothesisAssessment__EvidenceId"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "supporting_evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "considered_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/HypothesisAssessment__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "inconclusive",
+                "type": "string"
+              },
+              "missing_requirements": {
+                "items": {
+                  "$ref": "#/components/schemas/HypothesisAssessment__InvestigationRequirementRef"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/HypothesisAssessment__InvestigationStopReason"
+              }
+            },
+            "required": [
+              "kind",
+              "reason",
+              "considered_evidence_ids",
+              "missing_requirements"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "HypothesisAssessment__HypothesisAssessmentId": {
+        "description": "Stable identifier for one evidence-bound hypothesis assessment.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "HypothesisAssessment__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "HypothesisAssessment__InvestigationRequirementRef": {
+        "additionalProperties": false,
+        "description": "Fixed collector requirement resolved by the server from a compiled pack.",
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/HypothesisAssessment__InvestigationPackRef"
+          },
+          "requirement_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack",
+          "requirement_id"
+        ],
+        "type": "object"
+      },
+      "HypothesisAssessment__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/HypothesisAssessment__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "HypothesisAssessment__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/HypothesisAssessment__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/HypothesisAssessment__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HypothesisAssessment__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/HypothesisAssessment__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/HypothesisAssessment__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "HypothesisAssessment__InvestigationStopReason": {
+        "description": "Explicit stop reasons do not imply a root cause was established.",
+        "enum": [
+          "evidence_insufficient",
+          "budget_exhausted",
+          "deadline_exceeded",
+          "no_progress",
+          "model_unavailable",
+          "source_unavailable"
+        ],
+        "type": "string"
+      },
+      "HypothesisAssessment__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "HypothesisAssessment__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunFailure": {
+        "description": "Sanitized failures for the independent investigation-run contract.\n\nThese codes do not change the established Incident or execution error enum.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "invalid_input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "unauthorized",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "scope_mismatch",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "pack_not_allowed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "invalid_state_transition",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "actual": {
+                "$ref": "#/components/schemas/InvestigationRunFailure__InvestigationRevision"
+              },
+              "code": {
+                "const": "revision_conflict",
+                "type": "string"
+              },
+              "expected": {
+                "$ref": "#/components/schemas/InvestigationRunFailure__InvestigationRevision"
+              }
+            },
+            "required": [
+              "code",
+              "expected",
+              "actual"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "idempotency_conflict",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "budget_exceeded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "deadline_exceeded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "step_identity_conflict",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "step_already_completed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "step_in_flight",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "step_not_found",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "attempt_mismatch",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "result_conflict",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "invalid_assessment",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "counter_exhausted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "InvestigationRunFailure"
+      },
+      "InvestigationRunFailure__InvestigationRevision": {
+        "description": "Monotonic run revision, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
       }
     }
   },

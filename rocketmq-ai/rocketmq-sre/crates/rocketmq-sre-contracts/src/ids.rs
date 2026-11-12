@@ -158,6 +158,26 @@ uuid_id!(
     "Stable identifier for an immutable conversation answer revision."
 );
 uuid_id!(InvestigationId, "Stable identifier for a multi-step investigation.");
+uuid_id!(
+    InvestigationRunId,
+    "Stable identifier for one bounded investigation run."
+);
+uuid_id!(
+    InvestigationStepId,
+    "Stable identity for one read-only investigation step."
+);
+uuid_id!(
+    StepAttemptId,
+    "Stable identifier for one admitted investigation step attempt."
+);
+uuid_id!(
+    InvestigationCommandId,
+    "Stable identifier for one investigation control command."
+);
+uuid_id!(
+    HypothesisAssessmentId,
+    "Stable identifier for one evidence-bound hypothesis assessment."
+);
 uuid_id!(TimelineEventId, "Stable identifier for a workflow timeline event.");
 uuid_id!(
     DiagnosisRevisionId,

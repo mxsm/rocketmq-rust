@@ -712,6 +712,42 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
 fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalError> {
     Ok(vec![
         (
+            "investigation-run.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationRun))?,
+        ),
+        (
+            "create-investigation-run-request.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::CreateInvestigationRunRequest))?,
+        ),
+        (
+            "create-investigation-run-response.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::CreateInvestigationRunResponse))?,
+        ),
+        (
+            "investigation-command-request.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationCommandRequest))?,
+        ),
+        (
+            "investigation-command-receipt.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationCommandReceipt))?,
+        ),
+        (
+            "investigation-step.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationStep))?,
+        ),
+        (
+            "investigation-step-result.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationStepResult))?,
+        ),
+        (
+            "hypothesis-assessment.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::HypothesisAssessment))?,
+        ),
+        (
+            "investigation-run-failure.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationRunFailure))?,
+        ),
+        (
             "capability-quality-projection.schema.json",
             serde_json::to_value(schema_for!(rocketmq_sre_contracts::CapabilityQualityProjection))?,
         ),
@@ -1098,6 +1134,42 @@ signals:
     fn committed_schema_fixtures_match_public_contracts() {
         let committed = [
             (
+                "investigation-run.schema.json",
+                include_str!("../../../schemas/investigation-run.schema.json"),
+            ),
+            (
+                "create-investigation-run-request.schema.json",
+                include_str!("../../../schemas/create-investigation-run-request.schema.json"),
+            ),
+            (
+                "create-investigation-run-response.schema.json",
+                include_str!("../../../schemas/create-investigation-run-response.schema.json"),
+            ),
+            (
+                "investigation-command-request.schema.json",
+                include_str!("../../../schemas/investigation-command-request.schema.json"),
+            ),
+            (
+                "investigation-command-receipt.schema.json",
+                include_str!("../../../schemas/investigation-command-receipt.schema.json"),
+            ),
+            (
+                "investigation-step.schema.json",
+                include_str!("../../../schemas/investigation-step.schema.json"),
+            ),
+            (
+                "investigation-step-result.schema.json",
+                include_str!("../../../schemas/investigation-step-result.schema.json"),
+            ),
+            (
+                "hypothesis-assessment.schema.json",
+                include_str!("../../../schemas/hypothesis-assessment.schema.json"),
+            ),
+            (
+                "investigation-run-failure.schema.json",
+                include_str!("../../../schemas/investigation-run-failure.schema.json"),
+            ),
+            (
                 "capability-quality-projection.schema.json",
                 include_str!("../../../schemas/capability-quality-projection.schema.json"),
             ),
@@ -1273,8 +1345,33 @@ signals:
                 "phase2-contract-manifest.schema.json",
                 include_str!("../../../schemas/phase2-contract-manifest.schema.json"),
             ),
+            (
+                "incident-operation-request.schema.json",
+                include_str!("../../../schemas/incident-operation-request.schema.json"),
+            ),
+            (
+                "incident-operation-result.schema.json",
+                include_str!("../../../schemas/incident-operation-result.schema.json"),
+            ),
+            (
+                "incident-operations-state.schema.json",
+                include_str!("../../../schemas/incident-operations-state.schema.json"),
+            ),
+            (
+                "shift-handoff-summary.schema.json",
+                include_str!("../../../schemas/shift-handoff-summary.schema.json"),
+            ),
+            (
+                "operations-report.schema.json",
+                include_str!("../../../schemas/operations-report.schema.json"),
+            ),
         ];
         let generated = generated_schemas().expect("schemas should encode");
+        assert_eq!(
+            generated.len(),
+            committed.len(),
+            "every exported schema needs a fixture"
+        );
 
         for ((generated_name, generated_schema), (committed_name, committed_schema)) in
             generated.into_iter().zip(committed)

@@ -1,0 +1,273 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationCommand": {
+      "description": "No arbitrary tool, URL, shell, prompt, or JSON patch is accepted here.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "pause",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "resume",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "steer",
+              "type": "string"
+            },
+            "refinement": {
+              "$ref": "#/$defs/InvestigationRefinement"
+            }
+          },
+          "required": [
+            "kind",
+            "refinement"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InvestigationCommandId": {
+      "description": "Stable identifier for one investigation control command.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationId": {
+      "description": "Stable identifier for a multi-step investigation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationPackRef": {
+      "additionalProperties": false,
+      "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+      "properties": {
+        "pack_id": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack_id",
+        "pack_version"
+      ],
+      "type": "object"
+    },
+    "InvestigationRefinement": {
+      "additionalProperties": false,
+      "description": "Typed operator refinement. It never resets the deadline or remaining budget.",
+      "properties": {
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "packs": {
+          "description": "Order is meaningful: it expresses priority among the remaining packs.",
+          "items": {
+            "$ref": "#/$defs/InvestigationPackRef"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        }
+      },
+      "required": [
+        "scope",
+        "packs",
+        "evidence_ids"
+      ],
+      "type": "object"
+    },
+    "InvestigationResource": {
+      "additionalProperties": false,
+      "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "InvestigationRevision": {
+      "description": "Monotonic run revision, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationRunId": {
+      "description": "Stable identifier for one bounded investigation run.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationRunScope": {
+      "additionalProperties": false,
+      "description": "Immutable authority boundary and requested absolute observation window.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "investigation_id": {
+          "$ref": "#/$defs/InvestigationId"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "time_range": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "cluster_id",
+        "investigation_id",
+        "time_range"
+      ],
+      "type": "object"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TimeRange": {
+      "description": "Inclusive time range requested from an evidence source.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/InvestigationCommand"
+    },
+    "command_id": {
+      "$ref": "#/$defs/InvestigationCommandId"
+    },
+    "expected_revision": {
+      "$ref": "#/$defs/InvestigationRevision"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "run_id": {
+      "$ref": "#/$defs/InvestigationRunId"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "command_id",
+    "run_id",
+    "expected_revision",
+    "idempotency_key",
+    "reason",
+    "command"
+  ],
+  "title": "InvestigationCommandRequest",
+  "type": "object"
+}
