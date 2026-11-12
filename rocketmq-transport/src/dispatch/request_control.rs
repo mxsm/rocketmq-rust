@@ -17,6 +17,7 @@
 use std::any::Any;
 use std::any::TypeId;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use rocketmq_runtime::OperationContext;
@@ -146,6 +147,13 @@ impl RequestMeta {
 #[derive(Clone)]
 pub struct RequestControlView {
     deadline: Option<RequestDeadline>,
+    // A request clones its control for each layer that may stop it. Sharing one lifecycle per
+    // request keeps those clones off the session's watch channels and the task group's
+    // cancellation token, whose reference counts and lock every request of the session shares.
+    lifecycle: Arc<RequestLifecycle>,
+}
+
+struct RequestLifecycle {
     session: SessionStateView,
     parent_task_group_id: TaskGroupId,
     parent_cancellation: CancellationToken,
@@ -159,23 +167,26 @@ impl RequestControlView {
     pub(crate) fn from_meta(meta: &RequestMeta, session: SessionStateView, parent_task_group: &TaskGroup) -> Self {
         Self {
             deadline: meta.deadline(),
-            session,
-            parent_task_group_id: parent_task_group.id(),
-            parent_cancellation: parent_task_group.cancellation_token(),
+            lifecycle: Arc::new(RequestLifecycle {
+                session,
+                parent_task_group_id: parent_task_group.id(),
+                parent_cancellation: parent_task_group.cancellation_token(),
+            }),
         }
     }
 
     /// Proves that this control observes the supplied session and task-group
     /// owners rather than merely matching their diagnostic identifiers.
     pub(crate) fn same_lifecycle_owner(&self, session: &SessionStateView, parent_task_group: &TaskGroup) -> bool {
-        self.session.same_canonical_owner(session) && self.parent_task_group_id == parent_task_group.id()
+        self.lifecycle.session.same_canonical_owner(session)
+            && self.lifecycle.parent_task_group_id == parent_task_group.id()
     }
 
     #[cfg(test)]
     pub(crate) fn same_lifecycle_view(&self, other: &Self) -> bool {
         self.deadline == other.deadline
-            && self.session.same_canonical_owner(&other.session)
-            && self.parent_task_group_id == other.parent_task_group_id
+            && self.lifecycle.session.same_canonical_owner(&other.lifecycle.session)
+            && self.lifecycle.parent_task_group_id == other.lifecycle.parent_task_group_id
     }
 
     /// Returns the canonical ingress deadline, when one was supplied.
@@ -191,16 +202,16 @@ impl RequestControlView {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.deadline.is_some_and(RequestDeadline::is_expired)
-            || self.session.is_closed()
-            || self.parent_cancellation.is_cancelled()
+            || self.lifecycle.session.is_closed()
+            || self.lifecycle.parent_cancellation.is_cancelled()
     }
 
     pub(crate) fn session_is_closed(&self) -> bool {
-        self.session.is_closed()
+        self.lifecycle.session.is_closed()
     }
 
     pub(crate) fn parent_is_cancelled(&self) -> bool {
-        self.parent_cancellation.is_cancelled()
+        self.lifecycle.parent_cancellation.is_cancelled()
     }
 
     /// Derives the lifecycle-only control used to deliver a boundary rejection.
@@ -211,9 +222,7 @@ impl RequestControlView {
     pub(crate) fn boundary_response_control(&self) -> Self {
         Self {
             deadline: None,
-            session: self.session.clone(),
-            parent_task_group_id: self.parent_task_group_id,
-            parent_cancellation: self.parent_cancellation.clone(),
+            lifecycle: Arc::clone(&self.lifecycle),
         }
     }
 
@@ -223,8 +232,11 @@ impl RequestControlView {
     /// This method only observes lifecycle state; it cannot cause any of the
     /// transitions it waits for.
     pub async fn cancelled(&self) {
-        let session = self.session.clone();
-        let parent_cancellation = self.parent_cancellation.clone();
+        let RequestLifecycle {
+            session,
+            parent_cancellation,
+            ..
+        } = &*self.lifecycle;
 
         match self.deadline {
             Some(deadline) => {
@@ -249,8 +261,11 @@ impl RequestControlView {
     /// processor timeout can produce and consume its owned deadline plan
     /// through the normal one-way policy before terminal completion.
     pub(crate) async fn parent_or_session_cancelled(&self) {
-        let session = self.session.clone();
-        let parent_cancellation = self.parent_cancellation.clone();
+        let RequestLifecycle {
+            session,
+            parent_cancellation,
+            ..
+        } = &*self.lifecycle;
         tokio::select! {
             _ = session.closed() => {}
             _ = parent_cancellation.cancelled() => {}

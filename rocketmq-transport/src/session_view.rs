@@ -143,11 +143,22 @@ impl ProxyInfoSnapshot {
 pub struct SessionStateView {
     state_rx: watch::Receiver<ConnectionState>,
     closed_rx: watch::Receiver<bool>,
+    /// Whether the session was closed at the versions both receivers have marked seen.
+    closed_when_seen: bool,
 }
 
 impl SessionStateView {
-    pub(crate) fn from_receivers(state_rx: watch::Receiver<ConnectionState>, closed_rx: watch::Receiver<bool>) -> Self {
-        Self { state_rx, closed_rx }
+    pub(crate) fn from_receivers(
+        mut state_rx: watch::Receiver<ConnectionState>,
+        mut closed_rx: watch::Receiver<bool>,
+    ) -> Self {
+        let closed = *closed_rx.borrow_and_update();
+        let state_closed = *state_rx.borrow_and_update() == ConnectionState::Closed;
+        Self {
+            state_rx,
+            closed_rx,
+            closed_when_seen: closed || state_closed,
+        }
     }
 
     /// Proves that both views observe the same pair of lifecycle publishers.
@@ -167,6 +178,13 @@ impl SessionStateView {
     /// `true`.
     #[must_use]
     pub fn is_closed(&self) -> bool {
+        // Requests check this many times each, and every request of the session shares these
+        // channels. While neither publisher is gone and neither has published since this view
+        // marked their versions seen, the state is the one read then: one load per channel,
+        // instead of a read lock on each value.
+        if matches!(self.state_rx.has_changed(), Ok(false)) && matches!(self.closed_rx.has_changed(), Ok(false)) {
+            return self.closed_when_seen;
+        }
         self.publishers_dropped() || *self.closed_rx.borrow() || *self.state_rx.borrow() == ConnectionState::Closed
     }
 
@@ -434,6 +452,44 @@ mod tests {
         assert!(second.is_closed());
         assert!(!first.is_healthy());
         assert!(!second.is_healthy());
+    }
+
+    #[test]
+    fn views_report_the_state_published_before_and_after_they_were_created() {
+        let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
+        let (closed_tx, closed_rx) = watch::channel(false);
+        let open = SessionStateView::from_receivers(state_rx.clone(), closed_rx.clone());
+        let open_clone = open.clone();
+        assert!(!open.is_closed());
+
+        state_tx.send(ConnectionState::Closed).unwrap();
+        assert!(open.is_closed());
+        assert!(open_clone.is_closed());
+        let closed_by_state = SessionStateView::from_receivers(state_rx.clone(), closed_rx.clone());
+        assert!(closed_by_state.is_closed());
+        assert!(closed_by_state.clone().is_closed());
+
+        let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
+        let earlier = SessionStateView::from_receivers(state_rx.clone(), closed_rx.clone());
+        closed_tx.send(true).unwrap();
+        let later = SessionStateView::from_receivers(state_rx, closed_rx);
+        assert!(earlier.is_closed());
+        assert!(later.is_closed());
+        drop(state_tx);
+        assert!(later.is_closed());
+    }
+
+    #[test]
+    fn views_created_from_receivers_behind_the_latest_state_read_it() {
+        let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
+        let (_closed_tx, closed_rx) = watch::channel(false);
+        state_tx.send(ConnectionState::Degraded).unwrap();
+        state_tx.send(ConnectionState::Closed).unwrap();
+
+        let view = SessionStateView::from_receivers(state_rx, closed_rx);
+
+        assert!(view.is_closed());
+        assert!(view.clone().is_closed());
     }
 
     #[tokio::test]
