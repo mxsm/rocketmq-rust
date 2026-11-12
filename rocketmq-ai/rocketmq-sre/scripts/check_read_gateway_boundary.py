@@ -15,6 +15,14 @@ def source_text(root: Path) -> str:
     return "\n".join(path.read_text(encoding="utf-8") for path in sorted((root / "src").rglob("*.rs")))
 
 
+def is_test_only_source(source: str) -> bool:
+    first_item = next(
+        (line.strip() for line in source.splitlines() if line.strip() and not line.strip().startswith("//")),
+        None,
+    )
+    return first_item == "#![cfg(test)]"
+
+
 def connector_adapter_bypasses() -> list[str]:
     allowed = {
         Path("read_gateway/admin.rs"),
@@ -36,6 +44,9 @@ def connector_adapter_bypasses() -> list[str]:
         if relative in allowed:
             continue
         text = path.read_text(encoding="utf-8")
+        # The compiler excludes a file with this leading inner attribute from production.
+        if is_test_only_source(text):
+            continue
         for marker in forbidden:
             if marker in text:
                 bypasses.append(f"connector-adapter-bypass:{relative.as_posix()}:{marker}")
