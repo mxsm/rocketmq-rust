@@ -30,13 +30,16 @@ tokio::task_local! {
 /// This lets a caller bound how many writes are appending at once without also bounding how many
 /// wait for durability, as Java's `asyncPutMessage` frees its send thread after the append. Only
 /// the first append releases `held`. When `future` appends nothing, fails before appending, or
-/// appends on another task, `held` is dropped when `future` completes or is dropped.
-pub async fn hold_until_appended<T, F>(held: T, future: F) -> F::Output
+/// appends on another task, `held` is dropped when the returned future completes or is dropped.
+///
+/// It returns the task-local scope future itself: an `async fn` wrapper would hold `future` both
+/// as its argument and inside the scope it awaits, doubling a send's processing future.
+pub fn hold_until_appended<T, F>(held: T, future: F) -> impl Future<Output = F::Output>
 where
     T: Send + 'static,
     F: Future,
 {
-    HELD_UNTIL_APPENDED.scope(Cell::new(Some(Box::new(held))), future).await
+    HELD_UNTIL_APPENDED.scope(Cell::new(Some(Box::new(held))), future)
 }
 
 /// Releases the value held by the enclosing [`hold_until_appended`] scope, if any.
@@ -99,5 +102,24 @@ mod tests {
     #[test]
     fn release_outside_a_scope_is_a_no_op() {
         release_held_until_appended();
+    }
+
+    #[tokio::test]
+    async fn scope_holds_the_future_once() {
+        let write = async {
+            let state = [7_u8; 4096];
+            tokio::task::yield_now().await;
+            std::hint::black_box(state);
+        };
+        let write_size = std::mem::size_of_val(&write);
+
+        let held = hold_until_appended((), write);
+
+        assert!(
+            std::mem::size_of_val(&held) < write_size + 256,
+            "held write is {} bytes for a {write_size}-byte write",
+            std::mem::size_of_val(&held)
+        );
+        held.await;
     }
 }
