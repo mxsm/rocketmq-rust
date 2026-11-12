@@ -41,7 +41,7 @@ impl OwnedNotificationArrival {
         arrival: NotificationArrivalView<'_>,
         cursor: &NotificationScanCursor,
     ) -> Result<usize, NotificationContinuationOperationalError> {
-        let mut bytes = size_of::<NotificationArrivalContinuation>()
+        let mut bytes = size_of::<NotificationPendingArrival>()
             .checked_add(
                 cursor
                     .try_retained_bytes()
@@ -191,14 +191,6 @@ impl PendingArrivalValue for NotificationPendingArrival {
     }
 }
 
-#[must_use]
-pub(crate) struct NotificationArrivalContinuation {
-    pub(super) owned: OwnedNotificationArrival,
-    pub(super) cursor: NotificationScanCursor,
-    pub(super) remaining_conflicts: usize,
-    pub(super) _permit: ContinuationPermit,
-}
-
 fn byte_allocation_bound(len: usize) -> Option<usize> {
     len.checked_mul(2)?.checked_add(size_of::<usize>())
 }
@@ -291,4 +283,39 @@ pub(super) struct ContinuationSnapshot {
     pub(super) count: usize,
     pub(super) bytes: usize,
     pub(super) rejected: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continuation_admission_enforces_independent_count_and_byte_limits() {
+        let admission = Arc::new(ContinuationAdmission::new(1, 4096));
+        let permit = match admission.reserve(64).expect("first admission") {
+            NotificationContinuationDecision::Ready(permit) => permit,
+            NotificationContinuationDecision::Rejected(rejection) => panic!("first admission: {rejection:?}"),
+        };
+        assert_eq!(admission.snapshot().count, 1);
+        assert!(matches!(
+            admission.reserve(64),
+            Ok(NotificationContinuationDecision::Rejected(
+                NotificationContinuationRejection::CountFull
+            ))
+        ));
+        drop(permit);
+        assert_eq!(admission.snapshot().count, 0);
+        assert_eq!(admission.snapshot().bytes, 0);
+        assert_eq!(admission.snapshot().rejected, 1);
+
+        let bytes_limited = Arc::new(ContinuationAdmission::new(2, 4));
+        assert!(matches!(
+            bytes_limited.reserve(5),
+            Ok(NotificationContinuationDecision::Rejected(
+                NotificationContinuationRejection::BytesFull
+            ))
+        ));
+        assert_eq!(bytes_limited.snapshot().count, 0);
+        assert_eq!(bytes_limited.snapshot().bytes, 0);
+    }
 }
