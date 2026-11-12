@@ -68,6 +68,25 @@ pub(crate) fn decode_message_frame_with(
     input: &mut Bytes,
     properties_string: PropertiesString,
 ) -> Result<DecodedMessageFrame> {
+    let (mut frame, property_bytes) = decode_message_frame_parts(input, properties_string)?;
+    frame.properties = decode_properties(&property_bytes);
+    Ok(frame)
+}
+
+/// Decodes one frame like [`decode_message_frame_with`] but returns the encoded properties instead
+/// of parsing them: the returned frame's `properties` map is empty. A caller that builds lazy
+/// properties from the bytes skips parsing what its consumer never reads.
+pub(crate) fn decode_message_frame_with_encoded_properties(
+    input: &mut Bytes,
+    properties_string: PropertiesString,
+) -> Result<(DecodedMessageFrame, Bytes)> {
+    decode_message_frame_parts(input, properties_string)
+}
+
+fn decode_message_frame_parts(
+    input: &mut Bytes,
+    properties_string: PropertiesString,
+) -> Result<(DecodedMessageFrame, Bytes)> {
     let initial_len = input.remaining();
     let store_size = read_i32(input)?;
     if store_size <= 0 || store_size as usize > initial_len {
@@ -106,9 +125,8 @@ pub(crate) fn decode_message_frame_with(
         PropertiesString::Keep => CheetahString::from(String::from_utf8_lossy(&property_bytes).as_ref()),
         PropertiesString::Skip => CheetahString::empty(),
     };
-    let properties = decode_properties(&property_bytes);
 
-    Ok(DecodedMessageFrame {
+    let frame = DecodedMessageFrame {
         store_size,
         magic_code,
         body_crc,
@@ -126,8 +144,9 @@ pub(crate) fn decode_message_frame_with(
         body,
         topic,
         properties_string,
-        properties,
-    })
+        properties: HashMap::new(),
+    };
+    Ok((frame, property_bytes))
 }
 
 pub fn decode_properties(bytes: &[u8]) -> HashMap<CheetahString, CheetahString> {

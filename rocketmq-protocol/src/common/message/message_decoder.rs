@@ -217,7 +217,12 @@ pub fn decode(
     } else {
         PropertiesString::Skip
     };
-    let frame = crate::protocol::body::message_codec::decode_message_frame_with(byte_buffer, properties_string).ok()?;
+    let (frame, encoded_properties) =
+        crate::protocol::body::message_codec::decode_message_frame_with_encoded_properties(
+            byte_buffer,
+            properties_string,
+        )
+        .ok()?;
 
     if read_body && !frame.body.is_empty() && check_crc && crc32(&frame.body) != frame.body_crc {
         return None;
@@ -248,14 +253,16 @@ pub fn decode(
         msg_ext.message.set_body(Some(body));
     }
 
-    let mut properties = frame.properties;
+    // Parsed on first whole-map access: a consumer that reads its tags and sets a few properties
+    // never builds the map.
+    let mut properties = MessageProperties::from_encoded(encoded_properties);
     if is_set_properties_string && !frame.properties_string.is_empty() {
-        properties.insert(
+        properties.put(
             CheetahString::from_static_str("propertiesString"),
             frame.properties_string,
         );
     }
-    *msg_ext.message.properties_mut() = MessageProperties::from_map(properties);
+    *msg_ext.message.properties_mut() = properties;
     msg_ext.set_msg_id(CheetahString::from_string(build_message_id(
         frame.store_host,
         frame.commit_log_offset,
@@ -1208,6 +1215,51 @@ mod tests {
                 decode(&mut encoded, true, true, false, false, false).expect("compressed message should decode");
 
             assert_eq!(decoded.get_body(), Some(&body));
+        }
+    }
+
+    #[test]
+    fn lazily_decoded_properties_match_the_eager_frame_decoder() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::from_static(b"body"));
+        message_ext.put_property(
+            CheetahString::from_static_str("TAGS"),
+            CheetahString::from_static_str("tag-a"),
+        );
+        message_ext.put_property(
+            CheetahString::from_static_str("KEYS"),
+            CheetahString::from_static_str("k1 k2"),
+        );
+        message_ext.put_property(
+            CheetahString::from_static_str("UNIQ_KEY"),
+            CheetahString::from_static_str("0A0B0C"),
+        );
+        let encoded = encode(&message_ext, false).expect("message should encode");
+
+        let eager = crate::protocol::body::message_codec::decode_message_frame(&mut encoded.clone())
+            .expect("frame should decode");
+        for set_properties_string in [false, true] {
+            let mut lazy_bytes = encoded.clone();
+            let mut lazy = decode(&mut lazy_bytes, true, false, false, set_properties_string, false)
+                .expect("message should decode");
+            assert_eq!(lazy.get_tags(), Some(CheetahString::from_static_str("tag-a")));
+            lazy.put_property(
+                CheetahString::from_static_str("MIN_OFFSET"),
+                CheetahString::from_static_str("3"),
+            );
+
+            let mut expected = eager.properties.clone();
+            if set_properties_string {
+                expected.insert(
+                    CheetahString::from_static_str("propertiesString"),
+                    eager.properties_string.clone(),
+                );
+            }
+            expected.insert(
+                CheetahString::from_static_str("MIN_OFFSET"),
+                CheetahString::from_static_str("3"),
+            );
+            assert_eq!(lazy.properties(), &expected);
         }
     }
 

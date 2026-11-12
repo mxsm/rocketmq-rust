@@ -94,20 +94,18 @@ impl Message {
     #[inline]
     pub fn set_tags(&mut self, tags: CheetahString) {
         self.properties
-            .as_map_mut()
-            .insert(CheetahString::from_static_str(MessageConst::PROPERTY_TAGS), tags);
+            .put(CheetahString::from_static_str(MessageConst::PROPERTY_TAGS), tags);
     }
 
     #[inline]
     pub fn set_keys(&mut self, keys: CheetahString) {
         self.properties
-            .as_map_mut()
-            .insert(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
+            .put(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
     }
 
     #[inline]
     pub fn clear_property(&mut self, name: impl Into<CheetahString>) {
-        self.properties.as_map_mut().remove(name.into().as_str());
+        self.properties.remove(name.into().as_str());
     }
 
     #[inline]
@@ -117,7 +115,7 @@ impl Message {
 
     #[inline]
     pub fn get_property(&self, key: &CheetahString) -> Option<CheetahString> {
-        self.properties.as_map().get(key).cloned()
+        self.properties.get_owned(key)
     }
 
     #[inline]
@@ -152,7 +150,7 @@ impl Message {
 
     #[inline]
     pub fn get_tags(&self) -> Option<CheetahString> {
-        self.properties.as_map().get(MessageConst::PROPERTY_TAGS).cloned()
+        self.properties.get_owned(MessageConst::PROPERTY_TAGS)
     }
 
     #[inline]
@@ -167,7 +165,7 @@ impl Message {
 
     #[inline]
     pub fn set_delay_time_level(&mut self, level: i32) {
-        self.properties.as_map_mut().insert(
+        self.properties.put(
             CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
             CheetahString::from(level.to_string()),
         );
@@ -175,7 +173,7 @@ impl Message {
 
     #[inline]
     pub fn get_user_property(&self, name: impl Into<CheetahString>) -> Option<CheetahString> {
-        self.properties.as_map().get(name.into().as_str()).cloned()
+        self.properties.get_owned(name.into().as_str())
     }
 
     #[inline]
@@ -185,7 +183,7 @@ impl Message {
 
     #[inline]
     pub fn set_instance_id(&mut self, instance_id: impl Into<CheetahString>) {
-        self.properties.as_map_mut().insert(
+        self.properties.put(
             CheetahString::from_static_str(MessageConst::PROPERTY_INSTANCE_ID),
             instance_id.into(),
         );
@@ -222,7 +220,7 @@ impl Message {
     /// Returns a property value by key.
     #[inline]
     pub fn property(&self, key: &str) -> Option<&str> {
-        self.properties.as_map().get(key).map(|s| s.as_str())
+        self.properties.get_str(key)
     }
 
     /// Returns the message flag as a type-safe MessageFlag.
@@ -263,7 +261,7 @@ impl Message {
                 "The priority must be greater than or equal to 0",
             ));
         }
-        self.properties.as_map_mut().insert(
+        self.properties.put(
             CheetahString::from_static_str(MessageConst::PROPERTY_PRIORITY),
             CheetahString::from(priority.to_string()),
         );
@@ -389,17 +387,17 @@ impl MessageTrait for Message {
 
     #[inline]
     fn put_property(&mut self, key: CheetahString, value: CheetahString) {
-        self.properties.as_map_mut().insert(key, value);
+        self.properties.put(key, value);
     }
 
     #[inline]
     fn clear_property(&mut self, name: &str) {
-        self.properties.as_map_mut().remove(name);
+        self.properties.remove(name);
     }
 
     #[inline]
     fn property(&self, name: &CheetahString) -> Option<CheetahString> {
-        self.properties.as_map().get(name).cloned()
+        self.properties.get_owned(name)
     }
 
     fn property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
