@@ -61,6 +61,7 @@ import {
   incidentStatusLabels,
 } from "@/features/incidents/incidentPresentation";
 import { SupervisedDiagnosisPanel } from "@/features/incidents/SupervisedDiagnosisPanel";
+import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useClusterScope } from "@/hooks/useClusterScope";
 import { useWorkflowProgress } from "@/hooks/useWorkflowProgress";
@@ -98,6 +99,8 @@ export function AskSrePage() {
   const [resourcePath, setResourcePath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
+  const submitAbort = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => submitAbort.current?.abort(), []);
   const load = useCallback(
     (signal: AbortSignal) =>
       scope.clusterId
@@ -127,25 +130,29 @@ export function AskSrePage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!scope.clusterId || !question.trim()) {
+    if (!scope.clusterId || !question.trim() || submitting) {
       return;
     }
     setSubmitting(true);
     setSubmitError(undefined);
+    const controller = new AbortController();
+    submitAbort.current = controller;
     try {
       const result = await api.createConversation({
         cluster_id: scope.clusterId,
         question: question.trim(),
         resource: resourcePath.trim() || undefined,
         persist_investigation: true,
-      });
+      }, controller.signal);
+      if (controller.signal.aborted) return;
       navigate(`/conversations/${result.conversation.id}`);
     } catch {
+      if (controller.signal.aborted) return;
       setSubmitError(
         "无法创建只读会话。请确认 diagnose scope 与集群范围。",
       );
     } finally {
-      setSubmitting(false);
+      if (!controller.signal.aborted) setSubmitting(false);
     }
   };
 
@@ -402,6 +409,7 @@ export function ConversationDetailPage() {
   };
 
   return (
+    <ObjectScopeBoundary object={conversation.data?.conversation}>
     <div className="page conversation-page">
       <Button asChild className="back-link" variant="ghost">
         <Link to="/ask">
@@ -734,6 +742,7 @@ export function ConversationDetailPage() {
         </div>
       )}
     </div>
+    </ObjectScopeBoundary>
   );
 }
 
@@ -784,6 +793,8 @@ export function InvestigationDetailPage() {
   );
   const [promoting, setPromoting] = useState(false);
   const [promotionError, setPromotionError] = useState<string>();
+  const promotionAbort = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => promotionAbort.current?.abort(), []);
   const load = useCallback(
     (signal: AbortSignal) =>
       api.getInvestigation(investigationId, signal),
@@ -793,30 +804,36 @@ export function InvestigationDetailPage() {
   const progress = useWorkflowProgress(
     resource.data?.investigation.cluster_id ?? "",
     resource.reload,
+    { aggregateType: "investigation", aggregateId: investigationId },
   );
   const promote = async (event: FormEvent) => {
     event.preventDefault();
-    if (!promotionReason.trim()) {
+    if (!promotionReason.trim() || promoting) {
       return;
     }
     setPromoting(true);
     setPromotionError(undefined);
+    const controller = new AbortController();
+    promotionAbort.current = controller;
     try {
       const incident = await api.promoteInvestigation(investigationId, {
         title: promotionTitle.trim() || undefined,
         reason: promotionReason.trim(),
-      });
+      }, controller.signal);
+      if (controller.signal.aborted) return;
       navigate(`/incidents/${incident.incident.id}`);
     } catch {
+      if (controller.signal.aborted) return;
       setPromotionError(
         "调查升级失败；工作流状态未改变，也没有修改 RocketMQ 资源。",
       );
     } finally {
-      setPromoting(false);
+      if (!controller.signal.aborted) setPromoting(false);
     }
   };
 
   return (
+    <ObjectScopeBoundary object={resource.data?.investigation}>
     <div className="page">
       <PageHeader
         eyebrow="INVESTIGATION"
@@ -1029,6 +1046,7 @@ export function InvestigationDetailPage() {
         </>
       )}
     </div>
+    </ObjectScopeBoundary>
   );
 }
 
@@ -1160,6 +1178,7 @@ export function IncidentDetailPage() {
   const progress = useWorkflowProgress(
     resource.data?.incident.cluster_id ?? "",
     reload,
+    { aggregateType: "incident", aggregateId: incidentId },
   );
 
   const diagnose = async () => {
@@ -1179,6 +1198,7 @@ export function IncidentDetailPage() {
   };
 
   return (
+    <ObjectScopeBoundary object={resource.data?.incident}>
     <div className="page">
       <Button asChild className="back-link" variant="ghost">
         <Link to="/incidents">
@@ -1292,6 +1312,7 @@ export function IncidentDetailPage() {
         </>
       )}
     </div>
+    </ObjectScopeBoundary>
   );
 }
 
@@ -1532,6 +1553,7 @@ export function InspectionDetailPage() {
   const progress = useWorkflowProgress(
     resource.data?.run.cluster_id ?? "",
     resource.reload,
+    { aggregateType: "inspection", aggregateId: inspectionId },
   );
   const run = async () => {
     setRunning(true);
@@ -1574,6 +1596,7 @@ export function InspectionDetailPage() {
   };
 
   return (
+    <ObjectScopeBoundary object={resource.data?.run}>
     <div className="page">
       <Button asChild className="back-link" variant="ghost">
         <Link to="/inspections">
@@ -1745,6 +1768,7 @@ export function InspectionDetailPage() {
         </>
       )}
     </div>
+    </ObjectScopeBoundary>
   );
 }
 

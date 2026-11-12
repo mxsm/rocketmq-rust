@@ -13,15 +13,19 @@ import {
 import {
   type FormEvent,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import type {
   EvidenceCollectionStatus,
   EvidenceRecord,
   KnowledgeReviewStatus,
 } from "@/api/types";
+import { useAuth } from "@/auth/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import {
   ClusterScopeSelect,
@@ -57,21 +61,27 @@ const knowledgeVariants: Record<
 
 export function EvidenceExplorerPage() {
   const { api } = useSreData();
+  const auth = useAuth();
   const scope = useClusterScope();
+  const [params, setParams] = useSearchParams();
+  const evidenceId = params.get("evidence_id");
+  const requestedResource = scope.urlContext?.resourceKind && scope.urlContext.resourceKind !== "cluster"
+    ? `${scope.urlContext.resourceKind}/${scope.urlContext.resourceKey}` : undefined;
   const [search, setSearch] = useState("");
   const [status, setStatus] =
     useState<EvidenceCollectionStatus | "all">("all");
   const load = useCallback(
-    (signal: AbortSignal) =>
-      scope.clusterId
-        ? api.listEvidence(scope.clusterId, signal)
-        : Promise.resolve({
-            items: [],
-            partial: false,
-            warnings: [],
-            observed_at: new Date().toISOString(),
-          }),
-    [api, scope.clusterId],
+    async (signal: AbortSignal) => {
+      if (!scope.clusterId) return { items: [], partial: false, warnings: [], observed_at: "" };
+      if (!evidenceId) return api.listEvidence(scope.clusterId, signal);
+      const evidence = await api.getEvidence(evidenceId, signal);
+      if (evidence.evidence_id !== evidenceId || evidence.cluster_id !== scope.clusterId
+        || evidence.tenant_id !== auth.session?.tenantId || (requestedResource && evidence.resource !== requestedResource)) {
+        return { items: [], partial: false, warnings: [], observed_at: "" };
+      }
+      return { items: [evidence], partial: evidence.partial, warnings: evidence.warnings ?? [], observed_at: evidence.observed_at };
+    },
+    [api, auth.session?.tenantId, evidenceId, requestedResource, scope.clusterId],
   );
   const resource = useAsyncResource(load);
   const filtered = useMemo(
@@ -79,6 +89,10 @@ export function EvidenceExplorerPage() {
       (resource.data?.items ?? []).filter((item) => {
         const query = search.trim().toLocaleLowerCase();
         return (
+          item.cluster_id === scope.clusterId &&
+          item.tenant_id === auth.session?.tenantId &&
+          (!requestedResource || item.resource === requestedResource) &&
+          (!evidenceId || item.evidence_id === evidenceId) &&
           (status === "all" || evidenceStatus(item) === status) &&
           (!query ||
             item.source.toLocaleLowerCase().includes(query) ||
@@ -86,7 +100,7 @@ export function EvidenceExplorerPage() {
             item.correlation_id.toLocaleLowerCase().includes(query))
         );
       }),
-    [resource.data?.items, search, status],
+    [auth.session?.tenantId, evidenceId, requestedResource, resource.data?.items, scope.clusterId, search, status],
   );
 
   return (
@@ -105,6 +119,10 @@ export function EvidenceExplorerPage() {
       />
       <ReadOnlyBoundary compact />
       <PartialNotice envelope={resource.data} />
+      {evidenceId && <div className="inline-alert" role="status">
+        <span>正在定位调查引用的证据。</span>
+        <Button onClick={() => { const next = new URLSearchParams(params); next.delete("evidence_id"); setParams(next); }} size="sm" variant="ghost">查看当前范围全部证据</Button>
+      </div>}
       <DataSurface
         title="Evidence Snapshot"
         description="Hash 覆盖 schema、来源、资源、时间范围和内容；采集元数据不影响内容寻址。"
@@ -144,7 +162,8 @@ export function EvidenceExplorerPage() {
           error={resource.error}
           empty={!resource.loading && filtered.length === 0}
           onRetry={resource.reload}
-          emptyTitle="没有匹配的 Evidence"
+          emptyTitle={evidenceId ? "指定证据不在当前范围内或当前身份无权读取" : "没有匹配的 Evidence"}
+          emptyDescription={evidenceId ? "请核对证据引用和全局集群、资源范围；界面不会切换到其他集群查询。" : undefined}
         />
         {!resource.loading && !resource.error && filtered.length > 0 && (
           <div className="evidence-card-list">
@@ -165,30 +184,40 @@ function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
   const [content, setContent] = useState<unknown>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const pending = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => pending.current?.abort(), []);
   const status = evidenceStatus(evidence);
   const snapshot = detail ?? evidence;
   const warnings = snapshot.warnings ?? [];
   const expand = async () => {
     const nextExpanded = !expanded;
     setExpanded(nextExpanded);
-    if (!nextExpanded || detail) {
+    if (!nextExpanded) { pending.current?.abort(); return; }
+    if (detail) {
       return;
     }
     setLoading(true);
     setError(undefined);
+    const controller = new AbortController();
+    pending.current = controller;
     try {
-      const [nextDetail, nextContent] = await Promise.all([
-        api.getEvidence(evidence.evidence_id),
-        api.getEvidenceContent(evidence.evidence_id),
-      ]);
+      const nextDetail = await api.getEvidence(evidence.evidence_id, controller.signal);
+      if (controller.signal.aborted) return;
+      if (nextDetail.evidence_id !== evidence.evidence_id || nextDetail.tenant_id !== evidence.tenant_id
+        || nextDetail.cluster_id !== evidence.cluster_id || nextDetail.resource !== evidence.resource) {
+        throw new Error("evidence_scope_mismatch");
+      }
+      const nextContent = await api.getEvidenceContent(evidence.evidence_id, controller.signal);
+      if (controller.signal.aborted) return;
       setDetail(nextDetail);
       setContent(nextContent);
     } catch {
+      if (controller.signal.aborted) return;
       setError(
         "证据详情暂不可用；不会用列表摘要替代缺失的原始内容。",
       );
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   };
 

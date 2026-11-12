@@ -4,7 +4,9 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -18,6 +20,7 @@ import type {
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { createMockSreApi } from "@/data/mockApi";
+import { createApiRelay } from "./apiRelay";
 
 interface SreData {
   clusters: ClusterSummary[];
@@ -37,6 +40,7 @@ interface SreData {
 }
 
 const SreDataContext = createContext<SreData | undefined>(undefined);
+const EMPTY_CLUSTERS: ClusterSummary[] = [];
 
 function isDemoMode() {
   if (!import.meta.env.DEV) {
@@ -51,59 +55,115 @@ function isDemoMode() {
   if (requested) {
     window.sessionStorage.setItem("rocketmq-sre-demo", "1");
   }
-  return requested || window.sessionStorage.getItem("rocketmq-sre-demo") === "1";
+  return (
+    requested || window.sessionStorage.getItem("rocketmq-sre-demo") === "1"
+  );
 }
 
 export function SreDataProvider({ children }: PropsWithChildren) {
   const auth = useAuth();
   const demoMode = useMemo(isDemoMode, []);
-  const api = useMemo(
+  const requestApi = useMemo(
     () =>
       demoMode
         ? createMockSreApi(auth.requestContext)
         : createHttpSreApi(auth.requestContext),
     [auth.requestContext, demoMode],
   );
-  const [clusters, setClusters] = useState<ClusterSummary[]>([]);
-  const [health, setHealth] =
-    useState<ServiceStatus["status"]>("unavailable");
-  const [readiness, setReadiness] =
-    useState<ServiceStatus["status"]>("unavailable");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>();
+  const identityKey = JSON.stringify([
+    auth.session?.tenantId,
+    auth.session?.subject,
+    [...(auth.session?.clusterIds ?? [])].sort(),
+    [...(auth.session?.roles ?? [])].sort(),
+    demoMode,
+  ]);
+  const relay = useMemo(
+    () => ({ identityKey, ...createApiRelay() }),
+    [identityKey],
+  );
+  useLayoutEffect(() => {
+    relay.replace(requestApi);
+    return () => relay.replace(undefined);
+  }, [relay, requestApi]);
+  const api = relay.api;
+  const [snapshot, setSnapshot] = useState<{
+    owner: string;
+    clusters: ClusterSummary[];
+    health: ServiceStatus["status"];
+    readiness: ServiceStatus["status"];
+    loading: boolean;
+    error?: string;
+  }>();
+  const request = useRef<{ generation: number; controller?: AbortController }>({
+    generation: 0,
+  });
 
   const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(undefined);
+    request.current.controller?.abort();
+    const generation = ++request.current.generation;
     const controller = new AbortController();
+    request.current.controller = controller;
+    setSnapshot((previous) =>
+      previous?.owner === identityKey
+        ? { ...previous, loading: true, error: undefined }
+        : {
+            owner: identityKey,
+            clusters: [],
+            health: "unavailable",
+            readiness: "unavailable",
+            loading: true,
+          },
+    );
     const results = await Promise.allSettled([
-      api.listClusters(controller.signal),
-      api.getHealth(controller.signal),
-      api.getReadiness(controller.signal),
+      requestApi.listClusters(controller.signal),
+      requestApi.getHealth(controller.signal),
+      requestApi.getReadiness(controller.signal),
     ]);
     const [clusterResult, healthResult, readinessResult] = results;
-    if (clusterResult.status === "fulfilled") {
-      setClusters(
-        clusterResult.value.filter((cluster) =>
-          auth.hasClusterScope(cluster.id),
-        ),
-      );
-    }
-    if (healthResult.status === "fulfilled") {
-      setHealth(healthResult.value.status);
-    }
-    if (readinessResult.status === "fulfilled") {
-      setReadiness(readinessResult.value.status);
-    }
-    if (results.some((result) => result.status === "rejected")) {
-      setError("部分只读数据源暂不可用；未返回的数据不会按 0 处理。");
-    }
-    setLoading(false);
-  }, [api, auth]);
+    if (controller.signal.aborted || request.current.generation !== generation)
+      return;
+    setSnapshot({
+      owner: identityKey,
+      clusters:
+        clusterResult.status === "fulfilled"
+          ? clusterResult.value.filter(
+              (cluster) =>
+                auth.hasClusterScope(cluster.id) &&
+                cluster.tenant_id === auth.session?.tenantId,
+            )
+          : [],
+      health:
+        healthResult.status === "fulfilled"
+          ? healthResult.value.status
+          : "unavailable",
+      readiness:
+        readinessResult.status === "fulfilled"
+          ? readinessResult.value.status
+          : "unavailable",
+      loading: false,
+      error: results.some((result) => result.status === "rejected")
+        ? "部分只读数据源暂不可用；未返回的数据不会按 0 处理。"
+        : undefined,
+    });
+  }, [auth, identityKey, requestApi]);
 
   useEffect(() => {
+    const ownedRequest = request.current;
     void refresh();
+    return () => {
+      ownedRequest.controller?.abort();
+      ownedRequest.generation += 1;
+    };
   }, [refresh]);
+
+  // Principal boundaries hide old snapshots synchronously; renewing a token for
+  // the same principal preserves the workspace and uses the latest request API.
+  const current = snapshot?.owner === identityKey ? snapshot : undefined;
+  const clusters = current?.clusters ?? EMPTY_CLUSTERS;
+  const health = current?.health ?? "unavailable";
+  const readiness = current?.readiness ?? "unavailable";
+  const loading = current?.loading ?? true;
+  const error = current?.error;
 
   const value = useMemo<SreData>(
     () => ({
@@ -120,16 +180,7 @@ export function SreDataProvider({ children }: PropsWithChildren) {
       coverage: (signal) => api.getCoverage(signal),
       catalog: (signal) => api.getCapabilities(signal),
     }),
-    [
-      clusters,
-      api,
-      demoMode,
-      error,
-      health,
-      loading,
-      readiness,
-      refresh,
-    ],
+    [clusters, api, demoMode, error, health, loading, readiness, refresh],
   );
 
   return (

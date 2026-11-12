@@ -14,6 +14,7 @@ import "./styles/change-management.css";
 import "./styles/enterprise-operations.css";
 import "./styles/model-governance.css";
 import "./styles/release-management.css";
+import "./styles/investigation-workspace.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

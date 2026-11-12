@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -118,6 +118,29 @@ describe("bounded browser router", () => {
       await user.click(link);
     }
     expect(screen.getByTestId("location")).toHaveTextContent("/models");
+  });
+
+  it("preserves object scope in hrefs, navigation, browser Back and refresh", async () => {
+    const user = userEvent.setup();
+    const scope = "cluster_id=10000000-0000-4000-8000-000000000001&resource_kind=topic&resource_key=orders&window_start=2026-11-11T10%3A00%3A00Z&window_end=2026-11-11T11%3A00%3A00Z";
+    window.history.replaceState(null, "", `/investigations/object?${scope}`);
+    const router = createBrowserRouter([{ element: <Outlet />, children: [
+      { path: "/investigations/:id", element: <><Link to="/conversations/conversation?tab=answer">conversation</Link><LocationValue /></> },
+      { path: "/conversations/:id", element: <LocationValue /> },
+    ] }]);
+    const view = render(<RouterProvider router={router} />);
+    const href = new URL(screen.getByRole("link", { name: "conversation" }).getAttribute("href") ?? "", window.location.origin);
+    expect(href.searchParams.get("resource_key")).toBe("orders");
+    expect(href.searchParams.get("window_end")).toBe("2026-11-11T11:00:00Z");
+    await user.click(screen.getByRole("link", { name: "conversation" }));
+    expect(window.location.pathname).toBe("/conversations/conversation");
+    expect(new URLSearchParams(window.location.search).get("cluster_id")).toBe("10000000-0000-4000-8000-000000000001");
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/investigations/object?"));
+    view.unmount();
+    render(<RouterProvider router={router} />);
+    expect(screen.getByTestId("location")).toHaveTextContent("resource_key=orders");
+    expect(screen.getByTestId("location")).toHaveTextContent("window_end=");
   });
 });
 

@@ -10,7 +10,7 @@ import {
   Route,
   ShieldAlert,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -26,15 +26,19 @@ import { useAuth } from "@/auth/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { resourcePath } from "@/context/workspaceScope";
 import { ApprovalPanel } from "@/features/approvals/ApprovalPanel";
 import { AuditTimeline } from "@/features/audit/AuditTimeline";
 import { ChangeWorkspaceNav } from "@/features/change-management/ChangeWorkspace";
 import { ExecutionTimeline } from "@/features/executions/ExecutionTimeline";
 import { PlanDetail } from "@/features/plans/PlanDetail";
+import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 import {
   formatTimestamp,
   shortDigest,
 } from "@/features/plans/planPresentation";
+import { useAsyncResource } from "@/hooks/useAsyncResource";
+import { useClusterScope } from "@/hooks/useClusterScope";
 import { useWorkflowProgress } from "@/hooks/useWorkflowProgress";
 
 function useSupervisedApi() {
@@ -51,11 +55,11 @@ function useSupervisedApi() {
 
 export function ChangeCenterPage() {
   const navigate = useNavigate();
-  const { auth } = useSupervisedApi();
+  const scope = useClusterScope();
   const [planId, setPlanId] = useState("");
   const [executionId, setExecutionId] = useState("");
   const [correlationId, setCorrelationId] = useState("");
-  const clusterId = auth.session?.clusterIds[0];
+  const clusterId = scope.clusterId;
 
   const go = (event: FormEvent, path: string) => {
     event.preventDefault();
@@ -158,7 +162,7 @@ export function ChangeCenterPage() {
             disabled={!clusterId}
             onClick={() =>
               navigate(
-                `/changes/quarantines${clusterId ? `?cluster=${encodeURIComponent(clusterId)}` : ""}`,
+                `/changes/quarantines${clusterId ? `?cluster_id=${encodeURIComponent(clusterId)}` : ""}`,
               )
             }
           >
@@ -178,6 +182,8 @@ export function PlanPage() {
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const pending = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => pending.current?.abort(), []);
 
   const load = useCallback(async () => {
     if (!api || !planId) return;
@@ -193,16 +199,21 @@ export function PlanPage() {
     void load();
   }, [load]);
 
-  const mutate = async (operation: () => Promise<void>) => {
+  const mutate = async (operation: (signal: AbortSignal) => Promise<void>) => {
+    if (busy) return;
+    const controller = new AbortController();
+    pending.current = controller;
     setBusy(true);
     setMessage(undefined);
     try {
-      await operation();
+      await operation(controller.signal);
+      if (controller.signal.aborted) return;
       await load();
     } catch (reason) {
+      if (controller.signal.aborted) return;
       setMessage(reason instanceof Error ? reason.message : "请求失败");
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted) setBusy(false);
     }
   };
 
@@ -217,6 +228,7 @@ export function PlanPage() {
     roles.includes("operator") || roles.includes("rocketmq:operate");
 
   return (
+    <ObjectScopeBoundary object={view.plan}>
     <div className="page">
       <PageHeader
         actions={
@@ -239,32 +251,34 @@ export function PlanPage() {
           canExecute={canExecute}
           message={message}
           onCriticReview={() =>
-            mutate(async () => {
+            mutate(async (signal) => {
               await api?.reviewPlanWithCritic(planId, {
                 plan_hash: view.plan.plan_hash,
-              });
+              }, signal);
+              if (signal.aborted) return;
               setMessage("Critic review 已刷新");
             })
           }
           onDecision={(decision, request) =>
-            mutate(async () => {
+            mutate(async (signal) => {
               if (decision === "approve") {
-                await api?.approvePlan(planId, request);
+                await api?.approvePlan(planId, request, signal);
               } else {
-                await api?.rejectPlan(planId, request);
+                await api?.rejectPlan(planId, request, signal);
               }
+              if (signal.aborted) return;
               setMessage(decision === "approve" ? "计划已批准" : "计划已拒绝");
             })
           }
           onExecute={(preconditionHash) =>
-            mutate(async () => {
+            mutate(async (signal) => {
               const result = await api?.submitExecution({
                 plan_id: view.plan.id,
                 plan_hash: view.plan.plan_hash,
                 precondition_hash: preconditionHash,
                 idempotency_key: crypto.randomUUID(),
-              });
-              if (result) {
+              }, signal);
+              if (result && !signal.aborted) {
                 navigate(`/changes/executions/${result.execution.id}`);
               }
             })
@@ -273,6 +287,7 @@ export function PlanPage() {
         />
       </div>
     </div>
+    </ObjectScopeBoundary>
   );
 }
 
@@ -304,6 +319,7 @@ export function ExecutionPage() {
     return <LoadState title="执行时间线" error={error} onRetry={() => void load()} />;
   }
   return (
+    <ObjectScopeBoundary object={execution.execution}>
     <div className="page">
       <PageHeader
         actions={
@@ -322,12 +338,15 @@ export function ExecutionPage() {
         transport={progress.transport}
       />
     </div>
+    </ObjectScopeBoundary>
   );
 }
 
 export function AuditPageView() {
   const { correlationId = "" } = useParams();
-  const { api } = useSupervisedApi();
+  const { api, auth } = useSupervisedApi();
+  const scope = useClusterScope();
+  const [searchParams] = useSearchParams();
   const [audit, setAudit] = useState<AuditPage>();
   const [error, setError] = useState<string>();
 
@@ -347,39 +366,79 @@ export function AuditPageView() {
   if (!audit) {
     return <LoadState title="审计详情" error={error} onRetry={() => void load()} />;
   }
+  const authorizedItems = audit.items.filter((item) => item.tenant_id === auth.session?.tenantId
+    && auth.hasClusterScope(item.cluster_id)
+    && scope.clusters.some((cluster) => cluster.id === item.cluster_id && cluster.tenant_id === item.tenant_id));
+  const selectedCluster = searchParams.has("cluster_id") ? scope.clusterId : authorizedItems[0]?.cluster_id;
+  const items = authorizedItems.filter((item) => item.cluster_id === selectedCluster);
+  const auditScope = items[0] ?? authorizedItems[0] ?? audit.items[0];
+  const filtered = items.length !== audit.items.length;
   return (
+    <ObjectScopeBoundary object={auditScope}>
     <div className="page">
       <PageHeader
         description="完整展示人、策略、计划、Evidence、执行结果与人工隔离操作，不显示凭据或目标配置全文。"
         eyebrow="IMMUTABLE AUDIT"
         title="审计详情"
       />
-      <AuditTimeline audit={audit} />
+      {filtered && <p className="inline-alert warning" role="status">仅展示当前授权租户和集群内的审计记录；其他范围的记录已过滤。</p>}
+      <AuditTimeline audit={{ ...audit, items, partial: audit.partial || filtered }} />
     </div>
+    </ObjectScopeBoundary>
   );
 }
 
 export function QuarantinePageView() {
   const { api, auth } = useSupervisedApi();
+  const scope = useClusterScope();
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialCluster =
-    searchParams.get("cluster") ?? auth.session?.clusterIds[0] ?? "";
-  const [clusterId, setClusterId] = useState(initialCluster);
-  const [page, setPage] = useState<QuarantinePage>();
-  const [selected, setSelected] = useState<ResourceQuarantine>();
+  const availableClusters = scope.clusters.filter((cluster) => auth.hasClusterScope(cluster.id)
+    && cluster.tenant_id === auth.session?.tenantId);
+  const explicitCluster = searchParams.has("cluster_id");
+  const legacyValues = searchParams.getAll("cluster");
+  const legacyCluster = legacyValues[0]?.trim();
+  const validLegacyCluster = legacyValues.length === 1 && legacyCluster !== undefined
+    && auth.hasClusterScope(legacyCluster)
+    && availableClusters.some((cluster) => cluster.id === legacyCluster);
+  const invalidLegacyCluster = !explicitCluster && legacyValues.length > 0 && !validLegacyCluster;
+  const clusterId = invalidLegacyCluster ? ""
+    : !explicitCluster && validLegacyCluster ? legacyCluster : scope.clusterId;
+  const [selection, setSelection] = useState<{ owner: typeof api; clusterId: string; value: ResourceQuarantine }>();
+  const selected = selection && selection.owner === api && selection.clusterId === clusterId ? selection.value : undefined;
   const [reason, setReason] = useState("");
   const [evidence, setEvidence] = useState("");
   const [message, setMessage] = useState<string>();
 
-  const load = useCallback(async () => {
-    if (!api || !clusterId) return;
-    setPage(await api.listQuarantines(clusterId, true));
-  }, [api, clusterId]);
   useEffect(() => {
-    void load().catch((reason) =>
-      setMessage(reason instanceof Error ? reason.message : "隔离清单加载失败"),
-    );
-  }, [load]);
+    if (!searchParams.has("cluster") || invalidLegacyCluster) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("cluster");
+    if (!explicitCluster && validLegacyCluster) {
+      next.set("cluster_id", legacyCluster);
+      next.delete("resource_kind");
+      next.delete("resource_key");
+    }
+    setSearchParams(next, { replace: true });
+  }, [explicitCluster, invalidLegacyCluster, legacyCluster, searchParams, setSearchParams, validLegacyCluster]);
+
+  const load = useCallback((signal: AbortSignal) => {
+    if (!api || !clusterId) return Promise.resolve<QuarantinePage>({
+      schema_version: "rocketmq-sre.resource-quarantine-page.v1", items: [], partial: false,
+    });
+    return api.listQuarantines(clusterId, true, signal);
+  }, [api, clusterId]);
+  const resource = useAsyncResource(load);
+  const requestedResource = scope.urlContext?.resourceKind !== "cluster" && scope.urlContext ? resourcePath(scope.urlContext) : undefined;
+  const items = resource.data?.items.filter((item) => item.cluster_id === clusterId
+    && item.tenant_id === auth.session?.tenantId
+    && (!requestedResource || item.resource_key === requestedResource)) ?? [];
+
+  useEffect(() => {
+    setSelection(undefined);
+    setReason("");
+    setEvidence("");
+    setMessage(undefined);
+  }, [clusterId]);
 
   const clear = async () => {
     if (!api || !selected || reason.trim().length < 8) return;
@@ -392,10 +451,10 @@ export function QuarantinePageView() {
           .filter(Boolean),
       });
       setMessage("隔离解除请求已审计并完成");
-      setSelected(undefined);
+      setSelection(undefined);
       setReason("");
       setEvidence("");
-      await load();
+      resource.reload();
     } catch (failure) {
       setMessage(failure instanceof Error ? failure.message : "隔离解除失败");
     }
@@ -410,14 +469,19 @@ export function QuarantinePageView() {
             className="native-select"
             onChange={(event) => {
               const value = event.target.value;
-              setClusterId(value);
-              setSearchParams({ cluster: value });
+              const next = new URLSearchParams(searchParams);
+              next.delete("cluster");
+              next.set("cluster_id", value);
+              next.delete("resource_kind");
+              next.delete("resource_key");
+              setSearchParams(next);
             }}
             value={clusterId}
           >
-            {(auth.session?.clusterIds ?? []).map((id) => (
-              <option key={id} value={id}>
-                {shortDigest(id)}
+            <option disabled value="">选择授权集群</option>
+            {availableClusters.map((cluster) => (
+              <option key={cluster.id} value={cluster.id}>
+                {cluster.external_cluster_key}
               </option>
             ))}
           </select>
@@ -426,6 +490,8 @@ export function QuarantinePageView() {
         eyebrow="MANUAL TAKEOVER"
         title="资源隔离与人工接管"
       />
+      {invalidLegacyCluster && <p className="inline-alert warning" role="alert">旧链接中的集群范围无效或未授权，请选择授权集群。</p>}
+      {Boolean(resource.error) && <p className="inline-alert warning" role="alert">隔离清单加载失败，请刷新后重试。</p>}
       {message && <p className="inline-alert warning">{message}</p>}
       <div className="quarantine-layout">
         <section className="data-surface">
@@ -434,7 +500,7 @@ export function QuarantinePageView() {
               <h2>隔离资源</h2>
               <p>回滚失败后，即使临时 lock 已释放，新的 Plan/Execution 仍会被阻断。</p>
             </div>
-            <span>{page?.items.length ?? 0} items</span>
+            <span>{resource.loading && !resource.data ? "正在读取…" : resource.error ? "不可用" : `${items.length} items`}</span>
           </header>
           <div className="table-scroll">
             <table>
@@ -448,7 +514,7 @@ export function QuarantinePageView() {
                 </tr>
               </thead>
               <tbody>
-                {(page?.items ?? []).map((item) => (
+                {items.map((item) => (
                   <tr key={item.id}>
                     <td>
                       <strong>{item.resource_key}</strong>
@@ -464,7 +530,12 @@ export function QuarantinePageView() {
                     <td>
                       <Button
                         disabled={Boolean(item.cleared_at)}
-                        onClick={() => setSelected(item)}
+                        onClick={() => {
+                          setSelection({ owner: api, clusterId, value: item });
+                          setReason("");
+                          setEvidence("");
+                          setMessage(undefined);
+                        }}
                         size="sm"
                         variant="outline"
                       >
@@ -476,7 +547,7 @@ export function QuarantinePageView() {
               </tbody>
             </table>
           </div>
-          {(page?.items.length ?? 0) === 0 && (
+          {!resource.loading && !resource.error && !invalidLegacyCluster && items.length === 0 && (
             <div className="compact-empty">当前集群没有资源隔离记录。</div>
           )}
         </section>

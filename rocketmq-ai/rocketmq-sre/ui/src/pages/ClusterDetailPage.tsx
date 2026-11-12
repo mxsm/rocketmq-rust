@@ -20,6 +20,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSreData } from "@/data/SreDataContext";
+import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 
 export function ClusterDetailPage() {
   const { clusterId = "" } = useParams();
@@ -77,6 +78,7 @@ export function ClusterDetailPage() {
   }
 
   return (
+    <ObjectScopeBoundary object={{ tenant_id: cluster.tenant_id, cluster_id: cluster.id }}>
     <div className="page">
       <Button asChild size="sm" variant="ghost">
         <Link className="back-link" to="/clusters">
@@ -180,6 +182,7 @@ export function ClusterDetailPage() {
         )}
       </section>
     </div>
+    </ObjectScopeBoundary>
   );
 }
 function Definition({

@@ -617,7 +617,27 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
       const turns = conversationTurns.get(id) ?? [];
       turns.push(result);
       conversationTurns.set(id, turns);
+      evidence.push({
+        ...clone(phase1Evidence.items[0]),
+        evidence_id: evidenceId,
+        tenant_id: conversation.conversation.tenant_id,
+        cluster_id: conversation.conversation.cluster_id,
+        source,
+        resource: queryResource,
+        observed_at: now,
+        time_range: { start: new Date(Date.parse(now) - (input.window_seconds ?? 900) * 1000).toISOString(), end: now },
+        freshness_seconds: 2,
+        partial: false,
+        coverage: "available",
+        content_hash: result.answer!.citations[0].content_hash,
+        correlation_id: correlationId,
+        query_id: turnId,
+        warnings: [],
+        content: { storage: "inline", value: { demo: true, source, resource: queryResource, status: "available" } },
+      });
+      conversation.conversation.updated_at = now;
       if (investigationView && diagnosisRevision) {
+        investigationView.investigation.updated_at = now;
         investigationView.diagnosis_revisions.push(diagnosisRevision);
         investigationView.timeline.push({
           id: crypto.randomUUID(),

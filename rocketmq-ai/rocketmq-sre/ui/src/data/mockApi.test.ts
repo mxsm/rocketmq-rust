@@ -109,6 +109,15 @@ describe("mock SRE API", () => {
     expect(investigation.timeline.at(-1)?.event_type).toBe(
       "conversation_diagnosis_revision_created",
     );
+    expect(investigation.investigation.updated_at).toBe(result.turn.created_at);
+    const evidenceId = result.answer!.evidence_ids[0];
+    const evidence = await api.getEvidence(evidenceId);
+    expect(evidence).toMatchObject({
+      evidence_id: evidenceId, tenant_id: DEMO_TENANT_ID, cluster_id: DEMO_CLUSTER_ID,
+      source: "prometheus", resource: "instant/rocketmq_broker_up",
+      observed_at: result.turn.created_at, content_hash: result.answer!.citations[0].content_hash,
+    });
+    expect(await api.getEvidenceContent(evidenceId)).toMatchObject({ demo: true, source: "prometheus" });
     expect(JSON.stringify(result)).not.toContain("apply");
   });
 

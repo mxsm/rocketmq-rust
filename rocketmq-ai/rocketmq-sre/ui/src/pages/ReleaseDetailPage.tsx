@@ -31,6 +31,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSreData } from "@/data/SreDataContext";
 import { createMockReleaseManagementApi } from "@/data/phase3ReleaseDemo";
+import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 import {
   ChangeStatePanel,
   ChangeWorkspaceNav,
@@ -166,6 +167,7 @@ export function ReleaseDetailPage() {
   );
 
   return (
+    <ObjectScopeBoundary object={workflow}>
     <div className="page change-page release-detail-page">
       <PageHeader
         eyebrow="P3-12 · RELEASE ESCORT"
@@ -353,6 +355,7 @@ export function ReleaseDetailPage() {
         </>
       )}
     </div>
+    </ObjectScopeBoundary>
   );
 }
 

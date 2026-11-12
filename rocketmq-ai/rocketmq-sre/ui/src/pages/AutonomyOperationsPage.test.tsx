@@ -102,14 +102,22 @@ describe("AutonomyOperationsPage", () => {
       screen.getByRole("option", { name: "成功" }),
     );
 
-    await waitFor(() => {
-      expect(
-        screen.queryByText("自治执行失败"),
-      ).not.toBeInTheDocument();
-    });
     expect(
-      screen.getAllByText("verification_passed"),
+      await screen.findAllByText("verification_passed"),
     ).not.toHaveLength(0);
+    expect(
+      screen.queryByText("自治执行失败"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("tab", { name: "Outcome 明细" }),
+    ).toHaveAttribute("aria-selected", "true");
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Outcome 分类" }),
+    );
+    await user.click(screen.getByRole("option", { name: "全部结果" }));
+    expect(await screen.findByText("自治执行失败")).toBeInTheDocument();
+    expect(screen.getAllByText("预期拒绝")).not.toHaveLength(0);
   });
 
   it("queries operating quality and cost across scenario model and action dimensions", async () => {
