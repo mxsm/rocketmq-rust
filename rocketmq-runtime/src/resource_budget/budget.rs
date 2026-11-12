@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::fmt;
+use std::sync::atomic::fence;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -22,6 +23,7 @@ use std::sync::MutexGuard;
 
 use smallvec::SmallVec;
 use std::time::Duration;
+use tokio::sync::futures::Notified;
 use tokio::sync::Notify;
 
 use super::clock::MonotonicClock;
@@ -179,7 +181,7 @@ impl ResourceBudgetTree {
             clock,
             admission_gates.clone(),
         ));
-        let capacity_notify = Arc::new(Notify::new());
+        let capacity_notify = Arc::new(CapacitySignal::default());
         Ok(Self {
             root: ResourceBudget {
                 node: Arc::clone(&node),
@@ -221,9 +223,64 @@ impl ResourceBudgetTree {
 pub struct ResourceBudget {
     node: Arc<BudgetNode>,
     chain: Arc<[Arc<BudgetNode>]>,
-    capacity_notify: Arc<Notify>,
+    capacity_notify: Arc<CapacitySignal>,
     keys: DynamicKeyRegistry,
     admission_gates: Arc<[Arc<AdmissionGate>]>,
+}
+
+/// Wakes tasks of one budget tree that wait for capacity or for a dynamic budget to close.
+///
+/// Every permit release, rebind, shrink, and promotion in the tree signals capacity, and those
+/// happen several times per request, so a capacity signal first checks whether anyone waits
+/// instead of always taking the `Notify` lock. A waiter enables its [`Notified`] and registers
+/// through [`Self::register_waiter`] before its final capacity check; a signal fences after the
+/// capacity change and before reading the waiter count. One of the two always observes the
+/// other, so a release is never lost. Closure is rare and always notifies.
+#[derive(Default)]
+pub(crate) struct CapacitySignal {
+    notify: Notify,
+    waiters: AtomicUsize,
+}
+
+impl CapacitySignal {
+    /// Returns a future completed by the next capacity or closure signal.
+    pub(crate) fn notified(&self) -> Notified<'_> {
+        self.notify.notified()
+    }
+
+    /// Counts the caller as waiting for capacity until the guard drops.
+    ///
+    /// Call it after enabling the [`Notified`] from [`Self::notified`] and before the final
+    /// capacity check.
+    pub(crate) fn register_waiter(&self) -> CapacityWaiter<'_> {
+        self.waiters.fetch_add(1, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        CapacityWaiter { signal: self }
+    }
+
+    /// Signals a capacity change, after it is visible in the budget counters.
+    fn signal(&self) {
+        fence(Ordering::SeqCst);
+        if self.waiters.load(Ordering::Acquire) != 0 {
+            self.notify.notify_waiters();
+        }
+    }
+
+    /// Signals that a dynamic budget closed, waking every enabled waiter.
+    fn signal_closed(&self) {
+        self.notify.notify_waiters();
+    }
+}
+
+/// A waiter counted by [`CapacitySignal::register_waiter`].
+pub(crate) struct CapacityWaiter<'a> {
+    signal: &'a CapacitySignal,
+}
+
+impl Drop for CapacityWaiter<'_> {
+    fn drop(&mut self) {
+        self.signal.waiters.fetch_sub(1, Ordering::Release);
+    }
 }
 
 struct AdmissionGate {
@@ -349,7 +406,7 @@ impl ResourceBudget {
     pub(super) fn close_dynamic(&self) {
         if let Some(gate) = self.admission_gates.last() {
             *gate.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
-            self.capacity_notify.notify_waiters();
+            self.capacity_notify.signal_closed();
         }
     }
 
@@ -461,8 +518,15 @@ impl ResourceBudget {
         }
     }
 
-    pub(crate) fn capacity_notify(&self) -> &Notify {
+    pub(crate) fn capacity_notify(&self) -> &CapacitySignal {
         &self.capacity_notify
+    }
+
+    /// Returns whether a dynamic ancestor can close this budget's admission.
+    ///
+    /// A budget without dynamic ancestors never closes, so nothing needs to wait for that.
+    pub(crate) fn can_close(&self) -> bool {
+        !self.admission_gates.is_empty()
     }
 
     /// Attempts to acquire data.
@@ -537,7 +601,7 @@ pub struct ResourcePermit {
     reservations: SmallVec<[NodeReservation; 4]>,
     bytes: usize,
     class: BudgetClass,
-    capacity_notify: Arc<Notify>,
+    capacity_notify: Arc<CapacitySignal>,
 }
 
 impl fmt::Debug for ResourcePermit {
@@ -598,7 +662,7 @@ impl ResourcePermit {
                 if !Arc::ptr_eq(&reservation.node, &leaf) {
                     leaf.record_rejection(reason);
                 }
-                self.capacity_notify.notify_waiters();
+                self.capacity_notify.signal();
                 return Err(BudgetRejection {
                     path: leaf.path.clone(),
                     exhausted_path: reservation.node.path.clone(),
@@ -624,7 +688,7 @@ impl ResourcePermit {
             reservation.bytes = bytes;
         }
         self.bytes = bytes;
-        self.capacity_notify.notify_waiters();
+        self.capacity_notify.signal();
     }
 
     #[must_use]
@@ -657,7 +721,7 @@ impl ResourcePermit {
             reservation.class = BudgetClass::Control;
         }
         self.class = BudgetClass::Control;
-        self.capacity_notify.notify_waiters();
+        self.capacity_notify.signal();
     }
 
     /// Moves this reservation to another budget in the same resource tree.
@@ -733,7 +797,7 @@ impl ResourcePermit {
 
         self.reservations.truncate(common_ancestors);
         self.reservations.extend(target_reservations);
-        self.capacity_notify.notify_waiters();
+        self.capacity_notify.signal();
         PermitBudgetTransferStatus::Rebound
     }
 }
@@ -741,7 +805,7 @@ impl ResourcePermit {
 impl Drop for ResourcePermit {
     fn drop(&mut self) {
         self.reservations.clear();
-        self.capacity_notify.notify_waiters();
+        self.capacity_notify.signal();
     }
 }
 

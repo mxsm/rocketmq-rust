@@ -414,7 +414,7 @@ impl PartialFramePermit {
             self.permit._permit.promote_to_control();
         }
         let budget = handle.budget(resource);
-        if self.permit._permit.try_rebind(&budget).is_err() {
+        if self.permit._permit.try_rebind(budget).is_err() {
             let error = AdmissionRejection {
                 resource,
                 policy: policy_for(resource),
@@ -468,14 +468,16 @@ impl AdmissionScopeHandle {
         self.session_id
     }
 
-    fn budget(&self, resource: AdmissionResource) -> ResourceBudget {
+    // A reference: every request acquires several permits, and cloning a budget copies the
+    // reference counts of nodes that all requests share.
+    fn budget(&self, resource: AdmissionResource) -> &ResourceBudget {
         match resource {
-            AdmissionResource::Connection => self.budgets.connection.clone(),
-            AdmissionResource::Handshake => self.budgets.handshake.clone(),
-            AdmissionResource::PartialFrame => self.budgets.partial_frame.clone(),
-            AdmissionResource::Inflight => self.budgets.inflight.clone(),
-            AdmissionResource::Queued => self.budgets.queued.clone(),
-            AdmissionResource::Processor => self.budgets.processor.clone(),
+            AdmissionResource::Connection => &self.budgets.connection,
+            AdmissionResource::Handshake => &self.budgets.handshake,
+            AdmissionResource::PartialFrame => &self.budgets.partial_frame,
+            AdmissionResource::Inflight => &self.budgets.inflight,
+            AdmissionResource::Queued => &self.budgets.queued,
+            AdmissionResource::Processor => &self.budgets.processor,
         }
     }
 
@@ -514,7 +516,7 @@ impl AdmissionScopeHandle {
         mut permit: ResourcePermit,
     ) -> Result<AdmissionPermit, AdmissionRejection> {
         let budget = self.budget(resource);
-        permit.try_rebind(&budget).map_err(|_| {
+        permit.try_rebind(budget).map_err(|_| {
             self.observe(resource, AdmissionEventKind::Rejected, permit.bytes());
             AdmissionRejection {
                 resource,

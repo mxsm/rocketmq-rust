@@ -357,6 +357,8 @@ impl<T> BudgetedQueue<T> {
             let capacity_notified = self.inner.budget.capacity_notify().notified();
             tokio::pin!(capacity_notified);
             capacity_notified.as_mut().enable();
+            // Counted before the capacity check below, so a release in between still wakes us.
+            let _capacity_waiter = self.inner.budget.capacity_notify().register_waiter();
             let state_notified = self.inner.notify.notified();
             tokio::pin!(state_notified);
             state_notified.as_mut().enable();
@@ -470,13 +472,23 @@ impl<T> BudgetedQueue<T> {
     /// Returns `None` after closed admission and queued work have drained.
     /// Cancellation of this wait does not consume a queued item.
     pub async fn recv_budgeted(&self) -> Option<BudgetedItem<T>> {
+        // A queued item needs no wakeup registration.
+        if let Some(item) = self.try_pop_budgeted() {
+            return Some(item);
+        }
+        // The receiver waits for an item or for its budget to close. It does not count as a
+        // capacity waiter: releases elsewhere in the tree must not wake it, and closure always
+        // notifies. A budget that cannot close needs no closure wait at all.
+        let budget_can_close = self.inner.budget.can_close();
         loop {
             let notified = self.inner.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            let budget_changed = self.inner.budget.capacity_notify().notified();
-            tokio::pin!(budget_changed);
-            budget_changed.as_mut().enable();
+            let budget_closed = self.inner.budget.capacity_notify().notified();
+            tokio::pin!(budget_closed);
+            if budget_can_close {
+                budget_closed.as_mut().enable();
+            }
             if let Some(item) = self.try_pop_budgeted() {
                 return Some(item);
             }
@@ -486,9 +498,13 @@ impl<T> BudgetedQueue<T> {
                 // this final pop cannot miss a later accepted enqueue.
                 return self.try_pop_budgeted();
             }
-            tokio::select! {
-                _ = &mut notified => {},
-                _ = &mut budget_changed => {},
+            if budget_can_close {
+                tokio::select! {
+                    _ = &mut notified => {},
+                    _ = &mut budget_closed => {},
+                }
+            } else {
+                notified.await;
             }
         }
     }
