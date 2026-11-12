@@ -34,7 +34,18 @@ impl fmt::Display for CleanupPolicy {
 impl FromStr for CleanupPolicy {
     type Err = crate::ModelContractViolation;
 
+    // Parsed for every sent message. ASCII input is compared in place; only other input pays
+    // for the Unicode upper-casing that decides it, where for example U+0131 upper-cases to `I`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_ascii() {
+            if s.eq_ignore_ascii_case("DELETE") {
+                return Ok(CleanupPolicy::DELETE);
+            }
+            if s.eq_ignore_ascii_case("COMPACTION") {
+                return Ok(CleanupPolicy::COMPACTION);
+            }
+            return Err(crate::ModelContractViolation::InvalidCleanupPolicy);
+        }
         match s.to_uppercase().as_str() {
             "DELETE" => Ok(CleanupPolicy::DELETE),
             "COMPACTION" => Ok(CleanupPolicy::COMPACTION),
@@ -63,6 +74,17 @@ mod tests {
     fn cleanup_policy_from_str_case_insensitive() {
         assert_eq!("delete".parse(), Ok(CleanupPolicy::DELETE));
         assert_eq!("compaction".parse(), Ok(CleanupPolicy::COMPACTION));
+    }
+
+    #[test]
+    fn cleanup_policy_from_str_keeps_unicode_upper_casing_for_other_input() {
+        // U+0131 (dotless i) upper-cases to an ASCII `I`.
+        assert_eq!("compact\u{131}on".parse(), Ok(CleanupPolicy::COMPACTION));
+        assert_eq!("DeLeTe".parse(), Ok(CleanupPolicy::DELETE));
+        assert_eq!(
+            "d\u{e9}lete".parse::<CleanupPolicy>(),
+            Err(crate::ModelContractViolation::InvalidCleanupPolicy)
+        );
     }
 
     #[test]
