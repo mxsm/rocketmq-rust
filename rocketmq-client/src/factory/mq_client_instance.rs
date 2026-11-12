@@ -97,6 +97,7 @@ use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
 use crate::factory::client_tables::*;
+use crate::factory::route_miss::RouteMissLookups;
 use crate::factory::route_update::RouteUpdateCoordinator;
 use crate::factory::route_update::TopicRouteApplyStatus;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
@@ -263,6 +264,7 @@ pub struct MQClientInstance {
     /// HeartbeatV2: Set of brokers that support V2 protocol
     broker_support_v2_heartbeat_set: SharedBrokerSupportV2HeartbeatSet,
     route_refresh_state: Arc<TopicRouteRefreshState>,
+    route_miss_lookups: RouteMissLookups,
     consumer_stats_manager: ConsumerStatsManager,
     connection_event_shutdown: CancellationToken,
     connection_event_task_handle: StdMutex<Option<ClientTrackedTaskHandle>>,
@@ -304,6 +306,26 @@ pub struct HeartbeatRouteIndexProbe {
 enum TopicRouteRefreshKind {
     Periodic,
     RouteMiss,
+}
+
+/// What a route-miss lookup does once no other lookup of its topic is in progress.
+enum RouteMissTurn<'a> {
+    /// Query the NameServer, holding `turn` until the reply is applied against `request_version`.
+    Query {
+        request_version: u64,
+        turn: tokio::sync::MutexGuard<'a, ()>,
+    },
+    /// A lookup that finished while this caller waited applied a route for the topic.
+    Applied,
+    /// The caller's deadline passed while another lookup of the topic was in progress.
+    TimedOut,
+}
+
+fn route_miss_turn_timed_out(deadline: RequestDeadline) -> RetryInput {
+    RetryInput::BusinessError(ClientError::timeout(
+        "waiting for another topic route lookup",
+        deadline.budget_millis(),
+    ))
 }
 
 impl MQClientInstance {
@@ -479,6 +501,7 @@ impl MQClientInstance {
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
             route_refresh_state,
+            route_miss_lookups: RouteMissLookups::new(),
             consumer_stats_manager: ConsumerStatsManager::new(service_context.component("consumer-stats")),
             connection_event_shutdown: CancellationToken::new(),
             connection_event_task_handle: StdMutex::new(None),
@@ -1274,7 +1297,6 @@ impl MQClientInstance {
     ) -> Result<Option<TopicPublishInfo>, RetryInput> {
         self.route_refresh_state.metrics.record_attempt();
         let started = Instant::now();
-        let request_version = self.topic_route_version(topic);
         let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
             self.route_refresh_state.metrics.record_failure();
             self.record_topic_route_refresh_finish(
@@ -1283,6 +1305,14 @@ impl MQClientInstance {
                 TopicRouteApplyStatus::Unchanged,
             );
             return Err(RetryInput::BusinessError(ClientError::not_started()));
+        };
+        let (request_version, _turn) = match self.take_route_miss_turn(topic, deadline).await {
+            RouteMissTurn::Query { request_version, turn } => (request_version, turn),
+            RouteMissTurn::Applied => return Ok(self.reuse_applied_route(topic, started)),
+            RouteMissTurn::TimedOut => {
+                self.record_single_route_refresh_failure(started);
+                return Err(route_miss_turn_timed_out(deadline));
+            }
         };
 
         let topic_route_data = match mq_client_api_impl
@@ -1318,10 +1348,17 @@ impl MQClientInstance {
     ) -> Result<Option<TopicPublishInfo>, RetryInput> {
         self.route_refresh_state.metrics.record_attempt();
         let started = Instant::now();
-        let request_version = self.topic_route_version(topic);
         let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
             self.record_single_route_refresh_failure(started);
             return Err(RetryInput::BusinessError(ClientError::not_started()));
+        };
+        let (request_version, _turn) = match self.take_route_miss_turn(topic, deadline).await {
+            RouteMissTurn::Query { request_version, turn } => (request_version, turn),
+            RouteMissTurn::Applied => return Ok(self.reuse_applied_route(topic, started)),
+            RouteMissTurn::TimedOut => {
+                self.record_single_route_refresh_failure(started);
+                return Err(route_miss_turn_timed_out(deadline));
+            }
         };
 
         let topic_route_data = match mq_client_api_impl
@@ -1387,19 +1424,46 @@ impl MQClientInstance {
         }
 
         if matches!(outcome, TopicRouteApplyStatus::Stale) {
-            let current_route = self
-                .topic_route_table
-                .get(topic)
-                .map(|entry| TopicRouteData::from_existing(entry.value()));
-            if let Some(mut current_route) = current_route {
-                let mut current_publish_info = topic_route_data2topic_publish_info(topic, &mut current_route);
-                current_publish_info.have_topic_router_info = true;
-                return Some(current_publish_info);
-            }
-            return None;
+            return self.current_topic_publish_info(topic);
         }
 
         Some(publish_info)
+    }
+
+    fn current_topic_publish_info(&self, topic: &CheetahString) -> Option<TopicPublishInfo> {
+        let mut current_route = self
+            .topic_route_table
+            .get(topic)
+            .map(|entry| TopicRouteData::from_existing(entry.value()))?;
+        let mut current_publish_info = topic_route_data2topic_publish_info(topic, &mut current_route);
+        current_publish_info.have_topic_router_info = true;
+        Some(current_publish_info)
+    }
+
+    /// Waits until no other route-miss lookup of `topic` is in progress.
+    ///
+    /// Concurrent misses of one topic would otherwise each query the NameServer. A caller that
+    /// waited while another lookup applied a route for `topic` is told so and reuses that route.
+    async fn take_route_miss_turn(&self, topic: &CheetahString, deadline: RequestDeadline) -> RouteMissTurn<'_> {
+        let observed_version = self.topic_route_version(topic);
+        let Ok(turn) = deadline.timeout(self.route_miss_lookups.lock(topic)).await else {
+            return RouteMissTurn::TimedOut;
+        };
+        let request_version = self.topic_route_version(topic);
+        if request_version != observed_version && self.topic_route_table.contains_key(topic) {
+            return RouteMissTurn::Applied;
+        }
+        RouteMissTurn::Query { request_version, turn }
+    }
+
+    fn reuse_applied_route(&self, topic: &CheetahString, started: Instant) -> Option<TopicPublishInfo> {
+        self.route_refresh_state.metrics.record_skip();
+        self.record_topic_route_refresh_finish(
+            TopicRouteRefreshKind::RouteMiss,
+            started,
+            TopicRouteApplyStatus::Unchanged,
+        );
+        self.current_topic_publish_info(topic)
     }
 
     async fn update_topic_route_info_from_name_server_default_with_kind(
@@ -1411,7 +1475,6 @@ impl MQClientInstance {
     ) -> bool {
         self.route_refresh_state.metrics.record_attempt();
         let started = Instant::now();
-        let request_version = self.topic_route_version(topic);
 
         let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
             error!(
@@ -1421,6 +1484,30 @@ impl MQClientInstance {
             self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyStatus::Unchanged);
             self.route_refresh_state.metrics.record_failure();
             return false;
+        };
+        // Misses arrive in bursts; the periodic refresh queries each topic once per round.
+        let (request_version, _turn) = match refresh_kind {
+            TopicRouteRefreshKind::Periodic => (self.topic_route_version(topic), None),
+            TopicRouteRefreshKind::RouteMiss => {
+                let deadline = RequestDeadline::from_timeout_millis(self.client_config.mq_client_api_timeout);
+                match self.take_route_miss_turn(topic, deadline).await {
+                    RouteMissTurn::Query { request_version, turn } => (request_version, Some(turn)),
+                    RouteMissTurn::Applied => {
+                        self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyStatus::Unchanged);
+                        self.route_refresh_state.metrics.record_skip();
+                        return true;
+                    }
+                    RouteMissTurn::TimedOut => {
+                        warn!(
+                            "updateTopicRouteInfoFromNameServer timed out waiting for another lookup, Topic: {}. [{}]",
+                            topic, self.client_id
+                        );
+                        self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyStatus::Unchanged);
+                        self.route_refresh_state.metrics.record_failure();
+                        return false;
+                    }
+                }
+            }
         };
 
         let topic_route_data = if let (true, Some(producer_config)) = (is_default, producer_config) {
@@ -3219,6 +3306,123 @@ mod tests {
             .await
             .assert_no_task_leak()
             .expect("route preparation runtime tasks drained");
+    }
+
+    /// A client instance whose only NameServer is a loopback server answering from `processor`.
+    struct RouteLookupFixture {
+        server_runtime: RuntimeContext,
+        server: Arc<SessionTransportServer>,
+        processor: Arc<RoutePreparationProcessor>,
+        client_runtime: Arc<crate::runtime::ClientRuntime>,
+        instance: Arc<MQClientInstance>,
+    }
+
+    impl RouteLookupFixture {
+        async fn start(scope: &'static str) -> Self {
+            let server_runtime = RuntimeContext::from_current(scope);
+            let processor = Arc::new(RoutePreparationProcessor::default());
+            let server = SessionTransportServer::bind(
+                server_runtime.service_context("route-lookup-server"),
+                SessionTransportServerConfig::loopback(),
+                Arc::clone(&processor) as Arc<dyn SessionProcessor>,
+                Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            )
+            .await
+            .expect("bind route lookup server");
+            let name_server_addr = server.local_addr().to_string();
+            server.start().expect("start route lookup server");
+
+            let client_runtime = crate::runtime::test_client_runtime(scope);
+            let mut client_config = ClientConfig::default();
+            client_config.set_vip_channel_enabled(false);
+            let instance = MQClientInstance::new_arc(
+                client_config,
+                0,
+                scope,
+                None,
+                client_runtime.component("instance"),
+                client_runtime.telemetry_handle().clone(),
+                client_runtime.pool().request_future_holder(),
+            );
+            let api = instance.get_mq_client_api_impl().expect("client API");
+            api.update_name_server_address_list_sync(&name_server_addr);
+            api.start().await.expect("start route lookup transport");
+            Self {
+                server_runtime,
+                server,
+                processor,
+                client_runtime,
+                instance,
+            }
+        }
+
+        async fn shutdown(self) {
+            self.instance.shutdown().await;
+            self.client_runtime
+                .shutdown()
+                .await
+                .assert_no_task_leak()
+                .expect("client runtime tasks drained");
+            self.server
+                .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+                .await
+                .assert_no_task_leak()
+                .expect("route lookup server tasks drained");
+            self.server_runtime
+                .shutdown_tasks(Duration::from_secs(5))
+                .await
+                .assert_no_task_leak()
+                .expect("route lookup runtime tasks drained");
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_send_route_misses_of_one_topic_query_the_name_server_once() {
+        let fixture = RouteLookupFixture::start("concurrent-send-route-miss-test").await;
+        fixture.processor.push(default_topic_route_response(8));
+        let topic = CheetahString::from_static_str("cold-topic");
+        let producer_config = ProducerConfig::default();
+        let deadline = RequestDeadline::from_timeout_millis(2_000);
+
+        // More misses than the NameServer connection's control queue holds.
+        let lookups = (0..128).map(|_| {
+            fixture
+                .instance
+                .prepare_topic_publish_info_once(&topic, &producer_config, deadline)
+        });
+        for result in futures::future::join_all(lookups).await {
+            let publish_info = result
+                .expect("a waiting lookup reuses the applied route")
+                .expect("the route is available");
+            assert_eq!(publish_info.message_queue_list.len(), 8);
+        }
+        assert_eq!(
+            fixture.processor.topics(),
+            vec![topic],
+            "the burst asks the NameServer once"
+        );
+
+        fixture.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_route_miss_refreshes_of_one_topic_query_the_name_server_once() {
+        let fixture = RouteLookupFixture::start("concurrent-route-miss-refresh-test").await;
+        fixture.processor.push(default_topic_route_response(8));
+        let topic = CheetahString::from_static_str("cold-refresh-topic");
+
+        let refreshes = (0..16).map(|_| fixture.instance.update_topic_route_info_from_name_server_topic(&topic));
+        assert!(
+            futures::future::join_all(refreshes)
+                .await
+                .into_iter()
+                .all(|applied| applied),
+            "every refresh sees the applied route"
+        );
+        assert_eq!(fixture.processor.topics(), vec![topic.clone()]);
+        assert!(fixture.instance.topic_route_table.contains_key(&topic));
+
+        fixture.shutdown().await;
     }
 
     #[tokio::test]
