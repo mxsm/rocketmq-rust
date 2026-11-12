@@ -13,15 +13,45 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
 
 use crate::common::message::MessageConst;
 
+/// Separates the entries of encoded properties text.
+const PROPERTY_SEPARATOR: char = '\u{2}';
+/// Separates a key from its value in encoded properties text.
+const NAME_VALUE_SEPARATOR: char = '\u{1}';
+
 /// Type-safe message properties.
-#[derive(Clone, Debug, Default)]
+///
+/// Properties decoded from a message keep their encoded `key\u{1}value\u{2}` text and are parsed
+/// into a map only when the whole map is needed: [`Self::as_map`], [`Self::as_map_mut`],
+/// [`Self::len`] or a removal. Until then, single-key reads scan the text and writes collect in a
+/// small overlay that takes precedence over it, so a consumer that reads a few properties and sets
+/// a few more never builds a map, and cloning the message copies no map. Lookups return the same
+/// values the map would: entries with an empty key or value are skipped, and the last of
+/// duplicate keys wins.
+#[derive(Clone, Default)]
 pub struct MessageProperties {
-    inner: HashMap<CheetahString, CheetahString>,
+    /// Encoded properties not parsed into `map` yet; always valid UTF-8.
+    encoded: Option<CheetahString>,
+    /// Entries set since decoding, at most one per key, taking precedence over `encoded`.
+    overlay: Vec<(CheetahString, CheetahString)>,
+    /// The authoritative map once a mutable whole-map access or a removal built it.
+    map: Option<HashMap<CheetahString, CheetahString>>,
+    /// The map built for a shared whole-map access while `map` is `None`.
+    parsed: OnceLock<HashMap<CheetahString, CheetahString>>,
+}
+
+impl fmt::Debug for MessageProperties {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MessageProperties")
+            .field("inner", self.as_map())
+            .finish()
+    }
 }
 
 impl MessageProperties {
@@ -30,46 +60,132 @@ impl MessageProperties {
         Self::default()
     }
 
+    /// Creates properties from their encoded `key\u{1}value\u{2}` form, as stored in a message.
+    ///
+    /// Valid UTF-8 is kept as text and parsed on demand. Other input is parsed at once, replacing
+    /// invalid sequences as `String::from_utf8_lossy` does.
+    pub fn from_encoded(encoded: bytes::Bytes) -> Self {
+        match CheetahString::try_copy_from_bytes(encoded) {
+            Ok(text) if text.is_empty() => Self::default(),
+            Ok(text) => Self {
+                encoded: Some(text),
+                ..Self::default()
+            },
+            Err(error) => Self::from_map(parse_lossy(&error.into_parts().0)),
+        }
+    }
+
     /// Gets a property value by key.
     #[inline]
     pub fn get(&self, key: MessagePropertyKey) -> Option<&str> {
-        self.inner.get(key.as_str()).map(|s| s.as_str())
+        self.get_str(key.as_str())
+    }
+
+    /// Gets a property value by its key name without building the whole map.
+    pub fn get_str(&self, key: &str) -> Option<&str> {
+        if let Some(map) = self.built() {
+            return map.get(key).map(CheetahString::as_str);
+        }
+        if let Some((_, value)) = self.overlay.iter().find(|(name, _)| name.as_str() == key) {
+            return Some(value.as_str());
+        }
+        self.encoded.as_deref().and_then(|encoded| find_encoded(encoded, key))
+    }
+
+    /// Gets an owned copy of a property value without building the whole map.
+    pub fn get_owned(&self, key: &str) -> Option<CheetahString> {
+        if let Some(map) = self.built() {
+            return map.get(key).cloned();
+        }
+        if let Some((_, value)) = self.overlay.iter().find(|(name, _)| name.as_str() == key) {
+            return Some(value.clone());
+        }
+        self.encoded
+            .as_deref()
+            .and_then(|encoded| find_encoded(encoded, key))
+            .map(CheetahString::from_slice)
+    }
+
+    /// Sets a property, replacing any earlier value of `key`.
+    pub fn put(&mut self, key: CheetahString, value: CheetahString) {
+        if self.map.is_some() || self.parsed.get().is_some() {
+            self.map_mut().insert(key, value);
+            return;
+        }
+        match self.overlay.iter_mut().find(|(name, _)| *name == key) {
+            Some((_, existing)) => *existing = value,
+            None => self.overlay.push((key, value)),
+        }
+    }
+
+    /// Removes a property and returns its value.
+    pub fn remove(&mut self, key: &str) -> Option<CheetahString> {
+        self.map_mut().remove(key)
     }
 
     /// Sets a property value.
     pub(crate) fn insert(&mut self, key: MessagePropertyKey, value: impl Into<CheetahString>) {
-        self.inner.insert(key.to_cheetah_string(), value.into());
+        self.put(key.to_cheetah_string(), value.into());
     }
 
     /// Returns all properties as a map (for serialization and external crates).
+    ///
+    /// The first call on decoded properties parses them.
     #[inline]
     pub fn as_map(&self) -> &HashMap<CheetahString, CheetahString> {
-        &self.inner
+        match &self.map {
+            Some(map) => map,
+            None => self
+                .parsed
+                .get_or_init(|| build_map(self.encoded.as_deref(), &self.overlay)),
+        }
     }
 
     /// Returns all properties as a mutable map (for internal use).
     #[doc(hidden)]
     #[inline]
     pub fn as_map_mut(&mut self) -> &mut HashMap<CheetahString, CheetahString> {
-        &mut self.inner
+        self.map_mut()
     }
 
     /// Creates MessageProperties from a HashMap.
     #[inline]
     pub fn from_map(map: HashMap<CheetahString, CheetahString>) -> Self {
-        Self { inner: map }
+        Self {
+            map: Some(map),
+            ..Self::default()
+        }
     }
 
     /// Returns the number of properties.
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.as_map().len()
     }
 
     /// Returns true if there are no properties.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.as_map().is_empty()
+    }
+
+    /// The map, if a whole-map access already built it.
+    fn built(&self) -> Option<&HashMap<CheetahString, CheetahString>> {
+        self.map.as_ref().or_else(|| self.parsed.get())
+    }
+
+    /// The authoritative map, built first if needed; the encoded text and overlay are dropped.
+    fn map_mut(&mut self) -> &mut HashMap<CheetahString, CheetahString> {
+        if self.map.is_none() {
+            let map = self
+                .parsed
+                .take()
+                .unwrap_or_else(|| build_map(self.encoded.as_deref(), &self.overlay));
+            self.encoded = None;
+            self.overlay = Vec::new();
+            self.map = Some(map);
+        }
+        self.map.get_or_insert_with(HashMap::new)
     }
 
     // Convenience accessors for well-known properties
@@ -181,6 +297,56 @@ impl MessageProperties {
             .and_then(|s| s.parse().ok())
             .unwrap_or(-1)
     }
+}
+
+/// The entries of encoded properties text that a parsed map keeps: an empty key or value drops an
+/// entry, as the Java decoder does.
+fn encoded_entries(encoded: &str) -> impl Iterator<Item = (&str, &str)> {
+    encoded.split(PROPERTY_SEPARATOR).filter_map(|entry| {
+        let (key, value) = entry.split_once(NAME_VALUE_SEPARATOR)?;
+        (!key.is_empty() && !value.is_empty()).then_some((key, value))
+    })
+}
+
+/// The value the parsed map would hold for `key`: the last entry wins.
+fn find_encoded<'a>(encoded: &'a str, key: &str) -> Option<&'a str> {
+    encoded_entries(encoded)
+        .filter(|(name, _)| *name == key)
+        .last()
+        .map(|(_, value)| value)
+}
+
+fn build_map(
+    encoded: Option<&str>,
+    overlay: &[(CheetahString, CheetahString)],
+) -> HashMap<CheetahString, CheetahString> {
+    let mut map =
+        HashMap::with_capacity(overlay.len() + encoded.map_or(0, |text| text.matches(PROPERTY_SEPARATOR).count() + 1));
+    if let Some(encoded) = encoded {
+        for (key, value) in encoded_entries(encoded) {
+            map.insert(CheetahString::from_slice(key), CheetahString::from_slice(value));
+        }
+    }
+    for (key, value) in overlay {
+        map.insert(key.clone(), value.clone());
+    }
+    map
+}
+
+/// Parses encoded properties that are not valid UTF-8, replacing invalid sequences.
+fn parse_lossy(encoded: &[u8]) -> HashMap<CheetahString, CheetahString> {
+    encoded
+        .split(|byte| *byte == PROPERTY_SEPARATOR as u8)
+        .filter_map(|entry| {
+            let separator = entry.iter().position(|byte| *byte == NAME_VALUE_SEPARATOR as u8)?;
+            if separator == 0 || separator + 1 >= entry.len() {
+                return None;
+            }
+            let key = String::from_utf8_lossy(&entry[..separator]);
+            let value = String::from_utf8_lossy(&entry[separator + 1..]);
+            Some((CheetahString::from(key.as_ref()), CheetahString::from(value.as_ref())))
+        })
+        .collect()
 }
 
 /// Type-safe property keys.
@@ -388,6 +554,114 @@ mod tests {
 
         properties.insert(MessagePropertyKey::Priority, "invalid");
         assert_eq!(properties.priority(), -1);
+    }
+
+    /// The map the decoder built before properties were lazy.
+    fn reference(encoded: &[u8]) -> HashMap<CheetahString, CheetahString> {
+        parse_lossy(encoded)
+    }
+
+    #[test]
+    fn encoded_lookups_and_maps_match_the_eager_decoder() {
+        // A small alphabet makes separators, duplicates and empty parts frequent.
+        const ALPHABET: &[u8] = b"ab\x01\x02";
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..5_000 {
+            let len = (next() % 24) as usize;
+            let encoded: Vec<u8> = (0..len).map(|_| ALPHABET[(next() % 4) as usize]).collect();
+            let expected = reference(&encoded);
+            let properties = MessageProperties::from_encoded(bytes::Bytes::from(encoded.clone()));
+
+            for key in ["a", "b", "ab", "ba", "aa", "bb", "aab", "c", ""] {
+                assert_eq!(
+                    properties.get_str(key),
+                    expected.get(key).map(CheetahString::as_str),
+                    "key {key:?} in {encoded:?}"
+                );
+            }
+            assert!(properties.built().is_none(), "lookups must not build the map");
+            assert_eq!(properties.as_map(), &expected, "map of {encoded:?}");
+            assert_eq!(properties.len(), expected.len());
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_is_parsed_like_from_utf8_lossy() {
+        let encoded = b"KEY\x01\xffvalue\x02\xfeK\x01v".to_vec();
+        let properties = MessageProperties::from_encoded(bytes::Bytes::from(encoded.clone()));
+        assert_eq!(properties.as_map(), &reference(&encoded));
+        assert_eq!(properties.get_str("KEY"), Some("\u{fffd}value"));
+    }
+
+    #[test]
+    fn overlay_takes_precedence_until_and_after_the_map_is_built() {
+        let mut properties = MessageProperties::from_encoded(bytes::Bytes::from_static(b"TAGS\x01a\x02KEYS\x01k"));
+        properties.put(
+            CheetahString::from_static_str("TAGS"),
+            CheetahString::from_static_str("b"),
+        );
+        properties.put(
+            CheetahString::from_static_str("MIN_OFFSET"),
+            CheetahString::from_static_str("7"),
+        );
+        properties.put(
+            CheetahString::from_static_str("MIN_OFFSET"),
+            CheetahString::from_static_str("8"),
+        );
+        assert_eq!(properties.get_str("TAGS"), Some("b"));
+        assert_eq!(
+            properties.get_owned("MIN_OFFSET"),
+            Some(CheetahString::from_static_str("8"))
+        );
+        assert_eq!(properties.get_str("KEYS"), Some("k"));
+        assert!(properties.built().is_none());
+
+        assert_eq!(properties.as_map().len(), 3);
+        assert_eq!(properties.as_map().get("TAGS").map(CheetahString::as_str), Some("b"));
+        properties.put(
+            CheetahString::from_static_str("KEYS"),
+            CheetahString::from_static_str("z"),
+        );
+        assert_eq!(properties.get_str("KEYS"), Some("z"));
+        assert_eq!(properties.as_map().get("KEYS").map(CheetahString::as_str), Some("z"));
+
+        assert_eq!(properties.remove("TAGS"), Some(CheetahString::from_static_str("b")));
+        assert_eq!(properties.get_str("TAGS"), None);
+        assert_eq!(properties.len(), 2);
+    }
+
+    #[test]
+    fn clones_of_unparsed_properties_build_no_map() {
+        let mut properties = MessageProperties::from_encoded(bytes::Bytes::from_static(b"TAGS\x01a"));
+        properties.put(CheetahString::from_static_str("X"), CheetahString::from_static_str("1"));
+        let clone = properties.clone();
+        assert!(clone.built().is_none());
+        assert_eq!(clone.get_str("TAGS"), Some("a"));
+        assert_eq!(clone.get_str("X"), Some("1"));
+    }
+
+    #[test]
+    fn debug_output_shows_the_properties_like_the_map_did() {
+        let properties = MessageProperties::from_encoded(bytes::Bytes::from_static(b"TAGS\x01a"));
+        let eager = MessageProperties::from_map(HashMap::from([(
+            CheetahString::from_static_str("TAGS"),
+            CheetahString::from_static_str("a"),
+        )]));
+        assert_eq!(format!("{properties:?}"), format!("{eager:?}"));
+        assert_eq!(format!("{eager:?}"), r#"MessageProperties { inner: {"TAGS": "a"} }"#);
+    }
+
+    #[test]
+    fn empty_encoded_properties_are_empty() {
+        let properties = MessageProperties::from_encoded(bytes::Bytes::new());
+        assert!(properties.is_empty());
+        assert_eq!(properties.get_str("TAGS"), None);
     }
 
     #[test]
