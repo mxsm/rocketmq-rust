@@ -227,7 +227,7 @@ Consumers follow the same ownership pattern. Continue with:
 
 ## 📦 Components & Crates
 
-The root Cargo workspace contains 28 crates, all published on crates.io at the workspace version. Directory and package names match, except that the `rocketmq-client` directory holds the `rocketmq-client-rust` package. Dashboards, AI operations products, examples and the website are standalone projects with their own manifests.
+The root Cargo workspace contains 29 crates. Publishable members use the shared workspace version. Directory and package names match, except that the `rocketmq-client` directory holds the `rocketmq-client-rust` package. Dashboard applications, AI operations products, examples and the website are standalone projects with their own manifests.
 
 ### Core Runtime Services
 
@@ -276,6 +276,7 @@ The root Cargo workspace contains 28 crates, all published on crates.io at the w
 | [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | Presentation-independent admin services shared by the CLI, TUI, dashboards and MCP. |
 | [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | Offline CommitLog inspection, downgrade preflight and multipath consolidation. Binary: `rocketmq-cli-rust`. |
 | [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | Shared dashboard models and services. |
+| [rocketmq-dashboard-storage](./rocketmq-dashboard/rocketmq-dashboard-storage) | Native dashboard persistence with file storage and optional SQLite, MySQL and PostgreSQL drivers. |
 
 <p align="center">
   <img src="resources/rocketmq-admin-tui.png" alt="rocketmq-admin-tui showing consumer progress" width="85%"/>
