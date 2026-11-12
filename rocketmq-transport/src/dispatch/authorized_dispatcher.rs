@@ -467,6 +467,31 @@ async fn send_handler_boundary_response(
     send_handler_response(session, command).await
 }
 
+/// The authorization resource of a request, named by its request code.
+///
+/// Built for every request, so the code is written without a heap allocation: at most 11 bytes,
+/// which a `CheetahString` keeps inline.
+pub(super) fn request_code_resource(code: i32) -> Resource {
+    let mut digits = [0u8; 11];
+    let mut start = digits.len();
+    let mut value = code.unsigned_abs();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    if code < 0 {
+        start -= 1;
+        digits[start] = b'-';
+    }
+    // Only ASCII digits and a sign were written.
+    let name = std::str::from_utf8(&digits[start..]).unwrap_or_default();
+    Resource::new(ResourceKind::Other, name)
+}
+
 pub(super) fn admission_response(opaque: i32, error: &AdmissionRejection) -> RemotingCommand {
     RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemBusy, error.to_string())
         .set_opaque(opaque)
@@ -478,4 +503,18 @@ pub(super) fn deadline_response(opaque: i32) -> RemotingCommand {
         "request deadline exceeded".to_owned(),
     )
     .set_opaque(opaque)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_code_resource_names_the_code_like_its_decimal_text() {
+        for code in [0, 7, 10, 310, 1_000_000, -1, -310, i32::MAX, i32::MIN] {
+            let resource = request_code_resource(code);
+            assert_eq!(resource.kind(), ResourceKind::Other);
+            assert_eq!(resource.name(), code.to_string(), "{code}");
+        }
+    }
 }

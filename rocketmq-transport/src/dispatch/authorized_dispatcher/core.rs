@@ -23,13 +23,12 @@ use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOperation;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthorizationDecision;
-use rocketmq_security_api::Resource;
-use rocketmq_security_api::ResourceKind;
 use tracing::Instrument;
 
 use super::admission_response;
 use super::authorization_denied_response;
 use super::deadline_response;
+use super::request_code_resource;
 use super::AuthorizedDispatchSession;
 use super::DispatchSubmissionResult;
 use crate::admission::AdmissionClass;
@@ -255,7 +254,7 @@ where
                     builder.command(),
                     builder.peer(),
                     builder.principal(),
-                    Resource::new(ResourceKind::Other, original.original_code().to_string()),
+                    request_code_resource(original.original_code()),
                     Action::Manage,
                 ),
                 Ok(AuthorizationDecision::Allow)

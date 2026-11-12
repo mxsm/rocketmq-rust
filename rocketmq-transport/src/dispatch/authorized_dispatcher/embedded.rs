@@ -22,6 +22,7 @@ use std::time::Instant;
 use super::admission_response;
 use super::authorization_denied_response;
 use super::deadline_response;
+use super::request_code_resource;
 use super::AuthorizedCommandDispatcher;
 use super::AuthorizedDispatchSession;
 use crate::admission::AdmissionClass;
@@ -57,8 +58,6 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
-use rocketmq_security_api::Resource;
-use rocketmq_security_api::ResourceKind;
 
 #[path = "embedded/terminal.rs"]
 mod terminal;
@@ -189,7 +188,7 @@ where
             self.boundary.security.authorize_embedded_for_dispatch(
                 builder.command(),
                 &principal_for_security,
-                Resource::new(ResourceKind::Other, original.original_code().to_string()),
+                request_code_resource(original.original_code()),
                 Action::Manage,
             ),
             Ok(AuthorizationDecision::Allow)

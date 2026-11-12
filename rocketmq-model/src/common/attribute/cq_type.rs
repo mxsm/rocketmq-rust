@@ -36,12 +36,16 @@ impl fmt::Display for CQType {
 impl FromStr for CQType {
     type Err = crate::ModelContractViolation;
 
+    // Parsed for every appended message; comparing in place avoids an upper-cased copy.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_uppercase().as_str() {
-            "SIMPLECQ" => Ok(CQType::SimpleCQ),
-            "BATCHCQ" => Ok(CQType::BatchCQ),
-            "ROCKSDBCQ" => Ok(CQType::RocksDBCQ),
-            _ => Err(crate::ModelContractViolation::InvalidCqType),
+        if s.eq_ignore_ascii_case("SIMPLECQ") {
+            Ok(CQType::SimpleCQ)
+        } else if s.eq_ignore_ascii_case("BATCHCQ") {
+            Ok(CQType::BatchCQ)
+        } else if s.eq_ignore_ascii_case("ROCKSDBCQ") {
+            Ok(CQType::RocksDBCQ)
+        } else {
+            Err(crate::ModelContractViolation::InvalidCqType)
         }
     }
 }

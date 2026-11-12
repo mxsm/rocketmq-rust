@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::Buf;
@@ -182,13 +183,13 @@ impl MessageExtEncoder {
         self.byte_buf.put_i64(msg_inner.born_timestamp());
 
         // 10 BORNHOST
-        self.byte_buf.put(msg_inner.born_host_bytes());
+        put_socket_address(&mut self.byte_buf, msg_inner.born_host());
 
         // 11 STORETIMESTAMP
         self.byte_buf.put_i64(msg_inner.store_timestamp());
 
         // 12 STOREHOSTADDRESS
-        self.byte_buf.put(msg_inner.store_host_bytes());
+        put_socket_address(&mut self.byte_buf, msg_inner.store_host());
 
         // 13 RECONSUMETIMES
         self.byte_buf.put_i32(msg_inner.reconsume_times());
@@ -320,14 +321,18 @@ impl MessageExtEncoder {
             self.byte_buf
                 .put_i64(message_ext_batch.message_ext_broker_inner.born_timestamp());
             // 10 BORNHOST
-            self.byte_buf
-                .put(message_ext_batch.message_ext_broker_inner.born_host_bytes());
+            put_socket_address(
+                &mut self.byte_buf,
+                message_ext_batch.message_ext_broker_inner.born_host(),
+            );
             // 11 STORETIMESTAMP
             self.byte_buf
                 .put_i64(message_ext_batch.message_ext_broker_inner.store_timestamp());
             // 12 STOREHOSTADDRESS
-            self.byte_buf
-                .put(message_ext_batch.message_ext_broker_inner.store_host_bytes());
+            put_socket_address(
+                &mut self.byte_buf,
+                message_ext_batch.message_ext_broker_inner.store_host(),
+            );
             // 13 RECONSUMETIMES
             self.byte_buf
                 .put_i32(message_ext_batch.message_ext_broker_inner.reconsume_times());
@@ -390,6 +395,16 @@ impl MessageExtEncoder {
     }
 }
 
+/// Writes a host the way `MessageExt::socket_address_2_byte_buffer` encodes it (address octets,
+/// then the port as a big-endian `i32`) without building an intermediate buffer per message.
+fn put_socket_address(buf: &mut BytesMut, address: SocketAddr) {
+    match address {
+        SocketAddr::V4(address) => buf.put_slice(&address.ip().octets()),
+        SocketAddr::V6(address) => buf.put_slice(&address.ip().octets()),
+    }
+    buf.put_i32(i32::from(address.port()));
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -398,6 +413,20 @@ mod tests {
     use cheetah_string::CheetahString;
 
     use super::*;
+
+    #[test]
+    fn hosts_are_written_as_the_message_codec_encodes_them() {
+        use rocketmq_model::common::message::message_ext::MessageExt;
+
+        for address in [
+            "10.1.2.3:10911".parse::<SocketAddr>().unwrap(),
+            "[2001:db8::1]:65535".parse().unwrap(),
+        ] {
+            let mut written = BytesMut::new();
+            put_socket_address(&mut written, address);
+            assert_eq!(written.freeze(), MessageExt::socket_address_2_byte_buffer(&address));
+        }
+    }
 
     fn message_with_body_size(body_size: usize) -> MessageExtBrokerInner {
         let mut message = MessageExtBrokerInner::default();
