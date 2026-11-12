@@ -156,27 +156,28 @@ impl SessionExecutor {
         let request_operation_for_task = request_operation.clone();
         let spawn_group = self.inner.request_group.clone();
         let task_count = SessionTaskCountGuard::inline(Arc::clone(&self.inner.task_counts));
-        match spawn_group.spawn_draining_operation(
-            &request_operation,
-            "rocketmq.transport.session.request",
-            async move {
-                let _task_count = task_count;
-                let ordering_guard = sequencer.acquire(ordering).await;
-                let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
-                    Ok(processor) => processor,
-                    Err(error) => {
-                        drop(ordering_guard);
-                        drop(queued);
-                        reject(request_operation_for_task, error).await;
-                        return;
-                    }
-                };
-                drop(queued);
-                let _inflight = inflight;
-                let _processor = processor;
-                run_ordered(ordering_guard, execute(request_operation_for_task)).await;
-            },
-        ) {
+        // The request future holds the whole processing path. Each task wrapper keeps its future
+        // both as an argument and inside the future it awaits, so an unboxed request future
+        // grows several-fold per wrapper (one Broker request task measured 331 KB), and every
+        // request copies and allocates all of it. Boxed, the wrappers hold a pointer.
+        let request = Box::pin(async move {
+            let _task_count = task_count;
+            let ordering_guard = sequencer.acquire(ordering).await;
+            let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
+                Ok(processor) => processor,
+                Err(error) => {
+                    drop(ordering_guard);
+                    drop(queued);
+                    reject(request_operation_for_task, error).await;
+                    return;
+                }
+            };
+            drop(queued);
+            let _inflight = inflight;
+            let _processor = processor;
+            run_ordered(ordering_guard, execute(request_operation_for_task)).await;
+        });
+        match spawn_group.spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", request) {
             Ok(task_id) => Ok(SessionDispatchAttempt::Accepted(task_id)),
             Err(error) if session_stopped_admission(&error) => {
                 Ok(SessionDispatchAttempt::SessionClosed { retained_partial: None })
