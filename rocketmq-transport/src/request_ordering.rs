@@ -130,11 +130,14 @@ tokio::task_local! {
 ///
 /// The slot is released when `request` completes or is dropped, or earlier through
 /// [`release_request_ordering`].
-pub(crate) async fn run_ordered<F>(guard: RequestOrderingGuard, request: F) -> F::Output
+///
+/// It returns the task-local scope future itself: an `async fn` wrapper would hold `request` both
+/// as its argument and inside the scope it awaits, doubling the request future.
+pub(crate) fn run_ordered<F>(guard: RequestOrderingGuard, request: F) -> impl Future<Output = F::Output>
 where
     F: Future,
 {
-    HELD_ORDERING.scope(Cell::new(Some(guard)), request).await
+    HELD_ORDERING.scope(Cell::new(Some(guard)), request)
 }
 
 /// Ends the ordered part of the request running on the current task.
@@ -267,5 +270,26 @@ mod tests {
     #[test]
     fn release_outside_a_request_is_a_no_op() {
         release_request_ordering();
+    }
+
+    #[tokio::test]
+    async fn ordered_request_holds_its_future_once() {
+        let sequencer = RequestSequencer::default();
+        let guard = sequencer.acquire(RequestOrdering::Concurrent).await;
+        let request = async {
+            let state = [7_u8; 4096];
+            tokio::task::yield_now().await;
+            std::hint::black_box(state);
+        };
+        let request_size = std::mem::size_of_val(&request);
+
+        let ordered = run_ordered(guard, request);
+
+        assert!(
+            std::mem::size_of_val(&ordered) < request_size + 256,
+            "ordered request is {} bytes for a {request_size}-byte request",
+            std::mem::size_of_val(&ordered)
+        );
+        ordered.await;
     }
 }

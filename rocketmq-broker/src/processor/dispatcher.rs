@@ -160,27 +160,30 @@ where
     TS: TransactionalMessageService + Send + Sync + 'static,
 {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
+        // Each processor future is boxed. Inline, this future would be as large as the largest of
+        // them, and every future that holds it would copy that size whenever it moves, whatever
+        // the request.
         match self {
-            Self::Send(processor) => processor.process_shared(request).await,
-            Self::Pull(processor) => processor.process_shared(request).await,
-            Self::Peek(processor) => processor.process_shared(request).await,
-            Self::Pop(processor) => processor.process_shared(request).await,
-            Self::PopLite(processor) => processor.process_shared(request).await,
-            Self::Ack(processor) => processor.process_shared(request).await,
-            Self::ChangeInvisible(processor) => processor.process_shared(request).await,
-            Self::Notification(processor) => processor.process_shared(request).await,
-            Self::PollingInfo(processor) => processor.process_shared(request).await,
-            Self::Reply(processor) => processor.process_shared(request).await,
-            Self::Recall(processor) => processor.process_shared(request).await,
-            Self::QueryMessage(processor) => processor.process_shared(request).await,
-            Self::ClientManage(processor) => processor.process_shared(request).await,
-            Self::ConsumerManage(processor) => processor.process_shared(request).await,
-            Self::QueryAssignment(processor) => processor.process_shared(request).await,
-            Self::LiteManager(processor) => processor.process_shared(request).await,
-            Self::LiteSubscriptionCtl(processor) => processor.process_shared(request).await,
-            Self::EndTransaction(processor) => processor.process_shared(request).await,
-            Self::Maintenance(processor) => processor.process_shared(request).await,
-            Self::AdminBroker(processor) => processor.process_shared(request).await,
+            Self::Send(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::Pull(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::Peek(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::Pop(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::PopLite(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::Ack(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::ChangeInvisible(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::Notification(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::PollingInfo(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::Reply(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::Recall(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::QueryMessage(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::ClientManage(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::ConsumerManage(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::QueryAssignment(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::LiteManager(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::LiteSubscriptionCtl(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::EndTransaction(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::Maintenance(processor) => Box::pin(processor.process_shared(request)).await,
+            Self::AdminBroker(processor) => Box::pin(processor.process_shared(request)).await,
         }
     }
 
@@ -499,13 +502,15 @@ where
             },
         };
 
-        // Keep the large handler future out of the transport dispatch future.
-        let result = Box::pin(self.process_with_optional_fast_failure(
-            fast_failure_queue_kind(request_code, default_processor),
-            processor,
-            request,
-        ))
-        .await;
+        // `BrokerProcessorType` boxes its handler futures, which keeps this future small inside
+        // the transport dispatch future.
+        let result = self
+            .process_with_optional_fast_failure(
+                fast_failure_queue_kind(request_code, default_processor),
+                processor,
+                request,
+            )
+            .await;
         map_request_header_error(&self.command_factory, result, opaque)
     }
 
@@ -627,12 +632,12 @@ where
 ///   may append while this one waits for durability.
 ///
 /// When the send appends nothing, both are released when the processor returns.
-async fn process_send<P: RequestProcessor>(
-    processor: &mut P,
-    request: &mut RemotingRequest,
+fn process_send<'a, P: RequestProcessor>(
+    processor: &'a mut P,
+    request: &'a mut RemotingRequest,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
-) -> crate::broker_error::BrokerResult<ResponseAction> {
-    rocketmq_store::hold_until_appended((permit, SendOrderingRelease), processor.process(request)).await
+) -> impl std::future::Future<Output = crate::broker_error::BrokerResult<ResponseAction>> + Send + 'a {
+    rocketmq_store::hold_until_appended((permit, SendOrderingRelease), processor.process(request))
 }
 
 /// Ends the current send's transport ordering slot when dropped.

@@ -156,10 +156,12 @@ impl SessionExecutor {
         let request_operation_for_task = request_operation.clone();
         let spawn_group = self.inner.request_group.clone();
         let task_count = SessionTaskCountGuard::inline(Arc::clone(&self.inner.task_counts));
-        // The request future holds the whole processing path. Each task wrapper keeps its future
-        // both as an argument and inside the future it awaits, so an unboxed request future
-        // grows several-fold per wrapper (one Broker request task measured 331 KB), and every
-        // request copies and allocates all of it. Boxed, the wrappers hold a pointer.
+        // Each task wrapper keeps its future both as an argument and inside the future it awaits,
+        // so an unboxed request future grows several-fold per wrapper (one Broker request task
+        // measured 331 KB), and every request copies and allocates all of it. Boxed, the wrappers
+        // hold a pointer. The processing path and the rejection response are boxed separately when
+        // they start: a move copies a future's full size, so this admission wrapper stays small
+        // for the reader that boxes it, and only the path that runs is copied, once.
         let request = Box::pin(async move {
             let _task_count = task_count;
             let ordering_guard = sequencer.acquire(ordering).await;
@@ -168,14 +170,14 @@ impl SessionExecutor {
                 Err(error) => {
                     drop(ordering_guard);
                     drop(queued);
-                    reject(request_operation_for_task, error).await;
+                    Box::pin(reject(request_operation_for_task, error)).await;
                     return;
                 }
             };
             drop(queued);
             let _inflight = inflight;
             let _processor = processor;
-            run_ordered(ordering_guard, execute(request_operation_for_task)).await;
+            run_ordered(ordering_guard, Box::pin(execute(request_operation_for_task))).await;
         });
         match spawn_group.spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", request) {
             Ok(task_id) => Ok(SessionDispatchAttempt::Accepted(task_id)),
