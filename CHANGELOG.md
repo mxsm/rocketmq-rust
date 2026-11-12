@@ -116,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(client):** Remove the unused one-way egress snapshot and duplicate counters; runtime metrics and bounded admission are unchanged ([#12374](https://github.com/mxsm/rocketmq-rust/issues/12374)).
 - **refactor(client):** Remove unused initial delayed consume admission and exercise the shared retry task through worker retries ([#12407](https://github.com/mxsm/rocketmq-rust/issues/12407)).
 - **refactor(store):** Remove the unused private GetMessageResult constructor and retain the active capacity-based construction paths ([#12355](https://github.com/mxsm/rocketmq-rust/issues/12355)).
+- **refactor(store):** Remove the unused private async result alias and commented-out write declarations from the internal Store engine trait ([#12472](https://github.com/mxsm/rocketmq-rust/issues/12472)).
 - **refactor(client):** Remove the unused producer send kernel wrapper superseded by the runtime-snapshot send path ([#12323](https://github.com/mxsm/rocketmq-rust/issues/12323)).
 - **refactor(broker):** Remove the unconfigured internal shutdown hook and its injection-only test; active shutdown ownership and deadlines are unchanged ([#12324](https://github.com/mxsm/rocketmq-rust/issues/12324)).
 - **refactor(broker):** Remove the unused reply correlation-ID fallback helper and its dedicated tests ([#12315](https://github.com/mxsm/rocketmq-rust/issues/12315)).

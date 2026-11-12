@@ -16,8 +16,6 @@ use crate::base::message_store_reader::MessageStoreReader;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
@@ -67,8 +65,6 @@ use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
 use crate::timer::timer_message_store::TimerMessageStore;
-
-type AsyncResult<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
 
 /// Read-only view of the message-store state-machine version.
 ///
@@ -315,30 +311,6 @@ pub trait MessageStoreEngine: MessageStoreReader + Send + Sync + 'static {
     /// This adapter cannot await durable ledger and namespace work. Managed callers should use
     /// [`Self::destroy_gracefully`].
     fn destroy(&mut self);
-    /*
-    /// Store a message into the store in async manner.
-    ///
-    /// # Parameters
-    /// * `msg` - Message instance to store
-    ///
-    /// # Returns
-    /// A Future with the result of the store operation
-    async fn async_put_message(
-        &mut self,
-        msg: MessageExtBrokerInner,
-    ) -> PutMessageResult;*/
-
-    /*    /// Store a batch of messages in async manner.
-    ///
-    /// # Parameters
-    /// * `message_ext_batch` - The message batch
-    ///
-    /// # Returns
-    /// A Future with the result of the store operation
-    async fn async_put_messages(
-        &self,
-        message_ext_batch: MessageExtBatch,
-    ) -> Result<PutMessageResult, StoreError>;*/
 
     /// Store a message into store.
     ///
