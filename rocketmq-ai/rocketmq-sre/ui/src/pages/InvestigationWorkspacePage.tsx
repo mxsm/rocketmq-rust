@@ -76,7 +76,7 @@ function InvestigationWorkspace({
   refreshing,
 }: {
   view: InvestigationView;
-  reload: () => void;
+  reload: () => Promise<void>;
   refreshing: boolean;
 }) {
   const scope = useWorkspaceScope();
@@ -126,9 +126,8 @@ function InvestigationWorkspace({
       : undefined,
   );
   const reloadQuality = quality.reload;
-  const reloadAll = useCallback(() => {
-    reload();
-    reloadQuality();
+  const reloadAll = useCallback(async () => {
+    await Promise.all([reload(), reloadQuality()]);
   }, [reload, reloadQuality]);
   const progress = useWorkflowProgress(object.cluster_id, reloadAll, {
     aggregateType: "investigation",

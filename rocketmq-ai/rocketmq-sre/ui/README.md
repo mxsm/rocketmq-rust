@@ -24,6 +24,11 @@ Dashboard mutation API。
 新查询可能产生窗外修订，工作台显示数量，并提供显式扩展时间窗操作。
 证据保留原始观测时间，窗外证据有提示。规则支持评分不是校准概率。
 
+调查列表按服务端 `next_cursor` 翻页，每次请求 `limit=50`，支持回到已访问页后
+继续向前；搜索、状态和绝对时间窗仅筛选当前读取页，不声称全量搜索。切换身份、
+集群、资源或时间窗后，游标历史和旧页结果失效。旧接口一次返回完整列表时仍每页
+最多渲染 50 行。列表摘要未提供修订数时显示未知，打开调查才读取保存修订。
+
 当前调查工作台支持人工只读调查，不提供持久 run、暂停或预算控制。补证和
 追问从关联只读会话发起；升级事件调用既有工作流 API，执行仍只从事件的
 受监督计划、审批与围栏路径进入。未新增目标写入能力。
@@ -32,6 +37,12 @@ Dashboard mutation API。
 同身份刷新和 token 续期保留当前表单。工作流订阅由同身份消费者共享，按
 租户、集群和对象过滤，断流使用串行轮询。浅色/深色主题、语言和显示时区
 保存在操作员偏好中；新增导航和调查界面提供中英文文案。
+
+事件刷新等待实际数据请求结算，同一消费者最多保留一次待刷新，避免连续事件
+反复取消请求而无法得到新快照。成功、失败、范围取消及卸载均结算刷新等待者。
+Overview 的能力快照最多四路并发，页面内按 API 身份缓存成功结果；Fleet 排序
+和筛选不重复获取已有快照，显式刷新会重新读取。缓存随离页释放，返页仍重新取数；
+跨页面缓存与新鲜度策略需要独立评估，当前不使用无限期全局缓存。
 
 开发演示可访问 `/?demo=1`。历史演示记录位于 2026-07-27，需选择对应绝对
 时间窗；新会话查询生成当前时间的演示修订与可读取证据。演示租户与 DEV
@@ -154,6 +165,7 @@ fixture 只控制 HTTP 响应，应用仍通过真实 HTTP client 发送认证�
 
 ```bash
 npm run test -- --run src/context src/hooks src/data/SreDataContext.test.tsx src/data/SreDataContext.demo.test.tsx src/data/mockApi.test.ts src/features/investigations src/features/scope src/pages/InvestigationWorkspacePage.test.tsx src/pages/SupervisedExecutionPages.test.tsx src/pages/WorkflowPages.test.tsx src/router.test.tsx
+npm run test -- --run src/features/fleet src/pages/OverviewPage.test.tsx src/pages/InvestigationsPage.test.tsx src/api/client.test.ts
 ```
 
 覆盖范围投影、裸旧链接、浏览器历史、对象冲突、身份撤销、token 续期、

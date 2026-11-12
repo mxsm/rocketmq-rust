@@ -4,10 +4,12 @@ import { useAsyncResource } from "./useAsyncResource";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 describe("useAsyncResource request ownership", () => {
@@ -45,7 +47,7 @@ describe("useAsyncResource request ownership", () => {
       .mockReturnValueOnce(next.promise);
     const { result } = renderHook(() => useAsyncResource(load));
     await waitFor(() => expect(result.current.data).toBe("saved result"));
-    act(() => result.current.reload());
+    act(() => { void result.current.reload(); });
     expect(result.current.data).toBe("saved result");
     expect(result.current.loading).toBe(true);
     await act(async () => {
@@ -70,5 +72,66 @@ describe("useAsyncResource request ownership", () => {
     expect(signal?.aborted).toBe(true);
     expect(result.current.data).toBeUndefined();
     expect(result.current.loading).toBe(true);
+  });
+
+  it.each(["success", "failure", "scope change", "unmount"] as const)(
+    "settles reload completion after %s while retaining request ownership",
+    async (outcome) => {
+      const next = deferred<string>();
+      const load = vi.fn<(signal: AbortSignal) => Promise<string>>()
+        .mockResolvedValueOnce("saved")
+        .mockReturnValueOnce(next.promise);
+      const resource = renderHook(({ request }) => useAsyncResource(request), {
+        initialProps: { request: load as (signal: AbortSignal) => Promise<string> },
+      });
+      await waitFor(() => expect(resource.result.current.data).toBe("saved"));
+      let completion!: Promise<void>;
+      let settled = false;
+      act(() => {
+        completion = resource.result.current.reload();
+        void completion.then(() => { settled = true; });
+      });
+      expect(settled).toBe(false);
+      if (outcome === "success") await act(async () => next.resolve("updated"));
+      if (outcome === "failure") await act(async () => next.reject(new Error("unavailable")));
+      if (outcome === "scope change") resource.rerender({ request: () => Promise.resolve("new scope") });
+      if (outcome === "unmount") resource.unmount();
+      await act(async () => { await completion; });
+      expect(settled).toBe(true);
+      if (outcome === "failure") {
+        expect(resource.result.current.data).toBe("saved");
+        expect(resource.result.current.error).toBeInstanceOf(Error);
+      }
+      if (outcome === "scope change") expect(resource.result.current.data).toBe("new scope");
+      if (outcome === "unmount" || outcome === "scope change") {
+        expect(load.mock.calls[1][0].aborted).toBe(true);
+      }
+    },
+  );
+
+  it("settles batched reload callers when their latest request completes", async () => {
+    const next = deferred<string>();
+    const load = vi.fn().mockResolvedValueOnce("saved").mockReturnValueOnce(next.promise);
+    const resource = renderHook(() => useAsyncResource(load));
+    await waitFor(() => expect(resource.result.current.data).toBe("saved"));
+    let completions!: Promise<void>[];
+    act(() => { completions = [resource.result.current.reload(), resource.result.current.reload()]; });
+    expect(load).toHaveBeenCalledTimes(2);
+    await act(async () => next.resolve("latest"));
+    await act(async () => { await Promise.all(completions); });
+    expect(resource.result.current.data).toBe("latest");
+  });
+
+  it("settles a reload even if the owner unmounts before its new effect runs", async () => {
+    const load = vi.fn(() => Promise.resolve("saved"));
+    const resource = renderHook(() => useAsyncResource(load));
+    await waitFor(() => expect(resource.result.current.data).toBe("saved"));
+    let completion!: Promise<void>;
+    act(() => {
+      completion = resource.result.current.reload();
+      resource.unmount();
+    });
+    await completion;
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });

@@ -12,6 +12,20 @@ afterEach(() => {
 });
 
 describe("stateLabel", () => {
+  it("preserves investigation cursor metadata and the legacy signal argument", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      items: [], next_cursor: "next-id", partial: true, warnings: [], observed_at: "2026-11-12T10:00:00Z",
+    })));
+    const api = createHttpSreApi();
+    const controller = new AbortController();
+    const response = await api.listInvestigations("cluster/id", controller.signal, { cursor: "cursor/id", limit: 50 });
+    const target = new URL(String(fetchMock.mock.calls[0][0]), "http://localhost");
+    expect(target.searchParams.get("cluster_id")).toBe("cluster/id");
+    expect(target.searchParams.get("cursor")).toBe("cursor/id");
+    expect(target.searchParams.get("limit")).toBe("50");
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+    expect(response.next_cursor).toBe("next-id");
+  });
   it("encodes optional cluster and saved-revision coverage scope without changing the legacy call", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
     const api = createHttpSreApi({ token: "test", tenantId: "tenant", clusterIds: ["cluster/id"], subject: "reader", roles: ["rocketmq:read"] });

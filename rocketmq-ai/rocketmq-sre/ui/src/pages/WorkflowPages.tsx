@@ -1171,9 +1171,8 @@ export function IncidentDetailPage() {
   const topology = useAsyncResource(topologyLoad);
   const reloadIncident = resource.reload;
   const reloadTopology = topology.reload;
-  const reload = useCallback(() => {
-    reloadIncident();
-    reloadTopology();
+  const reload = useCallback(async () => {
+    await Promise.all([reloadIncident(), reloadTopology()]);
   }, [reloadIncident, reloadTopology]);
   const progress = useWorkflowProgress(
     resource.data?.incident.cluster_id ?? "",

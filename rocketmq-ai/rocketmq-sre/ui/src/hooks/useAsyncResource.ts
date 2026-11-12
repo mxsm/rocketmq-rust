@@ -1,16 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface AsyncResource<T> {
   data?: T;
   loading: boolean;
   error?: unknown;
-  reload: () => void;
+  reload: () => Promise<void>;
 }
 
 export function useAsyncResource<T>(
   load: (signal: AbortSignal) => Promise<T>,
 ): AsyncResource<T> {
   const [version, setVersion] = useState(0);
+  const requestedVersion = useRef(0);
+  const completions = useRef(new Map<number, () => void>());
+  const settle = useCallback((through = Infinity) => {
+    for (const [requested, complete] of completions.current) {
+      if (requested <= through) {
+        completions.current.delete(requested);
+        complete();
+      }
+    }
+  }, []);
   const [result, setResult] = useState<{
     owner: typeof load;
     version: number;
@@ -46,12 +56,23 @@ export function useAsyncResource<T>(
             data: previous?.owner === load ? previous.data : undefined,
           }));
         }
-      });
-    return () => controller.abort();
-  }, [load, version]);
+      })
+      .finally(() => settle(version));
+    return () => {
+      controller.abort();
+      settle(version);
+    };
+  }, [load, settle, version]);
+
+  useEffect(() => () => settle(), [settle]);
 
   const reload = useCallback(() => {
-    setVersion((current) => current + 1);
+    const requested = ++requestedVersion.current;
+    const completion = new Promise<void>((resolve) => {
+      completions.current.set(requested, resolve);
+    });
+    setVersion(requested);
+    return completion;
   }, []);
 
   // A changed request must hide the previous result during render, before effects run.

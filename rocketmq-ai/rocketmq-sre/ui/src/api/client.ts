@@ -74,6 +74,7 @@ import type {
   WhatIfSimulation,
   WhatIfSimulationRequest,
   WorkflowStreamEvent,
+  WorkflowListOptions,
 } from "./types";
 
 export class ApiError extends Error {
@@ -465,6 +466,7 @@ export interface SreApi {
   listInvestigations: (
     clusterId: string,
     signal?: AbortSignal,
+    options?: WorkflowListOptions,
   ) => Promise<CollectionEnvelope<InvestigationView>>;
   getInvestigation: (
     id: string,
@@ -772,10 +774,14 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
         undefined,
         signal,
       ),
-    listInvestigations: async (clusterId, signal) =>
+    listInvestigations: async (clusterId, signal, options) =>
       collection(
         await get<CollectionEnvelope<InvestigationView> | InvestigationView[]>(
-          apiQuery("/v1/investigations", { cluster_id: clusterId }),
+          apiQuery("/v1/investigations", {
+            cluster_id: clusterId,
+            cursor: options?.cursor,
+            limit: options?.limit?.toString(),
+          }),
           signal,
         ),
       ),

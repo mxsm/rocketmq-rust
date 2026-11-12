@@ -1,6 +1,11 @@
 import { useOperatorPreferences } from "@/preferences/OperatorPreferences";
 
 const zh = {
+  previousPage: "上一页",
+  nextPage: "下一页",
+  page: "页",
+  pageFilterHint: "搜索、状态和时间范围仅筛选当前读取页；可翻页继续查看。",
+  unknownRevisionCount: "列表未提供修订数量；打开调查查看保存修订。",
   duty: "值班台",
   investigations: "调查",
   changes: "变更",
@@ -126,6 +131,11 @@ const zh = {
 
 type Messages = { [K in keyof typeof zh]: string };
 const en: Messages = {
+  previousPage: "Previous page",
+  nextPage: "Next page",
+  page: "Page",
+  pageFilterHint: "Search, status and time scope filter the current loaded page. Continue paging to review other records.",
+  unknownRevisionCount: "The list does not provide a revision count. Open the investigation to review saved revisions.",
   duty: "On call",
   investigations: "Investigate",
   changes: "Changes",

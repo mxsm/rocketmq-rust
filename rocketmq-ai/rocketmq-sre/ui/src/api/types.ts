@@ -299,7 +299,12 @@ export interface CollectionEnvelope<T> {
   partial: boolean;
   warnings: string[];
   observed_at: string;
-  next_cursor?: string;
+  next_cursor?: string | null;
+}
+
+export interface WorkflowListOptions {
+  cursor?: string;
+  limit?: number;
 }
 
 export interface WorkflowActor {
