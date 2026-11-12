@@ -231,6 +231,34 @@ impl RequestProcessor for DrainingProcessor {
     }
 }
 
+/// Waits on the request's control for code 46 and reports when the wait ends.
+#[derive(Clone)]
+struct StopObservingProcessor {
+    waiting: Arc<tokio::sync::Notify>,
+    stopped: Arc<tokio::sync::Notify>,
+}
+
+impl RequestProcessor for StopObservingProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
+        if request.command().code() == 46 {
+            self.waiting.notify_one();
+            request.control().cancelled().await;
+            self.stopped.notify_one();
+            return Ok(ResponseAction::NoReply(
+                request
+                    .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
+                    .map_err(|error| crate::error_helpers::internal_failure("create protocol no-response", error))?,
+            ));
+        }
+        Ok(ResponseAction::Reply(
+            RemotingResponse::command(RemotingCommand::create_response_command_with_code(
+                ResponseCode::Success,
+            ))
+            .expect("stop-observing remoting response"),
+        ))
+    }
+}
+
 struct CountingHook {
     before: Arc<AtomicUsize>,
     after: Arc<AtomicUsize>,
@@ -2067,5 +2095,58 @@ async fn hooks_registered_before_and_after_injection_append_once_to_existing_reg
     );
 
     running.begin_shutdown();
+    running.finish().await;
+}
+
+async fn start_stop_observing_server(
+    name: &'static str,
+) -> (
+    crate::connection::Connection,
+    harness::RunningServer,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+) {
+    let runtime = TestRuntime::new(name);
+    let waiting = Arc::new(tokio::sync::Notify::new());
+    let stopped = Arc::new(tokio::sync::Notify::new());
+    let processor = StopObservingProcessor {
+        waiting: Arc::clone(&waiting),
+        stopped: Arc::clone(&stopped),
+    };
+    let server = TransportServer::new(loopback_server_config(), runtime.service_context(), processor);
+    let (mut client, _address, running) = start_server(runtime, server).await;
+    client
+        .send_command(RemotingCommand::create_remoting_command(46).set_opaque(4_601))
+        .await
+        .expect("send the waiting request");
+    tokio::time::timeout(Duration::from_secs(1), waiting.notified())
+        .await
+        .expect("the request waits on its control");
+    (client, running, waiting, stopped)
+}
+
+#[tokio::test]
+async fn a_waiting_request_stops_when_the_peer_closes_its_session() {
+    let (mut client, running, _waiting, stopped) =
+        start_stop_observing_server("transport-request-stop-peer-close").await;
+
+    client.shutdown().await.expect("close the client write half");
+    tokio::time::timeout(Duration::from_secs(1), stopped.notified())
+        .await
+        .expect("the session close stops the waiting request");
+
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn a_waiting_request_stops_when_the_server_shuts_down() {
+    let (_client, mut running, _waiting, stopped) =
+        start_stop_observing_server("transport-request-stop-server-shutdown").await;
+
+    running.begin_shutdown();
+    tokio::time::timeout(Duration::from_secs(1), stopped.notified())
+        .await
+        .expect("server shutdown stops the waiting request");
+
     running.finish().await;
 }

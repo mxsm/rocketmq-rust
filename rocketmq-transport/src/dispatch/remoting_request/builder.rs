@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::TaskGroup;
+use tokio_util::sync::CancellationToken;
 
 use super::IngressRequestView;
 use super::RemotingRequest;
@@ -41,12 +42,18 @@ use crate::session_view::SessionView;
 pub(crate) struct RequestLifecycleProvenance {
     session: SessionView,
     parent_task_group: TaskGroup,
+    /// The session's request stop token, for network sessions; see
+    /// [`RequestControlView::from_meta_with_session_stop`].
+    session_stop: Option<CancellationToken>,
 }
 
 impl RequestLifecycleProvenance {
     /// Derives network request lifecycle facts from one canonical session.
     pub(crate) fn from_network_session(session: &SessionHandle) -> Self {
-        Self::from_session_view(session.session_view(), session.task_group())
+        Self {
+            session_stop: Some(session.request_stop().clone()),
+            ..Self::from_session_view(session.session_view(), session.task_group())
+        }
     }
 
     /// Derives embedded request lifecycle facts from the record that owns its
@@ -59,6 +66,7 @@ impl RequestLifecycleProvenance {
         Self {
             session,
             parent_task_group: parent_task_group.clone(),
+            session_stop: None,
         }
     }
 
@@ -110,8 +118,12 @@ impl RemotingRequestBuilder {
     ) -> Self {
         let context = context.into_parts();
         let meta = RequestMeta::new(received_at, context.deadline);
-        let control =
-            RequestControlView::from_meta(&meta, lifecycle.session.state().clone(), &lifecycle.parent_task_group);
+        let control = RequestControlView::from_meta_with_session_stop(
+            &meta,
+            lifecycle.session.state().clone(),
+            &lifecycle.parent_task_group,
+            lifecycle.session_stop,
+        );
         Self {
             original,
             meta,

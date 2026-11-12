@@ -507,6 +507,13 @@ struct SessionSendHandle {
     session_view: SessionView,
     task_group: TaskGroup,
     reader_cancellation: CancellationToken,
+    /// Stops the session's requests. It is a child of the session task group's token and is
+    /// cancelled wherever this handle publishes the session closed, so a request needs to wait on
+    /// this token alone. A writer failure publishes the close itself and stops the reader, whose
+    /// exit then closes the session through [`SessionHandle::request_close`].
+    request_stop: CancellationToken,
+    /// Cancels `request_stop` when the handle, and with it the session's close publisher, is dropped.
+    _request_stop_on_drop: tokio_util::sync::DropGuard,
     server_outbound: Arc<ServerOutboundAdmission>,
     close_coordinator: SessionCloseCoordinator,
     writer_operation: OperationContext,
@@ -620,6 +627,11 @@ impl SessionHandle {
         self.original_request_identity
     }
 
+    /// Returns the token that stops this session's requests; see [`SessionSendHandle`].
+    pub(crate) fn request_stop(&self) -> &CancellationToken {
+        &self.send.request_stop
+    }
+
     pub(crate) fn is_same_session(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.send, &other.send)
     }
@@ -629,6 +641,7 @@ impl SessionHandle {
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
+        self.send.request_stop.cancel();
         self.request_operation.cancel();
         self.send.writer_operation.cancel();
         self.send.task_group.abort_task(self.send.writer_task_id);
@@ -641,6 +654,7 @@ impl SessionHandle {
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
+        self.send.request_stop.cancel();
         self.request_operation.cancel();
         self.send.writer_operation.cancel();
         if !self
@@ -697,6 +711,7 @@ impl SessionHandle {
         let outcome = self.send.server_outbound.close(cause);
         let _ = self.send.session_closed_tx.send(true);
         self.send.reader_cancellation.cancel();
+        self.send.request_stop.cancel();
         outcome
     }
 
@@ -763,6 +778,7 @@ impl SessionHandle {
             let _ = self.send.session_closed_tx.send(true);
             let _ = self.send.state_tx.send(ConnectionState::Closed);
             self.send.reader_cancellation.cancel();
+            self.send.request_stop.cancel();
             self.request_operation.cancel();
             self.send.writer_operation.cancel();
             self.send.task_group.abort_task(self.send.writer_task_id);
@@ -772,6 +788,7 @@ impl SessionHandle {
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
+        self.send.request_stop.cancel();
         self.request_operation.cancel();
         let _ = self
             .send
@@ -1459,6 +1476,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     let request_operation = executor.operation_context().clone();
     let reader_cancellation = CancellationToken::new();
     let reader_shutdown = reader_cancellation.clone();
+    let request_stop = task_group.cancellation_token().child_token();
     let writer_group = task_group.clone();
     let writer_cancellation = writer_operation.cancellation_token();
     let writer_loop = run_session_writer(
@@ -1507,6 +1525,8 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
             session_view,
             task_group: task_group.clone(),
             reader_cancellation: reader_cancellation.clone(),
+            _request_stop_on_drop: request_stop.clone().drop_guard(),
+            request_stop,
             server_outbound: ServerOutboundAdmission::new(),
             close_coordinator: SessionCloseCoordinator::new(),
             writer_operation,
