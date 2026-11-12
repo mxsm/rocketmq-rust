@@ -134,6 +134,20 @@ class ContainerFoundationTests(unittest.TestCase):
         )
         self.assertTrue(any("actions/checkout" in finding for finding in self.audit(workflow=workflow)))
 
+        cosign_sha = self.policy["workflow"]["actions"]["sigstore/cosign-installer"]
+        for field, source in (
+            ("workflow", self.workflow),
+            ("publication_workflow", self.publication_workflow),
+        ):
+            with self.subTest(workflow=field):
+                unpinned = source.replace(
+                    f"sigstore/cosign-installer@{cosign_sha}",
+                    "sigstore/cosign-installer@v4.1.3",
+                )
+                self.assertTrue(
+                    any("sigstore/cosign-installer" in finding for finding in self.audit(**{field: unpinned}))
+                )
+
         weakened = self.supply_script.replace("--severity", "--ignore-unfixed --severity", 1)
         self.assertTrue(any("must not ignore unfixed" in finding for finding in self.audit(supply_script=weakened)))
 
