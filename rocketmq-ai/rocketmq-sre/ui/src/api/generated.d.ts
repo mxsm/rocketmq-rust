@@ -7901,6 +7901,124 @@ export interface components {
             /** Format: date-time */
             observed_at: string;
         };
+        /**
+         * CapabilityQualityProjection
+         * @description Cluster-scoped capability facts evaluated against bounded, already saved evidence.
+         *
+         *     `observed_at` is the evaluation instant. Evidence freshness is compared with
+         *     each requirement's compiled age bound. This response never authorizes an action;
+         *     `execution_eligible` is always false. Verification remains unknown without an
+         *     explicit deployment verification record.
+         */
+        CapabilityQualityProjection: {
+            cluster_id?: components["schemas"]["CapabilityQualityProjection__ClusterId"] | null;
+            execution_eligible: boolean;
+            investigation_id?: components["schemas"]["CapabilityQualityProjection__InvestigationId"] | null;
+            /** Format: date-time */
+            observed_at: string;
+            packs: components["schemas"]["CapabilityQualityProjection__DiagnosticPackQuality"][];
+            partial: boolean;
+            revision_id?: components["schemas"]["CapabilityQualityProjection__DiagnosisRevisionId"] | null;
+            scenarios: components["schemas"]["CapabilityQualityProjection__DiagnosticScenarioCoverage"][];
+            schema_version: string;
+            tenant_id: components["schemas"]["CapabilityQualityProjection__TenantId"];
+        };
+        /**
+         * @description Primitive shape required by a compiled diagnostic predicate.
+         * @enum {string}
+         */
+        CapabilityQualityProjection__EvidenceFieldKind: "boolean" | "number" | "text";
+        /**
+         * @description Whether a particular capability fact has actually been established.
+         * @enum {string}
+         */
+        CapabilityQualityProjection__CapabilityFactStatus: "present" | "absent" | "unknown" | "not_applicable";
+        /**
+         * @description Quality of the bounded stored sample selected for one diagnostic requirement.
+         * @enum {string}
+         */
+        CapabilityQualityProjection__DiagnosticEvidenceQuality: "available" | "partial" | "missing" | "stale" | "unknown" | "unsupported";
+        /** @description A field contract describes evidence sufficiency; it grants no execution authority. */
+        CapabilityQualityProjection__EvidenceFieldContract: {
+            kind: components["schemas"]["CapabilityQualityProjection__EvidenceFieldKind"];
+            path: string;
+        };
+        /** @description One independently sourced fact, rather than an aggregate authorization decision. */
+        CapabilityQualityProjection__CapabilityFact: {
+            /** Format: date-time */
+            observed_at?: string | null;
+            reason_code: string;
+            source_ref: string;
+            status: components["schemas"]["CapabilityQualityProjection__CapabilityFactStatus"];
+        };
+        /** @description Registration, implementation, deployment, observation and verification stay independent. */
+        CapabilityQualityProjection__CapabilityLayers: {
+            configured: components["schemas"]["CapabilityQualityProjection__CapabilityFact"];
+            handler: components["schemas"]["CapabilityQualityProjection__CapabilityFact"];
+            production_verified: components["schemas"]["CapabilityQualityProjection__CapabilityFact"];
+            registered: components["schemas"]["CapabilityQualityProjection__CapabilityFact"];
+            target_observed: components["schemas"]["CapabilityQualityProjection__CapabilityFact"];
+            test_verified: components["schemas"]["CapabilityQualityProjection__CapabilityFact"];
+        };
+        /**
+         * @description IDs identify the exact stored sample that produced this assessment.
+         *
+         *     This cluster projection does not bind a diagnosis revision. A consumer
+         *     showing revision quality must intersect these IDs with that revision's
+         *     saved references and verify its resource and time scope.
+         */
+        CapabilityQualityProjection__DiagnosticRequirementQuality: {
+            evidence_ids: components["schemas"]["CapabilityQualityProjection__EvidenceId"][];
+            fields: components["schemas"]["CapabilityQualityProjection__EvidenceFieldContract"][];
+            id: string;
+            /** Format: uint64 */
+            max_age_seconds: number;
+            missing_fields: string[];
+            /** Format: date-time */
+            observed_at?: string | null;
+            quality: components["schemas"]["CapabilityQualityProjection__DiagnosticEvidenceQuality"];
+            reason_code: string;
+            required: boolean;
+            resource_prefix: string;
+            source: string;
+        };
+        /** @description Read-only evidence sufficiency for a compiled diagnostic pack. */
+        CapabilityQualityProjection__DiagnosticPackQuality: {
+            layers: components["schemas"]["CapabilityQualityProjection__CapabilityLayers"];
+            pack_id: string;
+            requirements: components["schemas"]["CapabilityQualityProjection__DiagnosticRequirementQuality"][];
+        };
+        /** @description A documented comparison of packs, never a claimed causal relationship between samples. */
+        CapabilityQualityProjection__DiagnosticScenarioCoverage: {
+            id: string;
+            pack_ids: string[];
+            required_signal_ids: string[];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        CapabilityQualityProjection__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        CapabilityQualityProjection__DiagnosisRevisionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        CapabilityQualityProjection__EvidenceId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a multi-step investigation.
+         */
+        CapabilityQualityProjection__InvestigationId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        CapabilityQualityProjection__TenantId: string;
     };
     responses: {
         /** @description Successful scoped response */
@@ -8508,14 +8626,33 @@ export interface operations {
     };
     getCoverage: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Authorized cluster. Omitting it selects the first authorized cluster; facts never combine clusters. */
+                cluster_id?: string;
+                /** @description Supply both identifiers to evaluate only evidence saved in this authorized investigation revision. */
+                investigation_id?: string;
+                /** @description Supply both identifiers to evaluate only evidence saved in this authorized investigation revision. */
+                revision_id?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Legacy coverage plus independently sourced read-only capability facts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        quality?: components["schemas"]["CapabilityQualityProjection"];
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
         };
     };
     listAssets: {

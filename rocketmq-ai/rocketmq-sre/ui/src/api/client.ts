@@ -27,6 +27,7 @@ import type {
   ConversationStreamEvent,
   ConversationTurnView,
   CoverageMatrix,
+  CoverageRevisionBinding,
   CreateConversationRequest,
   CreatePostmortemRequest,
   CreateInspectionRequest,
@@ -385,7 +386,7 @@ export interface SreApi {
   getPhase2Contract: (
     signal?: AbortSignal,
   ) => Promise<Phase2ContractManifest>;
-  getCoverage: (signal?: AbortSignal) => Promise<CoverageMatrix>;
+  getCoverage: (signal?: AbortSignal, clusterId?: string, binding?: CoverageRevisionBinding) => Promise<CoverageMatrix>;
   getHealth: (signal?: AbortSignal) => Promise<ServiceStatus>;
   getReadiness: (signal?: AbortSignal) => Promise<ServiceStatus>;
   getClusterSlo: (
@@ -676,8 +677,8 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
         "/v1/capabilities/phase2-contract",
         signal,
       ),
-    getCoverage: (signal) =>
-      get<CoverageMatrix>("/v1/capabilities/coverage", signal),
+    getCoverage: (signal, clusterId, binding) =>
+      get<CoverageMatrix>(apiQuery("/v1/capabilities/coverage", { cluster_id: clusterId, investigation_id: binding?.investigationId, revision_id: binding?.revisionId }), signal),
     getHealth: (signal) => get<ServiceStatus>("/healthz", signal),
     getReadiness: (signal) => get<ServiceStatus>("/readyz", signal),
     getClusterSlo: (clusterId, signal) =>
@@ -1164,8 +1165,10 @@ export function getCapabilities(
 export function getCoverage(
   signal?: AbortSignal,
   auth?: ApiRequestContext,
+  clusterId?: string,
+  binding?: CoverageRevisionBinding,
 ): Promise<CoverageMatrix> {
-  return createHttpSreApi(auth).getCoverage(signal);
+  return createHttpSreApi(auth).getCoverage(signal, clusterId, binding);
 }
 
 export function getHealth(

@@ -58,7 +58,7 @@ pub(super) fn apply(mut output: SourceOutput, projection: CanonicalProjection) -
         CanonicalProjection::ConsumerLag => consumer_lag(&output.content)?,
         CanonicalProjection::TopicRoute => topic_route(&output.content)?,
         CanonicalProjection::ConsumerRuntime => consumer_runtime(&output.content)?,
-        CanonicalProjection::ProducerConnectivity => producer_connectivity(&output.content)?,
+        CanonicalProjection::ProducerConnectivity => producer_connectivity(&output.content, output.partial)?,
         CanonicalProjection::ClientConnections => client_connections(&output.content)?,
         CanonicalProjection::BrokerHealth => prometheus_broker_health(&output.content)?,
         CanonicalProjection::ConsumerRuntimeMetrics => prometheus_consumer_runtime(&output.content)?,
@@ -220,7 +220,7 @@ fn consumer_runtime(raw: &Value) -> Result<Projected, ConnectorError> {
     })
 }
 
-fn producer_connectivity(raw: &Value) -> Result<Projected, ConnectorError> {
+fn producer_connectivity(raw: &Value, source_partial: bool) -> Result<Projected, ConnectorError> {
     let root = object(raw)?;
     let connections = required_array(root, "connections")?;
     let queried_brokers = required_u64(root, "queried_broker_count")?;
@@ -234,16 +234,21 @@ fn producer_connectivity(raw: &Value) -> Result<Projected, ConnectorError> {
         let connection = object(row.get("connection").ok_or_else(schema_mismatch)?)?;
         brokers.insert(required_string(connection, "broker_name")?);
     }
+    let mut content = json!({
+        "connected_clients": connections.len(),
+        "producer_groups": groups.len(),
+        "connected_brokers": brokers.len(),
+        "queried_brokers": queried_brokers,
+        "unavailable_brokers": failed_brokers.len(),
+        "truncated": truncated,
+    });
+    // A positive observation is useful even when another broker failed. An
+    // empty partial result cannot establish that the target is disconnected.
+    if !connections.is_empty() || (queried_brokers > 0 && failed_brokers.is_empty() && !truncated && !source_partial) {
+        content["connected"] = Value::Bool(!connections.is_empty());
+    }
     Ok(Projected {
-        content: json!({
-            "connected": !connections.is_empty(),
-            "connected_clients": connections.len(),
-            "producer_groups": groups.len(),
-            "connected_brokers": brokers.len(),
-            "queried_brokers": queried_brokers,
-            "unavailable_brokers": failed_brokers.len(),
-            "truncated": truncated,
-        }),
+        content,
         completeness: Completeness::Partial,
         warnings: vec![
             "producer_route_age_unavailable",
@@ -783,6 +788,52 @@ mod tests {
         )
         .expect_err("invalid sample");
         assert_eq!(error.failure(), ConnectorFailure::CapabilityMismatch);
+    }
+
+    #[test]
+    fn producer_absence_requires_a_complete_successful_query() {
+        for (queried, failed, truncated, expected) in [
+            (0, 0, false, None),
+            (1, 1, false, None),
+            (2, 1, false, None),
+            (1, 0, true, None),
+            (1, 0, false, Some(false)),
+        ] {
+            let output = apply(
+                raw(json!({
+                    "connections": [],
+                    "queried_broker_count": queried,
+                    "failed_brokers": vec!["unavailable"; failed],
+                    "truncated": truncated
+                })),
+                CanonicalProjection::ProducerConnectivity,
+            )
+            .unwrap();
+            assert_eq!(output.content.get("connected").and_then(Value::as_bool), expected);
+            assert_eq!(output.coverage, CoverageStatus::Partial);
+            assert!(output.content.get("send_error_rate_percent").is_none());
+        }
+        let mut incomplete_source = raw(json!({
+            "connections": [],"queried_broker_count": 1,"failed_brokers": [],"truncated": false
+        }));
+        incomplete_source.partial = true;
+        assert!(
+            apply(incomplete_source, CanonicalProjection::ProducerConnectivity)
+                .unwrap()
+                .content
+                .get("connected")
+                .is_none()
+        );
+        let mut observed = raw(json!({
+            "connections": [{"producer_group": "p", "connection": {"broker_name": "b"}}],
+            "queried_broker_count": 2,
+            "failed_brokers": ["unavailable"],
+            "truncated": true
+        }));
+        observed.partial = true;
+        let output = apply(observed, CanonicalProjection::ProducerConnectivity).unwrap();
+        assert_eq!(output.content["connected"], true);
+        assert_eq!(output.coverage, CoverageStatus::Partial);
     }
 
     #[test]

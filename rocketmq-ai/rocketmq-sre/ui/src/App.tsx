@@ -24,7 +24,7 @@ const TopologyPage = lazy(() =>
   })),
 );
 const EvidenceExplorerPage = lazy(() =>
-  import("./pages/InsightsPages").then((module) => ({
+  import("./pages/EvidenceExplorerPage").then((module) => ({
     default: module.EvidenceExplorerPage,
   })),
 );

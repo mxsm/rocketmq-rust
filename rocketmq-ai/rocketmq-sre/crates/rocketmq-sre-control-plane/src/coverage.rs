@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use rocketmq_sre_contracts::CapabilityQualityProjection;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_core::diagnostics::DiagnosticPack;
 use rocketmq_sre_core::diagnostics::EvidenceRequirement;
@@ -31,6 +32,11 @@ use crate::ControlPlaneError;
 use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 use crate::auth::AuthContext;
+
+#[cfg(test)]
+mod postgres_tests;
+mod quality;
+mod revision;
 
 const PACK_ORDER: [&str; 32] = [
     "cluster-topology.v1",
@@ -82,6 +88,8 @@ const SOURCE_ORDER: [&str; 9] = [
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct CoverageQuery {
     pub(crate) cluster_id: Option<String>,
+    pub(crate) investigation_id: Option<String>,
+    pub(crate) revision_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -119,6 +127,7 @@ struct CoverageMatrix {
     selected: SelectionView,
     source_capabilities: Vec<SourceCapabilityView>,
     pack_coverage: Vec<PackCoverageView>,
+    quality: CapabilityQualityProjection,
 }
 
 #[derive(Serialize)]
@@ -186,7 +195,25 @@ pub(crate) async fn matrix(
     auth: &AuthContext,
     query: CoverageQuery,
 ) -> Result<Value, ControlPlaneRequestFailure> {
-    let cluster_ids = selected_clusters(auth, query.cluster_id.as_deref())?;
+    let bound = revision::load(state, auth, &query).await?;
+    let cluster_ids = if query.cluster_id.is_none() {
+        if let Some(bound) = &bound {
+            vec![bound.cluster_id]
+        } else {
+            selected_clusters(auth, None)?
+        }
+    } else {
+        selected_clusters(auth, query.cluster_id.as_deref())?
+    };
+    if bound
+        .as_ref()
+        .is_some_and(|bound| Some(&bound.cluster_id) != cluster_ids.first())
+    {
+        return Err(ControlPlaneRequestFailure::forbidden(
+            "cluster_not_allowed",
+            "saved revision does not belong to the selected cluster",
+        ));
+    }
     let source_states = latest_source_states(state, auth, &cluster_ids).await?;
     let states = source_states
         .iter()
@@ -201,6 +228,27 @@ pub(crate) async fn matrix(
                 .ok_or_else(|| ControlPlaneError::configuration(format!("built-in diagnostic pack `{id}` is missing")))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let now = Utc::now();
+    let (evidence, evidence_partial) = if let Some(bound) = &bound {
+        bound.evidence(state, auth).await?
+    } else if let Some(cluster_id) = cluster_ids.first().copied() {
+        state.repository.coverage_evidence(auth, cluster_id).await?
+    } else {
+        (Vec::new(), false)
+    };
+    let mut quality = quality::project(
+        auth.tenant_id,
+        cluster_ids.first().copied(),
+        now,
+        &packs,
+        &states,
+        &evidence,
+        evidence_partial,
+    );
+    if let Some(bound) = &bound {
+        quality.investigation_id = Some(bound.investigation_id);
+        quality.revision_id = Some(bound.revision_id);
+    }
 
     let pack_views = packs
         .iter()
@@ -256,6 +304,7 @@ pub(crate) async fn matrix(
         },
         source_capabilities: source_states.into_iter().map(SourceCapabilityView::from).collect(),
         pack_coverage,
+        quality,
     })
     .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
@@ -276,7 +325,9 @@ fn selected_clusters(
         }
         Ok(vec![cluster_id])
     } else {
-        Ok(auth.clusters.iter().copied().collect())
+        // An omitted selector keeps the legacy endpoint usable without mixing
+        // one cluster's source state with another cluster's evidence.
+        Ok(auth.clusters.iter().next().copied().into_iter().collect())
     }
 }
 
@@ -323,6 +374,9 @@ fn cell_status(pack: &dyn DiagnosticPack, source: &str, source_state: Option<&So
     if matching_requirements(pack, source).next().is_none() {
         return CoverageCellStatus::NotProductionVerified;
     }
+    if source_state.is_some_and(|state| !source_state_current(state)) {
+        return CoverageCellStatus::NotProductionVerified;
+    }
     match source_state.map(|state| state.status.as_str()) {
         Some("queryable") => CoverageCellStatus::Queryable,
         Some("degraded") => CoverageCellStatus::InProcessOnly,
@@ -362,7 +416,12 @@ fn pack_coverage(pack: &dyn DiagnosticPack, states: &BTreeMap<&str, &SourceState
 fn source_is_queryable(source: &str, states: &BTreeMap<&str, &SourceState>) -> bool {
     states
         .get(capability_source(source))
-        .is_some_and(|state| state.status == "queryable")
+        .is_some_and(|state| state.status == "queryable" && source_state_current(state))
+}
+
+fn source_state_current(state: &SourceState) -> bool {
+    let now = Utc::now();
+    state.observed_at <= now && now.signed_duration_since(state.observed_at).num_seconds() <= 300
 }
 
 fn matching_requirements<'a>(

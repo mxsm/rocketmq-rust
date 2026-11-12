@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/tabs";
 import { useSreData } from "@/data/SreDataContext";
 import { DutyQueue } from "@/features/investigations/DutyQueue";
+import { CapabilityQualitySummary } from "@/features/capabilities/CapabilityQualitySummary";
 import {
   dataQualityLabel,
   filterAndSortClusters,
@@ -200,6 +201,7 @@ export function OverviewPage() {
       <ReadOnlyBoundary />
 
       <DutyQueue />
+      <CapabilityQualitySummary />
 
       <section
         aria-label="Fleet 筛选"

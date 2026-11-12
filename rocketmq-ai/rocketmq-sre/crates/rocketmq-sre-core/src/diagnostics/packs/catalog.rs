@@ -112,6 +112,30 @@ impl DiagnosticPack for CatalogPack {
         self.spec.optional
     }
 
+    fn evidence_fields(&self, requirement_key: &str) -> Vec<rocketmq_sre_contracts::EvidenceFieldContract> {
+        use rocketmq_sre_contracts::{EvidenceFieldContract, EvidenceFieldKind};
+        if self
+            .spec
+            .required
+            .first()
+            .is_none_or(|requirement| requirement.key != requirement_key)
+        {
+            return Vec::new();
+        }
+        self.spec
+            .rules
+            .iter()
+            .map(|rule| EvidenceFieldContract {
+                path: rule.condition.path().to_owned(),
+                kind: match rule.condition {
+                    Condition::Boolean { .. } => EvidenceFieldKind::Boolean,
+                    Condition::NumberAtLeast { .. } | Condition::NumberBelow { .. } => EvidenceFieldKind::Number,
+                    Condition::TextEquals { .. } => EvidenceFieldKind::Text,
+                },
+            })
+            .collect()
+    }
+
     fn rule_codes(&self) -> &'static [&'static str] {
         self.spec.rule_codes
     }

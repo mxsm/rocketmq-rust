@@ -32,6 +32,8 @@ mod proxy_diagnostics;
 mod remoting_diagnostics;
 mod required_signals;
 mod runtime_diagnostics;
+#[cfg(test)]
+mod scenario_tests;
 mod tempo;
 mod topology;
 
@@ -115,7 +117,7 @@ struct CacheEntry {
 
 #[derive(Clone, Debug)]
 struct ConsumerLagSample {
-    observed_at: Instant,
+    observed_at: DateTime<Utc>,
     total_lag: f64,
     consume_rate_per_sec: f64,
 }
@@ -494,12 +496,27 @@ where
         output: &mut SourceOutput,
         source_was_partial: bool,
     ) -> Result<(), ConnectorError> {
-        let observed_at = Instant::now();
-        let sample = consumer_lag_sample(&output.content, observed_at)?;
+        if source_was_partial {
+            return Ok(());
+        }
+        let sample = consumer_lag_sample(&output.content, output.observed_at)?;
         let key = format!("{external_cluster}\u{0}{resource}");
         let previous = {
             let mut history = self.consumer_lag_history.lock().await;
-            let previous = history.insert(key, sample.clone());
+            let previous = history.get(&key).cloned();
+            // Rate intervals are measured between source observations, not
+            // response arrival times. Late or cached responses must not roll
+            // the baseline backwards and manufacture a later slope.
+            if previous
+                .as_ref()
+                .is_some_and(|previous| sample.observed_at <= previous.observed_at)
+            {
+                output
+                    .warnings
+                    .push("consumer_lag_rate_history_out_of_order".to_owned());
+                return Ok(());
+            }
+            history.insert(key, sample.clone());
             if history.len() > CACHE_MAX_ENTRIES
                 && let Some(oldest) = history
                     .iter()
@@ -757,7 +774,7 @@ fn validate_query_completion(context: &ReadContext<'_>) -> Result<(), ConnectorA
     Ok(())
 }
 
-fn consumer_lag_sample(content: &Value, observed_at: Instant) -> Result<ConsumerLagSample, ConnectorError> {
+fn consumer_lag_sample(content: &Value, observed_at: DateTime<Utc>) -> Result<ConsumerLagSample, ConnectorError> {
     let content = content.as_object().ok_or_else(consumer_lag_history_schema_mismatch)?;
     let total_lag = content
         .get("total_lag")
@@ -789,7 +806,7 @@ fn augment_consumer_lag_rates(
     current: &ConsumerLagSample,
     source_was_partial: bool,
 ) {
-    let Some(elapsed) = current.observed_at.checked_duration_since(previous.observed_at) else {
+    let Ok(elapsed) = current.observed_at.signed_duration_since(previous.observed_at).to_std() else {
         return;
     };
     if !(CONSUMER_LAG_HISTORY_MIN_INTERVAL..=CONSUMER_LAG_HISTORY_MAX_INTERVAL).contains(&elapsed) {
@@ -1078,14 +1095,14 @@ mod tests {
 
     #[test]
     fn consumer_lag_history_supplies_measured_rates_without_neutral_defaults() {
-        let observed_at = Instant::now();
+        let observed_at = Utc.with_ymd_and_hms(2026, 7, 27, 8, 0, 0).single().unwrap();
         let previous = ConsumerLagSample {
             observed_at,
             total_lag: 10.0,
             consume_rate_per_sec: 1.0,
         };
         let current = ConsumerLagSample {
-            observed_at: observed_at + Duration::from_secs(2),
+            observed_at: observed_at + chrono::Duration::seconds(2),
             total_lag: 14.0,
             consume_rate_per_sec: 1.0,
         };
@@ -1112,14 +1129,14 @@ mod tests {
 
     #[test]
     fn consumer_lag_history_keeps_single_or_too_recent_samples_partial() {
-        let observed_at = Instant::now();
+        let observed_at = Utc.with_ymd_and_hms(2026, 7, 27, 8, 0, 0).single().unwrap();
         let previous = ConsumerLagSample {
             observed_at,
             total_lag: 10.0,
             consume_rate_per_sec: 0.0,
         };
         let current = ConsumerLagSample {
-            observed_at: observed_at + Duration::from_millis(500),
+            observed_at: observed_at + chrono::Duration::milliseconds(500),
             total_lag: 10.0,
             consume_rate_per_sec: 0.0,
         };

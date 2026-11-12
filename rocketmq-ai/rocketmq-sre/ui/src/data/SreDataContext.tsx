@@ -16,6 +16,7 @@ import type {
   CapabilitySnapshot,
   ClusterSummary,
   CoverageMatrix,
+  CoverageRevisionBinding,
   ServiceStatus,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
@@ -35,7 +36,7 @@ interface SreData {
     clusterId: string,
     signal?: AbortSignal,
   ) => Promise<CapabilitySnapshot>;
-  coverage: (signal?: AbortSignal) => Promise<CoverageMatrix>;
+  coverage: (signal?: AbortSignal, clusterId?: string, binding?: CoverageRevisionBinding) => Promise<CoverageMatrix>;
   catalog: (signal?: AbortSignal) => Promise<CapabilityCatalogResponse>;
 }
 
@@ -177,7 +178,7 @@ export function SreDataProvider({ children }: PropsWithChildren) {
       refresh,
       capability: (clusterId, signal) =>
         api.getClusterCapabilities(clusterId, signal),
-      coverage: (signal) => api.getCoverage(signal),
+      coverage: (signal, clusterId, binding) => api.getCoverage(signal, clusterId, binding),
       catalog: (signal) => api.getCapabilities(signal),
     }),
     [clusters, api, demoMode, error, health, loading, readiness, refresh],

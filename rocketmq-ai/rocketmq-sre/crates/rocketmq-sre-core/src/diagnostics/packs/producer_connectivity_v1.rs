@@ -79,6 +79,29 @@ impl DiagnosticPack for ProducerConnectivityV1 {
         OPTIONAL
     }
 
+    fn evidence_fields(&self, requirement_key: &str) -> Vec<rocketmq_sre_contracts::EvidenceFieldContract> {
+        use rocketmq_sre_contracts::{EvidenceFieldContract, EvidenceFieldKind};
+        if requirement_key != "producer" {
+            return Vec::new();
+        }
+        [
+            ("connected", EvidenceFieldKind::Boolean),
+            ("route_age_seconds", EvidenceFieldKind::Number),
+            ("send_error_rate_percent", EvidenceFieldKind::Number),
+            ("retry_rate_percent", EvidenceFieldKind::Number),
+            ("timeout_rate_percent", EvidenceFieldKind::Number),
+            ("queue_selection_failures", EvidenceFieldKind::Number),
+            ("backpressure", EvidenceFieldKind::Boolean),
+            ("client_version_supported", EvidenceFieldKind::Boolean),
+        ]
+        .into_iter()
+        .map(|(path, kind)| EvidenceFieldContract {
+            path: path.to_owned(),
+            kind,
+        })
+        .collect()
+    }
+
     fn rule_codes(&self) -> &'static [&'static str] {
         RULES
     }

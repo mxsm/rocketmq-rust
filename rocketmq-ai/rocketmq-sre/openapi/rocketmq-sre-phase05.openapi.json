@@ -794,9 +794,54 @@
         "operationId": "getCoverage",
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonObject"
+            "description": "Legacy coverage plus independently sourced read-only capability facts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "quality": {
+                      "$ref": "#/components/schemas/CapabilityQualityProjection"
+                    }
+                  }
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": false,
+            "description": "Authorized cluster. Omitting it selects the first authorized cluster; facts never combine clusters.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "investigation_id",
+            "in": "query",
+            "required": false,
+            "description": "Supply both identifiers to evaluate only evidence saved in this authorized investigation revision.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "query",
+            "required": false,
+            "description": "Supply both identifiers to evaluate only evidence saved in this authorized investigation revision.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
       }
     },
     "/v1/assets": {
@@ -32112,6 +32157,326 @@
             "format": "date-time"
           }
         }
+      },
+      "CapabilityQualityProjection": {
+        "title": "CapabilityQualityProjection",
+        "description": "Cluster-scoped capability facts evaluated against bounded, already saved evidence.\n\n`observed_at` is the evaluation instant. Evidence freshness is compared with\neach requirement's compiled age bound. This response never authorizes an action;\n`execution_eligible` is always false. Verification remains unknown without an\nexplicit deployment verification record.",
+        "type": "object",
+        "properties": {
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityQualityProjection__ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution_eligible": {
+            "type": "boolean"
+          },
+          "investigation_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityQualityProjection__InvestigationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityQualityProjection__DiagnosticPackQuality"
+            }
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "revision_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityQualityProjection__DiagnosisRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scenarios": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityQualityProjection__DiagnosticScenarioCoverage"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__TenantId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "tenant_id",
+          "observed_at",
+          "execution_eligible",
+          "partial",
+          "packs",
+          "scenarios"
+        ]
+      },
+      "CapabilityQualityProjection__EvidenceFieldKind": {
+        "description": "Primitive shape required by a compiled diagnostic predicate.",
+        "type": "string",
+        "enum": [
+          "boolean",
+          "number",
+          "text"
+        ]
+      },
+      "CapabilityQualityProjection__CapabilityFactStatus": {
+        "description": "Whether a particular capability fact has actually been established.",
+        "type": "string",
+        "enum": [
+          "present",
+          "absent",
+          "unknown",
+          "not_applicable"
+        ]
+      },
+      "CapabilityQualityProjection__DiagnosticEvidenceQuality": {
+        "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
+        "type": "string",
+        "enum": [
+          "available",
+          "partial",
+          "missing",
+          "stale",
+          "unknown",
+          "unsupported"
+        ]
+      },
+      "CapabilityQualityProjection__EvidenceFieldContract": {
+        "description": "A field contract describes evidence sufficiency; it grants no execution authority.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__EvidenceFieldKind"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ]
+      },
+      "CapabilityQualityProjection__CapabilityFact": {
+        "description": "One independently sourced fact, rather than an aggregate authorization decision.",
+        "type": "object",
+        "properties": {
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__CapabilityFactStatus"
+          }
+        },
+        "required": [
+          "status",
+          "reason_code",
+          "source_ref"
+        ]
+      },
+      "CapabilityQualityProjection__CapabilityLayers": {
+        "description": "Registration, implementation, deployment, observation and verification stay independent.",
+        "type": "object",
+        "properties": {
+          "configured": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__CapabilityFact"
+          },
+          "handler": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__CapabilityFact"
+          },
+          "production_verified": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__CapabilityFact"
+          },
+          "registered": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__CapabilityFact"
+          },
+          "target_observed": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__CapabilityFact"
+          },
+          "test_verified": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__CapabilityFact"
+          }
+        },
+        "required": [
+          "registered",
+          "handler",
+          "configured",
+          "target_observed",
+          "test_verified",
+          "production_verified"
+        ]
+      },
+      "CapabilityQualityProjection__DiagnosticRequirementQuality": {
+        "description": "IDs identify the exact stored sample that produced this assessment.\n\nThis cluster projection does not bind a diagnosis revision. A consumer\nshowing revision quality must intersect these IDs with that revision's\nsaved references and verify its resource and time scope.",
+        "type": "object",
+        "properties": {
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityQualityProjection__EvidenceId"
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityQualityProjection__EvidenceFieldContract"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "max_age_seconds": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "missing_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__DiagnosticEvidenceQuality"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "resource_prefix": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "resource_prefix",
+          "required",
+          "max_age_seconds",
+          "fields",
+          "quality",
+          "reason_code",
+          "evidence_ids",
+          "missing_fields"
+        ]
+      },
+      "CapabilityQualityProjection__DiagnosticPackQuality": {
+        "description": "Read-only evidence sufficiency for a compiled diagnostic pack.",
+        "type": "object",
+        "properties": {
+          "layers": {
+            "$ref": "#/components/schemas/CapabilityQualityProjection__CapabilityLayers"
+          },
+          "pack_id": {
+            "type": "string"
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityQualityProjection__DiagnosticRequirementQuality"
+            }
+          }
+        },
+        "required": [
+          "pack_id",
+          "layers",
+          "requirements"
+        ]
+      },
+      "CapabilityQualityProjection__DiagnosticScenarioCoverage": {
+        "description": "A documented comparison of packs, never a claimed causal relationship between samples.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pack_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required_signal_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "pack_ids",
+          "required_signal_ids"
+        ]
+      },
+      "CapabilityQualityProjection__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "type": "string",
+        "format": "uuid"
+      },
+      "CapabilityQualityProjection__DiagnosisRevisionId": {
+        "description": "Stable identifier for an immutable diagnosis revision.",
+        "type": "string",
+        "format": "uuid"
+      },
+      "CapabilityQualityProjection__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "type": "string",
+        "format": "uuid"
+      },
+      "CapabilityQualityProjection__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "type": "string",
+        "format": "uuid"
+      },
+      "CapabilityQualityProjection__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "type": "string",
+        "format": "uuid"
       }
     }
   },

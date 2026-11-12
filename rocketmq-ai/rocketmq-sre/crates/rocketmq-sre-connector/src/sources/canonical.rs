@@ -285,9 +285,9 @@ fn resolve_admin(resource: &str) -> Option<CanonicalResourceRoute> {
         ),
     ] {
         if let Some(target) = resource.strip_prefix(prefix) {
-            return Some(if safe_resource_path(target) {
+            return Some(if identifier(target).is_some() {
                 query(
-                    CanonicalQuery::Admin(query_resource.to_owned()),
+                    CanonicalQuery::Admin(format!("{query_resource}/{target}")),
                     CanonicalProjection::BrokerDiagnostics(profile),
                 )
             } else {
@@ -778,10 +778,20 @@ mod tests {
             assert_eq!(
                 resolve("admin-query", resource),
                 Some(query(
-                    CanonicalQuery::Admin(query_resource.to_owned()),
+                    CanonicalQuery::Admin(format!("{query_resource}/broker-a")),
                     CanonicalProjection::BrokerDiagnostics(profile),
                 ))
             );
+        }
+        for resource in [
+            "store-pressure/",
+            "store-pressure/broker-a/broker-b",
+            "broker-ha/broker a",
+        ] {
+            assert!(matches!(
+                resolve("admin-query", resource),
+                Some(CanonicalResourceRoute::NotProductionVerified { .. })
+            ));
         }
 
         for (resource, query_resource, profile) in [

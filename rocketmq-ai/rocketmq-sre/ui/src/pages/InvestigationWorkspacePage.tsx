@@ -17,6 +17,11 @@ import { useWorkspaceScope } from "@/context/WorkspaceScopeContext";
 import { withinWindow } from "@/context/workspaceScope";
 import { useSreData } from "@/data/SreDataContext";
 import { EvidenceReferencePanel } from "@/features/investigations/EvidenceReferencePanel";
+import { EvidenceDrawer } from "@/features/evidence/EvidenceDrawer";
+import type { EvidenceFreshnessPolicy } from "@/features/evidence/evidencePresentation";
+import { useCapabilityQuality } from "@/features/capabilities/useCapabilityQuality";
+import { ScenarioEvidenceChain } from "@/features/investigations/ScenarioEvidenceChain";
+import { policyForEvidence } from "@/features/investigations/scenarioEvidence";
 import { InvestigationPromotion } from "@/features/investigations/InvestigationPromotion";
 import {
   diagnosisHypotheses,
@@ -79,10 +84,6 @@ function InvestigationWorkspace({
   const { locale, formatDateTime } = useOperatorPreferences();
   const english = locale === "en-US";
   const object = view.investigation;
-  const progress = useWorkflowProgress(object.cluster_id, reload, {
-    aggregateType: "investigation",
-    aggregateId: object.id,
-  });
   const revisions = view.diagnosis_revisions
     .filter(
       (revision) =>
@@ -108,12 +109,40 @@ function InvestigationWorkspace({
   const revision =
     revisions.find((item) => item.id === revisionId) ?? revisions[0];
   const [evidenceId, setEvidenceId] = useState("");
+  const [drawer, setDrawer] = useState<{
+    revisionId: string;
+    evidenceId: string;
+    policy?: EvidenceFreshnessPolicy;
+  }>();
   const evidenceIds = [...new Set(revision?.evidence_ids ?? [])].slice(0, 128);
   const selectedEvidence = evidenceIds.includes(evidenceId)
     ? evidenceId
     : evidenceIds[0];
   const hypotheses = revision ? diagnosisHypotheses(revision) : [];
   const missing = revision ? missingEvidence(revision) : [];
+  const quality = useCapabilityQuality(
+    revision
+      ? { investigationId: object.id, revisionId: revision.id }
+      : undefined,
+  );
+  const reloadQuality = quality.reload;
+  const reloadAll = useCallback(() => {
+    reload();
+    reloadQuality();
+  }, [reload, reloadQuality]);
+  const progress = useWorkflowProgress(object.cluster_id, reloadAll, {
+    aggregateType: "investigation",
+    aggregateId: object.id,
+  });
+  const openEvidence = (id: string, policy?: EvidenceFreshnessPolicy) => {
+    if (!revision || !evidenceIds.includes(id)) return;
+    setEvidenceId(id);
+    setDrawer({
+      revisionId: revision.id,
+      evidenceId: id,
+      policy: policy ?? policyForEvidence(quality.projection, id),
+    });
+  };
   const timeline = view.timeline.filter(
     (event) =>
       event.tenant_id === object.tenant_id &&
@@ -147,7 +176,7 @@ function InvestigationWorkspace({
             <LiveTransport transport={progress.transport} />
             <Button
               disabled={refreshing}
-              onClick={reload}
+              onClick={reloadAll}
               size="sm"
               variant="outline"
             >
@@ -255,6 +284,15 @@ function InvestigationWorkspace({
               </div>
             )}
           </DataSurface>
+          <ScenarioEvidenceChain
+            projection={quality.projection}
+            loading={quality.loading}
+            error={quality.error}
+            revision={revision}
+            timeline={timeline}
+            onOpenEvidence={openEvidence}
+            conversationId={conversationId}
+          />
           <DataSurface title={m.hypotheses}>
             {!hypotheses.length ? (
               <p className="workspace-empty">{m.noHypotheses}</p>
@@ -280,7 +318,7 @@ function InvestigationWorkspace({
                           <button
                             className="evidence-reference"
                             key={id}
-                            onClick={() => setEvidenceId(id)}
+                            onClick={() => openEvidence(id)}
                             type="button"
                           >
                             {id}
@@ -297,7 +335,7 @@ function InvestigationWorkspace({
                           <button
                             className="evidence-reference"
                             key={id}
-                            onClick={() => setEvidenceId(id)}
+                            onClick={() => openEvidence(id)}
                             type="button"
                           >
                             {id}
@@ -321,7 +359,7 @@ function InvestigationWorkspace({
                     aria-pressed={selectedEvidence === id}
                     className={`evidence-reference${selectedEvidence === id ? " selected" : ""}`}
                     key={id}
-                    onClick={() => setEvidenceId(id)}
+                    onClick={() => openEvidence(id)}
                     type="button"
                   >
                     {id}
@@ -352,7 +390,10 @@ function InvestigationWorkspace({
           </DataSurface>
         </div>
         <div className="investigation-side-stack">
-          <EvidenceReferencePanel evidenceId={selectedEvidence} />
+          <EvidenceReferencePanel
+            evidenceId={selectedEvidence}
+            onOpen={openEvidence}
+          />
           <DataSurface title={m.assistant}>
             <p className="workspace-empty">{m.assistantHint}</p>
             {missing.length > 0 && (
@@ -423,6 +464,21 @@ function InvestigationWorkspace({
           </DataSurface>
         </div>
       </div>
+      {drawer &&
+        revision &&
+        drawer.revisionId === revision.id &&
+        evidenceIds.includes(drawer.evidenceId) && (
+          <EvidenceDrawer
+            evidenceId={drawer.evidenceId}
+            onClose={() => setDrawer(undefined)}
+            freshnessPolicy={drawer.policy}
+            access={{
+              kind: "revision_evidence",
+              revisionId: revision.id,
+              evidenceIds,
+            }}
+          />
+        )}
     </>
   );
 }

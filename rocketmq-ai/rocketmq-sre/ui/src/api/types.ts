@@ -262,7 +262,17 @@ export interface CoverageMatrix {
     status: CoverageCellStatus;
     requirements: CoverageRequirement[];
   };
+  quality?: CapabilityQualityProjection;
 }
+
+export type CapabilityQualityProjection = ApiSchemas["CapabilityQualityProjection"];
+export type DiagnosticPackQuality = ApiSchemas["CapabilityQualityProjection__DiagnosticPackQuality"];
+export type DiagnosticRequirementQuality = ApiSchemas["CapabilityQualityProjection__DiagnosticRequirementQuality"];
+export type DiagnosticEvidenceQuality = ApiSchemas["CapabilityQualityProjection__DiagnosticEvidenceQuality"];
+export type CapabilityFact = ApiSchemas["CapabilityQualityProjection__CapabilityFact"];
+export type CapabilityLayers = ApiSchemas["CapabilityQualityProjection__CapabilityLayers"];
+export type DiagnosticScenarioCoverage = ApiSchemas["CapabilityQualityProjection__DiagnosticScenarioCoverage"];
+export interface CoverageRevisionBinding { investigationId: string; revisionId: string }
 
 export interface CapabilityCatalogResponse {
   schema_version: string;
