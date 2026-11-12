@@ -7,12 +7,11 @@ import {
   ShieldCheck,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type {
   CapabilitySnapshot,
   ClusterSummary,
-  FleetHealthReport,
 } from "@/api/types";
 import { FleetHealthOverview } from "@/components/HealthOverview";
 import { PageHeader } from "@/components/PageHeader";
@@ -38,6 +37,8 @@ import {
 import { useSreData } from "@/data/SreDataContext";
 import { DutyQueue } from "@/features/investigations/DutyQueue";
 import { CapabilityQualitySummary } from "@/features/capabilities/CapabilityQualitySummary";
+import { useClusterCapabilitySnapshots } from "@/features/fleet/useClusterCapabilitySnapshots";
+import { useAsyncResource } from "@/hooks/useAsyncResource";
 import {
   dataQualityLabel,
   filterAndSortClusters,
@@ -46,18 +47,20 @@ import {
 } from "@/features/fleet/clusterFilters";
 
 export function OverviewPage() {
-  const { clusters, loading, error, refresh, capability, api } = useSreData();
+  const { clusters, loading, error, refresh, api } = useSreData();
   const [environment, setEnvironment] = useState("all");
   const [region, setRegion] = useState("all");
   const [tenant, setTenant] = useState("all");
   const [version, setVersion] = useState("all");
   const [selectedId, setSelectedId] = useState<string>();
-  const [capabilityMap, setCapabilityMap] = useState<
-    Record<string, CapabilitySnapshot>
-  >({});
-  const [capabilityError, setCapabilityError] = useState<string>();
-  const [fleetHealth, setFleetHealth] = useState<FleetHealthReport>();
-  const [fleetHealthError, setFleetHealthError] = useState<string>();
+  const loadFleet = useCallback(
+    (signal: AbortSignal) =>
+      api.getFleetHealth(region === "all" ? undefined : region, signal),
+    [api, region],
+  );
+  const fleet = useAsyncResource(loadFleet);
+  const fleetHealth = fleet.error ? undefined : fleet.data;
+  const fleetHealthError = fleet.error ? "Fleet 健康评分暂不可用" : undefined;
 
   const filteredClusters = useMemo(
     () =>
@@ -103,80 +106,19 @@ export function OverviewPage() {
     [fleetHealth],
   );
 
-  useEffect(() => {
-    if (
-      filteredClusters.length > 0 &&
-      !filteredClusters.some((cluster) => cluster.id === selectedId)
-    ) {
-      setSelectedId(filteredClusters[0].id);
-    }
-  }, [filteredClusters, selectedId]);
-
-  useEffect(() => {
-    if (filteredClusters.length === 0) {
-      setCapabilityMap({});
-      return;
-    }
-    const controller = new AbortController();
-    setCapabilityError(undefined);
-    void Promise.allSettled(
-      filteredClusters.map(async (cluster) => ({
-        id: cluster.id,
-        snapshot: await capability(cluster.id, controller.signal),
-      })),
-    ).then((results) => {
-      const next: Record<string, CapabilitySnapshot> = {};
-      let unavailable = false;
-      for (const result of results) {
-        if (result.status === "fulfilled") {
-          next[result.value.id] = result.value.snapshot;
-        } else if (
-          !(result.reason instanceof DOMException &&
-            result.reason.name === "AbortError")
-        ) {
-          unavailable = true;
-        }
-      }
-      if (!controller.signal.aborted) {
-        setCapabilityMap(next);
-        if (unavailable) {
-          setCapabilityError(
-            "部分集群尚无能力快照；对应字段保持“未采集”。",
-          );
-        }
-      }
-    });
-    return () => controller.abort();
-  }, [capability, filteredClusters]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setFleetHealthError(undefined);
-    void api
-      .getFleetHealth(
-        region === "all" ? undefined : region,
-        controller.signal,
-      )
-      .then(setFleetHealth)
-      .catch((cause: unknown) => {
-        if (
-          !(cause instanceof DOMException && cause.name === "AbortError")
-        ) {
-          setFleetHealthError(
-            cause instanceof Error
-              ? cause.message
-              : "Fleet 健康评分暂不可用",
-          );
-        }
-    });
-    return () => controller.abort();
-  }, [api, region]);
-
-  const selected = filteredClusters.find(
-    (cluster) => cluster.id === selectedId,
+  const capabilities = useClusterCapabilitySnapshots(
+    filteredClusters.map((cluster) => cluster.id),
   );
-  const selectedCapability = selectedId
-    ? capabilityMap[selectedId]
+  const capabilityMap = capabilities.data?.snapshots ?? {};
+  const capabilityError =
+    capabilities.data?.unavailable || capabilities.error
+      ? "部分集群尚无能力快照；对应字段保持“未采集”。"
+      : undefined;
+  const selected =
+    filteredClusters.find((cluster) => cluster.id === selectedId) ??
+    filteredClusters[0];
+  const selectedCapability = selected
+    ? capabilityMap[selected.id]
     : undefined;
   const summary = summarize(filteredClusters, selectedCapability);
 
@@ -187,7 +129,14 @@ export function OverviewPage() {
         title="集群战情台"
         description="汇总只读接入、安全握手和证据覆盖状态，缺失数据始终显式标记。"
         actions={
-          <Button disabled={loading} onClick={() => void refresh()}>
+          <Button
+            disabled={loading || capabilities.loading || fleet.loading}
+            onClick={() => {
+              void refresh();
+              void capabilities.reload();
+              void fleet.reload();
+            }}
+          >
             <RefreshCw
               aria-hidden="true"
               className={loading ? "spin" : undefined}
@@ -319,7 +268,7 @@ export function OverviewPage() {
               </thead>
               <tbody>
                 {filteredClusters.map((cluster) => {
-                  const isSelected = cluster.id === selectedId;
+                  const isSelected = cluster.id === selected?.id;
                   const current = capabilityMap[cluster.id];
                   const rowSummary = summarizeCapability(current);
                   const health = healthByCluster.get(cluster.id);

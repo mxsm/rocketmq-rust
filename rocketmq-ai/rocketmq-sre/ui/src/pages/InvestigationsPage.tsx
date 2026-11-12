@@ -31,18 +31,31 @@ export function InvestigationsPage() {
   const { locale, formatDateTime } = useOperatorPreferences();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [page, setPage] = useState(0);
+  const [pagination, setPagination] = useState<{
+    owner: string;
+    cursors: Array<string | undefined>;
+    index: number;
+    local: number;
+  }>({ owner: scope.scopeKey, cursors: [undefined], index: 0, local: 0 });
+  const paging =
+    pagination.owner === scope.scopeKey
+      ? pagination
+      : { owner: scope.scopeKey, cursors: [undefined], index: 0, local: 0 };
+  const cursor = paging.cursors[paging.index];
   const load = useCallback(
-    (signal: AbortSignal) =>
-      scope.clusterId
-        ? api.listInvestigations(scope.clusterId, signal)
+    async (signal: AbortSignal) => {
+      const page = scope.clusterId
+        ? api.listInvestigations(scope.clusterId, signal, { cursor, limit: 50 })
         : Promise.resolve({
             items: [],
             partial: false,
             warnings: [],
             observed_at: "",
-          }),
-    [api, scope.clusterId],
+            next_cursor: null,
+          });
+      return { ...(await page), ownerScope: scope.scopeKey };
+    },
+    [api, cursor, scope.clusterId, scope.scopeKey],
   );
   const resource = useAsyncResource(load);
   const progress = useWorkflowProgress(scope.clusterId, resource.reload, {
@@ -63,7 +76,31 @@ export function InvestigationsPage() {
         Date.parse(a.investigation.updated_at),
     );
   const pages = Math.max(1, Math.ceil(items.length / 50));
-  const currentPage = Math.min(page, pages - 1);
+  const currentPage = Math.min(paging.local, pages - 1);
+  const offeredCursor = resource.error ? undefined : resource.data?.next_cursor;
+  const nextCursor =
+    offeredCursor &&
+    !paging.cursors.slice(0, paging.index + 1).includes(offeredCursor)
+      ? offeredCursor
+      : undefined;
+  const previous = () =>
+    setPagination({
+      ...paging,
+      index: currentPage > 0 ? paging.index : Math.max(0, paging.index - 1),
+      local: currentPage > 0 ? currentPage - 1 : 0,
+    });
+  const next = () => {
+    if (currentPage < pages - 1) {
+      setPagination({ ...paging, local: currentPage + 1 });
+    } else if (nextCursor) {
+      setPagination({
+        ...paging,
+        cursors: [...paging.cursors.slice(0, paging.index + 1), nextCursor],
+        index: paging.index + 1,
+        local: 0,
+      });
+    }
+  };
 
   return (
     <div className="page investigations-page">
@@ -102,7 +139,7 @@ export function InvestigationsPage() {
               aria-label={m.search}
               onChange={(event) => {
                 setQuery(event.target.value);
-                setPage(0);
+                setPagination({ ...paging, local: 0 });
               }}
               placeholder={m.search}
               type="search"
@@ -114,7 +151,7 @@ export function InvestigationsPage() {
             className="native-select"
             onChange={(event) => {
               setStatus(event.target.value);
-              setPage(0);
+              setPagination({ ...paging, local: 0 });
             }}
             value={status}
           >
@@ -126,6 +163,7 @@ export function InvestigationsPage() {
             ))}
           </select>
         </div>
+        <p className="workspace-empty">{m.pageFilterHint}</p>
         <PartialNotice envelope={resource.data} />
         <DataState
           loading={resource.loading && !resource.data}
@@ -179,7 +217,12 @@ export function InvestigationsPage() {
                         </Badge>
                       </td>
                       <td>{view.investigation.resource ?? "cluster"}</td>
-                      <td>{view.diagnosis_revisions.length}</td>
+                      <td
+                        title={view.diagnosis_revisions.length
+                          ? undefined : m.unknownRevisionCount}
+                      >
+                        {view.diagnosis_revisions.length || "—"}
+                      </td>
                       <td>{formatDateTime(view.investigation.updated_at)}</td>
                     </tr>
                   ))}
@@ -187,22 +230,28 @@ export function InvestigationsPage() {
             </table>
           </div>
         )}
-        {pages > 1 && (
+        {(pages > 1 || paging.index > 0 || nextCursor) && (
           <div className="investigation-pagination">
             <Button
-              disabled={!currentPage}
-              onClick={() => setPage(currentPage - 1)}
+              aria-label={m.previousPage}
+              disabled={resource.loading || (!currentPage && !paging.index)}
+              onClick={previous}
               size="sm"
               variant="outline"
             >
               ←
             </Button>
             <span>
-              {currentPage + 1} / {pages}
+              {m.page} {paging.index + 1}
+              {pages > 1 ? ` · ${currentPage + 1} / ${pages}` : ""}
             </span>
             <Button
-              disabled={currentPage === pages - 1}
-              onClick={() => setPage(currentPage + 1)}
+              aria-label={m.nextPage}
+              disabled={
+                resource.loading || Boolean(resource.error) ||
+                (currentPage === pages - 1 && !nextCursor)
+              }
+              onClick={next}
               size="sm"
               variant="outline"
             >

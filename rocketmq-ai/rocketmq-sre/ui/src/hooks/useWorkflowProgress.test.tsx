@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 
 import type { WorkflowStreamEvent } from "@/api/types";
 import { useWorkflowProgress } from "./useWorkflowProgress";
+import { useAsyncResource } from "./useAsyncResource";
 
 const A = "cluster-a";
 const B = "cluster-b";
@@ -114,6 +115,42 @@ describe("shared workflow progress", () => {
     await act(async () => finish());
     await flush();
     expect(poll).toHaveBeenCalledTimes(2);
+    expect(state.signal?.aborted).toBe(true);
+  });
+
+  it("waits for the real resource load while coalescing a stream burst", async () => {
+    const requests: Array<{ signal: AbortSignal; finish: (value: string) => void }> = [];
+    const load = vi.fn((signal: AbortSignal) => {
+      if (!requests.length) {
+        requests.push({ signal, finish: () => undefined });
+        return Promise.resolve("saved snapshot");
+      }
+      return new Promise<string>((finish) => requests.push({ signal, finish }));
+    });
+    const resource = renderHook(() => {
+      const data = useAsyncResource(load);
+      useWorkflowProgress(A, data.reload);
+      return data;
+    });
+    await flush();
+    expect(resource.result.current.data).toBe("saved snapshot");
+    for (let index = 0; index < 6; index += 1) {
+      act(() => state.emit?.(event({ event_id: `event-${index}` })));
+      await flush();
+    }
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(requests[1].signal.aborted).toBe(false);
+    expect(resource.result.current.data).toBe("saved snapshot");
+    await act(async () => requests[1].finish("updated snapshot"));
+    await flush();
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(resource.result.current.data).toBe("updated snapshot");
+    act(() => state.emit?.(event({ event_id: "last-event" })));
+    await flush();
+    resource.unmount();
+    await act(async () => requests[2].finish("late snapshot"));
+    await flush();
+    expect(load).toHaveBeenCalledTimes(3);
     expect(state.signal?.aborted).toBe(true);
   });
 });
