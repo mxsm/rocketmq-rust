@@ -9,7 +9,7 @@ commit SHA; this document does not claim that a scheduled or release run succeed
 ## Toolchain and root workspace
 
 - Formal Rust toolchain and MSRV: `1.95.0`.
-- Root workspace packages: 28.
+- Root workspace packages: 29.
 - Full integration checks: `cargo fmt --all -- --check`, workspace Clippy, all-feature tests, and
   `cargo doc --workspace --no-deps --all-features`. Routine PR work is selected by changed paths
   through `scripts/ci_scope.py`.
@@ -24,6 +24,7 @@ commit SHA; this document does not claim that a scheduled or release run succeed
 | `rocketmq-client-rust` | `rocketmq-client` |
 | `rocketmq-controller` | `rocketmq-controller` |
 | `rocketmq-dashboard-common` | `rocketmq-dashboard/rocketmq-dashboard-common` |
+| `rocketmq-dashboard-storage` | `rocketmq-dashboard/rocketmq-dashboard-storage` |
 | `rocketmq-error` | `rocketmq-error` |
 | `rocketmq-filter` | `rocketmq-filter` |
 | `rocketmq-macros` | `rocketmq-macros` |
@@ -75,6 +76,8 @@ soak, complete disaster recovery, Docker images, and real external adapters rema
 |---|---|---|
 | `rocketmq-dashboard-gpui` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-dashboard-gpui` | `rocketmq-dashboard-common` | `rocketmq-dashboard/rocketmq-dashboard-common` |
+| `rocketmq-dashboard-gpui` | `rocketmq-dashboard-storage` | `rocketmq-dashboard/rocketmq-dashboard-storage` |
+| `rocketmq-dashboard-gpui` | `rocketmq-error` | `rocketmq-error` |
 | `rocketmq-dashboard-gpui` | `rocketmq-observability` | `rocketmq-observability` |
 | `rocketmq-dashboard-gpui` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-dashboard-tauri` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
@@ -175,6 +178,7 @@ libraries inherit an explicit feature union rather than the `full` meta-feature.
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml` | `tokio` | `full` | no |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml` | `tokio-stream` | `full` | no |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml` | `tokio-util` | `full` | no |
+| `rocketmq-dashboard/rocketmq-dashboard-storage/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml` | `tokio` | `sync, time` | no |
 | `rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml` | `tokio` | `full` | no |
 | `rocketmq-example/Cargo.toml` | `tokio` | `full` | no |
