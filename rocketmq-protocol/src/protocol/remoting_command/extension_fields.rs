@@ -16,6 +16,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use cheetah_string::CheetahString;
+
 use super::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderFieldSource;
 use crate::protocol::header_codec::JsonHeaderFields;
@@ -34,6 +36,12 @@ pub(super) enum ExtensionFields {
         fields: JsonHeaderFields,
         materialized: OnceLock<Arc<HeaderMap>>,
     },
+}
+
+/// The fields of an [`ExtensionFields`] in the cheapest form to read without materializing.
+enum Visitable<'a> {
+    Map(&'a HeaderMap),
+    Raw(&'a dyn HeaderFieldSource),
 }
 
 impl fmt::Debug for ExtensionFields {
@@ -92,6 +100,59 @@ impl ExtensionFields {
             Self::RocketMqRaw { fields, .. } => Some(fields),
             Self::JsonRaw { fields, .. } => Some(fields),
             Self::Absent | Self::Materialized(_) => None,
+        }
+    }
+
+    /// Returns the value of `key` without building the field map.
+    ///
+    /// A map built earlier is read instead. As in the map, the last occurrence of a repeated key
+    /// wins.
+    pub(super) fn get(&self, key: &str) -> Option<&str> {
+        match self.visitable() {
+            None => None,
+            Some(Visitable::Map(fields)) => fields.get(key).map(CheetahString::as_str),
+            Some(Visitable::Raw(source)) => {
+                let mut found = None;
+                source.visit_fields_while(&mut |field, value| {
+                    if field == key {
+                        found = Some(value);
+                    }
+                    true
+                });
+                found
+            }
+        }
+    }
+
+    /// Visits every field without building the field map; a map built earlier is visited instead.
+    ///
+    /// Unlike the map, the raw fields keep each occurrence of a repeated key.
+    pub(super) fn for_each<'a>(&'a self, visitor: &mut dyn FnMut(&'a str, &'a str)) {
+        let source: &'a dyn HeaderFieldSource = match self.visitable() {
+            None => return,
+            Some(Visitable::Map(fields)) => fields,
+            Some(Visitable::Raw(source)) => source,
+        };
+        source.visit_fields_while(&mut |field, value| {
+            visitor(field, value);
+            true
+        });
+    }
+
+    fn visitable(&self) -> Option<Visitable<'_>> {
+        match self {
+            Self::Absent => None,
+            Self::Materialized(fields) => Some(Visitable::Map(fields)),
+            Self::RocketMqRaw { fields, materialized } => Some(
+                materialized
+                    .get()
+                    .map_or(Visitable::Raw(fields), |map| Visitable::Map(map)),
+            ),
+            Self::JsonRaw { fields, materialized } => Some(
+                materialized
+                    .get()
+                    .map_or(Visitable::Raw(fields), |map| Visitable::Map(map)),
+            ),
         }
     }
 
@@ -156,6 +217,15 @@ impl ExtensionFields {
     #[cfg(test)]
     pub(super) fn is_json_raw(&self) -> bool {
         matches!(self, Self::JsonRaw { .. })
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_materialized(&self) -> bool {
+        match self {
+            Self::Absent => false,
+            Self::Materialized(_) => true,
+            Self::RocketMqRaw { materialized, .. } | Self::JsonRaw { materialized, .. } => materialized.get().is_some(),
+        }
     }
 
     #[cfg(test)]

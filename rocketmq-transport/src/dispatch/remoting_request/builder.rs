@@ -142,7 +142,7 @@ impl RemotingRequestBuilder {
     pub(crate) fn ingress_view(&self) -> IngressRequestView<'_> {
         IngressRequestView {
             original: self.original,
-            ext_fields: self.command.ext_fields(),
+            command: &self.command,
         }
     }
 

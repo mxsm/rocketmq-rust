@@ -22,6 +22,7 @@ use rocketmq_security_api::evaluate_request;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::AuthorizationDenial;
+use rocketmq_security_api::HeaderFields;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::IngressPolicy;
 use rocketmq_security_api::LayerEvaluation;
@@ -41,6 +42,32 @@ use rocketmq_security_api::SecurityRequestView;
 fn empty_fields() -> &'static HashMap<CheetahString, CheetahString> {
     static EMPTY: OnceLock<HashMap<CheetahString, CheetahString>> = OnceLock::new();
     EMPTY.get_or_init(HashMap::new)
+}
+
+/// The header fields of an inbound command, built only when a policy reads them.
+///
+/// The Broker's ingress policy, for one, never does, and building them would otherwise cost every
+/// request a field map on the connection reader.
+struct CommandHeaderFields<'a>(&'a RemotingCommand);
+
+impl HeaderFields for CommandHeaderFields<'_> {
+    fn fields(&self) -> &HashMap<CheetahString, CheetahString> {
+        self.0.ext_fields().unwrap_or_else(|| empty_fields())
+    }
+}
+
+fn lazy_request_view<'a>(
+    command: &'a RemotingCommand,
+    fields: &'a CommandHeaderFields<'a>,
+    peer: Option<&'a PeerInfo>,
+) -> SecurityRequestView<'a> {
+    SecurityRequestView::with_header_fields(
+        command.code(),
+        command.version(),
+        fields,
+        command.body().map(bytes::Bytes::as_ref),
+        peer,
+    )
 }
 
 /// Borrows security-relevant fields without copying the protocol command or body.
@@ -126,7 +153,10 @@ impl TransportSecurity {
         peer: Option<&PeerInfo>,
     ) -> LayerEvaluation<IngressDecision> {
         match &self.ingress_policy {
-            Some(policy) => policy.evaluate_ingress(request_view(command, peer)),
+            Some(policy) => {
+                let fields = CommandHeaderFields(command);
+                policy.evaluate_ingress(lazy_request_view(command, &fields, peer))
+            }
             None => match self.profile {
                 SecurityBootstrapProfile::DevelopmentInsecureLoopback => Ok(IngressDecision::AllowToContinue),
                 SecurityBootstrapProfile::SecureEnforced => Err(LayerFailureKind::Unavailable),
@@ -148,7 +178,8 @@ impl TransportSecurity {
                 SecurityBootstrapProfile::SecureEnforced => Err(LayerFailureKind::Unavailable),
             };
         };
-        let context = RequestContext::new(request_view(command, peer), principal, resource, action);
+        let fields = CommandHeaderFields(command);
+        let context = RequestContext::new(lazy_request_view(command, &fields, peer), principal, resource, action);
         Ok(evaluate_request(policy.as_ref(), &context))
     }
 
@@ -187,7 +218,13 @@ impl TransportSecurity {
         let Some(policy) = &self.policy else {
             return Err(LayerFailureKind::Unavailable);
         };
-        let context = RequestContext::new(request_view(command, None), Some(principal), resource, action);
+        let fields = CommandHeaderFields(command);
+        let context = RequestContext::new(
+            lazy_request_view(command, &fields, None),
+            Some(principal),
+            resource,
+            action,
+        );
         Ok(evaluate_request(policy.as_ref(), &context))
     }
 

@@ -296,8 +296,9 @@ impl RemotingRequest {
 ///
 /// The trusted builder creates this view before transferring command ownership
 /// to [`RemotingRequest`]. It borrows the command's ingress extension fields
-/// directly and never contains a request body, so ordering can inspect headers
-/// without copying or retaining the payload.
+/// directly and never exposes a request body, so ordering can inspect headers
+/// without copying or retaining the payload. Creating the view does not build
+/// the extension field map; [`Self::for_each_ext_field`] reads fields without it.
 ///
 /// ```compile_fail
 /// use rocketmq_transport::api::IngressRequestView;
@@ -308,7 +309,7 @@ impl RemotingRequest {
 /// ```
 pub struct IngressRequestView<'a> {
     original: OriginalRequestIdentity,
-    ext_fields: Option<&'a HashMap<CheetahString, CheetahString>>,
+    command: &'a RemotingCommand,
 }
 
 impl<'a> IngressRequestView<'a> {
@@ -321,11 +322,20 @@ impl<'a> IngressRequestView<'a> {
     /// Returns the captured ingress extension fields, when the inbound command
     /// carried any.
     ///
-    /// The builder consumes itself after ordering finishes, so later processor
-    /// command mutation cannot be observed through this view.
+    /// The first call on a decoded command builds the field map. The builder
+    /// consumes itself after ordering finishes, so later processor command
+    /// mutation cannot be observed through this view.
     #[must_use]
-    pub const fn ext_fields(&self) -> Option<&'a HashMap<CheetahString, CheetahString>> {
-        self.ext_fields
+    pub fn ext_fields(&self) -> Option<&'a HashMap<CheetahString, CheetahString>> {
+        self.command.ext_fields()
+    }
+
+    /// Visits every ingress extension field without building the field map.
+    ///
+    /// A key that the header repeats is visited once per occurrence; [`Self::ext_fields`] keeps
+    /// only the last one. Each call walks every field, so read all needed fields in one visit.
+    pub fn for_each_ext_field(&self, visitor: impl FnMut(&'a str, &'a str)) {
+        self.command.for_each_ext_field(visitor);
     }
 }
 

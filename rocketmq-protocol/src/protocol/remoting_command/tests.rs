@@ -258,6 +258,78 @@ fn add_ext_field_preserves_rocketmq_raw_fields() {
     assert_eq!(fields.get("added").map(CheetahString::as_str), Some("value"));
 }
 
+fn assert_single_field_reads_match_the_map(command: &RemotingCommand, keys: &[&str]) {
+    let mut visited = Vec::new();
+    command.for_each_ext_field(|key, value| visited.push((key.to_owned(), value.to_owned())));
+    let reads = keys.iter().map(|key| command.ext_field(key)).collect::<Vec<_>>();
+    assert!(!command.ext_fields.is_materialized());
+
+    let fields = command.ext_fields().expect("extension fields should exist");
+    for (key, read) in keys.iter().zip(&reads) {
+        assert_eq!(*read, fields.get(*key).map(CheetahString::as_str), "{key}");
+    }
+    visited.sort();
+    let mut expected = fields
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(visited, expected);
+    assert_eq!(
+        command.ext_field("topic"),
+        fields.get("topic").map(CheetahString::as_str)
+    );
+}
+
+#[test]
+fn single_field_reads_leave_json_fields_unmaterialized() {
+    let mut header = json_header_with_ext_fields(r#"{"topic":"orders","queueId":"3","escaped":"a\"b"}"#);
+    let header_length = header.len();
+    let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+        .unwrap()
+        .unwrap();
+    assert!(command.ext_fields.is_json_raw());
+
+    assert_eq!(command.ext_field("queueId"), Some("3"));
+    assert_single_field_reads_match_the_map(&command, &["topic", "queueId", "escaped", "absent"]);
+}
+
+#[test]
+fn single_field_reads_leave_rocketmq_fields_unmaterialized() {
+    let mut source = RemotingCommand::create_success_response_command()
+        .set_serialize_type(SerializeType::ROCKETMQ)
+        .set_ext_fields(HashMap::from([
+            (
+                CheetahString::from_static_str("topic"),
+                CheetahString::from_static_str("orders"),
+            ),
+            (
+                CheetahString::from_static_str("queueId"),
+                CheetahString::from_static_str("3"),
+            ),
+        ]));
+    let mut encoded = BytesMut::new();
+    source.try_fast_header_encode(&mut encoded).unwrap();
+    let command = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+    assert!(command.ext_fields.is_rocketmq_raw());
+
+    assert_eq!(command.ext_field("topic"), Some("orders"));
+    assert_single_field_reads_match_the_map(&command, &["topic", "queueId", "absent"]);
+}
+
+#[test]
+fn single_field_reads_use_the_last_repeated_key_like_the_map() {
+    let mut header = json_header_with_ext_fields(r#"{"topic":"first","topic":"last"}"#);
+    let header_length = header.len();
+    let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+        .unwrap()
+        .unwrap();
+    let read = command.ext_field("topic").map(str::to_owned);
+    assert_eq!(read.as_deref(), Some("last"));
+    let fields = command.ext_fields().expect("extension fields should exist");
+    assert_eq!(read.as_deref(), fields.get("topic").map(CheetahString::as_str));
+}
+
 #[test]
 fn add_ext_field_coexists_with_typed_header() {
     for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {

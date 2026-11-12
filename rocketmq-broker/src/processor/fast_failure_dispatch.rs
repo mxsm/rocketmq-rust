@@ -373,19 +373,14 @@ pub(super) fn estimate_retained_bytes(request: &RemotingCommand) -> usize {
     let mut retained_bytes = std::mem::size_of::<RemotingCommand>();
     retained_bytes = retained_bytes.saturating_add(request.body().map_or(0, bytes::Bytes::len));
     retained_bytes = retained_bytes.saturating_add(request.remark().map_or(0, |remark| remark.len()));
-    if let Some(ext_fields) = request.ext_fields() {
-        retained_bytes = retained_bytes.saturating_add(
-            ext_fields
-                .iter()
-                .map(|(key, value)| {
-                    std::mem::size_of_val(key)
-                        .saturating_add(std::mem::size_of_val(value))
-                        .saturating_add(key.len())
-                        .saturating_add(value.len())
-                })
-                .fold(0usize, usize::saturating_add),
-        );
-    }
+    // Visits the fields as received instead of building the field map for every send.
+    let field_overhead = 2 * std::mem::size_of::<cheetah_string::CheetahString>();
+    request.for_each_ext_field(|key, value| {
+        retained_bytes = retained_bytes
+            .saturating_add(field_overhead)
+            .saturating_add(key.len())
+            .saturating_add(value.len());
+    });
     retained_bytes.max(1)
 }
 
