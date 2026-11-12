@@ -13,6 +13,8 @@ import {
   type ScenarioId,
 } from "@/i18n/capabilityMessages";
 import { useOperatorPreferences } from "@/preferences/OperatorPreferences";
+import { CapabilityVerificationDetails } from "./CapabilityVerificationDetails";
+import { scopedCapabilityProjection } from "./capabilityVerification";
 
 const LAYERS: Array<keyof CapabilityLayers> = [
   "registered",
@@ -24,10 +26,11 @@ const LAYERS: Array<keyof CapabilityLayers> = [
 ];
 
 export function CapabilityQualityMatrix({
-  projection,
+  projection: incoming,
 }: {
   projection: CapabilityQualityProjection;
 }) {
+  const projection = scopedCapabilityProjection(incoming);
   const m = useCapabilityMessages();
   const { formatDateTime } = useOperatorPreferences();
   const [scenarioId, setScenarioId] = useState("all");
@@ -133,6 +136,12 @@ export function CapabilityQualityMatrix({
                   : m.unknown,
               },
             ]}
+          />
+          <CapabilityVerificationDetails
+            fact={fact}
+            projection={projection}
+            pack={selectedPack}
+            layer={selectedLayer}
           />
         </DataSurface>
       )}

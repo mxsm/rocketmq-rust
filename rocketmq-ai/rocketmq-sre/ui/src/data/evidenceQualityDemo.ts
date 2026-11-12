@@ -195,6 +195,7 @@ export function demoCapabilityQuality(
     };
     return {
       pack_id: template.pack,
+      pack_version: "1.0.0",
       requirements: [requirement],
       layers: {
         registered: fact("present", "synthetic_descriptor_fixture", now),

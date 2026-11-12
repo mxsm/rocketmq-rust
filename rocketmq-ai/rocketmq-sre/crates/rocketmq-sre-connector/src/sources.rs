@@ -169,7 +169,8 @@ where
             config.prometheus_url.clone(),
             config.source_limits.label_allowlist.clone(),
             config.source_limits.max_time_range,
-        );
+        )
+        .with_cluster_label(config.source_limits.prometheus_cluster_label.clone())?;
         let loki = LokiSource::new(
             http.clone(),
             config.loki_url.clone(),

@@ -763,6 +763,11 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             "storeSyncFlushQueueDepth".to_string(),
             store_health.flush_backlog.queue_depth.to_string(),
         );
+        // The Store already publishes the cumulative counter. Preserve its
+        // absence for unsupported stores instead of manufacturing a zero.
+        if let Some(timeout_total) = runtime_info.get("syncFlushTimeoutTotal").cloned() {
+            runtime_info.insert("storeSyncFlushTimeoutTotal".to_string(), timeout_total);
+        }
         runtime_info.insert(
             "storeSyncFlushOldestWaitMillis".to_string(),
             store_health.flush_backlog.oldest_wait_millis.to_string(),
@@ -1304,6 +1309,11 @@ mod tests {
             Some("1")
         );
         assert_eq!(initial.get("storeWriteable").map(|value| value.as_str()), Some("true"));
+        assert!(initial.contains_key("syncFlushTimeoutTotal"));
+        assert_eq!(
+            initial.get("storeSyncFlushTimeoutTotal"),
+            initial.get("syncFlushTimeoutTotal")
+        );
         assert!(initial.contains_key("storeConfirmOffset"));
         assert!(initial.contains_key("haLegalInSyncAckOffset"));
         assert_eq!(

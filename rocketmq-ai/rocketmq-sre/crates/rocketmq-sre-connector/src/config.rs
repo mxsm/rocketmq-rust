@@ -168,6 +168,7 @@ pub(crate) struct SourceLimits {
     pub max_requests_per_minute: usize,
     pub cache_ttl: Duration,
     pub label_allowlist: BTreeSet<String>,
+    pub prometheus_cluster_label: String,
 }
 
 #[derive(Clone)]
@@ -711,6 +712,8 @@ fn load_source_limits(
             "component",
             "namespace",
             "node_id",
+            "topic",
+            "le",
             "consumer_group",
             "dimension",
             "sli",
@@ -756,6 +759,8 @@ fn load_source_limits(
         max_requests_per_minute,
         cache_ttl,
         label_allowlist,
+        prometheus_cluster_label: env::var("ROCKETMQ_SRE_PROMETHEUS_CLUSTER_LABEL")
+            .unwrap_or_else(|_| "rocketmq_cluster".to_owned()),
     })
 }
 
@@ -1031,6 +1036,8 @@ pub(crate) fn test_source_limits(max_concurrency: usize, max_bytes: usize) -> So
             "dimension".to_owned(),
             "namespace".to_owned(),
             "node_id".to_owned(),
+            "topic".to_owned(),
+            "le".to_owned(),
             "sli".to_owned(),
             "service.name".to_owned(),
             "service_name".to_owned(),
@@ -1045,6 +1052,7 @@ pub(crate) fn test_source_limits(max_concurrency: usize, max_bytes: usize) -> So
             "rocketmqrust.com/service".to_owned(),
             "rocketmqrust.com/broker-name".to_owned(),
         ]),
+        prometheus_cluster_label: "rocketmq_cluster".to_owned(),
     }
 }
 

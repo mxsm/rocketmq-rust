@@ -32,11 +32,17 @@ use crate::ControlPlaneError;
 use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 use crate::auth::AuthContext;
+use crate::repository::ClusterRepository;
 
 #[cfg(test)]
 mod postgres_tests;
 mod quality;
 mod revision;
+mod verification;
+
+pub(crate) fn verification_routes() -> axum::Router<AppState> {
+    verification::routes()
+}
 
 const PACK_ORDER: [&str; 32] = [
     "cluster-topology.v1",
@@ -90,6 +96,7 @@ pub(crate) struct CoverageQuery {
     pub(crate) cluster_id: Option<String>,
     pub(crate) investigation_id: Option<String>,
     pub(crate) revision_id: Option<String>,
+    pub(crate) resource: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -214,6 +221,9 @@ pub(crate) async fn matrix(
             "saved revision does not belong to the selected cluster",
         ));
     }
+    if let Some(cluster_id) = cluster_ids.first() {
+        crate::api::ensure_cluster_authorized(auth, &state.repository.get(*cluster_id).await?)?;
+    }
     let source_states = latest_source_states(state, auth, &cluster_ids).await?;
     let states = source_states
         .iter()
@@ -229,13 +239,28 @@ pub(crate) async fn matrix(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let now = Utc::now();
-    let (evidence, evidence_partial) = if let Some(bound) = &bound {
+    if let Some(resource) = &query.resource {
+        verification::validate_resource(resource)?;
+    }
+    let (mut evidence, evidence_partial) = if let Some(bound) = &bound {
         bound.evidence(state, auth).await?
     } else if let Some(cluster_id) = cluster_ids.first().copied() {
-        state.repository.coverage_evidence(auth, cluster_id).await?
+        state
+            .repository
+            .coverage_evidence(auth, cluster_id, query.resource.as_deref())
+            .await?
     } else {
         (Vec::new(), false)
     };
+    if let Some(resource) = &query.resource {
+        if bound.is_some() && !evidence.iter().any(|snapshot| snapshot.resource == *resource) {
+            return Err(ControlPlaneRequestFailure::validation(
+                "revision_resource_mismatch",
+                "canonical resource is not a visible saved reference in this revision",
+            ));
+        }
+        evidence.retain(|snapshot| snapshot.resource == *resource);
+    }
     let mut quality = quality::project(
         auth.tenant_id,
         cluster_ids.first().copied(),
@@ -249,6 +274,8 @@ pub(crate) async fn matrix(
         quality.investigation_id = Some(bound.investigation_id);
         quality.revision_id = Some(bound.revision_id);
     }
+    quality.resource.clone_from(&query.resource);
+    verification::apply(state, auth, &mut quality, &evidence).await?;
 
     let pack_views = packs
         .iter()

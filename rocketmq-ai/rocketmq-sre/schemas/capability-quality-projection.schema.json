@@ -1,88 +1,14 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "CapabilityQualityProjection",
-  "description": "Cluster-scoped capability facts evaluated against bounded, already saved evidence.\n\n`observed_at` is the evaluation instant. Evidence freshness is compared with\neach requirement's compiled age bound. This response never authorizes an action;\n`execution_eligible` is always false. Verification remains unknown without an\nexplicit deployment verification record.",
-  "type": "object",
-  "properties": {
-    "cluster_id": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ClusterId"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "execution_eligible": {
-      "type": "boolean"
-    },
-    "investigation_id": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/InvestigationId"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "observed_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "packs": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/DiagnosticPackQuality"
-      }
-    },
-    "partial": {
-      "type": "boolean"
-    },
-    "revision_id": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/DiagnosisRevisionId"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "scenarios": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/DiagnosticScenarioCoverage"
-      }
-    },
-    "schema_version": {
-      "type": "string"
-    },
-    "tenant_id": {
-      "$ref": "#/$defs/TenantId"
-    }
-  },
-  "required": [
-    "schema_version",
-    "tenant_id",
-    "observed_at",
-    "execution_eligible",
-    "partial",
-    "packs",
-    "scenarios"
-  ],
   "$defs": {
     "CapabilityFact": {
       "description": "One independently sourced fact, rather than an aggregate authorization decision.",
-      "type": "object",
       "properties": {
         "observed_at": {
+          "format": "date-time",
           "type": [
             "string",
             "null"
-          ],
-          "format": "date-time"
+          ]
         },
         "reason_code": {
           "type": "string"
@@ -92,27 +18,38 @@
         },
         "status": {
           "$ref": "#/$defs/CapabilityFactStatus"
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapabilityVerificationRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact controlled report behind a verification fact, including its scope."
         }
       },
       "required": [
         "status",
         "reason_code",
         "source_ref"
-      ]
+      ],
+      "type": "object"
     },
     "CapabilityFactStatus": {
       "description": "Whether a particular capability fact has actually been established.",
-      "type": "string",
       "enum": [
         "present",
         "absent",
         "unknown",
         "not_applicable"
-      ]
+      ],
+      "type": "string"
     },
     "CapabilityLayers": {
       "description": "Registration, implementation, deployment, observation and verification stay independent.",
-      "type": "object",
       "properties": {
         "configured": {
           "$ref": "#/$defs/CapabilityFact"
@@ -140,21 +77,173 @@
         "target_observed",
         "test_verified",
         "production_verified"
-      ]
+      ],
+      "type": "object"
+    },
+    "CapabilityVerificationId": {
+      "description": "Stable identifier for an immutable capability verification record.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CapabilityVerificationLevel": {
+      "description": "Independent validation environments, without any execution permission.",
+      "enum": [
+        "test",
+        "production"
+      ],
+      "type": "string"
+    },
+    "CapabilityVerificationMethod": {
+      "description": "How the verifier obtained the report; fixtures never establish production validation.",
+      "enum": [
+        "deterministic_fixture",
+        "live_read_only"
+      ],
+      "type": "string"
+    },
+    "CapabilityVerificationOutcome": {
+      "description": "The latest source observation supersedes an earlier assessment in the same\nscope. A non-passing outcome wins a tie; delivery order cannot restore a pass.",
+      "enum": [
+        "passed",
+        "failed",
+        "inconclusive",
+        "revoked"
+      ],
+      "type": "string"
+    },
+    "CapabilityVerificationRecord": {
+      "description": "Immutable provenance. The authenticated issuer and recording time are server-owned.",
+      "properties": {
+        "assessment": {
+          "$ref": "#/$defs/CapabilityVerificationRequest"
+        },
+        "record_id": {
+          "$ref": "#/$defs/CapabilityVerificationId"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "verified_by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record_id",
+        "verified_by",
+        "recorded_at",
+        "assessment"
+      ],
+      "type": "object"
+    },
+    "CapabilityVerificationRequest": {
+      "additionalProperties": false,
+      "description": "Bounded attestation accepted only from a dedicated verifier workload identity.\n\n`resource` is an exact canonical Evidence resource, not an operator navigation\nresource. Resource-scoped records cannot certify a cluster overview. The\ninvestigation and revision identifiers must either both be present or absent.\n`source_ref` identifies a report; the server never fetches the reference.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "investigation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/CapabilityVerificationLevel"
+        },
+        "method": {
+          "$ref": "#/$defs/CapabilityVerificationMethod"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/CapabilityVerificationOutcome"
+        },
+        "pack_id": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        },
+        "report_digest": {
+          "type": "string"
+        },
+        "resource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiagnosisRevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "time_range": {
+          "$ref": "#/$defs/TimeRange"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "tenant_id",
+        "cluster_id",
+        "pack_id",
+        "pack_version",
+        "level",
+        "method",
+        "outcome",
+        "time_range",
+        "observed_at",
+        "valid_until",
+        "source_ref",
+        "report_digest"
+      ],
+      "type": "object"
     },
     "ClusterId": {
       "description": "Internal identifier for an onboarded cluster.",
-      "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "type": "string"
     },
     "DiagnosisRevisionId": {
       "description": "Stable identifier for an immutable diagnosis revision.",
-      "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "type": "string"
     },
     "DiagnosticEvidenceQuality": {
       "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
-      "type": "string",
       "enum": [
         "available",
         "partial",
@@ -162,11 +251,11 @@
         "stale",
         "unknown",
         "unsupported"
-      ]
+      ],
+      "type": "string"
     },
     "DiagnosticPackQuality": {
       "description": "Read-only evidence sufficiency for a compiled diagnostic pack.",
-      "type": "object",
       "properties": {
         "layers": {
           "$ref": "#/$defs/CapabilityLayers"
@@ -174,55 +263,60 @@
         "pack_id": {
           "type": "string"
         },
+        "pack_version": {
+          "default": "",
+          "description": "Exact compiled implementation version; absent legacy values remain unknown.",
+          "type": "string"
+        },
         "requirements": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/DiagnosticRequirementQuality"
-          }
+          },
+          "type": "array"
         }
       },
       "required": [
         "pack_id",
         "layers",
         "requirements"
-      ]
+      ],
+      "type": "object"
     },
     "DiagnosticRequirementQuality": {
-      "description": "IDs identify the exact stored sample that produced this assessment.\n\nThis cluster projection does not bind a diagnosis revision. A consumer\nshowing revision quality must intersect these IDs with that revision's\nsaved references and verify its resource and time scope.",
-      "type": "object",
+      "description": "IDs identify the exact stored sample that produced this assessment.\n\nAn unbound cluster projection does not establish revision membership.\nConsumers showing revision quality must require the requested investigation\nand revision binding, intersect these IDs with saved references, and verify\nresource and time scope.",
       "properties": {
         "evidence_ids": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/EvidenceId"
-          }
+          },
+          "type": "array"
         },
         "fields": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/EvidenceFieldContract"
-          }
+          },
+          "type": "array"
         },
         "id": {
           "type": "string"
         },
         "max_age_seconds": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "missing_fields": {
-          "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "type": "array"
         },
         "observed_at": {
+          "format": "date-time",
           "type": [
             "string",
             "null"
-          ],
-          "format": "date-time"
+          ]
         },
         "quality": {
           "$ref": "#/$defs/DiagnosticEvidenceQuality"
@@ -251,37 +345,37 @@
         "reason_code",
         "evidence_ids",
         "missing_fields"
-      ]
+      ],
+      "type": "object"
     },
     "DiagnosticScenarioCoverage": {
       "description": "A documented comparison of packs, never a claimed causal relationship between samples.",
-      "type": "object",
       "properties": {
         "id": {
           "type": "string"
         },
         "pack_ids": {
-          "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "type": "array"
         },
         "required_signal_ids": {
-          "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "type": "array"
         }
       },
       "required": [
         "id",
         "pack_ids",
         "required_signal_ids"
-      ]
+      ],
+      "type": "object"
     },
     "EvidenceFieldContract": {
       "description": "A field contract describes evidence sufficiency; it grants no execution authority.",
-      "type": "object",
       "properties": {
         "kind": {
           "$ref": "#/$defs/EvidenceFieldKind"
@@ -293,31 +387,130 @@
       "required": [
         "path",
         "kind"
-      ]
+      ],
+      "type": "object"
     },
     "EvidenceFieldKind": {
       "description": "Primitive shape required by a compiled diagnostic predicate.",
-      "type": "string",
       "enum": [
         "boolean",
         "number",
         "text"
-      ]
+      ],
+      "type": "string"
     },
     "EvidenceId": {
       "description": "Stable identifier for an evidence snapshot.",
-      "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "type": "string"
     },
     "InvestigationId": {
       "description": "Stable identifier for a multi-step investigation.",
-      "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "type": "string"
     },
     "TenantId": {
       "description": "Stable tenant boundary identifier.",
-      "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "type": "string"
+    },
+    "TimeRange": {
+      "description": "Inclusive time range requested from an evidence source.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
     }
-  }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Cluster-scoped capability facts evaluated against bounded, already saved evidence.\n\n`observed_at` is the evaluation instant. Evidence freshness is compared with\neach requirement's compiled age bound. This response never authorizes an action;\n`execution_eligible` is always false. Verification remains unknown without an\nexplicit deployment verification record.",
+  "properties": {
+    "cluster_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClusterId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "execution_eligible": {
+      "type": "boolean"
+    },
+    "investigation_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InvestigationId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "packs": {
+      "items": {
+        "$ref": "#/$defs/DiagnosticPackQuality"
+      },
+      "type": "array"
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "resource": {
+      "description": "Explicit canonical Evidence target; absent means the cluster overview.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "revision_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DiagnosisRevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scenarios": {
+      "items": {
+        "$ref": "#/$defs/DiagnosticScenarioCoverage"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "observed_at",
+    "execution_eligible",
+    "partial",
+    "packs",
+    "scenarios"
+  ],
+  "title": "CapabilityQualityProjection",
+  "type": "object"
 }

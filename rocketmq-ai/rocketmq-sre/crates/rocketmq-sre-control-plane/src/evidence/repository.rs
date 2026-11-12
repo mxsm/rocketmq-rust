@@ -334,6 +334,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
+        resource: Option<&str>,
     ) -> Result<(Vec<EvidenceSnapshot>, bool), ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&cluster_id) {
             return Err(ControlPlaneRequestFailure::forbidden(
@@ -346,9 +347,11 @@ impl PostgresRepository {
         const LIMIT: usize = 64;
         let rows = sqlx::query(evidence_query(
             " WHERE e.tenant_id = $1 AND e.cluster_id = $2
+                AND ($3::text IS NULL OR e.resource = $3)
                 AND e.id IN (
                     SELECT DISTINCT ON (source, resource) id FROM evidence_snapshots
                     WHERE tenant_id = $1 AND cluster_id = $2
+                        AND ($3::text IS NULL OR resource = $3)
                         AND (expires_at IS NULL OR expires_at > NOW())
                     ORDER BY source, resource, observed_at DESC, collected_at DESC, id DESC
                 )
@@ -356,6 +359,7 @@ impl PostgresRepository {
         ))
         .bind(auth.tenant_id.as_uuid())
         .bind(cluster_id.as_uuid())
+        .bind(resource)
         .fetch_all(&self.pool)
         .await?;
         let partial = rows.len() > LIMIT;

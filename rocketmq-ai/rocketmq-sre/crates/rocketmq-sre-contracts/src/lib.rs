@@ -27,6 +27,7 @@ mod automation;
 mod autonomy;
 mod canonical;
 mod capability_quality;
+mod capability_verification;
 mod connector;
 mod correlation;
 mod critic;
@@ -120,6 +121,10 @@ pub use capability_quality::{
     CapabilityFact, CapabilityFactStatus, CapabilityLayers, CapabilityQualityProjection, DiagnosticEvidenceQuality,
     DiagnosticPackQuality, DiagnosticRequirementQuality, DiagnosticScenarioCoverage, EvidenceFieldContract,
     EvidenceFieldKind,
+};
+pub use capability_verification::{
+    CAPABILITY_VERIFICATION_SCHEMA_VERSION, CapabilityVerificationLevel, CapabilityVerificationMethod,
+    CapabilityVerificationOutcome, CapabilityVerificationRecord, CapabilityVerificationRequest,
 };
 pub use connector::ConnectorCapabilityState;
 pub use connector::ConnectorHeartbeat;
@@ -276,6 +281,7 @@ pub use ids::AutonomyOutcomeId;
 pub use ids::AutonomyPolicyId;
 pub use ids::AutonomySampleId;
 pub use ids::BaselineId;
+pub use ids::CapabilityVerificationId;
 pub use ids::ChangePointId;
 pub use ids::ChangeScheduleId;
 pub use ids::ChangeWindowId;

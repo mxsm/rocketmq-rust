@@ -188,6 +188,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     let active = true;
+    let generation = 0;
     if (mode === "development") {
       setSession(developmentSession());
       setStatus("authenticated");
@@ -205,7 +206,38 @@ export function AuthProvider({ children }: PropsWithChildren) {
       };
     }
 
+    const applyUser = (user: User | null) => {
+      if (!active) return;
+      setError(undefined);
+      if (!user || user.expired) {
+        setSession(undefined);
+        setStatus("anonymous");
+        return;
+      }
+      const next = sessionFromOidc(user);
+      if (!next.tenantId || next.clusterIds.length === 0) {
+        setSession(undefined);
+        setError("OIDC token 缺少 rocketmq_tenant 或 rocketmq_clusters claim。");
+        setStatus("error");
+        return;
+      }
+      setSession(next);
+      setStatus("authenticated");
+    };
+    const loaded = (user: User) => {
+      generation += 1;
+      applyUser(user);
+    };
+    const unloaded = () => {
+      generation += 1;
+      applyUser(null);
+    };
+    manager.events.addUserLoaded(loaded);
+    manager.events.addUserUnloaded(unloaded);
+    manager.events.addAccessTokenExpired(unloaded);
+
     const load = async () => {
+      const requestedGeneration = generation;
       try {
         const user = isOidcCallback()
           ? await manager.signinRedirectCallback()
@@ -216,20 +248,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
         if (isOidcCallback()) {
           window.history.replaceState({}, "", window.location.pathname);
         }
-        if (!user || user.expired) {
-          setStatus("anonymous");
-          return;
-        }
-        const next = sessionFromOidc(user);
-        if (!next.tenantId || next.clusterIds.length === 0) {
-          setError("OIDC token 缺少 rocketmq_tenant 或 rocketmq_clusters claim。");
-          setStatus("error");
-          return;
-        }
-        setSession(next);
-        setStatus("authenticated");
+        // A renewal or revocation event wins over an earlier storage/callback read.
+        if (generation === requestedGeneration) applyUser(user);
       } catch {
-        if (active) {
+        if (active && generation === requestedGeneration) {
+          setSession(undefined);
           setError("OIDC 登录回调校验失败，请重新登录。");
           setStatus("error");
         }
@@ -238,6 +261,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
     void load();
     return () => {
       active = false;
+      manager.events.removeUserLoaded(loaded);
+      manager.events.removeUserUnloaded(unloaded);
+      manager.events.removeAccessTokenExpired(unloaded);
     };
   }, [manager, mode]);
 

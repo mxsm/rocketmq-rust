@@ -354,7 +354,7 @@ fn resolve_prometheus(resource: &str) -> Option<CanonicalResourceRoute> {
         ),
         (
             "send-latency/",
-            "metrics/rocketmq_send_message_latency_milliseconds_bucket",
+            "metrics/rocketmq_send_message_latency_bucket",
             MetricDiagnosticProfile::SendLatency,
         ),
         (
@@ -389,17 +389,25 @@ fn resolve_prometheus(resource: &str) -> Option<CanonicalResourceRoute> {
         ),
     ] {
         if let Some(target) = resource.strip_prefix(prefix) {
-            return Some(if safe_resource_path(target) {
-                query(
-                    CanonicalQuery::Prometheus {
-                        resource: query_resource.to_owned(),
-                        matchers: Vec::new(),
-                    },
-                    CanonicalProjection::MetricDiagnostics(profile),
-                )
-            } else {
-                not_verified("canonical_resource_parameters_unavailable")
-            });
+            return Some(
+                if safe_resource_path(target)
+                    && (profile != MetricDiagnosticProfile::SendLatency || identifier(target).is_some())
+                {
+                    query(
+                        CanonicalQuery::Prometheus {
+                            resource: query_resource.to_owned(),
+                            matchers: if profile == MetricDiagnosticProfile::SendLatency {
+                                vec![("topic".to_owned(), target.to_owned())]
+                            } else {
+                                Vec::new()
+                            },
+                        },
+                        CanonicalProjection::MetricDiagnostics(profile),
+                    )
+                } else {
+                    not_verified("canonical_resource_parameters_unavailable")
+                },
+            );
         }
     }
     resolve_catalog_resource(
@@ -807,7 +815,7 @@ mod tests {
             ),
             (
                 "send-latency/topic-a",
-                "metrics/rocketmq_send_message_latency_milliseconds_bucket",
+                "metrics/rocketmq_send_message_latency_bucket",
                 MetricDiagnosticProfile::SendLatency,
             ),
             (
@@ -846,7 +854,11 @@ mod tests {
                 Some(query(
                     CanonicalQuery::Prometheus {
                         resource: query_resource.to_owned(),
-                        matchers: Vec::new(),
+                        matchers: if profile == MetricDiagnosticProfile::SendLatency {
+                            vec![("topic".to_owned(), "topic-a".to_owned())]
+                        } else {
+                            Vec::new()
+                        },
                     },
                     CanonicalProjection::MetricDiagnostics(profile),
                 ))

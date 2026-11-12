@@ -1392,7 +1392,7 @@ mod tests {
             ("storeHaPendingRequestCount", "0"),
             ("storeHaPendingOldestWaitMillis", "0"),
             ("storeSyncFlushQueueDepth", "0"),
-            ("storeSyncFlushTimeoutTotal", "0"),
+            ("storeSyncFlushTimeoutTotal", "37"),
             ("storeSyncFlushOldestWaitMillis", "0"),
             ("recoveryReportAvailable", "false"),
             ("backgroundIndexRebuildState", "idle"),
@@ -1428,6 +1428,13 @@ mod tests {
             Some("LocalFile")
         );
         assert_eq!(diagnostics.coverage, BrokerDiagnosticsCoverage::Available);
+        assert_eq!(
+            diagnostics
+                .store_health
+                .as_ref()
+                .map(|health| health.sync_flush.timeout_total),
+            Some(37)
+        );
         let encoded = serde_json::to_string(&diagnostics).expect("diagnostics should serialize");
         assert!(!encoded.contains("secretAccessKey"));
         assert!(!encoded.contains("must-not-escape"));
@@ -1438,6 +1445,26 @@ mod tests {
         let diagnostics = project_broker_diagnostics("broker-a".to_owned(), 0, &KVTable { table: HashMap::new() });
         assert_eq!(diagnostics.coverage, BrokerDiagnosticsCoverage::Unsupported);
         assert!(diagnostics.config.is_none());
+    }
+
+    #[test]
+    fn missing_sync_flush_timeout_is_not_replaced_with_a_healthy_zero() {
+        let table = HashMap::from([
+            ("storeWriteable", "true"),
+            ("storeLastFlushError", "false"),
+            ("storeOsPageCacheBusy", "false"),
+            ("storeTransientPoolDeficient", "false"),
+            ("storeDispatchBehindBytes", "0"),
+            ("storeShutdown", "false"),
+            ("storeHaPendingRequestCount", "0"),
+            ("storeHaPendingOldestWaitMillis", "0"),
+            ("storeSyncFlushQueueDepth", "0"),
+            ("storeSyncFlushOldestWaitMillis", "0"),
+        ])
+        .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect();
+        assert!(parse_store_health(&KVTable { table }).is_none());
     }
 
     #[test]
