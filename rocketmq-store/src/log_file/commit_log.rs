@@ -1181,7 +1181,7 @@ impl CommitLog {
             msg_batch.message_ext_broker_inner.with_store_host_v6_flag();
         }
 
-        let curr_offset = self.mapped_file_queue.append_handle().current_append_offset();
+        let curr_offset = self.mapped_file_queue.current_append_offset();
         let need_handle_ha = self.need_handle_ha(&msg_batch.message_ext_broker_inner);
         let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
             Ok(ack_nums) => ack_nums,
@@ -1261,7 +1261,7 @@ impl CommitLog {
 
         //get last mapped file from mapped file queue
         // current offset is physical offset
-        let curr_offset = self.mapped_file_queue.append_handle().current_append_offset();
+        let curr_offset = self.mapped_file_queue.current_append_offset();
         let need_handle_ha = self.need_handle_ha(&msg);
         let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
             Ok(ack_nums) => ack_nums,

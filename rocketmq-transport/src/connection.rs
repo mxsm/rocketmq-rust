@@ -172,12 +172,36 @@ pub(crate) fn request_write_failure(failure: WriterFailure, deadline: RequestDea
     classify_writer_failure(failure, Some(deadline)).into_command_outcome()
 }
 
-struct QueuedConnection {
+/// The queued writer of one session.
+///
+/// Every [`Connection`] built for the session shares it, so building one, which happens for
+/// each response, clones one `Arc` instead of each writer lane and handle.
+pub(crate) struct QueuedWriterParts {
     writer: WriterLanes,
     writer_diagnostics: Arc<SessionWriterDiagnostics>,
     admission: AdmissionScopeHandle,
-    response_class: Option<AdmissionClass>,
     lifecycle: Arc<SessionLifecycle>,
+}
+
+impl QueuedWriterParts {
+    pub(crate) fn new(
+        writer: WriterLanes,
+        writer_diagnostics: Arc<SessionWriterDiagnostics>,
+        admission: AdmissionScopeHandle,
+        lifecycle: Arc<SessionLifecycle>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            writer,
+            writer_diagnostics,
+            admission,
+            lifecycle,
+        })
+    }
+}
+
+struct QueuedConnection {
+    parts: Arc<QueuedWriterParts>,
+    response_class: Option<AdmissionClass>,
 }
 
 pub type ConnectionId = CheetahString;
@@ -863,26 +887,17 @@ impl Connection {
     }
 
     pub(crate) fn new_queued(
-        writer: WriterLanes,
-        writer_diagnostics: Arc<SessionWriterDiagnostics>,
-        admission: AdmissionScopeHandle,
+        parts: Arc<QueuedWriterParts>,
         state_tx: watch::Sender<ConnectionState>,
         state_rx: watch::Receiver<ConnectionState>,
         connection_id: ConnectionId,
         limits: FrameLimits,
         response_class: Option<AdmissionClass>,
-        lifecycle: Arc<SessionLifecycle>,
         telemetry: TransportTelemetry,
     ) -> Self {
         Self {
             inbound: None,
-            outbound: ConnectionWriter::Queued(QueuedConnection {
-                writer,
-                writer_diagnostics,
-                admission,
-                response_class,
-                lifecycle,
-            }),
+            outbound: ConnectionWriter::Queued(QueuedConnection { parts, response_class }),
             limits,
             state_tx,
             state_rx,
@@ -1056,15 +1071,15 @@ impl Connection {
             });
         }
         if let Some(queued) = self.queued_writer() {
-            let _send_lease = match queued.lifecycle.begin_send() {
+            let _send_lease = match queued.parts.lifecycle.begin_send() {
                 Some(lease) => lease,
                 None => {
-                    queued.writer_diagnostics.record_rejected(None);
+                    queued.parts.writer_diagnostics.record_rejected(None);
                     return Err(SendFailure::SessionClosed);
                 }
             };
             if self.state() == ConnectionState::Closed {
-                queued.writer_diagnostics.record_rejected(None);
+                queued.parts.writer_diagnostics.record_rejected(None);
                 return Err(SendFailure::SessionClosed);
             }
             #[cfg(test)]
@@ -1092,13 +1107,17 @@ impl Connection {
                 }
             }
             let permit = match reservation {
-                Some(reservation) => queued.admission.rebind_permit(AdmissionResource::Queued, reservation),
+                Some(reservation) => queued
+                    .parts
+                    .admission
+                    .rebind_permit(AdmissionResource::Queued, reservation),
                 None => queued
+                    .parts
                     .admission
                     .try_acquire(AdmissionResource::Queued, encoded_len, class),
             }
             .map_err(|_| {
-                queued.writer_diagnostics.record_rejected(None);
+                queued.parts.writer_diagnostics.record_rejected(None);
                 SendFailure::QueueSaturated {
                     target: target.to_string(),
                 }
@@ -1113,8 +1132,8 @@ impl Connection {
             }
             let (completion, result) = oneshot::channel();
             let progress = Arc::new(QueuedWriteProgress::waiting());
-            let enqueued_at = queued.writer_diagnostics.prepare_enqueue(encoded_len);
-            match queued.writer.try_send(
+            let enqueued_at = queued.parts.writer_diagnostics.prepare_enqueue(encoded_len);
+            match queued.parts.writer.try_send(
                 class,
                 QueuedWrite::data(
                     payload,
@@ -1127,11 +1146,11 @@ impl Connection {
                 .with_response_queue_wait_observation(response_queue_wait_observation),
             ) {
                 crate::writer_runtime::WriterEnqueueResult::Enqueued => {
-                    queued.writer_diagnostics.record_accepted();
+                    queued.parts.writer_diagnostics.record_accepted();
                     self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
                 }
                 rejection => {
-                    queued.writer_diagnostics.record_rejected(Some(encoded_len));
+                    queued.parts.writer_diagnostics.record_rejected(Some(encoded_len));
                     return Err(match rejection {
                         crate::writer_runtime::WriterEnqueueResult::Full(write) => {
                             drop(write);
@@ -1465,23 +1484,24 @@ impl Connection {
         let Some(queued) = self.queued_writer() else {
             return settled(CommandWriteResult::SessionClosed);
         };
-        let Some(send_lease) = queued.lifecycle.begin_owned_send() else {
-            queued.writer_diagnostics.record_rejected(None);
+        let Some(send_lease) = queued.parts.lifecycle.begin_owned_send() else {
+            queued.parts.writer_diagnostics.record_rejected(None);
             return settled(CommandWriteResult::SessionClosed);
         };
         if self.state() == ConnectionState::Closed {
-            queued.writer_diagnostics.record_rejected(None);
+            queued.parts.writer_diagnostics.record_rejected(None);
             return settled(CommandWriteResult::SessionClosed);
         }
         let Ok(permit) = queued
+            .parts
             .admission
             .try_acquire(AdmissionResource::Queued, encoded_len, class)
         else {
-            queued.writer_diagnostics.record_rejected(None);
+            queued.parts.writer_diagnostics.record_rejected(None);
             return settled(CommandWriteResult::QueueSaturated);
         };
         let progress = Arc::new(QueuedWriteProgress::waiting());
-        let enqueued_at = queued.writer_diagnostics.prepare_enqueue(encoded_len);
+        let enqueued_at = queued.parts.writer_diagnostics.prepare_enqueue(encoded_len);
         let completion = WriteCompletion::PendingRequest {
             sink: guard.write_sink(),
             send_lease,
@@ -1494,18 +1514,18 @@ impl Connection {
             Arc::clone(&progress),
             enqueued_at,
         );
-        match queued.writer.try_send(class, write) {
+        match queued.parts.writer.try_send(class, write) {
             crate::writer_runtime::WriterEnqueueResult::Enqueued => {
-                queued.writer_diagnostics.record_accepted();
+                queued.parts.writer_diagnostics.record_accepted();
                 self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
                 RequestEnqueueResult::Queued(progress)
             }
             crate::writer_runtime::WriterEnqueueResult::Full(_) => {
-                queued.writer_diagnostics.record_rejected(Some(encoded_len));
+                queued.parts.writer_diagnostics.record_rejected(Some(encoded_len));
                 settled(CommandWriteResult::QueueSaturated)
             }
             crate::writer_runtime::WriterEnqueueResult::Closed(_) => {
-                queued.writer_diagnostics.record_rejected(Some(encoded_len));
+                queued.parts.writer_diagnostics.record_rejected(Some(encoded_len));
                 settled(CommandWriteResult::SessionClosed)
             }
         }
@@ -1934,6 +1954,7 @@ impl Connection {
             ConnectionWriter::Queued(queued) => {
                 let (completion, result) = oneshot::channel();
                 queued
+                    .parts
                     .writer
                     .close(completion)
                     .await

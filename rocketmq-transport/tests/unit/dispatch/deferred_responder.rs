@@ -440,15 +440,17 @@ async fn queued_response_without_canonical_plan_context_fails_before_enqueue() {
     let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let mut connection = crate::connection::Connection::new_queued(
-        lanes,
-        Arc::clone(&diagnostics),
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes,
+            Arc::clone(&diagnostics),
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx,
         state_rx,
         CheetahString::from_static_str("deferred-missing-plan-context"),
         crate::codec::remoting_command_codec::FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
 

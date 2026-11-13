@@ -376,15 +376,17 @@ async fn typed_response_queue_saturation_is_not_started() {
     let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let mut connection = Connection::new_queued(
-        lanes.clone(),
-        diagnostics,
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes.clone(),
+            diagnostics,
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx,
         state_rx,
         CheetahString::from_string("typed-response-queue-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
     assert_normal_rejection(
@@ -417,15 +419,17 @@ async fn typed_response_admission_saturation_is_not_started_before_lane_enqueue(
     let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let mut connection = Connection::new_queued(
-        lanes.clone(),
-        diagnostics,
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes.clone(),
+            diagnostics,
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx,
         state_rx,
         CheetahString::from_string("typed-response-admission-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
 
@@ -459,15 +463,17 @@ async fn queued_response_api_records_queue_wait_but_generic_commands_do_not() {
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let (telemetry, capture) = TransportTelemetry::with_boundary_metric_capture();
     let mut connection = Connection::new_queued(
-        lanes,
-        Arc::clone(&diagnostics),
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes,
+            Arc::clone(&diagnostics),
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx.clone(),
         state_rx,
         CheetahString::from_string("queued-response-observation-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         telemetry.clone(),
     );
     let writer = tokio::spawn(run_session_writer(
@@ -506,15 +512,17 @@ async fn actual_dropped_queued_completion_before_start_maps_to_typed_not_started
     let (lanes, mut receivers) = writer_lanes(config);
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let connection = Connection::new_queued(
-        lanes.clone(),
-        diagnostics,
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes.clone(),
+            diagnostics,
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx,
         state_rx,
         CheetahString::from_string("dropped-before-start-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
     let send = tokio::spawn(async move {
@@ -563,15 +571,17 @@ async fn actual_dropped_active_completion_maps_to_typed_possibly_partial() {
     let (lanes, receivers) = writer_lanes(config);
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let connection = Connection::new_queued(
-        lanes,
-        Arc::clone(&diagnostics),
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes,
+            Arc::clone(&diagnostics),
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx.clone(),
         state_rx,
         CheetahString::from_string("dropped-active-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
     let writer = tokio::spawn(run_session_writer(
@@ -813,15 +823,17 @@ async fn queued_preflight_deadline_matches_direct_not_started_classification_wit
     let (lanes, receivers) = writer_lanes(config);
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let queued_connection = Connection::new_queued(
-        lanes,
-        Arc::clone(&diagnostics),
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes,
+            Arc::clone(&diagnostics),
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx.clone(),
         state_rx,
         CheetahString::from_string("queued-preflight-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
     let writer = tokio::spawn(run_session_writer(
@@ -1055,15 +1067,17 @@ async fn queued_control_does_not_reclassify_a_completed_stall_after_its_later_de
     let (lanes, receivers) = writer_lanes(config);
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let mut connection = Connection::new_queued(
-        lanes.clone(),
-        Arc::clone(&diagnostics),
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes.clone(),
+            Arc::clone(&diagnostics),
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx.clone(),
         state_rx,
         CheetahString::from_string("queued-completion-cause-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
     let writer = tokio::spawn(run_session_writer(
@@ -1151,15 +1165,17 @@ async fn queued_control_does_not_reclassify_a_dropped_completion_after_its_later
     let (lanes, mut receivers) = writer_lanes(config);
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let mut connection = Connection::new_queued(
-        lanes.clone(),
-        Arc::clone(&diagnostics),
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes.clone(),
+            Arc::clone(&diagnostics),
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx.clone(),
         state_rx,
         CheetahString::from_string("queued-dropped-completion-cause-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
     let owner_deadline = RequestDeadline::after(std::time::Duration::from_millis(80));
@@ -1270,15 +1286,17 @@ async fn queued_typed_transport_failure_matches_direct_possibly_partial_classifi
     let (lanes, receivers) = writer_lanes(config);
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let mut connection = Connection::new_queued(
-        lanes,
-        Arc::clone(&diagnostics),
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes,
+            Arc::clone(&diagnostics),
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx.clone(),
         state_rx,
         CheetahString::from_string("queued-typed-failure-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
     let writer = tokio::spawn(run_session_writer(
@@ -1327,15 +1345,17 @@ async fn queued_facade_preserves_the_shared_canonical_writer_source() {
     let (lanes, receivers) = writer_lanes(config);
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let mut queued_connection = Connection::new_queued(
-        lanes,
-        Arc::clone(&diagnostics),
-        admission,
+        crate::connection::QueuedWriterParts::new(
+            lanes,
+            Arc::clone(&diagnostics),
+            admission,
+            Arc::new(SessionLifecycle::new()),
+        ),
         state_tx.clone(),
         state_rx,
         CheetahString::from_string("queued-legacy-test".to_string()),
         FrameLimits::default(),
         Some(AdmissionClass::Data),
-        Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
     let writer = tokio::spawn(run_session_writer(
@@ -1383,15 +1403,12 @@ fn request_test_connection(
     let (lanes, receivers) = writer_lanes(config);
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let connection = Connection::new_queued(
-        lanes.clone(),
-        diagnostics,
-        admission,
+        crate::connection::QueuedWriterParts::new(lanes.clone(), diagnostics, admission, lifecycle),
         state_tx,
         state_rx,
         CheetahString::from_static_str("queued-request-test"),
         FrameLimits::default(),
         None,
-        lifecycle,
         TransportTelemetry::noop(),
     );
     (controller, connection, lanes, receivers)
