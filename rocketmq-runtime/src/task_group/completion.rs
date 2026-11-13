@@ -27,8 +27,9 @@ use super::TaskId;
 use super::TaskResult;
 
 // Before the first poll, struct field order destroys the user future before
-// its finalizer. Once polled, run() establishes the same order for its locals.
-// This keeps the existing inline/large-future allocation boundary intact.
+// its finalizer. Once polled, run() keeps the same order: its combinator holds
+// the future ahead of the closure that owns the finalizer. This keeps the
+// existing inline/large-future allocation boundary intact.
 pub(super) struct TaskExecution<F> {
     future: F,
     finalizer: TaskFinalizer,
@@ -57,27 +58,40 @@ impl<F: Future<Output = ()>> TaskExecution<F> {
         }
     }
 
-    pub(super) async fn run(self) {
-        let mut finalizer = self.finalizer;
-        let result = AssertUnwindSafe(self.future).catch_unwind().await;
-        // The awaited future has been destroyed at this statement boundary.
-        // Record the observed result once, independently of subsequent aborts.
-        match result {
-            Ok(()) => {
-                if finalizer.inner.cancellation_token.is_cancelled() {
-                    finalizer.result = TaskResult::Cancelled;
-                } else {
-                    finalizer.result = TaskResult::Completed;
+    /// Runs the user future and records its result in the finalizer.
+    ///
+    /// This is a combinator rather than an `async fn`: a coroutine keeps its argument as well
+    /// as the locals moved out of it, which made the wrapper of a 464-byte request future
+    /// 1,584 bytes, and Tokio copies a task's future several times. `Map` drops the finished
+    /// future before it calls the closure, and drops the future before the closure when the
+    /// task is dropped unfinished, so the finalizer always runs after the user future is gone.
+    pub(super) fn run(self) -> impl Future<Output = ()> {
+        let Self {
+            future,
+            finalizer,
+            propagate_panic,
+        } = self;
+        AssertUnwindSafe(future).catch_unwind().map(move |result| {
+            // Its `Drop` publishes the result when the closure returns or unwinds.
+            let mut finalizer = finalizer;
+            // Record the observed result once, independently of subsequent aborts.
+            match result {
+                Ok(()) => {
+                    if finalizer.inner.cancellation_token.is_cancelled() {
+                        finalizer.result = TaskResult::Cancelled;
+                    } else {
+                        finalizer.result = TaskResult::Completed;
+                    }
+                }
+                Err(error) => {
+                    finalizer.result = TaskResult::Panicked;
+                    tracing::error!(task_id = finalizer.task_id.as_u64(), "task panicked");
+                    if propagate_panic {
+                        std::panic::resume_unwind(error);
+                    }
                 }
             }
-            Err(error) => {
-                finalizer.result = TaskResult::Panicked;
-                tracing::error!(task_id = finalizer.task_id.as_u64(), "task panicked");
-                if self.propagate_panic {
-                    std::panic::resume_unwind(error);
-                }
-            }
-        }
+        })
     }
 }
 

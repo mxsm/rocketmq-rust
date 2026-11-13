@@ -66,6 +66,11 @@ const STATE_POISONED: u8 = 4;
 // Tokio's spawn boundary leaves their by-value stack frames live during task submission.
 const MAX_INLINE_TASK_FUTURE_SIZE: usize = crate::stack::MAX_INLINE_SIZE;
 
+// A wrapped task future larger than this is boxed before it reaches Tokio. Tokio and the
+// tracker copy the future about five times over a task's life, which for a request task of
+// about 1.5 KB costs more than one allocation; a small future stays inline.
+const MAX_INLINE_TASK_CELL_SIZE: usize = 256;
+
 /// Identifies a task within the group that owns it.
 ///
 /// The id records its owning group, so a group never mistakes another
@@ -1369,5 +1374,34 @@ mod tests {
         assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::Closed);
         assert!(group.shutdown(Duration::from_secs(1)).await.is_healthy());
         assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
+    }
+
+    #[tokio::test]
+    async fn the_task_wrapper_adds_little_to_the_size_of_the_future_it_runs() {
+        let context = RuntimeContext::from_current("task-wrapper-size");
+        let group = context.service_context("owner").task_group().clone();
+        let payload = [7u8; 512];
+        let future = async move {
+            std::hint::black_box(&payload);
+        };
+        let future_size = std::mem::size_of_val(&future);
+        let wrapped = completion::TaskExecution::new(
+            future,
+            group.inner.clone(),
+            TaskId::new(group.inner.id, 0),
+            Arc::new(TaskCompletion::new()),
+            false,
+            None,
+        )
+        .run();
+
+        // As an `async fn` the wrapper kept both its argument and the future moved out of
+        // it, about three times the size of the future it runs.
+        assert!(
+            std::mem::size_of_val(&wrapped) <= future_size + 128,
+            "wrapper {} bytes around a {future_size}-byte future",
+            std::mem::size_of_val(&wrapped)
+        );
+        drop(wrapped);
     }
 }

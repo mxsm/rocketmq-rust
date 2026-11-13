@@ -17,7 +17,7 @@
 use super::completion::TaskExecution;
 use super::{
     TaskCompletion, TaskGroup, TaskGroupLifecycleState, TaskId, TaskKind, TaskMeta, TaskName, TaskState,
-    MAX_INLINE_TASK_FUTURE_SIZE,
+    MAX_INLINE_TASK_CELL_SIZE, MAX_INLINE_TASK_FUTURE_SIZE,
 };
 use crate::critical::CriticalRegistration;
 use crate::RuntimeResult;
@@ -107,7 +107,25 @@ impl TaskGroup {
             critical,
         )
         .run();
+        // Tokio moves a task's future into its cell and copies the whole stage again each time
+        // the task finishes, hands over its output, or drops it, and the tracker moves it once
+        // more. Boxed, each of those moves copies a pointer and the future is copied once.
+        if std::mem::size_of_val(&wrapped) > MAX_INLINE_TASK_CELL_SIZE {
+            self.dispatch_registered(task_id, meta, Box::pin(wrapped))
+        } else {
+            self.dispatch_registered(task_id, meta, wrapped)
+        }
+    }
 
+    fn dispatch_registered<W>(
+        &self,
+        task_id: TaskId,
+        meta: TaskMeta,
+        wrapped: W,
+    ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
+    where
+        W: Future<Output = ()> + Send + 'static,
+    {
         // Registration is serialized with shutdown; dispatch to Tokio is not.
         // The tracker token taken under the gate keeps a shutdown's join
         // waiting until the task has run, and an abort requested before the

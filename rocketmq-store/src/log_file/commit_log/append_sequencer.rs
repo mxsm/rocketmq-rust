@@ -91,7 +91,7 @@ pub(super) struct SequencedBatchAppend {
 /// Cloneable admission port shared by normal and internal CommitLog producers.
 #[derive(Clone)]
 pub(super) struct CommitLogAppendPort {
-    sender: AppendSequencerSender<AppendRequest>,
+    sender: AppendSequencerSender<QueuedAppend>,
     queue_offsets: ConsumeQueueLookupHandle,
 }
 
@@ -114,16 +114,16 @@ impl CommitLogAppendPort {
     ) -> SequencedMessageAppend {
         let (completion, response) = oneshot::channel();
         let queue_offset = self.resolve_queue_offset(&message);
-        let request = AppendRequest::Message {
+        let request = Box::new(AppendRequest::Message {
             message,
             prepared,
             assign_queue_offset,
             queue_offset,
             completion,
-        };
+        });
         let retained_bytes = request.retained_bytes();
         if let AppendAdmissionResult::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
-            request.reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
+            (*request).reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
             error!(error = %response_error, "CommitLog append worker dropped a message response");
@@ -142,16 +142,16 @@ impl CommitLogAppendPort {
     ) -> SequencedBatchAppend {
         let (completion, response) = oneshot::channel();
         let queue_offset = self.resolve_queue_offset(&batch.message_ext_broker_inner);
-        let request = AppendRequest::Batch {
+        let request = Box::new(AppendRequest::Batch {
             batch,
             prepared,
             context,
             queue_offset,
             completion,
-        };
+        });
         let retained_bytes = request.retained_bytes();
         if let AppendAdmissionResult::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
-            request.reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
+            (*request).reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
             error!(error = %response_error, "CommitLog append worker dropped a batch response");
@@ -236,6 +236,10 @@ impl CommitLogAppendRuntime {
         }
     }
 }
+
+/// An append request crosses the sequencer queue boxed. It carries the whole message, and the
+/// queue moves an item several times on the way in and out, so the moves copy a pointer.
+type QueuedAppend = Box<AppendRequest>;
 
 enum AppendRequest {
     Message {
@@ -485,7 +489,7 @@ impl CommitLogAppendProcessor {
 
     async fn process_batch(
         &self,
-        batch: rocketmq_store_local::commit_log::append::micro_batch::MicroBatch<AppendRequest>,
+        batch: rocketmq_store_local::commit_log::append::micro_batch::MicroBatch<QueuedAppend>,
     ) {
         let request_count = batch.len();
         let retained_bytes = batch.retained_bytes();
@@ -493,7 +497,7 @@ impl CommitLogAppendProcessor {
         let mut permits = Vec::with_capacity(request_count);
         for budgeted_request in batch.into_budgeted_items() {
             let (request, permit, _) = budgeted_request.into_parts();
-            requests.push(request.bind_sequencer_fields(
+            requests.push((*request).bind_sequencer_fields(
                 self.append_callback.as_ref(),
                 self.message_store_config.duplication_enable,
             ));
@@ -801,7 +805,7 @@ impl CommitLogAppendProcessor {
 }
 
 async fn run_append_worker(
-    mut receiver: AppendSequencerReceiver<AppendRequest>,
+    mut receiver: AppendSequencerReceiver<QueuedAppend>,
     processor: CommitLogAppendProcessor,
     cancellation: tokio_util::sync::CancellationToken,
     port: CommitLogAppendPort,
