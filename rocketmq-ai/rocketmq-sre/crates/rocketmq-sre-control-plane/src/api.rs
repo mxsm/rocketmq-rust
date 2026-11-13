@@ -84,6 +84,7 @@ use crate::release_management::ReleaseManagementService;
 use crate::repository::ClusterRepository;
 use crate::slo::SloService;
 use crate::workflow::ConversationQueryService;
+use crate::workflow::InvestigationRunService;
 use crate::workflow::WorkflowEventBus;
 use crate::workflow::WorkflowService;
 
@@ -593,6 +594,7 @@ pub(crate) struct AppState {
     pub(crate) slo: SloService,
     pub(crate) supervised_execution: crate::supervised_execution::SupervisedExecutionService,
     pub(crate) workflow: WorkflowService,
+    pub(crate) investigation_runs: InvestigationRunService,
 }
 
 /// Builds the production API router.
@@ -633,6 +635,7 @@ struct ControlPlaneRouters {
     forecast: ForecastService,
     preventive_automation: crate::automation::PreventiveAutomationService,
     slo: SloService,
+    investigation_runs: InvestigationRunService,
 }
 
 fn build_routers_with_auth(
@@ -649,6 +652,7 @@ fn build_routers_with_auth(
     workflow: WorkflowService,
     task_spawner: Option<TaskSpawner>,
 ) -> Result<ControlPlaneRouters, ControlPlaneRequestFailure> {
+    let investigation_runs = InvestigationRunService::new(repository.clone())?;
     let alerting = AlertingService::new(repository.clone(), workflow.clone())?;
     let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
     let finops = crate::finops::FinOpsService::new(repository.clone());
@@ -753,6 +757,7 @@ fn build_routers_with_auth(
         slo: slo.clone(),
         supervised_execution,
         workflow,
+        investigation_runs: investigation_runs.clone(),
     };
     let public = Router::new()
         .route("/healthz", get(health))
@@ -768,6 +773,7 @@ fn build_routers_with_auth(
         .route("/v1/capabilities/coverage", get(coverage))
         .route("/v1/capabilities/phase2-contract", get(phase2_contract_manifest))
         .merge(crate::phase1_api::public_routes())
+        .merge(crate::workflow::investigation_run_routes())
         .merge(crate::operator_workbench::routes())
         .merge(crate::postmortem::routes())
         .merge(crate::supervised_execution::routes())
@@ -803,6 +809,7 @@ fn build_routers_with_auth(
         forecast,
         preventive_automation,
         slo,
+        investigation_runs,
     })
 }
 
@@ -1027,6 +1034,7 @@ pub async fn run(
         workflow,
         Some(service_context.task_spawner()),
     )?;
+    routers.investigation_runs.schedule_recovery(&service_context)?;
     let autonomy_report_worker = routers.autonomy_operations.clone();
     let autonomy_report_tasks = service_context.scheduled_tasks("autonomy-operations-reports");
     let mut autonomy_report_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(
@@ -1124,6 +1132,7 @@ pub async fn run(
         forecast: _,
         preventive_automation: _,
         slo: _,
+        investigation_runs: _,
     } = routers;
     let connector_shutdown = service_context.task_group().cancellation_token();
     let connector_failure = connector_shutdown.clone();

@@ -322,6 +322,7 @@ impl InvestigationRun {
     /// Every admitted read/model call remains charged after settlement, including
     /// failed and superseded work. Actual reported consumption stays in each
     /// result; Evidence and output settle to actual usage instead of their bound.
+    /// Interrupted attempts retain their complete unknown reservation.
     ///
     /// # Errors
     /// Rejects arithmetic overflow instead of wrapping or resetting a budget.
@@ -350,7 +351,7 @@ impl InvestigationRun {
         self.steps
             .iter()
             .flat_map(|step| &step.attempts)
-            .filter(|attempt| attempt.result.is_none())
+            .filter(|attempt| attempt.result.is_none() && attempt.interruption.is_none())
             .count()
     }
 

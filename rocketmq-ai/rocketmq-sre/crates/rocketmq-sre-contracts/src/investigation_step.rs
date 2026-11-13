@@ -26,6 +26,8 @@ use crate::{
     InvestigationRunStatus, InvestigationStepId, StepAttemptId, canonical_sha256,
 };
 
+mod recovery;
+
 /// Closed read-only work: collectors are resolved from a trusted requirement catalog.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -177,6 +179,28 @@ pub struct InvestigationStepAttempt {
     pub reservation: InvestigationBudgetCost,
     pub result: Option<InvestigationStepResult>,
     pub disposition: Option<InvestigationResultDisposition>,
+    /// Unknown work retains its reservation without inventing a measured result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interruption: Option<InvestigationStepInterruption>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestigationInterruptionReason {
+    WorkerLeaseExpired,
+}
+
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvestigationStepInterruption {
+    pub reason: InvestigationInterruptionReason,
+    pub recovered_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvestigationInterruptionAcceptance {
+    Recorded,
+    Replay,
 }
 
 /// Logical work identity remains stable across bounded retries and restarts.
@@ -283,7 +307,11 @@ impl InvestigationRun {
             }) {
                 return Err(InvestigationRunFailure::StepAlreadyCompleted);
             }
-            if step.attempts.iter().any(|attempt| attempt.result.is_none()) {
+            if step
+                .attempts
+                .iter()
+                .any(|attempt| attempt.result.is_none() && attempt.interruption.is_none())
+            {
                 return Err(InvestigationRunFailure::StepInFlight);
             }
             if step.attempts.len() >= usize::from(self.budget.max_attempts_per_step) {
@@ -322,6 +350,7 @@ impl InvestigationRun {
             reservation: request.reservation,
             result: None,
             disposition: None,
+            interruption: None,
         };
         if let Some(index) = existing {
             next.steps[index].attempts.push(attempt);
@@ -370,6 +399,9 @@ impl InvestigationRun {
             .position(|attempt| attempt.id == result.attempt_id)
             .ok_or(InvestigationRunFailure::AttemptMismatch)?;
         let attempt = &step.attempts[attempt_index];
+        if attempt.interruption.is_some() {
+            return Err(InvestigationRunFailure::ResultConflict);
+        }
         step.spec.validate_result_references(&result.evidence_ids)?;
         if result.control_epoch != attempt.control_epoch {
             return Err(InvestigationRunFailure::AttemptMismatch);

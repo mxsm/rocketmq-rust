@@ -105,10 +105,11 @@ npm run check:api
 工作流请求类型。诊断 API 保持只读；审批与执行页面仅使用既有版本化的
 Control Plane 受监督接口，不提供任意目标请求、配置补丁或 shell。
 
-D13 的独立 InvestigationRun、Step、Command、Assessment 类型同样从 Rust
-JSON Schema 生成。`generate:api` 单独运行调查合同组件扩展器，避免既有会话合同
-扩展的早退跳过新类型。本阶段只发布 OpenAPI components 与类型别名，没有 run
-HTTP paths、client 方法或控制按钮；持久化协调与运行接口属于尚未交付的 D14。
+D13 的独立 InvestigationRun、Step、Command、Assessment 与 D14 持久事件类型
+同样从 Rust JSON Schema 生成。`generate:api` 单独运行调查合同扩展器，避免既有会话
+合同扩展早退跳过新类型。D14 已注册运行创建、快照、命令和持久事件补读 HTTP paths；
+当前 UI 和固定只读 SDK 不添加 mutation client 方法或控制按钮。新运行保持 queued，
+自动诊断派发属于 D15，UI 控制属于 D16。
 现有工作台仍展示人工只读调查。详见[调查运行合同](../docs/investigation-run-contract.md)。
 
 ## 认证配置

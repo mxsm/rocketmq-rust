@@ -2827,6 +2827,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/investigations/{id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Persist a bounded read-only investigation run
+         * @description Requires current diagnose/operator authority and a matching saved investigation. Exact authorized replay returns its original creation snapshot. Queued work awaits the D15 dispatcher; this operation performs no target query or mutation.
+         */
+        post: operations["createInvestigationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/investigation-runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current authorized run snapshot */
+        get: operations["getInvestigationRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/investigation-runs/{id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply typed pause, resume, cancel or narrowing refinement
+         * @description Requires current diagnose/operator authority. Expected revisions and actor-bound idempotency are checked atomically. A replay reads the original receipt without reapplying its status or overwriting a newer snapshot. No tool, shell, model prompt or target mutation can be submitted.
+         */
+        post: operations["commandInvestigationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/investigation-runs/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read bounded durable events or resynchronize a cursor
+         * @description Sequences are per-run lossless decimal strings, independent of revisions. Expired, ahead or gapped cursors return snapshot_required with the latest authorized snapshot; resume after next_sequence. Pages contain at most 100 events and no source bodies or worker lease tokens.
+         */
+        get: operations["listInvestigationRunEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -8208,6 +8285,8 @@ export interface components {
          * @description Stable identifier for a multi-step investigation.
          */
         InvestigationRun__InvestigationId: string;
+        /** @enum {string} */
+        InvestigationRun__InvestigationInterruptionReason: "worker_lease_expired";
         /** @description Exact compiled pack version; neither a catalog entry nor a directory grants authority. */
         InvestigationRun__InvestigationPackRef: {
             pack_id: string;
@@ -8258,6 +8337,8 @@ export interface components {
             control_epoch: components["schemas"]["InvestigationRun__InvestigationControlEpoch"];
             disposition?: components["schemas"]["InvestigationRun__InvestigationResultDisposition"] | null;
             id: components["schemas"]["InvestigationRun__StepAttemptId"];
+            /** @description Unknown work retains its reservation without inventing a measured result. */
+            interruption?: components["schemas"]["InvestigationRun__InvestigationStepInterruption"] | null;
             reservation: components["schemas"]["InvestigationRun__InvestigationBudgetCost"];
             result?: components["schemas"]["InvestigationRun__InvestigationStepResult"] | null;
         };
@@ -8268,6 +8349,11 @@ export interface components {
          * @description Stable identity for one read-only investigation step.
          */
         InvestigationRun__InvestigationStepId: string;
+        InvestigationRun__InvestigationStepInterruption: {
+            reason: components["schemas"]["InvestigationRun__InvestigationInterruptionReason"];
+            /** Format: date-time */
+            recovered_at: string;
+        };
         /** @description Closed read-only work: collectors are resolved from a trusted requirement catalog. */
         InvestigationRun__InvestigationStepKind: {
             /** @constant */
@@ -8517,6 +8603,8 @@ export interface components {
          * @description Stable identifier for a multi-step investigation.
          */
         CreateInvestigationRunResponse__InvestigationId: string;
+        /** @enum {string} */
+        CreateInvestigationRunResponse__InvestigationInterruptionReason: "worker_lease_expired";
         /** @description Exact compiled pack version; neither a catalog entry nor a directory grants authority. */
         CreateInvestigationRunResponse__InvestigationPackRef: {
             pack_id: string;
@@ -8592,6 +8680,8 @@ export interface components {
             control_epoch: components["schemas"]["CreateInvestigationRunResponse__InvestigationControlEpoch"];
             disposition?: components["schemas"]["CreateInvestigationRunResponse__InvestigationResultDisposition"] | null;
             id: components["schemas"]["CreateInvestigationRunResponse__StepAttemptId"];
+            /** @description Unknown work retains its reservation without inventing a measured result. */
+            interruption?: components["schemas"]["CreateInvestigationRunResponse__InvestigationStepInterruption"] | null;
             reservation: components["schemas"]["CreateInvestigationRunResponse__InvestigationBudgetCost"];
             result?: components["schemas"]["CreateInvestigationRunResponse__InvestigationStepResult"] | null;
         };
@@ -8602,6 +8692,11 @@ export interface components {
          * @description Stable identity for one read-only investigation step.
          */
         CreateInvestigationRunResponse__InvestigationStepId: string;
+        CreateInvestigationRunResponse__InvestigationStepInterruption: {
+            reason: components["schemas"]["CreateInvestigationRunResponse__InvestigationInterruptionReason"];
+            /** Format: date-time */
+            recovered_at: string;
+        };
         /** @description Closed read-only work: collectors are resolved from a trusted requirement catalog. */
         CreateInvestigationRunResponse__InvestigationStepKind: {
             /** @constant */
@@ -8841,6 +8936,8 @@ export interface components {
          * @description Stable identifier for a multi-step investigation.
          */
         InvestigationStep__InvestigationId: string;
+        /** @enum {string} */
+        InvestigationStep__InvestigationInterruptionReason: "worker_lease_expired";
         /** @description Exact compiled pack version; neither a catalog entry nor a directory grants authority. */
         InvestigationStep__InvestigationPackRef: {
             pack_id: string;
@@ -8875,6 +8972,8 @@ export interface components {
             control_epoch: components["schemas"]["InvestigationStep__InvestigationControlEpoch"];
             disposition?: components["schemas"]["InvestigationStep__InvestigationResultDisposition"] | null;
             id: components["schemas"]["InvestigationStep__StepAttemptId"];
+            /** @description Unknown work retains its reservation without inventing a measured result. */
+            interruption?: components["schemas"]["InvestigationStep__InvestigationStepInterruption"] | null;
             reservation: components["schemas"]["InvestigationStep__InvestigationBudgetCost"];
             result?: components["schemas"]["InvestigationStep__InvestigationStepResult"] | null;
         };
@@ -8885,6 +8984,11 @@ export interface components {
          * @description Stable identity for one read-only investigation step.
          */
         InvestigationStep__InvestigationStepId: string;
+        InvestigationStep__InvestigationStepInterruption: {
+            reason: components["schemas"]["InvestigationStep__InvestigationInterruptionReason"];
+            /** Format: date-time */
+            recovered_at: string;
+        };
         /** @description Closed read-only work: collectors are resolved from a trusted requirement catalog. */
         InvestigationStep__InvestigationStepKind: {
             /** @constant */
@@ -9177,6 +9281,453 @@ export interface components {
         };
         /** @description Monotonic run revision, serialized as a lossless decimal string. */
         InvestigationRunFailure__InvestigationRevision: string;
+        /**
+         * InvestigationRunEvent
+         * @description Durable per-run sequence is independent of the run's control revision.
+         */
+        InvestigationRunEvent: {
+            actor_subject: string;
+            cluster_id: components["schemas"]["InvestigationRunEvent__ClusterId"];
+            control_epoch: components["schemas"]["InvestigationRunEvent__InvestigationControlEpoch"];
+            event: components["schemas"]["InvestigationRunEvent__InvestigationRunEventKind"];
+            investigation_id: components["schemas"]["InvestigationRunEvent__InvestigationId"];
+            /** Format: date-time */
+            occurred_at: string;
+            revision: components["schemas"]["InvestigationRunEvent__InvestigationRevision"];
+            run_id: components["schemas"]["InvestigationRunEvent__InvestigationRunId"];
+            schema_version: string;
+            sequence: components["schemas"]["InvestigationRunEvent__InvestigationEventSequence"];
+            status: components["schemas"]["InvestigationRunEvent__InvestigationRunStatus"];
+            tenant_id: components["schemas"]["InvestigationRunEvent__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        InvestigationRunEvent__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for one evidence-bound hypothesis assessment.
+         */
+        InvestigationRunEvent__HypothesisAssessmentId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for one investigation control command.
+         */
+        InvestigationRunEvent__InvestigationCommandId: string;
+        /** @description Control generation, serialized as a lossless decimal string. */
+        InvestigationRunEvent__InvestigationControlEpoch: string;
+        /** @description Independent durable event sequence, serialized as a lossless decimal string. */
+        InvestigationRunEvent__InvestigationEventSequence: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a multi-step investigation.
+         */
+        InvestigationRunEvent__InvestigationId: string;
+        /** @enum {string} */
+        InvestigationRunEvent__InvestigationInterruptionReason: "worker_lease_expired";
+        /** @enum {string} */
+        InvestigationRunEvent__InvestigationResultDisposition: "applied" | "superseded";
+        /** @description Monotonic run revision, serialized as a lossless decimal string. */
+        InvestigationRunEvent__InvestigationRevision: string;
+        /** @description Event payloads carry bounded identities, never source bodies or worker lease tokens. */
+        InvestigationRunEvent__InvestigationRunEventKind: {
+            /** @constant */
+            kind: "created";
+        } | {
+            command_id: components["schemas"]["InvestigationRunEvent__InvestigationCommandId"];
+            /** @constant */
+            kind: "command_accepted";
+        } | {
+            /** @constant */
+            kind: "worker_claimed";
+        } | {
+            /** @constant */
+            kind: "worker_released";
+        } | {
+            /** @constant */
+            kind: "started";
+        } | {
+            attempt_id: components["schemas"]["InvestigationRunEvent__StepAttemptId"];
+            /** @constant */
+            kind: "step_admitted";
+            step_id: components["schemas"]["InvestigationRunEvent__InvestigationStepId"];
+        } | {
+            attempt_id: components["schemas"]["InvestigationRunEvent__StepAttemptId"];
+            disposition: components["schemas"]["InvestigationRunEvent__InvestigationResultDisposition"];
+            /** @constant */
+            kind: "step_settled";
+            step_id: components["schemas"]["InvestigationRunEvent__InvestigationStepId"];
+        } | {
+            attempt_id: components["schemas"]["InvestigationRunEvent__StepAttemptId"];
+            /** @constant */
+            kind: "attempt_interrupted";
+            reason: components["schemas"]["InvestigationRunEvent__InvestigationInterruptionReason"];
+            step_id: components["schemas"]["InvestigationRunEvent__InvestigationStepId"];
+        } | {
+            assessment_id: components["schemas"]["InvestigationRunEvent__HypothesisAssessmentId"];
+            /** @constant */
+            kind: "assessment_recorded";
+        } | {
+            /** @constant */
+            kind: "stopped";
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for one bounded investigation run.
+         */
+        InvestigationRunEvent__InvestigationRunId: string;
+        /**
+         * @description Run control is separate from the saved Investigation and Incident lifecycles.
+         * @enum {string}
+         */
+        InvestigationRunEvent__InvestigationRunStatus: "queued" | "running" | "pausing" | "paused" | "needs_evidence" | "completed" | "inconclusive" | "cancelling" | "cancelled" | "failed";
+        /**
+         * Format: uuid
+         * @description Stable identity for one read-only investigation step.
+         */
+        InvestigationRunEvent__InvestigationStepId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for one admitted investigation step attempt.
+         */
+        InvestigationRunEvent__StepAttemptId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        InvestigationRunEvent__TenantId: string;
+        /**
+         * InvestigationRunEventPage
+         * @description A reset includes the authorized latest snapshot and resumes after its head.
+         */
+        InvestigationRunEventPage: {
+            cluster_id: components["schemas"]["InvestigationRunEventPage__ClusterId"];
+            current_snapshot?: components["schemas"]["InvestigationRunEventPage__InvestigationRun"] | null;
+            earliest_sequence: components["schemas"]["InvestigationRunEventPage__InvestigationEventSequence"];
+            events: components["schemas"]["InvestigationRunEventPage__InvestigationRunEvent"][];
+            has_more: boolean;
+            investigation_id: components["schemas"]["InvestigationRunEventPage__InvestigationId"];
+            latest_sequence: components["schemas"]["InvestigationRunEventPage__InvestigationEventSequence"];
+            next_sequence: components["schemas"]["InvestigationRunEventPage__InvestigationEventSequence"];
+            recovery_reason?: components["schemas"]["InvestigationRunEventPage__InvestigationCursorRecovery"] | null;
+            run_id: components["schemas"]["InvestigationRunEventPage__InvestigationRunId"];
+            schema_version: string;
+            snapshot_required: boolean;
+            tenant_id: components["schemas"]["InvestigationRunEventPage__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        InvestigationRunEventPage__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        InvestigationRunEventPage__DiagnosisRevisionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        InvestigationRunEventPage__EvidenceId: string;
+        /**
+         * @description Evidence-bound advisory assessment on an existing immutable diagnosis revision.
+         *
+         *     No execution-eligibility field exists: this object cannot grant execution.
+         */
+        InvestigationRunEventPage__HypothesisAssessment: {
+            conclusion: components["schemas"]["InvestigationRunEventPage__HypothesisAssessmentConclusion"];
+            control_epoch: components["schemas"]["InvestigationRunEventPage__InvestigationControlEpoch"];
+            /** Format: date-time */
+            created_at: string;
+            diagnosis_revision_id: components["schemas"]["InvestigationRunEventPage__DiagnosisRevisionId"];
+            id: components["schemas"]["InvestigationRunEventPage__HypothesisAssessmentId"];
+            run_id: components["schemas"]["InvestigationRunEventPage__InvestigationRunId"];
+            schema_version: string;
+            scope: components["schemas"]["InvestigationRunEventPage__InvestigationRunScope"];
+            summary: string;
+        };
+        /** @description Advisory conclusions reference saved Evidence, never an inferred timestamp relation. */
+        InvestigationRunEventPage__HypothesisAssessmentConclusion: {
+            counter_evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+            /** @constant */
+            kind: "root_cause";
+            statement: string;
+            supporting_evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+        } | {
+            /** @constant */
+            kind: "healthy";
+            supporting_evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+        } | {
+            considered_evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+            /** @constant */
+            kind: "inconclusive";
+            missing_requirements: components["schemas"]["InvestigationRunEventPage__InvestigationRequirementRef"][];
+            reason: components["schemas"]["InvestigationRunEventPage__InvestigationStopReason"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for one evidence-bound hypothesis assessment.
+         */
+        InvestigationRunEventPage__HypothesisAssessmentId: string;
+        /** @description Hard limits: retries are admissions and cannot create a fresh budget. */
+        InvestigationRunEventPage__InvestigationBudget: {
+            limit: components["schemas"]["InvestigationRunEventPage__InvestigationBudgetCost"];
+            /** Format: uint8 */
+            max_attempts_per_step: number;
+            /** Format: uint8 */
+            max_in_flight: number;
+            /** Format: uint8 */
+            max_query_retries: number;
+            /** Format: uint32 */
+            max_steps: number;
+        };
+        /** @description Conservatively reserved or actually consumed resources, shared across all steps. */
+        InvestigationRunEventPage__InvestigationBudgetCost: {
+            /** Format: uint64 */
+            evidence_items: number;
+            /** Format: uint64 */
+            model_calls: number;
+            /** Format: uint64 */
+            output_bytes: number;
+            /** Format: uint64 */
+            read_queries: number;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for one investigation control command.
+         */
+        InvestigationRunEventPage__InvestigationCommandId: string;
+        /** @description Control generation, serialized as a lossless decimal string. */
+        InvestigationRunEventPage__InvestigationControlEpoch: string;
+        /** @enum {string} */
+        InvestigationRunEventPage__InvestigationCursorRecovery: "cursor_expired" | "cursor_ahead" | "retained_event_gap";
+        /** @description Independent durable event sequence, serialized as a lossless decimal string. */
+        InvestigationRunEventPage__InvestigationEventSequence: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a multi-step investigation.
+         */
+        InvestigationRunEventPage__InvestigationId: string;
+        /** @enum {string} */
+        InvestigationRunEventPage__InvestigationInterruptionReason: "worker_lease_expired";
+        /** @description Exact compiled pack version; neither a catalog entry nor a directory grants authority. */
+        InvestigationRunEventPage__InvestigationPackRef: {
+            pack_id: string;
+            pack_version: string;
+        };
+        /** @description Fixed collector requirement resolved by the server from a compiled pack. */
+        InvestigationRunEventPage__InvestigationRequirementRef: {
+            pack: components["schemas"]["InvestigationRunEventPage__InvestigationPackRef"];
+            requirement_id: string;
+        };
+        /** @description An investigation subject, not a canonical Evidence source resource or URL. */
+        InvestigationRunEventPage__InvestigationResource: {
+            key: string;
+            kind: components["schemas"]["InvestigationRunEventPage__ResourceKind"];
+        };
+        /** @enum {string} */
+        InvestigationRunEventPage__InvestigationResultDisposition: "applied" | "superseded";
+        /** @description Monotonic run revision, serialized as a lossless decimal string. */
+        InvestigationRunEventPage__InvestigationRevision: string;
+        /** @description Durable read model for bounded read-only work. No deployed run route exists in D13. */
+        InvestigationRunEventPage__InvestigationRun: {
+            assessments: components["schemas"]["InvestigationRunEventPage__HypothesisAssessment"][];
+            budget: components["schemas"]["InvestigationRunEventPage__InvestigationBudget"];
+            control_epoch: components["schemas"]["InvestigationRunEventPage__InvestigationControlEpoch"];
+            /** Format: date-time */
+            created_at: string;
+            created_by_subject: string;
+            /** Format: date-time */
+            deadline: string;
+            effective_packs: components["schemas"]["InvestigationRunEventPage__InvestigationPackRef"][];
+            effective_scope: components["schemas"]["InvestigationRunEventPage__InvestigationRunScope"];
+            evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+            id: components["schemas"]["InvestigationRunEventPage__InvestigationRunId"];
+            initial_packs: components["schemas"]["InvestigationRunEventPage__InvestigationPackRef"][];
+            initial_scope: components["schemas"]["InvestigationRunEventPage__InvestigationRunScope"];
+            revision: components["schemas"]["InvestigationRunEventPage__InvestigationRevision"];
+            schema_version: string;
+            status: components["schemas"]["InvestigationRunEventPage__InvestigationRunStatus"];
+            steps: components["schemas"]["InvestigationRunEventPage__InvestigationStep"][];
+            /** @description Imported, already saved references consume the same distinct-Evidence budget. */
+            supplied_evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @description Durable per-run sequence is independent of the run's control revision. */
+        InvestigationRunEventPage__InvestigationRunEvent: {
+            actor_subject: string;
+            cluster_id: components["schemas"]["InvestigationRunEventPage__ClusterId"];
+            control_epoch: components["schemas"]["InvestigationRunEventPage__InvestigationControlEpoch"];
+            event: components["schemas"]["InvestigationRunEventPage__InvestigationRunEventKind"];
+            investigation_id: components["schemas"]["InvestigationRunEventPage__InvestigationId"];
+            /** Format: date-time */
+            occurred_at: string;
+            revision: components["schemas"]["InvestigationRunEventPage__InvestigationRevision"];
+            run_id: components["schemas"]["InvestigationRunEventPage__InvestigationRunId"];
+            schema_version: string;
+            sequence: components["schemas"]["InvestigationRunEventPage__InvestigationEventSequence"];
+            status: components["schemas"]["InvestigationRunEventPage__InvestigationRunStatus"];
+            tenant_id: components["schemas"]["InvestigationRunEventPage__TenantId"];
+        };
+        /** @description Event payloads carry bounded identities, never source bodies or worker lease tokens. */
+        InvestigationRunEventPage__InvestigationRunEventKind: {
+            /** @constant */
+            kind: "created";
+        } | {
+            command_id: components["schemas"]["InvestigationRunEventPage__InvestigationCommandId"];
+            /** @constant */
+            kind: "command_accepted";
+        } | {
+            /** @constant */
+            kind: "worker_claimed";
+        } | {
+            /** @constant */
+            kind: "worker_released";
+        } | {
+            /** @constant */
+            kind: "started";
+        } | {
+            attempt_id: components["schemas"]["InvestigationRunEventPage__StepAttemptId"];
+            /** @constant */
+            kind: "step_admitted";
+            step_id: components["schemas"]["InvestigationRunEventPage__InvestigationStepId"];
+        } | {
+            attempt_id: components["schemas"]["InvestigationRunEventPage__StepAttemptId"];
+            disposition: components["schemas"]["InvestigationRunEventPage__InvestigationResultDisposition"];
+            /** @constant */
+            kind: "step_settled";
+            step_id: components["schemas"]["InvestigationRunEventPage__InvestigationStepId"];
+        } | {
+            attempt_id: components["schemas"]["InvestigationRunEventPage__StepAttemptId"];
+            /** @constant */
+            kind: "attempt_interrupted";
+            reason: components["schemas"]["InvestigationRunEventPage__InvestigationInterruptionReason"];
+            step_id: components["schemas"]["InvestigationRunEventPage__InvestigationStepId"];
+        } | {
+            assessment_id: components["schemas"]["InvestigationRunEventPage__HypothesisAssessmentId"];
+            /** @constant */
+            kind: "assessment_recorded";
+        } | {
+            /** @constant */
+            kind: "stopped";
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for one bounded investigation run.
+         */
+        InvestigationRunEventPage__InvestigationRunId: string;
+        /** @description Immutable authority boundary and requested absolute observation window. */
+        InvestigationRunEventPage__InvestigationRunScope: {
+            cluster_id: components["schemas"]["InvestigationRunEventPage__ClusterId"];
+            investigation_id: components["schemas"]["InvestigationRunEventPage__InvestigationId"];
+            resource?: components["schemas"]["InvestigationRunEventPage__InvestigationResource"] | null;
+            tenant_id: components["schemas"]["InvestigationRunEventPage__TenantId"];
+            time_range: components["schemas"]["InvestigationRunEventPage__TimeRange"];
+        };
+        /**
+         * @description Run control is separate from the saved Investigation and Incident lifecycles.
+         * @enum {string}
+         */
+        InvestigationRunEventPage__InvestigationRunStatus: "queued" | "running" | "pausing" | "paused" | "needs_evidence" | "completed" | "inconclusive" | "cancelling" | "cancelled" | "failed";
+        /** @description Logical work identity remains stable across bounded retries and restarts. */
+        InvestigationRunEventPage__InvestigationStep: {
+            attempts: components["schemas"]["InvestigationRunEventPage__InvestigationStepAttempt"][];
+            id: components["schemas"]["InvestigationRunEventPage__InvestigationStepId"];
+            spec: components["schemas"]["InvestigationRunEventPage__InvestigationStepSpec"];
+        };
+        InvestigationRunEventPage__InvestigationStepAttempt: {
+            /** Format: date-time */
+            admitted_at: string;
+            admitted_revision: components["schemas"]["InvestigationRunEventPage__InvestigationRevision"];
+            control_epoch: components["schemas"]["InvestigationRunEventPage__InvestigationControlEpoch"];
+            disposition?: components["schemas"]["InvestigationRunEventPage__InvestigationResultDisposition"] | null;
+            id: components["schemas"]["InvestigationRunEventPage__StepAttemptId"];
+            /** @description Unknown work retains its reservation without inventing a measured result. */
+            interruption?: components["schemas"]["InvestigationRunEventPage__InvestigationStepInterruption"] | null;
+            reservation: components["schemas"]["InvestigationRunEventPage__InvestigationBudgetCost"];
+            result?: components["schemas"]["InvestigationRunEventPage__InvestigationStepResult"] | null;
+        };
+        /** @enum {string} */
+        InvestigationRunEventPage__InvestigationStepFailure: "source_unavailable" | "evidence_insufficient" | "model_unavailable" | "deadline_exceeded";
+        /**
+         * Format: uuid
+         * @description Stable identity for one read-only investigation step.
+         */
+        InvestigationRunEventPage__InvestigationStepId: string;
+        InvestigationRunEventPage__InvestigationStepInterruption: {
+            reason: components["schemas"]["InvestigationRunEventPage__InvestigationInterruptionReason"];
+            /** Format: date-time */
+            recovered_at: string;
+        };
+        /** @description Closed read-only work: collectors are resolved from a trusted requirement catalog. */
+        InvestigationRunEventPage__InvestigationStepKind: {
+            /** @constant */
+            kind: "collect_evidence";
+            requirement_id: string;
+        } | {
+            evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+            /** @constant */
+            kind: "evaluate_rules";
+        } | {
+            evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+            /** @constant */
+            kind: "explain_evidence";
+        };
+        InvestigationRunEventPage__InvestigationStepOutcome: ("succeeded" | "failed") | "cancelled_acknowledged";
+        /**
+         * @description Final observation and actual usage for exactly one admitted attempt.
+         *
+         *     The worker must join/cancel its owned read and know final consumption before
+         *     acknowledging cancellation. No raw result, credentials or message body is carried.
+         */
+        InvestigationRunEventPage__InvestigationStepResult: {
+            actual_cost: components["schemas"]["InvestigationRunEventPage__InvestigationBudgetCost"];
+            attempt_id: components["schemas"]["InvestigationRunEventPage__StepAttemptId"];
+            control_epoch: components["schemas"]["InvestigationRunEventPage__InvestigationControlEpoch"];
+            evidence_ids: components["schemas"]["InvestigationRunEventPage__EvidenceId"][];
+            failure?: components["schemas"]["InvestigationRunEventPage__InvestigationStepFailure"] | null;
+            /** Format: date-time */
+            finished_at: string;
+            outcome: components["schemas"]["InvestigationRunEventPage__InvestigationStepOutcome"];
+            run_id: components["schemas"]["InvestigationRunEventPage__InvestigationRunId"];
+            schema_version: string;
+            step_id: components["schemas"]["InvestigationRunEventPage__InvestigationStepId"];
+        };
+        InvestigationRunEventPage__InvestigationStepSpec: {
+            pack: components["schemas"]["InvestigationRunEventPage__InvestigationPackRef"];
+            scope: components["schemas"]["InvestigationRunEventPage__InvestigationRunScope"];
+            work: components["schemas"]["InvestigationRunEventPage__InvestigationStepKind"];
+        };
+        /**
+         * @description Explicit stop reasons do not imply a root cause was established.
+         * @enum {string}
+         */
+        InvestigationRunEventPage__InvestigationStopReason: "evidence_insufficient" | "budget_exhausted" | "deadline_exceeded" | "no_progress" | "model_unavailable" | "source_unavailable";
+        /**
+         * @description Resource classes accepted by the Phase 2 correlation engine.
+         * @enum {string}
+         */
+        InvestigationRunEventPage__ResourceKind: "cluster" | "name_server" | "controller" | "broker" | "proxy" | "store" | "topic" | "queue" | "consumer_group" | "producer_group" | "pod" | "node" | "persistent_volume_claim" | "certificate" | "runtime" | "telemetry";
+        /**
+         * Format: uuid
+         * @description Stable identifier for one admitted investigation step attempt.
+         */
+        InvestigationRunEventPage__StepAttemptId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        InvestigationRunEventPage__TenantId: string;
+        /** @description Inclusive time range requested from an evidence source. */
+        InvestigationRunEventPage__TimeRange: {
+            /** Format: date-time */
+            end: string;
+            /** Format: date-time */
+            start: string;
+        };
     };
     responses: {
         /** @description Successful scoped response */
@@ -19995,6 +20546,303 @@ export interface operations {
             };
             /** @description Sanitized stable error envelope */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createInvestigationRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInvestigationRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact authorized creation replay; original snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateInvestigationRunResponse"];
+                };
+            };
+            /** @description New queued run and original creation receipt */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateInvestigationRunResponse"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getInvestigationRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current persisted snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationRun"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    commandInvestigationRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvestigationCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Immediate command or exact authorized receipt replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationCommandReceipt"];
+                };
+            };
+            /** @description Newly accepted pause/cancel with admitted attempts still draining */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationCommandReceipt"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listInvestigationRunEvents: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Contiguous events or an explicit snapshot reset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationRunEventPage"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal; no source content is returned */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

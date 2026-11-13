@@ -23,8 +23,9 @@ These are serializable contracts, not implementations of those services. The
 public exports are listed in [src/lib.rs](src/lib.rs).
 
 D13 also publishes independent investigation run, step, command and hypothesis
-assessment contracts. Their schemas and generated TypeScript types are design
-contracts; run HTTP routes and the durable D14 coordinator are not implemented.
+assessment contracts. D14 adds durable event contracts and authenticated
+PostgreSQL-backed run operations. Automatic diagnostic dispatch and UI controls
+remain separate D15/D16 work.
 See [Investigation run contracts](../../docs/investigation-run-contract.md) for
 the generation chain and runtime obligations.
 

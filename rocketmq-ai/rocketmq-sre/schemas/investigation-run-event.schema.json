@@ -1,0 +1,321 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "HypothesisAssessmentId": {
+      "description": "Stable identifier for one evidence-bound hypothesis assessment.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationCommandId": {
+      "description": "Stable identifier for one investigation control command.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationControlEpoch": {
+      "description": "Control generation, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationEventSequence": {
+      "description": "Independent durable event sequence, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationId": {
+      "description": "Stable identifier for a multi-step investigation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationInterruptionReason": {
+      "enum": [
+        "worker_lease_expired"
+      ],
+      "type": "string"
+    },
+    "InvestigationResultDisposition": {
+      "enum": [
+        "applied",
+        "superseded"
+      ],
+      "type": "string"
+    },
+    "InvestigationRevision": {
+      "description": "Monotonic run revision, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationRunEventKind": {
+      "description": "Event payloads carry bounded identities, never source bodies or worker lease tokens.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "created",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "command_id": {
+              "$ref": "#/$defs/InvestigationCommandId"
+            },
+            "kind": {
+              "const": "command_accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "command_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "worker_claimed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "worker_released",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "$ref": "#/$defs/StepAttemptId"
+            },
+            "kind": {
+              "const": "step_admitted",
+              "type": "string"
+            },
+            "step_id": {
+              "$ref": "#/$defs/InvestigationStepId"
+            }
+          },
+          "required": [
+            "kind",
+            "step_id",
+            "attempt_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "$ref": "#/$defs/StepAttemptId"
+            },
+            "disposition": {
+              "$ref": "#/$defs/InvestigationResultDisposition"
+            },
+            "kind": {
+              "const": "step_settled",
+              "type": "string"
+            },
+            "step_id": {
+              "$ref": "#/$defs/InvestigationStepId"
+            }
+          },
+          "required": [
+            "kind",
+            "step_id",
+            "attempt_id",
+            "disposition"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "$ref": "#/$defs/StepAttemptId"
+            },
+            "kind": {
+              "const": "attempt_interrupted",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/InvestigationInterruptionReason"
+            },
+            "step_id": {
+              "$ref": "#/$defs/InvestigationStepId"
+            }
+          },
+          "required": [
+            "kind",
+            "step_id",
+            "attempt_id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assessment_id": {
+              "$ref": "#/$defs/HypothesisAssessmentId"
+            },
+            "kind": {
+              "const": "assessment_recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "assessment_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "stopped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InvestigationRunId": {
+      "description": "Stable identifier for one bounded investigation run.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationRunStatus": {
+      "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+      "enum": [
+        "queued",
+        "running",
+        "pausing",
+        "paused",
+        "needs_evidence",
+        "completed",
+        "inconclusive",
+        "cancelling",
+        "cancelled",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "InvestigationStepId": {
+      "description": "Stable identity for one read-only investigation step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "StepAttemptId": {
+      "description": "Stable identifier for one admitted investigation step attempt.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Durable per-run sequence is independent of the run's control revision.",
+  "properties": {
+    "actor_subject": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "control_epoch": {
+      "$ref": "#/$defs/InvestigationControlEpoch"
+    },
+    "event": {
+      "$ref": "#/$defs/InvestigationRunEventKind"
+    },
+    "investigation_id": {
+      "$ref": "#/$defs/InvestigationId"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "revision": {
+      "$ref": "#/$defs/InvestigationRevision"
+    },
+    "run_id": {
+      "$ref": "#/$defs/InvestigationRunId"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "sequence": {
+      "$ref": "#/$defs/InvestigationEventSequence"
+    },
+    "status": {
+      "$ref": "#/$defs/InvestigationRunStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "cluster_id",
+    "investigation_id",
+    "run_id",
+    "sequence",
+    "revision",
+    "control_epoch",
+    "status",
+    "actor_subject",
+    "event",
+    "occurred_at"
+  ],
+  "title": "InvestigationRunEvent",
+  "type": "object"
+}

@@ -57,6 +57,12 @@
       "format": "uuid",
       "type": "string"
     },
+    "InvestigationInterruptionReason": {
+      "enum": [
+        "worker_lease_expired"
+      ],
+      "type": "string"
+    },
     "InvestigationPackRef": {
       "additionalProperties": false,
       "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
@@ -169,6 +175,17 @@
         "id": {
           "$ref": "#/$defs/StepAttemptId"
         },
+        "interruption": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationStepInterruption"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unknown work retains its reservation without inventing a measured result."
+        },
         "reservation": {
           "$ref": "#/$defs/InvestigationBudgetCost"
         },
@@ -205,6 +222,23 @@
       "description": "Stable identity for one read-only investigation step.",
       "format": "uuid",
       "type": "string"
+    },
+    "InvestigationStepInterruption": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/InvestigationInterruptionReason"
+        },
+        "recovered_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "recovered_at"
+      ],
+      "type": "object"
     },
     "InvestigationStepKind": {
       "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
