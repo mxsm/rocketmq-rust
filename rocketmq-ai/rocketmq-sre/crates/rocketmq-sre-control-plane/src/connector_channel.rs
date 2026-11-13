@@ -29,6 +29,7 @@ pub(crate) use model::ConnectorChannelStatus;
 pub(crate) use model::ConnectorCommand;
 pub(crate) use model::ConnectorLiveness;
 pub(crate) use model::ConnectorPrincipal;
+pub(crate) use model::MAX_RESPONSE_BYTES;
 pub(crate) use model::MAX_SOURCES;
 pub(crate) use model::PollRequest;
 pub(crate) use model::PollResponse;

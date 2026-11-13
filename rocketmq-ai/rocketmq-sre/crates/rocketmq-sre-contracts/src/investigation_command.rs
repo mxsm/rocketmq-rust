@@ -177,6 +177,8 @@ impl InvestigationRun {
             evidence_ids: Vec::new(),
             supplied_evidence_ids: Vec::new(),
             assessments: Vec::new(),
+            pack_results: Vec::new(),
+            stop_reason: None,
             created_by_subject: context.actor_subject.clone(),
             created_at: at,
             updated_at: at,
@@ -277,6 +279,7 @@ impl InvestigationRun {
                 }
                 next.check_live(at)?;
                 next.status = InvestigationRunStatus::Running;
+                next.stop_reason = None;
             }
             InvestigationCommand::Cancel {} => {
                 if next.status == InvestigationRunStatus::Cancelling {

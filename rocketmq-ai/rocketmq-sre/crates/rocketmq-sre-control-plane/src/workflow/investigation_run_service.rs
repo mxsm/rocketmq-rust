@@ -27,13 +27,15 @@ use super::investigation_run_repository::RunCommandOutcome;
 use crate::{ControlPlaneRequestFailure, PostgresRepository, auth::AuthContext};
 
 mod api;
+pub(super) mod bindings;
+mod dispatcher;
 mod failure;
 #[cfg(test)]
 mod http_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 mod recovery;
-mod scope;
+pub(super) mod scope;
 #[cfg(test)]
 mod scope_tests;
 #[cfg(test)]
@@ -42,12 +44,13 @@ mod test_support;
 pub(crate) use api::routes;
 pub(crate) use failure::contract_failure;
 
-/// Authenticated persistent run operations. This service never dispatches work.
+/// Authenticated run operations and an optionally configured owned dispatcher.
 #[derive(Clone)]
 pub(crate) struct InvestigationRunService {
     repository: PostgresRepository,
     catalog: Arc<DiagnosticPackRegistry>,
     recovery_owner: uuid::Uuid,
+    dispatcher: Option<Arc<dispatcher::RunDispatcher>>,
 }
 
 impl InvestigationRunService {
@@ -59,7 +62,18 @@ impl InvestigationRunService {
                     .map_err(|_| ControlPlaneRequestFailure::configuration("diagnostic registry rejected"))?,
             ),
             recovery_owner: uuid::Uuid::new_v4(),
+            dispatcher: None,
         })
+    }
+
+    pub(crate) fn with_dispatcher(
+        mut self,
+        channel: crate::connector_channel::PostgresConnectorChannelService,
+        evidence: crate::evidence::EvidenceService,
+        models: crate::models::ModelGatewayService,
+    ) -> Self {
+        self.dispatcher = Some(Arc::new(dispatcher::RunDispatcher::new(channel, evidence, models)));
+        self
     }
 
     pub(crate) async fn create(

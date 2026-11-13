@@ -55,7 +55,8 @@ async fn migration_from_0059_preserves_saved_parent_and_old_workflow_state() {
     old.run(&pool).await.unwrap();
     let repo = PostgresRepository::from_pool(pool.clone());
     let (auth, scope) = seed_parent(&repo).await;
-    sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+    let current = sqlx::migrate!("../../migrations");
+    current.run(&pool).await.unwrap();
     let row = sqlx::query("SELECT status,resource FROM investigations WHERE id=$1")
         .bind(scope.investigation_id.as_uuid())
         .fetch_one(&pool)
@@ -75,7 +76,7 @@ async fn migration_from_0059_preserves_saved_parent_and_old_workflow_state() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(applied, 60);
+    assert_eq!(Some(applied), current.iter().map(|migration| migration.version).max());
     pool.close().await;
     // Only this test's UUID-named schema is removed.
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))

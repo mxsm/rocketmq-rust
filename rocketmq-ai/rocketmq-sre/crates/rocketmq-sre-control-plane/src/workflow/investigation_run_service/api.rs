@@ -33,7 +33,24 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/investigation-runs/{id}", get(snapshot))
         .route("/v1/investigation-runs/{id}/commands", post(command))
         .route("/v1/investigation-runs/{id}/events", get(events))
+        .route("/v1/investigation-runs/{id}/revisions/{revision_id}", get(revision))
         .layer(DefaultBodyLimit::max(32 * 1024))
+}
+
+async fn revision(
+    State(state): State<AppState>,
+    path: Result<Path<(String, String)>, axum::extract::rejection::PathRejection>,
+    headers: HeaderMap,
+) -> Result<Json<rocketmq_sre_contracts::SavedInvestigationRunRevision>, ControlPlaneRequestFailure> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    let Path((id, revision_id)) = path.map_err(|_| invalid_input())?;
+    let run_id = parse_run_id(&id)?;
+    state.investigation_runs.get(&auth, run_id).await?;
+    state
+        .repository
+        .investigation_run_revision(&auth, run_id, revision_id.parse().map_err(|_| invalid_input())?)
+        .await
+        .map(Json)
 }
 
 async fn create(

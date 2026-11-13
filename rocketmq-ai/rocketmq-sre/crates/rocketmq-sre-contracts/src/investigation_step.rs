@@ -138,6 +138,8 @@ pub enum InvestigationStepOutcome {
 #[serde(rename_all = "snake_case")]
 pub enum InvestigationStepFailure {
     SourceUnavailable,
+    /// A known permanent refusal; it must not consume automatic query retries.
+    SourceRejected,
     EvidenceInsufficient,
     ModelUnavailable,
     DeadlineExceeded,
@@ -188,6 +190,17 @@ pub struct InvestigationStepAttempt {
 #[serde(rename_all = "snake_case")]
 pub enum InvestigationInterruptionReason {
     WorkerLeaseExpired,
+    SourceOutcomeUnknown,
+    ModelOutcomeUnknown,
+    OwnerShutdown,
+}
+
+/// Internal lifecycle settlement; never a browser-supplied result or cost.
+pub struct InvestigationInterruptAttemptRequest {
+    pub expected_revision: InvestigationRevision,
+    pub step_id: InvestigationStepId,
+    pub attempt_id: StepAttemptId,
+    pub reason: InvestigationInterruptionReason,
 }
 
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
@@ -459,6 +472,17 @@ impl InvestigationRun {
         }
         if next.in_flight_count() == 0 {
             next.status = match next.status {
+                InvestigationRunStatus::Pausing
+                    if matches!(
+                        next.stop_reason,
+                        Some(
+                            crate::InvestigationStopReason::SourceUnavailable
+                                | crate::InvestigationStopReason::ModelUnavailable
+                        )
+                    ) =>
+                {
+                    InvestigationRunStatus::NeedsEvidence
+                }
                 InvestigationRunStatus::Pausing => InvestigationRunStatus::Paused,
                 InvestigationRunStatus::Cancelling => InvestigationRunStatus::Cancelled,
                 status => status,

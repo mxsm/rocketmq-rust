@@ -199,3 +199,29 @@ test("unexpected non-local schema references are rejected without fetching them"
     /non-local reference/,
   );
 });
+
+test("run-owned revisions preserve legacy payload shape and keep worker operations private", () => {
+  const document = existing();
+  extendInvestigationRunContracts({ schemas: document.components.schemas, readSchema });
+  extendInvestigationRunTransport({ document });
+  const revision = document.components.schemas.SavedInvestigationRunRevision;
+  for (const field of ["conversation_id", "turn_id", "answer_revision_id"]) {
+    assert.equal(Object.hasOwn(revision.properties, field), false);
+  }
+  assert.ok(revision.required.includes("input_fingerprint"));
+  const assessment = document.components.schemas.HypothesisAssessment;
+  assert.equal(assessment.required.includes("diagnosis_revision_id"), false);
+  assert.equal(assessment.required.includes("run_revision_id"), false);
+  assert.ok(assessment.properties.diagnosis_revision_id);
+  assert.ok(assessment.properties.run_revision_id);
+  const run = document.components.schemas.InvestigationRun;
+  assert.equal(run.required.includes("pack_results"), false);
+  assert.equal(run.required.includes("stop_reason"), false);
+  const path = document.paths["/v1/investigation-runs/{id}/revisions/{revision_id}"];
+  assert.deepEqual(Object.keys(path), ["get"]);
+  assert.equal(path.get.responses[200].content["application/json"].schema.$ref,
+    "#/components/schemas/SavedInvestigationRunRevision");
+  for (const path of Object.keys(document.paths)) {
+    assert.doesNotMatch(path, /\/(?:claim|admit|settle|dispatch|collect|shell)(?:\/|$)/);
+  }
+});

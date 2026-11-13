@@ -66,7 +66,10 @@ pub struct HypothesisAssessment {
     pub run_id: InvestigationRunId,
     pub scope: InvestigationRunScope,
     pub control_epoch: InvestigationControlEpoch,
-    pub diagnosis_revision_id: DiagnosisRevisionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnosis_revision_id: Option<DiagnosisRevisionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_revision_id: Option<crate::InvestigationRunRevisionId>,
     pub conclusion: HypothesisAssessmentConclusion,
     pub summary: String,
     pub created_at: DateTime<Utc>,
@@ -99,7 +102,9 @@ impl HypothesisAssessment {
         if self.schema_version != INVESTIGATION_RUN_SCHEMA_VERSION
             || self.id.as_uuid().is_nil()
             || self.run_id.as_uuid().is_nil()
-            || self.diagnosis_revision_id.as_uuid().is_nil()
+            || self.diagnosis_revision_id.is_some() == self.run_revision_id.is_some()
+            || self.diagnosis_revision_id.is_some_and(|id| id.as_uuid().is_nil())
+            || self.run_revision_id.is_some_and(|id| id.as_uuid().is_nil())
             || !valid_run_text(&self.summary, 4096)
             || !unique_run_ids(&self.references(), 128)
             || self.references().iter().any(|id| id.as_uuid().is_nil())
@@ -171,7 +176,8 @@ impl HypothesisAssessment {
         if self.run_id != run.id
             || self.scope != run.effective_scope
             || self.control_epoch != run.control_epoch
-            || revision.id != self.diagnosis_revision_id
+            || Some(revision.id) != self.diagnosis_revision_id
+            || self.run_revision_id.is_some()
             || revision.investigation_id != run.initial_scope.investigation_id
             || !run
                 .effective_packs

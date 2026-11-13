@@ -122,6 +122,7 @@ const SCHEMA_REPAIR_PURPOSE: &str = "schema_repair";
 
 mod conversation;
 mod critic;
+mod investigation;
 mod lifecycle;
 #[cfg(test)]
 mod live_deepseek;

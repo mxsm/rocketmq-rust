@@ -32,7 +32,10 @@
     },
     "InvestigationInterruptionReason": {
       "enum": [
-        "worker_lease_expired"
+        "worker_lease_expired",
+        "source_outcome_unknown",
+        "model_outcome_unknown",
+        "owner_shutdown"
       ],
       "type": "string"
     },

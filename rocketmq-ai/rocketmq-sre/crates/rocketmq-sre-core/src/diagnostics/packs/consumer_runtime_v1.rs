@@ -78,6 +78,30 @@ impl DiagnosticPack for ConsumerRuntimeV1 {
         OPTIONAL
     }
 
+    fn evidence_fields(&self, requirement_key: &str) -> Vec<rocketmq_sre_contracts::EvidenceFieldContract> {
+        use rocketmq_sre_contracts::{EvidenceFieldContract, EvidenceFieldKind};
+        if requirement_key != "runtime" {
+            return Vec::new();
+        }
+        [
+            ("connected", EvidenceFieldKind::Boolean),
+            ("running_info_available", EvidenceFieldKind::Boolean),
+            ("rebalance_in_progress", EvidenceFieldKind::Boolean),
+            ("unassigned_queues", EvidenceFieldKind::Number),
+            ("process_rt_ms", EvidenceFieldKind::Number),
+            ("paused", EvidenceFieldKind::Boolean),
+            ("commit_failures", EvidenceFieldKind::Number),
+            ("seek_operations", EvidenceFieldKind::Number),
+            ("client_version_supported", EvidenceFieldKind::Boolean),
+        ]
+        .into_iter()
+        .map(|(path, kind)| EvidenceFieldContract {
+            path: path.to_owned(),
+            kind,
+        })
+        .collect()
+    }
+
     fn rule_codes(&self) -> &'static [&'static str] {
         RULES
     }

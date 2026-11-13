@@ -222,7 +222,8 @@ fn assessment(
         run_id: run.id,
         scope: run.effective_scope.clone(),
         control_epoch: run.control_epoch,
-        diagnosis_revision_id: revision.id,
+        diagnosis_revision_id: Some(revision.id),
+        run_revision_id: None,
         conclusion,
         summary: "Advisory assessment bound to saved evidence".into(),
         created_at: run.updated_at,
@@ -238,6 +239,8 @@ mod steps;
 #[path = "investigation_run_contracts/assessment.rs"]
 mod assessment;
 
+#[path = "investigation_run_contracts/progress.rs"]
+mod progress;
 #[path = "investigation_run_contracts/recovery.rs"]
 mod recovery;
 #[path = "investigation_run_contracts/validation.rs"]

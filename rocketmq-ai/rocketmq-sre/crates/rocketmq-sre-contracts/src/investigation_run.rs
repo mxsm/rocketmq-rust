@@ -294,6 +294,12 @@ pub struct InvestigationRun {
     /// Imported, already saved references consume the same distinct-Evidence budget.
     pub supplied_evidence_ids: Vec<EvidenceId>,
     pub assessments: Vec<HypothesisAssessment>,
+    /// Immutable saved per-pack results, including superseded control epochs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pack_results: Vec<crate::InvestigationPackResult>,
+    /// A bounded worker stop need not invent a diagnosis revision or assessment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<crate::InvestigationStopReason>,
     pub created_by_subject: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

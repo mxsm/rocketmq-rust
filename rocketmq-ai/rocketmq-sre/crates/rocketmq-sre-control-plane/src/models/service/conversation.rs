@@ -904,7 +904,7 @@ fn tool_profile_eligible(profile: &RuntimeModelProfile) -> bool {
             .contains(&ProviderCapability::ToolCalling)
 }
 
-fn answer_profile_eligible(profile: &RuntimeModelProfile, data_class: DataClass) -> bool {
+pub(super) fn answer_profile_eligible(profile: &RuntimeModelProfile, data_class: DataClass) -> bool {
     profile.profile.health.routable()
         && profile.profile.allowed_data_classes.contains(&data_class)
         && profile
@@ -919,7 +919,7 @@ fn answer_profile_eligible(profile: &RuntimeModelProfile, data_class: DataClass)
             .contains(&ProviderCapability::JsonSchema)
 }
 
-fn parse_answer(
+pub(super) fn parse_answer(
     response: &CanonicalModelResponse,
     evidence_ids: &[EvidenceId],
 ) -> Result<StructuredConversationAnswer, ProviderStatusOutcome> {

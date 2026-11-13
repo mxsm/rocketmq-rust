@@ -145,7 +145,7 @@ impl PostgresRepository {
     not(test),
     allow(dead_code, reason = "Used by the D15 worker facade, not public D14 handlers")
 )]
-async fn load_worker(
+pub(super) async fn load_worker(
     tx: &mut Transaction<'_, Postgres>,
     worker: &RunWorkerContext<'_>,
     id: InvestigationRunId,

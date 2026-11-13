@@ -14392,7 +14392,7 @@
       "post": {
         "operationId": "createInvestigationRun",
         "summary": "Persist a bounded read-only investigation run",
-        "description": "Requires current diagnose/operator authority and a matching saved investigation. Exact authorized replay returns its original creation snapshot. Queued work awaits the D15 dispatcher; this operation performs no target query or mutation.",
+        "description": "Requires current diagnose/operator authority and a matching saved investigation. Exact authorized replay returns its original creation snapshot. The managed dispatcher uses a bounded receipt-backed read-job delegation, exact selected compiled packs and shared budgets. This request performs no target mutation and exposes no arbitrary query operation.",
         "parameters": [
           {
             "name": "id",
@@ -14711,6 +14711,95 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/InvestigationRunEventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/investigation-runs/{id}/revisions/{revision_id}": {
+      "get": {
+        "operationId": "getInvestigationRunRevision",
+        "summary": "Read one immutable run-owned diagnostic revision",
+        "description": "Current authentication, tenant/cluster and saved-parent scope are checked for this run and revision together. This record has no fabricated conversation, turn or answer IDs and grants no execution authority.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The actual persisted deterministic revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedInvestigationRunRevision"
                 }
               }
             }
@@ -33061,6 +33150,639 @@
         ],
         "type": "object"
       },
+      "SavedInvestigationRunRevision": {
+        "additionalProperties": false,
+        "description": "Run-owned immutable diagnosis, without synthetic conversation/turn/answer IDs.\nIt must be inserted in the fenced evaluation-settlement transaction.",
+        "properties": {
+          "attempt_id": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationControlEpoch"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/SavedInvestigationRunRevision__EvidenceId"
+            },
+            "type": "array"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationRunFinding"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationRunRevisionId"
+          },
+          "input_fingerprint": {
+            "type": "string"
+          },
+          "pack": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationPackRef"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "requirements": {
+            "items": {
+              "$ref": "#/components/schemas/SavedInvestigationRunRevision__DiagnosticRequirementQuality"
+            },
+            "type": "array"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationRunScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationDiagnosisStatus"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationStepId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "run_id",
+          "scope",
+          "control_epoch",
+          "pack",
+          "step_id",
+          "attempt_id",
+          "status",
+          "partial",
+          "input_fingerprint",
+          "evidence_ids",
+          "requirements",
+          "findings",
+          "created_at"
+        ],
+        "title": "SavedInvestigationRunRevision",
+        "type": "object"
+      },
+      "SavedInvestigationRunRevision__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__DiagnosticEvidenceQuality": {
+        "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
+        "enum": [
+          "available",
+          "partial",
+          "missing",
+          "stale",
+          "unknown",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__DiagnosticRequirementQuality": {
+        "description": "IDs identify the exact stored sample that produced this assessment.\n\nAn unbound cluster projection does not establish revision membership.\nConsumers showing revision quality must require the requested investigation\nand revision binding, intersect these IDs with saved references, and verify\nresource and time scope.",
+        "properties": {
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/SavedInvestigationRunRevision__EvidenceId"
+            },
+            "type": "array"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/SavedInvestigationRunRevision__EvidenceFieldContract"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "max_age_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quality": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__DiagnosticEvidenceQuality"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "resource_prefix": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "resource_prefix",
+          "required",
+          "max_age_seconds",
+          "fields",
+          "quality",
+          "reason_code",
+          "evidence_ids",
+          "missing_fields"
+        ],
+        "type": "object"
+      },
+      "SavedInvestigationRunRevision__EvidenceFieldContract": {
+        "description": "A field contract describes evidence sufficiency; it grants no execution authority.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__EvidenceFieldKind"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "SavedInvestigationRunRevision__EvidenceFieldKind": {
+        "description": "Primitive shape required by a compiled diagnostic predicate.",
+        "enum": [
+          "boolean",
+          "number",
+          "text"
+        ],
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__InvestigationDiagnosisStatus": {
+        "description": "Outcome of a deterministic diagnostic pack evaluated for an investigation.",
+        "enum": [
+          "healthy",
+          "fault",
+          "inconclusive",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "SavedInvestigationRunRevision__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "SavedInvestigationRunRevision__InvestigationRunFinding": {
+        "additionalProperties": false,
+        "description": "Deterministic rule output. Model prose cannot replace these findings or\npromote missing/counter evidence into a root-cause statement.",
+        "properties": {
+          "counter_evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/SavedInvestigationRunRevision__EvidenceId"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationDiagnosisStatus"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "root_cause": {
+            "type": "string"
+          },
+          "supporting_evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/SavedInvestigationRunRevision__EvidenceId"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "reason_code",
+          "root_cause",
+          "outcome",
+          "supporting_evidence_ids",
+          "counter_evidence_ids"
+        ],
+        "type": "object"
+      },
+      "SavedInvestigationRunRevision__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__InvestigationRunRevisionId": {
+        "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SavedInvestigationRunRevision__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/SavedInvestigationRunRevision__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "SavedInvestigationRunRevision__InvestigationStepId": {
+        "description": "Stable identity for one read-only investigation step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__StepAttemptId": {
+        "description": "Stable identifier for one admitted investigation step attempt.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SavedInvestigationRunRevision__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "InvestigationPackResult": {
+        "additionalProperties": false,
+        "description": "Compact immutable projection derived from an actual saved run revision.",
+        "properties": {
+          "attempt_id": {
+            "$ref": "#/components/schemas/InvestigationPackResult__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationPackResult__InvestigationControlEpoch"
+          },
+          "counter_evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationPackResult__EvidenceId"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationPackResult__EvidenceId"
+            },
+            "type": "array"
+          },
+          "fault_finding_count": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input_fingerprint": {
+            "type": "string"
+          },
+          "pack": {
+            "$ref": "#/components/schemas/InvestigationPackResult__InvestigationPackRef"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "required_evidence_quality": {
+            "$ref": "#/components/schemas/InvestigationPackResult__DiagnosticEvidenceQuality"
+          },
+          "revision_digest": {
+            "type": "string"
+          },
+          "run_revision_id": {
+            "$ref": "#/components/schemas/InvestigationPackResult__InvestigationRunRevisionId"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationPackResult__InvestigationRunScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvestigationPackResult__InvestigationDiagnosisStatus"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/InvestigationPackResult__InvestigationStepId"
+          }
+        },
+        "required": [
+          "run_revision_id",
+          "revision_digest",
+          "pack",
+          "scope",
+          "control_epoch",
+          "step_id",
+          "attempt_id",
+          "status",
+          "partial",
+          "input_fingerprint",
+          "evidence_ids",
+          "required_evidence_quality",
+          "fault_finding_count",
+          "counter_evidence_ids",
+          "created_at"
+        ],
+        "title": "InvestigationPackResult",
+        "type": "object"
+      },
+      "InvestigationPackResult__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationPackResult__DiagnosticEvidenceQuality": {
+        "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
+        "enum": [
+          "available",
+          "partial",
+          "missing",
+          "stale",
+          "unknown",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "InvestigationPackResult__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationPackResult__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationPackResult__InvestigationDiagnosisStatus": {
+        "description": "Outcome of a deterministic diagnostic pack evaluated for an investigation.",
+        "enum": [
+          "healthy",
+          "fault",
+          "inconclusive",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "InvestigationPackResult__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationPackResult__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "InvestigationPackResult__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/InvestigationPackResult__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "InvestigationPackResult__InvestigationRunRevisionId": {
+        "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationPackResult__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/InvestigationPackResult__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/InvestigationPackResult__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationPackResult__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationPackResult__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/InvestigationPackResult__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "InvestigationPackResult__InvestigationStepId": {
+        "description": "Stable identity for one read-only investigation step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationPackResult__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "InvestigationPackResult__StepAttemptId": {
+        "description": "Stable identifier for one admitted investigation step attempt.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationPackResult__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationPackResult__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
       "InvestigationRun": {
         "additionalProperties": false,
         "description": "Durable read model for bounded read-only work. No deployed run route exists in D13.",
@@ -33115,6 +33837,13 @@
           "initial_scope": {
             "$ref": "#/components/schemas/InvestigationRun__InvestigationRunScope"
           },
+          "pack_results": {
+            "description": "Immutable saved per-pack results, including superseded control epochs.",
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__InvestigationPackResult"
+            },
+            "type": "array"
+          },
           "revision": {
             "$ref": "#/components/schemas/InvestigationRun__InvestigationRevision"
           },
@@ -33129,6 +33858,17 @@
               "$ref": "#/components/schemas/InvestigationRun__InvestigationStep"
             },
             "type": "array"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRun__InvestigationStopReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A bounded worker stop need not invent a diagnosis revision or assessment."
           },
           "supplied_evidence_ids": {
             "description": "Imported, already saved references consume the same distinct-Evidence budget.",
@@ -33175,6 +33915,18 @@
         "format": "uuid",
         "type": "string"
       },
+      "InvestigationRun__DiagnosticEvidenceQuality": {
+        "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
+        "enum": [
+          "available",
+          "partial",
+          "missing",
+          "stale",
+          "unknown",
+          "unsupported"
+        ],
+        "type": "string"
+      },
       "InvestigationRun__EvidenceId": {
         "description": "Stable identifier for an evidence snapshot.",
         "format": "uuid",
@@ -33195,13 +33947,30 @@
             "type": "string"
           },
           "diagnosis_revision_id": {
-            "$ref": "#/components/schemas/InvestigationRun__DiagnosisRevisionId"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRun__DiagnosisRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/InvestigationRun__HypothesisAssessmentId"
           },
           "run_id": {
             "$ref": "#/components/schemas/InvestigationRun__InvestigationRunId"
+          },
+          "run_revision_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRun__InvestigationRunRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "schema_version": {
             "type": "string"
@@ -33219,7 +33988,6 @@
           "run_id",
           "scope",
           "control_epoch",
-          "diagnosis_revision_id",
           "conclusion",
           "summary",
           "created_at"
@@ -33400,6 +34168,16 @@
         "pattern": "^(0|[1-9][0-9]{0,19})$",
         "type": "string"
       },
+      "InvestigationRun__InvestigationDiagnosisStatus": {
+        "description": "Outcome of a deterministic diagnostic pack evaluated for an investigation.",
+        "enum": [
+          "healthy",
+          "fault",
+          "inconclusive",
+          "unsupported"
+        ],
+        "type": "string"
+      },
       "InvestigationRun__InvestigationId": {
         "description": "Stable identifier for a multi-step investigation.",
         "format": "uuid",
@@ -33407,7 +34185,10 @@
       },
       "InvestigationRun__InvestigationInterruptionReason": {
         "enum": [
-          "worker_lease_expired"
+          "worker_lease_expired",
+          "source_outcome_unknown",
+          "model_outcome_unknown",
+          "owner_shutdown"
         ],
         "type": "string"
       },
@@ -33425,6 +34206,85 @@
         "required": [
           "pack_id",
           "pack_version"
+        ],
+        "type": "object"
+      },
+      "InvestigationRun__InvestigationPackResult": {
+        "additionalProperties": false,
+        "description": "Compact immutable projection derived from an actual saved run revision.",
+        "properties": {
+          "attempt_id": {
+            "$ref": "#/components/schemas/InvestigationRun__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationControlEpoch"
+          },
+          "counter_evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRun__EvidenceId"
+            },
+            "type": "array"
+          },
+          "fault_finding_count": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input_fingerprint": {
+            "type": "string"
+          },
+          "pack": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationPackRef"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "required_evidence_quality": {
+            "$ref": "#/components/schemas/InvestigationRun__DiagnosticEvidenceQuality"
+          },
+          "revision_digest": {
+            "type": "string"
+          },
+          "run_revision_id": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunRevisionId"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationRunScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationDiagnosisStatus"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationStepId"
+          }
+        },
+        "required": [
+          "run_revision_id",
+          "revision_digest",
+          "pack",
+          "scope",
+          "control_epoch",
+          "step_id",
+          "attempt_id",
+          "status",
+          "partial",
+          "input_fingerprint",
+          "evidence_ids",
+          "required_evidence_quality",
+          "fault_finding_count",
+          "counter_evidence_ids",
+          "created_at"
         ],
         "type": "object"
       },
@@ -33476,6 +34336,11 @@
       },
       "InvestigationRun__InvestigationRunId": {
         "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRun__InvestigationRunRevisionId": {
+        "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
         "format": "uuid",
         "type": "string"
       },
@@ -33615,13 +34480,22 @@
         "type": "object"
       },
       "InvestigationRun__InvestigationStepFailure": {
-        "enum": [
-          "source_unavailable",
-          "evidence_insufficient",
-          "model_unavailable",
-          "deadline_exceeded"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "source_unavailable",
+              "evidence_insufficient",
+              "model_unavailable",
+              "deadline_exceeded"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "source_rejected",
+            "description": "A known permanent refusal; it must not consume automatic query retries.",
+            "type": "string"
+          }
+        ]
       },
       "InvestigationRun__InvestigationStepId": {
         "description": "Stable identity for one read-only investigation step.",
@@ -34152,6 +35026,18 @@
         "format": "uuid",
         "type": "string"
       },
+      "CreateInvestigationRunResponse__DiagnosticEvidenceQuality": {
+        "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
+        "enum": [
+          "available",
+          "partial",
+          "missing",
+          "stale",
+          "unknown",
+          "unsupported"
+        ],
+        "type": "string"
+      },
       "CreateInvestigationRunResponse__EvidenceId": {
         "description": "Stable identifier for an evidence snapshot.",
         "format": "uuid",
@@ -34172,13 +35058,30 @@
             "type": "string"
           },
           "diagnosis_revision_id": {
-            "$ref": "#/components/schemas/CreateInvestigationRunResponse__DiagnosisRevisionId"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__DiagnosisRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/CreateInvestigationRunResponse__HypothesisAssessmentId"
           },
           "run_id": {
             "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunId"
+          },
+          "run_revision_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "schema_version": {
             "type": "string"
@@ -34196,7 +35099,6 @@
           "run_id",
           "scope",
           "control_epoch",
-          "diagnosis_revision_id",
           "conclusion",
           "summary",
           "created_at"
@@ -34377,6 +35279,16 @@
         "pattern": "^(0|[1-9][0-9]{0,19})$",
         "type": "string"
       },
+      "CreateInvestigationRunResponse__InvestigationDiagnosisStatus": {
+        "description": "Outcome of a deterministic diagnostic pack evaluated for an investigation.",
+        "enum": [
+          "healthy",
+          "fault",
+          "inconclusive",
+          "unsupported"
+        ],
+        "type": "string"
+      },
       "CreateInvestigationRunResponse__InvestigationId": {
         "description": "Stable identifier for a multi-step investigation.",
         "format": "uuid",
@@ -34384,7 +35296,10 @@
       },
       "CreateInvestigationRunResponse__InvestigationInterruptionReason": {
         "enum": [
-          "worker_lease_expired"
+          "worker_lease_expired",
+          "source_outcome_unknown",
+          "model_outcome_unknown",
+          "owner_shutdown"
         ],
         "type": "string"
       },
@@ -34402,6 +35317,85 @@
         "required": [
           "pack_id",
           "pack_version"
+        ],
+        "type": "object"
+      },
+      "CreateInvestigationRunResponse__InvestigationPackResult": {
+        "additionalProperties": false,
+        "description": "Compact immutable projection derived from an actual saved run revision.",
+        "properties": {
+          "attempt_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationControlEpoch"
+          },
+          "counter_evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__EvidenceId"
+            },
+            "type": "array"
+          },
+          "fault_finding_count": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input_fingerprint": {
+            "type": "string"
+          },
+          "pack": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationPackRef"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "required_evidence_quality": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__DiagnosticEvidenceQuality"
+          },
+          "revision_digest": {
+            "type": "string"
+          },
+          "run_revision_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunRevisionId"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationDiagnosisStatus"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepId"
+          }
+        },
+        "required": [
+          "run_revision_id",
+          "revision_digest",
+          "pack",
+          "scope",
+          "control_epoch",
+          "step_id",
+          "attempt_id",
+          "status",
+          "partial",
+          "input_fingerprint",
+          "evidence_ids",
+          "required_evidence_quality",
+          "fault_finding_count",
+          "counter_evidence_ids",
+          "created_at"
         ],
         "type": "object"
       },
@@ -34505,6 +35499,13 @@
           "initial_scope": {
             "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRunScope"
           },
+          "pack_results": {
+            "description": "Immutable saved per-pack results, including superseded control epochs.",
+            "items": {
+              "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationPackResult"
+            },
+            "type": "array"
+          },
           "revision": {
             "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationRevision"
           },
@@ -34519,6 +35520,17 @@
               "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStep"
             },
             "type": "array"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStopReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A bounded worker stop need not invent a diagnosis revision or assessment."
           },
           "supplied_evidence_ids": {
             "description": "Imported, already saved references consume the same distinct-Evidence budget.",
@@ -34556,6 +35568,11 @@
       },
       "CreateInvestigationRunResponse__InvestigationRunId": {
         "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationRunRevisionId": {
+        "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
         "format": "uuid",
         "type": "string"
       },
@@ -34695,13 +35712,22 @@
         "type": "object"
       },
       "CreateInvestigationRunResponse__InvestigationStepFailure": {
-        "enum": [
-          "source_unavailable",
-          "evidence_insufficient",
-          "model_unavailable",
-          "deadline_exceeded"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "source_unavailable",
+              "evidence_insufficient",
+              "model_unavailable",
+              "deadline_exceeded"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "source_rejected",
+            "description": "A known permanent refusal; it must not consume automatic query retries.",
+            "type": "string"
+          }
+        ]
       },
       "CreateInvestigationRunResponse__InvestigationStepId": {
         "description": "Stable identity for one read-only investigation step.",
@@ -35394,7 +36420,10 @@
       },
       "InvestigationStep__InvestigationInterruptionReason": {
         "enum": [
-          "worker_lease_expired"
+          "worker_lease_expired",
+          "source_outcome_unknown",
+          "model_outcome_unknown",
+          "owner_shutdown"
         ],
         "type": "string"
       },
@@ -35545,13 +36574,22 @@
         "type": "object"
       },
       "InvestigationStep__InvestigationStepFailure": {
-        "enum": [
-          "source_unavailable",
-          "evidence_insufficient",
-          "model_unavailable",
-          "deadline_exceeded"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "source_unavailable",
+              "evidence_insufficient",
+              "model_unavailable",
+              "deadline_exceeded"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "source_rejected",
+            "description": "A known permanent refusal; it must not consume automatic query retries.",
+            "type": "string"
+          }
+        ]
       },
       "InvestigationStep__InvestigationStepId": {
         "description": "Stable identity for one read-only investigation step.",
@@ -35895,13 +36933,22 @@
         "type": "string"
       },
       "InvestigationStepResult__InvestigationStepFailure": {
-        "enum": [
-          "source_unavailable",
-          "evidence_insufficient",
-          "model_unavailable",
-          "deadline_exceeded"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "source_unavailable",
+              "evidence_insufficient",
+              "model_unavailable",
+              "deadline_exceeded"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "source_rejected",
+            "description": "A known permanent refusal; it must not consume automatic query retries.",
+            "type": "string"
+          }
+        ]
       },
       "InvestigationStepResult__InvestigationStepId": {
         "description": "Stable identity for one read-only investigation step.",
@@ -35944,13 +36991,30 @@
             "type": "string"
           },
           "diagnosis_revision_id": {
-            "$ref": "#/components/schemas/HypothesisAssessment__DiagnosisRevisionId"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HypothesisAssessment__DiagnosisRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/HypothesisAssessment__HypothesisAssessmentId"
           },
           "run_id": {
             "$ref": "#/components/schemas/HypothesisAssessment__InvestigationRunId"
+          },
+          "run_revision_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HypothesisAssessment__InvestigationRunRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "schema_version": {
             "type": "string"
@@ -35968,7 +37032,6 @@
           "run_id",
           "scope",
           "control_epoch",
-          "diagnosis_revision_id",
           "conclusion",
           "summary",
           "created_at"
@@ -36146,6 +37209,11 @@
       },
       "HypothesisAssessment__InvestigationRunId": {
         "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "HypothesisAssessment__InvestigationRunRevisionId": {
+        "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
         "format": "uuid",
         "type": "string"
       },
@@ -36572,7 +37640,10 @@
       },
       "InvestigationRunEvent__InvestigationInterruptionReason": {
         "enum": [
-          "worker_lease_expired"
+          "worker_lease_expired",
+          "source_outcome_unknown",
+          "model_outcome_unknown",
+          "owner_shutdown"
         ],
         "type": "string"
       },
@@ -36886,6 +37957,18 @@
         "format": "uuid",
         "type": "string"
       },
+      "InvestigationRunEventPage__DiagnosticEvidenceQuality": {
+        "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
+        "enum": [
+          "available",
+          "partial",
+          "missing",
+          "stale",
+          "unknown",
+          "unsupported"
+        ],
+        "type": "string"
+      },
       "InvestigationRunEventPage__EvidenceId": {
         "description": "Stable identifier for an evidence snapshot.",
         "format": "uuid",
@@ -36906,13 +37989,30 @@
             "type": "string"
           },
           "diagnosis_revision_id": {
-            "$ref": "#/components/schemas/InvestigationRunEventPage__DiagnosisRevisionId"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__DiagnosisRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/InvestigationRunEventPage__HypothesisAssessmentId"
           },
           "run_id": {
             "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunId"
+          },
+          "run_revision_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunRevisionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "schema_version": {
             "type": "string"
@@ -36930,7 +38030,6 @@
           "run_id",
           "scope",
           "control_epoch",
-          "diagnosis_revision_id",
           "conclusion",
           "summary",
           "created_at"
@@ -37124,6 +38223,16 @@
         ],
         "type": "string"
       },
+      "InvestigationRunEventPage__InvestigationDiagnosisStatus": {
+        "description": "Outcome of a deterministic diagnostic pack evaluated for an investigation.",
+        "enum": [
+          "healthy",
+          "fault",
+          "inconclusive",
+          "unsupported"
+        ],
+        "type": "string"
+      },
       "InvestigationRunEventPage__InvestigationEventSequence": {
         "description": "Independent durable event sequence, serialized as a lossless decimal string.",
         "pattern": "^(0|[1-9][0-9]{0,19})$",
@@ -37136,7 +38245,10 @@
       },
       "InvestigationRunEventPage__InvestigationInterruptionReason": {
         "enum": [
-          "worker_lease_expired"
+          "worker_lease_expired",
+          "source_outcome_unknown",
+          "model_outcome_unknown",
+          "owner_shutdown"
         ],
         "type": "string"
       },
@@ -37154,6 +38266,85 @@
         "required": [
           "pack_id",
           "pack_version"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationPackResult": {
+        "additionalProperties": false,
+        "description": "Compact immutable projection derived from an actual saved run revision.",
+        "properties": {
+          "attempt_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationControlEpoch"
+          },
+          "counter_evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+            },
+            "type": "array"
+          },
+          "fault_finding_count": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input_fingerprint": {
+            "type": "string"
+          },
+          "pack": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationPackRef"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "required_evidence_quality": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__DiagnosticEvidenceQuality"
+          },
+          "revision_digest": {
+            "type": "string"
+          },
+          "run_revision_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunRevisionId"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationDiagnosisStatus"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepId"
+          }
+        },
+        "required": [
+          "run_revision_id",
+          "revision_digest",
+          "pack",
+          "scope",
+          "control_epoch",
+          "step_id",
+          "attempt_id",
+          "status",
+          "partial",
+          "input_fingerprint",
+          "evidence_ids",
+          "required_evidence_quality",
+          "fault_finding_count",
+          "counter_evidence_ids",
+          "created_at"
         ],
         "type": "object"
       },
@@ -37257,6 +38448,13 @@
           "initial_scope": {
             "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunScope"
           },
+          "pack_results": {
+            "description": "Immutable saved per-pack results, including superseded control epochs.",
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationPackResult"
+            },
+            "type": "array"
+          },
           "revision": {
             "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRevision"
           },
@@ -37271,6 +38469,17 @@
               "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStep"
             },
             "type": "array"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStopReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A bounded worker stop need not invent a diagnosis revision or assessment."
           },
           "supplied_evidence_ids": {
             "description": "Imported, already saved references consume the same distinct-Evidence budget.",
@@ -37544,6 +38753,11 @@
         "format": "uuid",
         "type": "string"
       },
+      "InvestigationRunEventPage__InvestigationRunRevisionId": {
+        "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
+        "format": "uuid",
+        "type": "string"
+      },
       "InvestigationRunEventPage__InvestigationRunScope": {
         "additionalProperties": false,
         "description": "Immutable authority boundary and requested absolute observation window.",
@@ -37680,13 +38894,22 @@
         "type": "object"
       },
       "InvestigationRunEventPage__InvestigationStepFailure": {
-        "enum": [
-          "source_unavailable",
-          "evidence_insufficient",
-          "model_unavailable",
-          "deadline_exceeded"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "source_unavailable",
+              "evidence_insufficient",
+              "model_unavailable",
+              "deadline_exceeded"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "source_rejected",
+            "description": "A known permanent refusal; it must not consume automatic query retries.",
+            "type": "string"
+          }
+        ]
       },
       "InvestigationRunEventPage__InvestigationStepId": {
         "description": "Stable identity for one read-only investigation step.",

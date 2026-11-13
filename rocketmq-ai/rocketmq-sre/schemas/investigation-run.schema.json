@@ -10,6 +10,18 @@
       "format": "uuid",
       "type": "string"
     },
+    "DiagnosticEvidenceQuality": {
+      "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
+      "enum": [
+        "available",
+        "partial",
+        "missing",
+        "stale",
+        "unknown",
+        "unsupported"
+      ],
+      "type": "string"
+    },
     "EvidenceId": {
       "description": "Stable identifier for an evidence snapshot.",
       "format": "uuid",
@@ -30,13 +42,30 @@
           "type": "string"
         },
         "diagnosis_revision_id": {
-          "$ref": "#/$defs/DiagnosisRevisionId"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiagnosisRevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "id": {
           "$ref": "#/$defs/HypothesisAssessmentId"
         },
         "run_id": {
           "$ref": "#/$defs/InvestigationRunId"
+        },
+        "run_revision_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationRunRevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "schema_version": {
           "type": "string"
@@ -54,7 +83,6 @@
         "run_id",
         "scope",
         "control_epoch",
-        "diagnosis_revision_id",
         "conclusion",
         "summary",
         "created_at"
@@ -235,6 +263,16 @@
       "pattern": "^(0|[1-9][0-9]{0,19})$",
       "type": "string"
     },
+    "InvestigationDiagnosisStatus": {
+      "description": "Outcome of a deterministic diagnostic pack evaluated for an investigation.",
+      "enum": [
+        "healthy",
+        "fault",
+        "inconclusive",
+        "unsupported"
+      ],
+      "type": "string"
+    },
     "InvestigationId": {
       "description": "Stable identifier for a multi-step investigation.",
       "format": "uuid",
@@ -242,7 +280,10 @@
     },
     "InvestigationInterruptionReason": {
       "enum": [
-        "worker_lease_expired"
+        "worker_lease_expired",
+        "source_outcome_unknown",
+        "model_outcome_unknown",
+        "owner_shutdown"
       ],
       "type": "string"
     },
@@ -260,6 +301,85 @@
       "required": [
         "pack_id",
         "pack_version"
+      ],
+      "type": "object"
+    },
+    "InvestigationPackResult": {
+      "additionalProperties": false,
+      "description": "Compact immutable projection derived from an actual saved run revision.",
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/StepAttemptId"
+        },
+        "control_epoch": {
+          "$ref": "#/$defs/InvestigationControlEpoch"
+        },
+        "counter_evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "fault_finding_count": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_fingerprint": {
+          "type": "string"
+        },
+        "pack": {
+          "$ref": "#/$defs/InvestigationPackRef"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "required_evidence_quality": {
+          "$ref": "#/$defs/DiagnosticEvidenceQuality"
+        },
+        "revision_digest": {
+          "type": "string"
+        },
+        "run_revision_id": {
+          "$ref": "#/$defs/InvestigationRunRevisionId"
+        },
+        "scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        },
+        "status": {
+          "$ref": "#/$defs/InvestigationDiagnosisStatus"
+        },
+        "step_id": {
+          "$ref": "#/$defs/InvestigationStepId"
+        }
+      },
+      "required": [
+        "run_revision_id",
+        "revision_digest",
+        "pack",
+        "scope",
+        "control_epoch",
+        "step_id",
+        "attempt_id",
+        "status",
+        "partial",
+        "input_fingerprint",
+        "evidence_ids",
+        "required_evidence_quality",
+        "fault_finding_count",
+        "counter_evidence_ids",
+        "created_at"
       ],
       "type": "object"
     },
@@ -311,6 +431,11 @@
     },
     "InvestigationRunId": {
       "description": "Stable identifier for one bounded investigation run.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationRunRevisionId": {
+      "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
       "format": "uuid",
       "type": "string"
     },
@@ -450,13 +575,22 @@
       "type": "object"
     },
     "InvestigationStepFailure": {
-      "enum": [
-        "source_unavailable",
-        "evidence_insufficient",
-        "model_unavailable",
-        "deadline_exceeded"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "source_unavailable",
+            "evidence_insufficient",
+            "model_unavailable",
+            "deadline_exceeded"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "source_rejected",
+          "description": "A known permanent refusal; it must not consume automatic query retries.",
+          "type": "string"
+        }
+      ]
     },
     "InvestigationStepId": {
       "description": "Stable identity for one read-only investigation step.",
@@ -754,6 +888,13 @@
     "initial_scope": {
       "$ref": "#/$defs/InvestigationRunScope"
     },
+    "pack_results": {
+      "description": "Immutable saved per-pack results, including superseded control epochs.",
+      "items": {
+        "$ref": "#/$defs/InvestigationPackResult"
+      },
+      "type": "array"
+    },
     "revision": {
       "$ref": "#/$defs/InvestigationRevision"
     },
@@ -768,6 +909,17 @@
         "$ref": "#/$defs/InvestigationStep"
       },
       "type": "array"
+    },
+    "stop_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InvestigationStopReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A bounded worker stop need not invent a diagnosis revision or assessment."
     },
     "supplied_evidence_ids": {
       "description": "Imported, already saved references consume the same distinct-Evidence budget.",

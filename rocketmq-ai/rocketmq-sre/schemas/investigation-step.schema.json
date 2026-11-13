@@ -59,7 +59,10 @@
     },
     "InvestigationInterruptionReason": {
       "enum": [
-        "worker_lease_expired"
+        "worker_lease_expired",
+        "source_outcome_unknown",
+        "model_outcome_unknown",
+        "owner_shutdown"
       ],
       "type": "string"
     },
@@ -210,13 +213,22 @@
       "type": "object"
     },
     "InvestigationStepFailure": {
-      "enum": [
-        "source_unavailable",
-        "evidence_insufficient",
-        "model_unavailable",
-        "deadline_exceeded"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "source_unavailable",
+            "evidence_insufficient",
+            "model_unavailable",
+            "deadline_exceeded"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "source_rejected",
+          "description": "A known permanent refusal; it must not consume automatic query retries.",
+          "type": "string"
+        }
+      ]
     },
     "InvestigationStepId": {
       "description": "Stable identity for one read-only investigation step.",
