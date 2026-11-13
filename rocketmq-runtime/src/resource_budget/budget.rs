@@ -175,13 +175,15 @@ impl ResourceBudgetTree {
         let name = validated_name(name.into())?;
         limit.validate(&name)?;
         let admission_gates: Arc<[Arc<AdmissionGate>]> = Arc::from([]);
+        let capacity_notify = Arc::new(CapacitySignal::default());
         let node = Arc::new(BudgetNode::new(
             Arc::from(name.as_str()),
             limit,
             clock,
             admission_gates.clone(),
+            Arc::clone(&capacity_notify),
+            true,
         ));
-        let capacity_notify = Arc::new(CapacitySignal::default());
         Ok(Self {
             root: ResourceBudget {
                 node: Arc::clone(&node),
@@ -331,7 +333,37 @@ impl ResourceBudget {
     /// Returns a contract violation when the child name is blank or malformed,
     /// its limit is invalid, or its limit exceeds its parent.
     pub fn child(&self, name: impl Into<String>, limit: BudgetLimit) -> Result<Self, crate::RuntimeContractViolation> {
-        self.child_with_gates(name, limit, self.admission_gates.clone())
+        self.child_with_gates(name, limit, self.admission_gates.clone(), true)
+    }
+
+    /// Creates a group child named `name` together with all of its children.
+    ///
+    /// The group joins its children under one path, `<this>/<name>/<child>`, and enforces
+    /// `limit` like any other level. When no rate is configured and the children's capacities,
+    /// and their capacities net of the control reserve, add up to no more than the group's,
+    /// the group can never run out before one of its children does. It then counts nothing
+    /// itself, which saves one shared update per permit taken below it. The group handle is
+    /// not returned, so nothing acquires from it directly or adds children to it later.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when a name or limit is invalid, or when a child limit
+    /// exceeds the group limit.
+    pub fn child_group<const N: usize>(
+        &self,
+        name: impl Into<String>,
+        limit: BudgetLimit,
+        children: [(&str, BudgetLimit); N],
+    ) -> Result<[Self; N], crate::RuntimeContractViolation> {
+        let counted = !children_fit_within(limit, children.iter().map(|(_, child)| *child));
+        let group = self.child_with_gates(name, limit, self.admission_gates.clone(), counted)?;
+        let mut created = Vec::with_capacity(N);
+        for (child_name, child_limit) in children {
+            created.push(group.child(child_name, child_limit)?);
+        }
+        Ok(created
+            .try_into()
+            .unwrap_or_else(|_: Vec<Self>| unreachable!("one budget is created for each of the N children")))
     }
 
     fn child_with_gates(
@@ -339,6 +371,7 @@ impl ResourceBudget {
         name: impl Into<String>,
         limit: BudgetLimit,
         admission_gates: Arc<[Arc<AdmissionGate>]>,
+        counted: bool,
     ) -> Result<Self, crate::RuntimeContractViolation> {
         let name = validated_name(name.into())?;
         let path: Arc<str> = Arc::from(format!("{}/{}", self.node.path, name));
@@ -348,6 +381,8 @@ impl ResourceBudget {
             limit,
             Arc::clone(&self.node.clock),
             admission_gates.clone(),
+            Arc::clone(&self.capacity_notify),
+            counted,
         ));
         let mut chain = Vec::with_capacity(self.chain.len() + 1);
         chain.extend(self.chain.iter().cloned());
@@ -389,7 +424,7 @@ impl ResourceBudget {
             closed: Mutex::new(false),
         }));
         let child = self
-            .child_with_gates(name, limit, Arc::from(gates))
+            .child_with_gates(name, limit, Arc::from(gates), true)
             .map_err(DynamicKeyRegistrationFailure::Invalid)?;
         self.keys.register(child, path)
     }
@@ -456,25 +491,23 @@ impl ResourceBudget {
         class: BudgetClass,
         record_failure: bool,
     ) -> Result<ResourcePermit, BudgetRejection> {
-        let mut reservations = PendingReservations::new(bytes, class);
-        for node in self.chain.iter() {
-            if let Err(dimension) = reservations.reserve(node) {
-                if record_failure {
-                    self.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
-                }
-                return Err(BudgetRejection {
-                    path: Arc::clone(&self.node.path),
-                    exhausted_path: Arc::clone(&node.path),
-                    reason: BudgetRejectionReason::Capacity(dimension),
-                    policy: self.node.limit.full_policy,
-                });
+        let mut reservations = PendingReservations::new(&self.chain, bytes, class);
+        if let Err((node, dimension)) = reservations.reserve_all() {
+            if record_failure {
+                self.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
             }
+            return Err(BudgetRejection {
+                path: Arc::clone(&self.node.path),
+                exhausted_path: Arc::clone(&node.path),
+                reason: BudgetRejectionReason::Capacity(dimension),
+                policy: self.node.limit.full_policy,
+            });
         }
+        reservations.commit();
         Ok(ResourcePermit {
-            nodes: reservations.commit(),
+            chain: Arc::clone(&self.chain),
             bytes,
             class,
-            capacity_notify: Arc::clone(&self.capacity_notify),
         })
     }
 
@@ -579,6 +612,45 @@ impl ResourceBudget {
     }
 }
 
+/// Whether a group with `limit` can never run out before one of `children` does.
+///
+/// Every reservation below the group is held by exactly one child subtree, and each child
+/// keeps its own total and data-class usage within its capacity, so the group's usage never
+/// exceeds the children's summed capacities. A rate cannot be derived from the children.
+fn children_fit_within(limit: BudgetLimit, children: impl Iterator<Item = BudgetLimit>) -> bool {
+    if limit.capacity.rate.is_some() {
+        return false;
+    }
+    let mut sums = Some([0usize; 4]);
+    for child in children {
+        sums = sums.and_then(|[count, bytes, data_count, data_bytes]| {
+            let data = data_capacity(child);
+            Some([
+                count.checked_add(child.capacity.count)?,
+                bytes.checked_add(child.capacity.bytes)?,
+                data_count.checked_add(data.0)?,
+                data_bytes.checked_add(data.1)?,
+            ])
+        });
+    }
+    let Some([count, bytes, data_count, data_bytes]) = sums else {
+        return false;
+    };
+    let (group_data_count, group_data_bytes) = data_capacity(limit);
+    count <= limit.capacity.count
+        && bytes <= limit.capacity.bytes
+        && data_count <= group_data_count
+        && data_bytes <= group_data_bytes
+}
+
+/// The count and bytes the data class may hold: capacity net of the control reserve.
+fn data_capacity(limit: BudgetLimit) -> (usize, usize) {
+    (
+        limit.capacity.count.saturating_sub(limit.control_reserve.count),
+        limit.capacity.bytes.saturating_sub(limit.control_reserve.bytes),
+    )
+}
+
 fn validated_name(name: String) -> Result<String, crate::RuntimeContractViolation> {
     let name = name.trim();
     if name.is_empty() {
@@ -590,31 +662,23 @@ fn validated_name(name: String) -> Result<String, crate::RuntimeContractViolatio
     Ok(name.to_owned())
 }
 
-/// Budget levels a permit holds inline before its chain moves to the heap.
-///
-/// Admission chains are up to about six levels deep (process root, resource, IP, tenant,
-/// session and dynamic generations); each level is one pointer.
-const INLINE_CHAIN_LEVELS: usize = 8;
-
-/// The nodes of a permit's chain, root first.
-type HeldNodes = SmallVec<[Arc<BudgetNode>; INLINE_CHAIN_LEVELS]>;
-
 /// Represents resource permit.
 ///
-/// The permit holds one count and its `bytes` of its `class` at every node of `nodes`, so a
-/// node needs no reservation record of its own.
+/// The permit holds one count and its `bytes` of its `class` at every node of `chain`, the
+/// chain of the budget it was acquired from or last rebound to, so a node needs no
+/// reservation record of its own and the permit shares the budget's chain instead of
+/// holding each level.
 pub struct ResourcePermit {
-    nodes: HeldNodes,
+    chain: Arc<[Arc<BudgetNode>]>,
     bytes: usize,
     class: BudgetClass,
-    capacity_notify: Arc<CapacitySignal>,
 }
 
 impl fmt::Debug for ResourcePermit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ResourcePermit")
-            .field("path", &self.nodes.last().map(|node| &node.path))
+            .field("path", &self.chain.last().map(|node| &node.path))
             .field("bytes", &self.bytes)
             .field("class", &self.class)
             .finish()
@@ -638,8 +702,11 @@ impl ResourcePermit {
             self.shrink_to(bytes);
             return Ok(());
         }
-        // Every live permit owns at least its root reservation.
-        let leaf = Arc::clone(self.nodes.last().expect("permits own a root reservation"));
+        let chain = &self.chain;
+        // Every budget chain starts at its tree root, so a permit always has a leaf.
+        let Some(leaf) = chain.last() else {
+            return Ok(());
+        };
         let mut guards = SmallVec::<[MutexGuard<'_, bool>; 2]>::new();
         for gate in leaf.admission_gates.iter() {
             let guard = gate.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -655,17 +722,17 @@ impl ResourcePermit {
             guards.push(guard);
         }
         let additional = bytes - self.bytes;
-        for (index, node) in self.nodes.iter().enumerate() {
+        for (index, node) in chain.iter().enumerate() {
             if !node.try_reserve_bytes(additional, self.class) {
-                for reserved in &self.nodes[..index] {
+                for reserved in &chain[..index] {
                     reserved.release_bytes(additional, self.class);
                 }
                 let reason = BudgetRejectionReason::Capacity(BudgetDimension::Bytes);
                 node.record_rejection(reason);
-                if !Arc::ptr_eq(node, &leaf) {
+                if !Arc::ptr_eq(node, leaf) {
                     leaf.record_rejection(reason);
                 }
-                self.capacity_notify.signal();
+                node.capacity_notify.signal();
                 return Err(BudgetRejection {
                     path: leaf.path.clone(),
                     exhausted_path: node.path.clone(),
@@ -674,6 +741,7 @@ impl ResourcePermit {
                 });
             }
         }
+        drop(guards);
         self.bytes = bytes;
         Ok(())
     }
@@ -683,11 +751,11 @@ impl ResourcePermit {
         if released == 0 {
             return;
         }
-        for node in &self.nodes {
+        for node in self.chain.iter() {
             node.release_bytes(released, self.class);
         }
         self.bytes = bytes;
-        self.capacity_notify.signal();
+        self.signal_capacity();
     }
 
     #[must_use]
@@ -710,15 +778,14 @@ impl ResourcePermit {
         if self.class == BudgetClass::Control {
             return;
         }
-        for node in &self.nodes {
-            release_reserved(&node.data_count, 1);
-            release_reserved(&node.data_bytes, self.bytes);
+        for node in self.chain.iter() {
+            node.release_data_class(self.bytes);
             if let Some(rate) = &node.rate {
                 BudgetNode::lock_rate(rate).restore_data(node.limit);
             }
         }
         self.class = BudgetClass::Control;
-        self.capacity_notify.signal();
+        self.signal_capacity();
     }
 
     /// Moves this reservation to another budget in the same resource tree.
@@ -750,7 +817,7 @@ impl ResourcePermit {
     }
 
     pub(super) fn belongs_to_tree(&self, target: &ResourceBudget) -> bool {
-        self.nodes
+        self.chain
             .first()
             .zip(target.chain.first())
             .is_some_and(|(held, node)| Arc::ptr_eq(held, node))
@@ -759,7 +826,7 @@ impl ResourcePermit {
     pub(super) fn try_rebind_admitted(&mut self, admission: &BudgetAdmission<'_>) -> PermitBudgetTransferStatus {
         let target = admission.budget;
         let common_ancestors = self
-            .nodes
+            .chain
             .iter()
             .zip(target.chain.iter())
             .take_while(|(held, target_node)| Arc::ptr_eq(held, target_node))
@@ -768,70 +835,83 @@ impl ResourcePermit {
             common_ancestors > 0,
             "caller validates the permit tree before admission"
         );
-        if common_ancestors == self.nodes.len() && common_ancestors == target.chain.len() {
+        if common_ancestors == self.chain.len() && common_ancestors == target.chain.len() {
             return PermitBudgetTransferStatus::Unchanged;
         }
 
-        let mut target_reservations = PendingReservations::new(self.bytes, self.class);
-        for node in target.chain.iter().skip(common_ancestors) {
-            if let Err(dimension) = target_reservations.reserve(node) {
-                target.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
-                return PermitBudgetTransferStatus::Rejected(BudgetRejection {
-                    path: Arc::clone(&target.node.path),
-                    exhausted_path: Arc::clone(&node.path),
-                    reason: BudgetRejectionReason::Capacity(dimension),
-                    policy: target.node.limit.full_policy,
-                });
-            }
+        let mut target_reservations =
+            PendingReservations::new(&target.chain[common_ancestors..], self.bytes, self.class);
+        if let Err((node, dimension)) = target_reservations.reserve_all() {
+            target.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
+            return PermitBudgetTransferStatus::Rejected(BudgetRejection {
+                path: Arc::clone(&target.node.path),
+                exhausted_path: Arc::clone(&node.path),
+                reason: BudgetRejectionReason::Capacity(dimension),
+                policy: target.node.limit.full_policy,
+            });
         }
-        let target_nodes = target_reservations.commit();
+        target_reservations.commit();
 
-        for node in self.nodes.drain(common_ancestors..) {
+        for node in &self.chain[common_ancestors..] {
             node.release_held(self.bytes, self.class);
         }
-        self.nodes.extend(target_nodes);
-        self.capacity_notify.signal();
+        // The target chain starts with the common ancestors this permit keeps holding.
+        self.chain = Arc::clone(&target.chain);
+        self.signal_capacity();
         PermitBudgetTransferStatus::Rebound
+    }
+
+    fn signal_capacity(&self) {
+        if let Some(root) = self.chain.first() {
+            root.capacity_notify.signal();
+        }
     }
 }
 
 impl Drop for ResourcePermit {
     fn drop(&mut self) {
-        for node in self.nodes.drain(..) {
+        for node in self.chain.iter() {
             node.release_held(self.bytes, self.class);
         }
-        self.capacity_notify.signal();
+        self.signal_capacity();
     }
 }
 
 /// One budget level.
 ///
-/// Count and byte capacity is reserved with atomic read-modify-writes. A
-/// request that fails at a later dimension, or at a later node of its chain,
+/// Count and byte capacity is reserved with atomic read-modify-writes on packed
+/// [`PackedUsage`] words: one for all reservations and one for the data class.
+/// A request that fails at the data word, or at a later node of its chain,
 /// rolls back what it reserved, so no counter ever exceeds its limit. A
 /// concurrent request that observes capacity during such a rollback can be
 /// rejected even though the capacity is about to return.
+///
+/// A node of a [`ResourceBudget::child_group`] whose children fit within it
+/// can never be the first to run out, so it does not count at all.
 ///
 /// Only a node that configures a rate takes a lock, around its token buckets.
 struct BudgetNode {
     path: Arc<str>,
     limit: BudgetLimit,
     clock: Arc<dyn MonotonicClock>,
-    current_count: AtomicUsize,
-    current_bytes: AtomicUsize,
-    data_count: AtomicUsize,
-    data_bytes: AtomicUsize,
+    counted: bool,
+    total: PackedUsage,
+    data: PackedUsage,
+    total_limit: PackedLimit,
+    data_limit: PackedLimit,
     counters: BudgetCounters,
     rate: Option<Mutex<RateState>>,
     // Resize uses the leaf node's gates, including after rebind. Keep this
     // shared state out of every ResourcePermit and its downstream containers.
     admission_gates: Arc<[Arc<AdmissionGate>]>,
+    // Every node of a tree shares the tree's signal, so a permit reaches it through its chain.
+    capacity_notify: Arc<CapacitySignal>,
 }
 
+/// Released counts follow from `admitted` minus what is held, so only admissions are counted.
 #[derive(Default)]
 struct BudgetCounters {
     admitted: AtomicU64,
-    released: AtomicU64,
     rejected: AtomicU64,
     throttled: AtomicU64,
     dropped: AtomicU64,
@@ -839,46 +919,119 @@ struct BudgetCounters {
     closed_slow_consumer: AtomicU64,
 }
 
-/// Adds `amount` to `counter` when the sum stays within `limit`.
-fn try_reserve_within(counter: &AtomicUsize, amount: usize, limit: usize) -> bool {
-    counter
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-            current.checked_add(amount).filter(|total| *total <= limit)
-        })
-        .is_ok()
+/// Bits of a [`PackedUsage`] word that hold bytes; the count takes the rest.
+const PACKED_BYTE_BITS: u32 = 40;
+const PACKED_BYTE_MASK: u64 = (1 << PACKED_BYTE_BITS) - 1;
+/// Largest count one budget level holds: 16,777,215.
+const MAX_PACKED_COUNT: u64 = (1 << (u64::BITS - PACKED_BYTE_BITS)) - 1;
+/// Largest byte total one budget level holds: 1 TiB minus one byte.
+const MAX_PACKED_BYTES: u64 = PACKED_BYTE_MASK;
+
+/// A count and a byte limit as a [`PackedUsage`] word holds them.
+///
+/// A configured limit beyond a field's maximum is treated as that maximum; no
+/// process holds 16.7 million permits or a terabyte of reservations at once.
+#[derive(Clone, Copy)]
+struct PackedLimit {
+    count: u64,
+    bytes: u64,
 }
 
-fn release_reserved(counter: &AtomicUsize, amount: usize) {
-    let previous = counter.fetch_sub(amount, Ordering::AcqRel);
-    debug_assert!(previous >= amount, "budget capacity released more than reserved");
+impl PackedLimit {
+    fn new(count: usize, bytes: usize) -> Self {
+        Self {
+            count: packed_field(count).min(MAX_PACKED_COUNT),
+            bytes: packed_field(bytes).min(MAX_PACKED_BYTES),
+        }
+    }
+}
+
+fn packed_field(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+/// The count and bytes reserved at one budget level, in one word, so that one atomic
+/// read-modify-write reserves or releases both.
+///
+/// The count is in the high bits and the bytes in the low [`PACKED_BYTE_BITS`]. A reservation
+/// never takes either field past its [`PackedLimit`], and a release returns only what a
+/// reservation added, so subtracting a packed amount never borrows across the fields.
+#[derive(Default)]
+struct PackedUsage(AtomicU64);
+
+impl PackedUsage {
+    /// Adds `count` and `bytes` when both stay within `limit`; reports the count first.
+    fn try_reserve(&self, count: u64, bytes: usize, limit: PackedLimit) -> Result<(), BudgetDimension> {
+        let bytes = packed_field(bytes);
+        let mut current = self.0.load(Ordering::Acquire);
+        loop {
+            let held_count = current >> PACKED_BYTE_BITS;
+            let held_bytes = current & PACKED_BYTE_MASK;
+            let next_count = held_count + count;
+            if next_count > limit.count {
+                return Err(BudgetDimension::Count);
+            }
+            let Some(next_bytes) = held_bytes.checked_add(bytes).filter(|total| *total <= limit.bytes) else {
+                return Err(BudgetDimension::Bytes);
+            };
+            match self.0.compare_exchange_weak(
+                current,
+                (next_count << PACKED_BYTE_BITS) | next_bytes,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Returns `count` and `bytes` that an earlier reservation added.
+    fn release(&self, count: u64, bytes: usize) {
+        let bytes = packed_field(bytes);
+        debug_assert!(
+            bytes <= MAX_PACKED_BYTES,
+            "a reservation never holds more than the packed maximum"
+        );
+        let previous = self.0.fetch_sub((count << PACKED_BYTE_BITS) | bytes, Ordering::AcqRel);
+        debug_assert!(
+            previous >> PACKED_BYTE_BITS >= count && previous & PACKED_BYTE_MASK >= bytes,
+            "budget capacity released more than reserved"
+        );
+    }
+
+    fn load(&self) -> (usize, usize) {
+        let current = self.0.load(Ordering::Acquire);
+        (
+            usize::try_from(current >> PACKED_BYTE_BITS).unwrap_or(usize::MAX),
+            usize::try_from(current & PACKED_BYTE_MASK).unwrap_or(usize::MAX),
+        )
+    }
 }
 
 impl BudgetNode {
     fn try_reserve_bytes(&self, bytes: usize, class: BudgetClass) -> bool {
-        if !try_reserve_within(&self.current_bytes, bytes, self.limit.capacity.bytes) {
+        if !self.counted {
+            return true;
+        }
+        if self.total.try_reserve(0, bytes, self.total_limit).is_err() {
             return false;
         }
-        if class == BudgetClass::Data
-            && !try_reserve_within(
-                &self.data_bytes,
-                bytes,
-                self.limit
-                    .capacity
-                    .bytes
-                    .saturating_sub(self.limit.control_reserve.bytes),
-            )
-        {
-            release_reserved(&self.current_bytes, bytes);
+        if class == BudgetClass::Data && self.data.try_reserve(0, bytes, self.data_limit).is_err() {
+            self.total.release(0, bytes);
             return false;
         }
         true
     }
 
     fn release_bytes(&self, bytes: usize, class: BudgetClass) {
-        if class == BudgetClass::Data {
-            release_reserved(&self.data_bytes, bytes);
+        if !self.counted {
+            return;
         }
-        release_reserved(&self.current_bytes, bytes);
+        if class == BudgetClass::Data {
+            self.data.release(0, bytes);
+        }
+        self.total.release(0, bytes);
     }
 
     fn new(
@@ -886,22 +1039,31 @@ impl BudgetNode {
         limit: BudgetLimit,
         clock: Arc<dyn MonotonicClock>,
         admission_gates: Arc<[Arc<AdmissionGate>]>,
+        capacity_notify: Arc<CapacitySignal>,
+        counted: bool,
     ) -> Self {
         let rate = limit
             .capacity
             .rate
             .map(|_| Mutex::new(RateState::new(limit, clock.now())));
+        let capacity = limit.capacity;
+        let reserve = limit.control_reserve;
         Self {
             path,
             limit,
             clock,
-            current_count: AtomicUsize::new(0),
-            current_bytes: AtomicUsize::new(0),
-            data_count: AtomicUsize::new(0),
-            data_bytes: AtomicUsize::new(0),
+            counted,
+            total: PackedUsage::default(),
+            data: PackedUsage::default(),
+            total_limit: PackedLimit::new(capacity.count, capacity.bytes),
+            data_limit: PackedLimit::new(
+                capacity.count.saturating_sub(reserve.count),
+                capacity.bytes.saturating_sub(reserve.bytes),
+            ),
             counters: BudgetCounters::default(),
             rate,
             admission_gates,
+            capacity_notify,
         }
     }
 
@@ -912,32 +1074,14 @@ impl BudgetNode {
     /// Reserves one count and `bytes` of `class`, and a rate token where the node has a rate.
     /// [`PendingReservations`] owns the reservation until it is committed to a permit.
     fn try_reserve(&self, bytes: usize, class: BudgetClass) -> Result<(), BudgetDimension> {
-        let capacity = self.limit.capacity;
-        let control_reserve = self.limit.control_reserve;
-        if !try_reserve_within(&self.current_count, 1, capacity.count) {
-            return Err(BudgetDimension::Count);
+        if !self.counted {
+            return Ok(());
         }
-        if !try_reserve_within(&self.current_bytes, bytes, capacity.bytes) {
-            release_reserved(&self.current_count, 1);
-            return Err(BudgetDimension::Bytes);
-        }
+        self.total.try_reserve(1, bytes, self.total_limit)?;
         if class == BudgetClass::Data {
-            if !try_reserve_within(
-                &self.data_count,
-                1,
-                capacity.count.saturating_sub(control_reserve.count),
-            ) {
-                self.release_capacity(bytes, BudgetClass::Control);
-                return Err(BudgetDimension::Count);
-            }
-            if !try_reserve_within(
-                &self.data_bytes,
-                bytes,
-                capacity.bytes.saturating_sub(control_reserve.bytes),
-            ) {
-                release_reserved(&self.data_count, 1);
-                self.release_capacity(bytes, BudgetClass::Control);
-                return Err(BudgetDimension::Bytes);
+            if let Err(dimension) = self.data.try_reserve(1, bytes, self.data_limit) {
+                self.total.release(1, bytes);
+                return Err(dimension);
             }
         }
         if let Some(rate) = &self.rate {
@@ -954,39 +1098,37 @@ impl BudgetNode {
         Ok(())
     }
 
-    /// Returns what a permit held at this node and counts the release.
+    /// Returns what a permit held at this node.
     fn release_held(&self, bytes: usize, class: BudgetClass) {
         self.release_capacity(bytes, class);
-        self.counters.released.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Returns reserved count and bytes; data counters too for a data reservation.
     fn release_capacity(&self, bytes: usize, class: BudgetClass) {
-        if class == BudgetClass::Data {
-            release_reserved(&self.data_count, 1);
-            release_reserved(&self.data_bytes, bytes);
+        if !self.counted {
+            return;
         }
-        release_reserved(&self.current_bytes, bytes);
-        release_reserved(&self.current_count, 1);
+        if class == BudgetClass::Data {
+            self.data.release(1, bytes);
+        }
+        self.total.release(1, bytes);
+    }
+
+    /// Moves a held data reservation to the control class: count and bytes stay held in total.
+    fn release_data_class(&self, bytes: usize) {
+        if self.counted {
+            self.data.release(1, bytes);
+        }
     }
 
     fn permanent_exhaustion_dimension(&self, bytes: usize, class: BudgetClass) -> Option<BudgetDimension> {
-        let (count_capacity, byte_capacity) = match class {
-            BudgetClass::Data => (
-                self.limit
-                    .capacity
-                    .count
-                    .saturating_sub(self.limit.control_reserve.count),
-                self.limit
-                    .capacity
-                    .bytes
-                    .saturating_sub(self.limit.control_reserve.bytes),
-            ),
-            BudgetClass::Control => (self.limit.capacity.count, self.limit.capacity.bytes),
+        let limit = match class {
+            BudgetClass::Data => self.data_limit,
+            BudgetClass::Control => self.total_limit,
         };
-        if count_capacity == 0 {
+        if limit.count == 0 {
             Some(BudgetDimension::Count)
-        } else if bytes > byte_capacity {
+        } else if packed_field(bytes) > limit.bytes {
             Some(BudgetDimension::Bytes)
         } else {
             None
@@ -1013,13 +1155,18 @@ impl BudgetNode {
     }
 
     /// Reads each counter atomically; the fields are not one consistent cut.
+    ///
+    /// The released count is the admitted count minus the count held now, so it is exact
+    /// whenever no acquisition or release is in progress at this node.
     fn snapshot(&self) -> BudgetSnapshot {
+        let (current_count, current_bytes) = self.total.load();
+        let admitted_count = self.counters.admitted.load(Ordering::Acquire);
         BudgetSnapshot {
             path: Arc::clone(&self.path),
-            current_count: self.current_count.load(Ordering::Acquire),
-            current_bytes: self.current_bytes.load(Ordering::Acquire),
-            admitted_count: self.counters.admitted.load(Ordering::Relaxed),
-            released_count: self.counters.released.load(Ordering::Relaxed),
+            current_count,
+            current_bytes,
+            admitted_count,
+            released_count: admitted_count.saturating_sub(current_count as u64),
             rejected_count: self.counters.rejected.load(Ordering::Relaxed),
             throttled_count: self.counters.throttled.load(Ordering::Relaxed),
             dropped_count: self.counters.dropped.load(Ordering::Relaxed),
@@ -1031,39 +1178,48 @@ impl BudgetNode {
 
 /// Reservations taken on a run of nodes for one acquisition or rebind, rolled back unless
 /// they are committed to a permit.
-struct PendingReservations {
-    nodes: HeldNodes,
+struct PendingReservations<'a> {
+    nodes: &'a [Arc<BudgetNode>],
+    reserved: usize,
     bytes: usize,
     class: BudgetClass,
 }
 
-impl PendingReservations {
-    fn new(bytes: usize, class: BudgetClass) -> Self {
+impl<'a> PendingReservations<'a> {
+    fn new(nodes: &'a [Arc<BudgetNode>], bytes: usize, class: BudgetClass) -> Self {
         Self {
-            nodes: HeldNodes::new(),
+            nodes,
+            reserved: 0,
             bytes,
             class,
         }
     }
 
-    fn reserve(&mut self, node: &Arc<BudgetNode>) -> Result<(), BudgetDimension> {
-        node.try_reserve(self.bytes, self.class)?;
-        self.nodes.push(Arc::clone(node));
+    /// Reserves at every node in order, and reports the first node that has no capacity.
+    fn reserve_all(&mut self) -> Result<(), (&'a Arc<BudgetNode>, BudgetDimension)> {
+        let nodes = self.nodes;
+        for node in nodes {
+            node.try_reserve(self.bytes, self.class)
+                .map_err(|dimension| (node, dimension))?;
+            self.reserved += 1;
+        }
         Ok(())
     }
 
-    /// Counts the admissions and hands the reservations to a permit.
-    fn commit(mut self) -> HeldNodes {
-        for node in &self.nodes {
-            node.counters.admitted.fetch_add(1, Ordering::Relaxed);
+    /// Counts the admissions; the caller's permit owns the reservations from now on.
+    fn commit(mut self) {
+        for node in &self.nodes[..self.reserved] {
+            if node.counted {
+                node.counters.admitted.fetch_add(1, Ordering::Relaxed);
+            }
         }
-        std::mem::take(&mut self.nodes)
+        self.reserved = 0;
     }
 }
 
-impl Drop for PendingReservations {
+impl Drop for PendingReservations<'_> {
     fn drop(&mut self) {
-        for node in &self.nodes {
+        for node in &self.nodes[..self.reserved] {
             node.release_capacity(self.bytes, self.class);
             if let Some(rate) = &node.rate {
                 // A rolled-back reservation returns the rate token it consumed.

@@ -308,54 +308,73 @@ impl GlobalBudgets {
             total.saturating_add(effective_reserve(limits.control_reserve.bytes, limit.bytes))
         });
         let reserve_bytes = effective_reserve(requested_reserve_bytes, root_bytes);
-        let root = process_budget.child(
+        let root_capacity = BudgetCapacity::new(root_count, root_bytes);
+        let no_reserve = ResourceLimit { count: 0, bytes: 0 };
+        // Unless the process root caps it, the transport root is the sum of its resources and
+        // can never run out first, so the group leaves it uncounted.
+        let [connections, handshakes, partial_frames, inflight, queued, processors] = process_budget.child_group(
             "transport",
             BudgetLimit::new(root_count, root_bytes, FullPolicy::Reject)
                 .with_control_reserve(BudgetCapacity::new(reserve_count, reserve_bytes)),
+            [
+                (
+                    "connections",
+                    global_limit(
+                        root_capacity,
+                        limits.connections,
+                        limits.control_reserve,
+                        FullPolicy::CloseSlowConsumer,
+                    ),
+                ),
+                (
+                    "handshakes",
+                    global_limit(
+                        root_capacity,
+                        limits.handshakes,
+                        limits.control_reserve,
+                        FullPolicy::CloseSlowConsumer,
+                    ),
+                ),
+                (
+                    "partial-frames",
+                    global_limit(
+                        root_capacity,
+                        limits.partial_frames,
+                        no_reserve,
+                        FullPolicy::CloseSlowConsumer,
+                    ),
+                ),
+                (
+                    "inflight",
+                    global_limit(
+                        root_capacity,
+                        limits.inflight,
+                        limits.control_reserve,
+                        FullPolicy::Reject,
+                    ),
+                ),
+                (
+                    "queued",
+                    global_limit(root_capacity, limits.queued, limits.control_reserve, FullPolicy::Reject),
+                ),
+                (
+                    "processors",
+                    global_limit(
+                        root_capacity,
+                        limits.processors,
+                        limits.control_reserve,
+                        FullPolicy::Reject,
+                    ),
+                ),
+            ],
         )?;
         Ok(Self {
-            connections: global_budget(
-                &root,
-                "connections",
-                limits.connections,
-                limits.control_reserve,
-                FullPolicy::CloseSlowConsumer,
-            )?,
-            handshakes: global_budget(
-                &root,
-                "handshakes",
-                limits.handshakes,
-                limits.control_reserve,
-                FullPolicy::CloseSlowConsumer,
-            )?,
-            partial_frames: global_budget(
-                &root,
-                "partial-frames",
-                limits.partial_frames,
-                ResourceLimit { count: 0, bytes: 0 },
-                FullPolicy::CloseSlowConsumer,
-            )?,
-            inflight: global_budget(
-                &root,
-                "inflight",
-                limits.inflight,
-                limits.control_reserve,
-                FullPolicy::Reject,
-            )?,
-            queued: global_budget(
-                &root,
-                "queued",
-                limits.queued,
-                limits.control_reserve,
-                FullPolicy::Reject,
-            )?,
-            processors: global_budget(
-                &root,
-                "processors",
-                limits.processors,
-                limits.control_reserve,
-                FullPolicy::Reject,
-            )?,
+            connections,
+            handshakes,
+            partial_frames,
+            inflight,
+            queued,
+            processors,
         })
     }
 
@@ -916,14 +935,12 @@ fn standalone_process_budget(limits: AdmissionLimits) -> Result<ResourceBudget, 
     .root())
 }
 
-fn global_budget(
-    root: &ResourceBudget,
-    name: &str,
+fn global_limit(
+    root_capacity: BudgetCapacity,
     limit: ResourceLimit,
     reserve: ResourceLimit,
     policy: FullPolicy,
-) -> Result<ResourceBudget, RuntimeContractViolation> {
-    let root_capacity = root.limit().capacity;
+) -> BudgetLimit {
     let limit = ResourceLimit {
         count: limit.count.min(root_capacity.count),
         bytes: limit.bytes.min(root_capacity.bytes),
@@ -932,11 +949,8 @@ fn global_budget(
         count: effective_reserve(reserve.count, limit.count),
         bytes: effective_reserve(reserve.bytes, limit.bytes),
     };
-    root.child(
-        name,
-        BudgetLimit::new(limit.count, limit.bytes, policy)
-            .with_control_reserve(BudgetCapacity::new(reserve.count, reserve.bytes)),
-    )
+    BudgetLimit::new(limit.count, limit.bytes, policy)
+        .with_control_reserve(BudgetCapacity::new(reserve.count, reserve.bytes))
 }
 
 fn effective_reserve(requested: usize, capacity: usize) -> usize {
