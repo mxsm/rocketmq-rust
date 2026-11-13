@@ -324,10 +324,6 @@ where
         self.message_store.look_message_by_offset(offset)
     }
 
-    pub async fn write_op(&self, queue_id: i32, message: Message) -> bool {
-        self.write_op_result(queue_id, message).await.put_message_status() == PutMessageStatus::PutOk
-    }
-
     pub(crate) async fn write_op_result(&self, queue_id: i32, message: Message) -> PutMessageResult {
         let op_queue = resolve_op_queue(&self.op_queue_map, queue_id, &self.broker_name).await;
         let inner = self.make_op_message_inner(message, &op_queue);
@@ -335,11 +331,7 @@ where
     }
 
     pub async fn put_message_return_result(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        let result = self.message_store.put_message(message_inner).await;
-        if result.put_message_status() == PutMessageStatus::PutOk {
-            //nothing to do
-        }
-        result
+        self.message_store.put_message(message_inner).await
     }
 
     pub async fn put_message(&self, message_inner: MessageExtBrokerInner) -> bool {
