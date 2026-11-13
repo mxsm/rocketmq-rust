@@ -170,10 +170,13 @@ impl InvestigationRun {
             }
         }
         let in_flight = self.in_flight_count();
+        crate::investigation_progress::validate_history(self, &observed)?;
         match self.status {
             InvestigationRunStatus::Queued
                 if !self.steps.is_empty()
                     || !self.assessments.is_empty()
+                    || !self.pack_results.is_empty()
+                    || self.stop_reason.is_some()
                     || !self.evidence_ids.is_empty()
                     || !self.supplied_evidence_ids.is_empty()
                     || self.effective_scope != self.initial_scope

@@ -652,7 +652,6 @@ fn build_routers_with_auth(
     workflow: WorkflowService,
     task_spawner: Option<TaskSpawner>,
 ) -> Result<ControlPlaneRouters, ControlPlaneRequestFailure> {
-    let investigation_runs = InvestigationRunService::new(repository.clone())?;
     let alerting = AlertingService::new(repository.clone(), workflow.clone())?;
     let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
     let finops = crate::finops::FinOpsService::new(repository.clone());
@@ -667,6 +666,11 @@ fn build_routers_with_auth(
     );
     let operations = crate::operator_workbench::OperatorWorkbenchService::new(repository.clone());
     let connector_channel = PostgresConnectorChannelService::postgres(repository.clone(), internal_token.clone())?;
+    let investigation_runs = InvestigationRunService::new(repository.clone())?.with_dispatcher(
+        connector_channel.clone(),
+        evidence.clone(),
+        model_gateway.clone(),
+    );
     let conversation_queries = ConversationQueryService::new(
         repository.clone(),
         connector_channel.clone(),
@@ -1035,6 +1039,7 @@ pub async fn run(
         Some(service_context.task_spawner()),
     )?;
     routers.investigation_runs.schedule_recovery(&service_context)?;
+    routers.investigation_runs.schedule_dispatch(&service_context)?;
     let autonomy_report_worker = routers.autonomy_operations.clone();
     let autonomy_report_tasks = service_context.scheduled_tasks("autonomy-operations-reports");
     let mut autonomy_report_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(

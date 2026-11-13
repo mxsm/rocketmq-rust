@@ -94,6 +94,26 @@ impl DiagnosticPack for ConsumerLagV2 {
 
     fn evidence_fields(&self, requirement_key: &str) -> Vec<rocketmq_sre_contracts::EvidenceFieldContract> {
         use rocketmq_sre_contracts::{EvidenceFieldContract, EvidenceFieldKind};
+        let optional: &[(&str, EvidenceFieldKind)] = match requirement_key {
+            "consumer-runtime" => &[
+                ("paused", EvidenceFieldKind::Boolean),
+                ("connected_clients", EvidenceFieldKind::Number),
+            ],
+            "broker-store" => &[
+                ("broker_ready", EvidenceFieldKind::Boolean),
+                ("store_healthy", EvidenceFieldKind::Boolean),
+            ],
+            _ => &[],
+        };
+        if !optional.is_empty() {
+            return optional
+                .iter()
+                .map(|(path, kind)| EvidenceFieldContract {
+                    path: (*path).to_owned(),
+                    kind: *kind,
+                })
+                .collect();
+        }
         if requirement_key != "consumer-lag" {
             return Vec::new();
         }

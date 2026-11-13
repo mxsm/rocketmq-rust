@@ -81,6 +81,12 @@ impl DiagnosticPack for ProducerConnectivityV1 {
 
     fn evidence_fields(&self, requirement_key: &str) -> Vec<rocketmq_sre_contracts::EvidenceFieldContract> {
         use rocketmq_sre_contracts::{EvidenceFieldContract, EvidenceFieldKind};
+        if requirement_key == "topic-route" {
+            return vec![EvidenceFieldContract {
+                path: "route_available".to_owned(),
+                kind: EvidenceFieldKind::Boolean,
+            }];
+        }
         if requirement_key != "producer" {
             return Vec::new();
         }

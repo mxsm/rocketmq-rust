@@ -1,0 +1,254 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DiagnosticEvidenceQuality": {
+      "description": "Quality of the bounded stored sample selected for one diagnostic requirement.",
+      "enum": [
+        "available",
+        "partial",
+        "missing",
+        "stale",
+        "unknown",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationControlEpoch": {
+      "description": "Control generation, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationDiagnosisStatus": {
+      "description": "Outcome of a deterministic diagnostic pack evaluated for an investigation.",
+      "enum": [
+        "healthy",
+        "fault",
+        "inconclusive",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "InvestigationId": {
+      "description": "Stable identifier for a multi-step investigation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationPackRef": {
+      "additionalProperties": false,
+      "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+      "properties": {
+        "pack_id": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack_id",
+        "pack_version"
+      ],
+      "type": "object"
+    },
+    "InvestigationResource": {
+      "additionalProperties": false,
+      "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "InvestigationRunRevisionId": {
+      "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationRunScope": {
+      "additionalProperties": false,
+      "description": "Immutable authority boundary and requested absolute observation window.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "investigation_id": {
+          "$ref": "#/$defs/InvestigationId"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "time_range": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "cluster_id",
+        "investigation_id",
+        "time_range"
+      ],
+      "type": "object"
+    },
+    "InvestigationStepId": {
+      "description": "Stable identity for one read-only investigation step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "StepAttemptId": {
+      "description": "Stable identifier for one admitted investigation step attempt.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TimeRange": {
+      "description": "Inclusive time range requested from an evidence source.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Compact immutable projection derived from an actual saved run revision.",
+  "properties": {
+    "attempt_id": {
+      "$ref": "#/$defs/StepAttemptId"
+    },
+    "control_epoch": {
+      "$ref": "#/$defs/InvestigationControlEpoch"
+    },
+    "counter_evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "fault_finding_count": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "input_fingerprint": {
+      "type": "string"
+    },
+    "pack": {
+      "$ref": "#/$defs/InvestigationPackRef"
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "required_evidence_quality": {
+      "$ref": "#/$defs/DiagnosticEvidenceQuality"
+    },
+    "revision_digest": {
+      "type": "string"
+    },
+    "run_revision_id": {
+      "$ref": "#/$defs/InvestigationRunRevisionId"
+    },
+    "scope": {
+      "$ref": "#/$defs/InvestigationRunScope"
+    },
+    "status": {
+      "$ref": "#/$defs/InvestigationDiagnosisStatus"
+    },
+    "step_id": {
+      "$ref": "#/$defs/InvestigationStepId"
+    }
+  },
+  "required": [
+    "run_revision_id",
+    "revision_digest",
+    "pack",
+    "scope",
+    "control_epoch",
+    "step_id",
+    "attempt_id",
+    "status",
+    "partial",
+    "input_fingerprint",
+    "evidence_ids",
+    "required_evidence_quality",
+    "fault_finding_count",
+    "counter_evidence_ids",
+    "created_at"
+  ],
+  "title": "InvestigationPackResult",
+  "type": "object"
+}

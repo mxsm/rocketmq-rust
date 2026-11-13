@@ -28,11 +28,16 @@ use super::investigation_run_service::{authorize_control, contract_failure};
 use super::repository::ensure_cluster_scope;
 use crate::{ControlPlaneRequestFailure, PostgresRepository, auth::AuthContext};
 
+mod delegation;
+mod dispatch;
 mod events;
 mod ownership;
 #[cfg(test)]
 mod tests;
 mod worker;
+
+pub(crate) use delegation::RunDelegation;
+pub(crate) use dispatch::{RunAdmissionProof, RunReadProof};
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct RunCommandOutcome {

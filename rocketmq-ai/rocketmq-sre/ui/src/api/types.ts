@@ -2,7 +2,9 @@ import type { components as GeneratedComponents } from "./generated";
 
 type ApiSchemas = GeneratedComponents["schemas"];
 
-// D14 run transport is exposed through OpenAPI; this UI adds no run controls.
+// Run transport is exposed through OpenAPI; this UI adds no run controls.
+export type SavedInvestigationRunRevision = ApiSchemas["SavedInvestigationRunRevision"];
+export type InvestigationPackResult = ApiSchemas["InvestigationPackResult"];
 export type InvestigationRun = ApiSchemas["InvestigationRun"];
 export type CreateInvestigationRunRequest = ApiSchemas["CreateInvestigationRunRequest"];
 export type CreateInvestigationRunResponse = ApiSchemas["CreateInvestigationRunResponse"];

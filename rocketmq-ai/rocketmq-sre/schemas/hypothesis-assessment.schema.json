@@ -173,6 +173,11 @@
       "format": "uuid",
       "type": "string"
     },
+    "InvestigationRunRevisionId": {
+      "description": "Identifier of a saved run-owned diagnostic revision, independent of chat revisions.",
+      "format": "uuid",
+      "type": "string"
+    },
     "InvestigationRunScope": {
       "additionalProperties": false,
       "description": "Immutable authority boundary and requested absolute observation window.",
@@ -281,13 +286,30 @@
       "type": "string"
     },
     "diagnosis_revision_id": {
-      "$ref": "#/$defs/DiagnosisRevisionId"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DiagnosisRevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "id": {
       "$ref": "#/$defs/HypothesisAssessmentId"
     },
     "run_id": {
       "$ref": "#/$defs/InvestigationRunId"
+    },
+    "run_revision_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InvestigationRunRevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "schema_version": {
       "type": "string"
@@ -305,7 +327,6 @@
     "run_id",
     "scope",
     "control_epoch",
-    "diagnosis_revision_id",
     "conclusion",
     "summary",
     "created_at"

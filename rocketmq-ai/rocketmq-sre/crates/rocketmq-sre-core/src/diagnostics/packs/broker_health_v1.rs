@@ -94,6 +94,32 @@ impl DiagnosticPack for BrokerHealthV1 {
         OPTIONAL
     }
 
+    fn evidence_fields(&self, requirement_key: &str) -> Vec<rocketmq_sre_contracts::EvidenceFieldContract> {
+        use rocketmq_sre_contracts::{EvidenceFieldContract, EvidenceFieldKind};
+        let fields: &[(&str, EvidenceFieldKind)] = match requirement_key {
+            "broker-metrics" => &[
+                ("ready", EvidenceFieldKind::Boolean),
+                ("request_error_rate_percent", EvidenceFieldKind::Number),
+                ("active_connections", EvidenceFieldKind::Number),
+                ("cpu_percent", EvidenceFieldKind::Number),
+                ("rss_bytes", EvidenceFieldKind::Number),
+                ("disk_used_percent", EvidenceFieldKind::Number),
+                ("flush_latency_ms", EvidenceFieldKind::Number),
+                ("dispatch_backlog", EvidenceFieldKind::Number),
+                ("ha_lag_bytes", EvidenceFieldKind::Number),
+            ],
+            "broker-runtime" => &[("broker_up", EvidenceFieldKind::Boolean)],
+            _ => &[],
+        };
+        fields
+            .iter()
+            .map(|(path, kind)| EvidenceFieldContract {
+                path: (*path).to_owned(),
+                kind: *kind,
+            })
+            .collect()
+    }
+
     fn rule_codes(&self) -> &'static [&'static str] {
         RULES
     }

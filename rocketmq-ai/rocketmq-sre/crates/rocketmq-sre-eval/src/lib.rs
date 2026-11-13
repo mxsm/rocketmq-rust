@@ -712,6 +712,14 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
 fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalError> {
     Ok(vec![
         (
+            "saved-investigation-run-revision.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::SavedInvestigationRunRevision))?,
+        ),
+        (
+            "investigation-pack-result.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationPackResult))?,
+        ),
+        (
             "investigation-run.schema.json",
             serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationRun))?,
         ),
@@ -1141,6 +1149,14 @@ signals:
     #[test]
     fn committed_schema_fixtures_match_public_contracts() {
         let committed = [
+            (
+                "saved-investigation-run-revision.schema.json",
+                include_str!("../../../schemas/saved-investigation-run-revision.schema.json"),
+            ),
+            (
+                "investigation-pack-result.schema.json",
+                include_str!("../../../schemas/investigation-pack-result.schema.json"),
+            ),
             (
                 "investigation-run.schema.json",
                 include_str!("../../../schemas/investigation-run.schema.json"),

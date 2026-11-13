@@ -163,6 +163,10 @@ uuid_id!(
     "Stable identifier for one bounded investigation run."
 );
 uuid_id!(
+    InvestigationRunRevisionId,
+    "Identifier of a saved run-owned diagnostic revision, independent of chat revisions."
+);
+uuid_id!(
     InvestigationStepId,
     "Stable identity for one read-only investigation step."
 );

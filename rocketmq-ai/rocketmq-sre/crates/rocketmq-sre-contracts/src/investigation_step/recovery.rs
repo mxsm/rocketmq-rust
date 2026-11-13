@@ -15,9 +15,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::{
-    InvestigationInterruptionAcceptance, InvestigationInterruptionReason, InvestigationRevision, InvestigationRun,
-    InvestigationRunContext, InvestigationRunFailure, InvestigationRunStatus, InvestigationStepId,
-    InvestigationStepInterruption, StepAttemptId,
+    InvestigationInterruptAttemptRequest, InvestigationInterruptionAcceptance, InvestigationInterruptionReason,
+    InvestigationRevision, InvestigationRun, InvestigationRunContext, InvestigationRunFailure, InvestigationRunStatus,
+    InvestigationStepId, InvestigationStepInterruption, StepAttemptId,
 };
 
 impl InvestigationRun {
@@ -39,37 +39,92 @@ impl InvestigationRun {
         attempt_id: StepAttemptId,
         at: DateTime<Utc>,
     ) -> Result<InvestigationInterruptionAcceptance, InvestigationRunFailure> {
+        self.interrupt_with_reason(
+            context,
+            InvestigationInterruptAttemptRequest {
+                expected_revision,
+                step_id,
+                attempt_id,
+                reason: InvestigationInterruptionReason::WorkerLeaseExpired,
+            },
+            at,
+        )
+    }
+
+    /// Records an explicitly unknown source/owner outcome without claiming a
+    /// final RPC result or refunding any reservation. Cancelling still drains to
+    /// cancelled; unknown running work stops at needs-evidence after draining.
+    ///
+    /// # Errors
+    /// Rejects wrong attempt/authority, conflicting reasons and stale decisions.
+    pub fn interrupt_with_reason(
+        &mut self,
+        context: &InvestigationRunContext,
+        request: InvestigationInterruptAttemptRequest,
+        at: DateTime<Utc>,
+    ) -> Result<InvestigationInterruptionAcceptance, InvestigationRunFailure> {
         context.authorize(&self.initial_scope)?;
         self.validate()?;
         let step_index = self
             .steps
             .iter()
-            .position(|step| step.id == step_id)
+            .position(|step| step.id == request.step_id)
             .ok_or(InvestigationRunFailure::StepNotFound)?;
         let attempt_index = self.steps[step_index]
             .attempts
             .iter()
-            .position(|attempt| attempt.id == attempt_id)
+            .position(|attempt| attempt.id == request.attempt_id)
             .ok_or(InvestigationRunFailure::AttemptMismatch)?;
         let attempt = &self.steps[step_index].attempts[attempt_index];
-        if attempt.interruption.is_some() {
-            return Ok(InvestigationInterruptionAcceptance::Replay);
+        if let Some(previous) = &attempt.interruption {
+            return if previous.reason == request.reason {
+                Ok(InvestigationInterruptionAcceptance::Replay)
+            } else {
+                Err(InvestigationRunFailure::ResultConflict)
+            };
         }
-        self.expect_revision(expected_revision)?;
+        self.expect_revision(request.expected_revision)?;
         if attempt.result.is_some() || at < attempt.admitted_at || self.status.is_terminal() {
             return Err(InvestigationRunFailure::ResultConflict);
         }
         let mut next = self.clone();
         next.bump(at)?;
         next.steps[step_index].attempts[attempt_index].interruption = Some(InvestigationStepInterruption {
-            reason: InvestigationInterruptionReason::WorkerLeaseExpired,
+            reason: request.reason,
             recovered_at: at,
         });
         if next.status == InvestigationRunStatus::Running {
             next.status = InvestigationRunStatus::Pausing;
         }
+        if self.status == InvestigationRunStatus::Running
+            && matches!(
+                request.reason,
+                InvestigationInterruptionReason::SourceOutcomeUnknown
+                    | InvestigationInterruptionReason::ModelOutcomeUnknown
+                    | InvestigationInterruptionReason::OwnerShutdown
+            )
+        {
+            next.stop_reason = Some(
+                if request.reason == InvestigationInterruptionReason::ModelOutcomeUnknown {
+                    crate::InvestigationStopReason::ModelUnavailable
+                } else {
+                    crate::InvestigationStopReason::SourceUnavailable
+                },
+            );
+        }
         if next.in_flight_count() == 0 {
             next.status = match next.status {
+                InvestigationRunStatus::Pausing
+                    if matches!(
+                        next.stop_reason,
+                        Some(
+                            crate::InvestigationStopReason::SourceUnavailable
+                                | crate::InvestigationStopReason::ModelUnavailable
+                        )
+                    ) =>
+                {
+                    InvestigationRunStatus::NeedsEvidence
+                }
                 InvestigationRunStatus::Pausing => InvestigationRunStatus::Paused,
                 InvestigationRunStatus::Cancelling => InvestigationRunStatus::Cancelled,
                 status => status,

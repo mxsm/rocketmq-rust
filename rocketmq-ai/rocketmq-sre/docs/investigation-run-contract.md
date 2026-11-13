@@ -1,4 +1,4 @@
-# Investigation run contracts and persistence (D13–D14)
+# Investigation run contracts, persistence and planning (D13–D15)
 
 D13 defines serializable contracts and pure validation for bounded, read-only
 investigations. A run is independent of the existing `Investigation` and
@@ -7,14 +7,17 @@ investigations. A run is independent of the existing `Investigation` and
 D13 introduced the contracts and pure validation. D14 registers authenticated
 creation, snapshot, command and durable-event HTTP operations, backed by
 PostgreSQL transactions and fenced worker ownership. Managed recovery accounts
-for interrupted work without dispatching it again. New runs remain `queued`:
-the D15 diagnostic dispatcher and D16 UI controls are not delivered here.
+for interrupted work without dispatching it again. D15 adds managed dispatch
+over all explicitly selected compiled packs. New runs enter `queued` before
+bounded dispatch; the D16 UI controls are not delivered here.
 The existing workspace continues to display saved manual investigations.
 
 ## Published components
 
 | Rust root / OpenAPI component | Schema artifact | Purpose |
 | --- | --- | --- |
+| `SavedInvestigationRunRevision` | `saved-investigation-run-revision.schema.json` | Actual run-owned immutable diagnostic output |
+| `InvestigationPackResult` | `investigation-pack-result.schema.json` | Compact saved-revision projection in the run snapshot |
 | `InvestigationRun` | `investigation-run.schema.json` | Run identity, scope, lifecycle and bounded progress |
 | `CreateInvestigationRunRequest` | `create-investigation-run-request.schema.json` | Typed creation input |
 | `CreateInvestigationRunResponse` | `create-investigation-run-response.schema.json` | Creation result |
@@ -110,8 +113,10 @@ explicit retry consumes additional quota. Interrupted attempts no longer keep
 pause/cancel draining, and a late result from that attempt is rejected.
 
 Trusted authorization and Evidence contexts are not serializable request DTOs.
-D14 must construct them from current identity claims, compiled pack/requirement
-admission, actual Evidence metadata and authorized related-resource provenance.
+Public operations construct them from current identity claims, compiled
+pack/requirement admission, actual Evidence metadata and authorized
+related-resource provenance. D15 workers use the separate bounded delegation
+described below.
 An assessment must also bind the saved diagnosis revision and current run
 scope/epoch. A root-cause conclusion requires a non-partial saved `fault`
 revision; a healthy conclusion requires a non-partial saved `healthy` revision.
@@ -127,7 +132,113 @@ Supporting, counter and missing references remain traceable; the assessment
 remains advisory, does not establish causality from timestamps, and grants no
 execution permission.
 
-## Registered D14 transport
+## Bounded D15 planning and job authority
+
+The pure Core planner resolves exact selected pack versions and iterates every
+effective pack. It accepts only trusted canonical requirement bindings from
+the service. Registration alone grants no collection authority. Reads share
+one admission only when source, canonical resource, scope and absolute window
+all match; related prefixes, other clusters and other windows never establish
+the same read. Removing or reordering its original consuming pack cannot reset
+the shared read identity or global retry count. A successful step is not
+redispatched because its result was partial or lacked a required field.
+
+Qualification uses actual typed fields from a single scoped snapshot for each
+requirement, its reported freshness plus elapsed observation age, and the
+compiled age bound. Missing, stale, partial, unknown/unmaterialized-reference and
+unsupported evidence remain explicit. PostgreSQL stores microsecond windows;
+matching windows compare that precision while retaining exact resource identity.
+No absent metric becomes zero or healthy. Remaining C02–C04 signal gaps are not
+filled by fixtures or source names.
+
+Automatic retries require a known retryable source failure. A permanent
+`source_rejected` result or any unknown interruption is not retried by the
+dispatcher; neither changing the consuming pack nor resuming the same unknown
+read turns it into a free first attempt. Each operation reserves its full
+configured response bound before it begins. Insufficient remaining bytes stops
+admission rather than shrinking the reservation below the real transport bound.
+
+The planner's input fingerprint covers scoped content, source coverage and
+partialness, so filling missing fields changes the facts. Evidence IDs,
+collection timestamps and an age classification alone do not count as new
+facts. Replacing identical
+content with a new ID stops with `no_progress`; restoring incomplete evidence
+to qualified content permits a new evaluation. Shared reads, retries,
+evaluations, explanations and supplied Evidence all retain the original run
+budget and deadline. A stop before an evaluation can be admitted stores a typed
+`stop_reason` without inventing a revision, conclusion or chat record.
+
+The worker has a private, bounded read-job delegation derived from the actual
+creation receipt and the immutable initial run scope/pack/budget/deadline.
+It stores no bearer token and cannot widen the run. Current public requests
+continue to authenticate independently. Before worker admission, the service
+rechecks the saved parent/resource, cluster onboarding, compiled canonical
+bindings, control epoch, lease fence and shared quotas. The delegation can
+outlive the initiating token until deadline, cancellation or offboarding; it
+does not claim continuous IdP revocation detection. It grants no target writes,
+arbitrary HTTP/shell operation, new execution permission or SDK escape hatch.
+
+Each evaluated pack produces a real `SavedInvestigationRunRevision` in its own
+table. Scope, epoch, step/attempt, selected pack/version, exact references,
+typed deterministic findings and requirement quality are saved in the same
+fenced transaction as evaluation settlement and its compact `pack_results`
+projection. The projection carries a digest of the original immutable report;
+changing finding text while retaining its IDs/counts is a conflicting replay.
+No conversation, turn or answer ID is manufactured for a background run.
+
+All effective packs must have current-epoch qualified non-partial saved results
+before a strong conclusion. All healthy permits an advisory healthy result.
+Exactly one fault pack, exactly one unambiguous fault finding and otherwise
+healthy packs permits only that existing finding and its actual support as an
+advisory root cause. Multiple faults, counter-evidence, partial or missing
+results remain inconclusive; the model cannot stitch independent faults into
+a causal claim. Finalization rechecks evidence quality at the current time,
+including after any model wait. Explanations are optional, admitted with their
+own model reservation, and unavailable models remain rule-only.
+
+The time contract comes from the closed adapter capabilities. `rocketmq-mcp`
+and `admin-query` read current state without a historical time argument. Their
+actual `observed_at` must lie inside the requested window (at PostgreSQL
+microsecond precision) to qualify as a point observation; this does not prove
+coverage throughout the window. An echoed query window cannot supply that
+proof. An outside-window snapshot remains referenced context with quality
+`unknown` and reason `instant_observation_outside_requested_window`.
+`prometheus`, `loki` and `tempo` bind their source requests to time arguments;
+collecting their historical response after the window ends is permitted.
+Unrecognized temporal capabilities remain `unknown`. Content hashes, exact
+resource and window binding, typed fields, freshness and source partialness
+are checked independently. Only qualified `available` inputs enter rule
+evaluation, including optional inputs; context cannot establish a strong
+healthy or fault result.
+
+Read admissions conservatively consume the shared twelve-query allowance,
+including at most two query retries across the run. Model admissions consume
+their independent model allowance. `output_bytes` measures normalized JSON
+accepted by the Control Plane: the whole Connector response envelope for a
+collection, and the normalized provider response for a model call. Collection
+reserves the actual 512 KiB response-channel limit; evaluation and explanation
+each have a 64 KiB bound. Local rule output uses a bounded writer: exceeding
+that bound before accepting output is a known local failure, not an unknown
+remote query. A known model no-op reports zero actual calls while its admission
+still consumes one call allowance. Unknown outcomes retain the entire original
+reservation instead of reporting zero consumption.
+
+Source, model or shutdown outcomes that cannot be measured use distinct typed
+interruptions. Their entire reservations remain occupied, with no invented
+zero-cost result. Running unknown work stops at `needs_evidence`; an explicit
+pause still drains to `paused` and cancel to `cancelled`. Rule-only completion
+may still use already saved qualified results after an unknown explanation;
+a successful strong completion clears the prior stop reason.
+
+`HypothesisAssessment` now has an exclusive basis: either the legacy optional
+`diagnosis_revision_id` or the new optional `run_revision_id`, exactly one
+non-nil. Old D14 payloads retain their old UUID field when round-tripped. New
+runtime assessments reference only real run revisions. Closed D14 readers must
+update to the generated D15 contract. Existing saved Investigation/Incident
+enums and old chat deep links are unchanged; the current UI/SDK has no older
+run-control consumer and gains no run buttons or mutation methods here.
+
+## Registered run transport
 
 The public Control Plane router registers these operations. They change only
 the persisted read-only investigation lifecycle. They do not expose worker
@@ -139,6 +250,7 @@ control buttons.
 | --- | --- | --- |
 | `POST /v1/investigations/{id}/runs` | `CreateInvestigationRunRequest` → `CreateInvestigationRunResponse` | `201` for a newly recorded queued run; `200` for exact authorized creation replay |
 | `GET /v1/investigation-runs/{id}` | `InvestigationRun` | `200` for the authorized current snapshot |
+| `GET /v1/investigation-runs/{id}/revisions/{revision_id}` | `SavedInvestigationRunRevision` | `200` for an actual immutable run-owned revision |
 | `POST /v1/investigation-runs/{id}/commands` | `InvestigationCommandRequest` → `InvestigationCommandReceipt` | `202` when a newly accepted pause/cancel must drain; `200` for immediate application or exact authorized receipt replay |
 | `GET /v1/investigation-runs/{id}/events?after=0&limit=50` | `InvestigationRunEventPage` | `200` for contiguous durable events or an explicit snapshot reset |
 
@@ -249,8 +361,12 @@ existing `ChildServiceContext` scheduled-task owner; process shutdown cancels
 and awaits that owner's work. Recovery never dispatches queries, grants user
 authority or reports unknown consumption as measured cost.
 
-D15 must implement registered read-only collection and assessment dispatch,
-including actual metadata/quality proof, cancellation settlement and recovery
-coordination at the source boundary. D16 may add UI controls against these
-versioned operations. Persistence and an accepted control receipt alone do not
-claim that a diagnostic worker has run or that a conclusion was established.
+D15 dispatches registered read-only collection and assessment with metadata
+and quality proof, cancellation settlement and recovery coordination at the
+source boundary. Actual source capabilities can still leave a run
+inconclusive, particularly for historical windows backed only by current-state
+MCP/Admin reads. D16 may add UI controls against these versioned operations.
+Persistence and an accepted control receipt alone do not claim that a
+diagnostic worker has run or that a conclusion was established. Controlled
+protocol fixtures do not establish production validation or execution
+eligibility.

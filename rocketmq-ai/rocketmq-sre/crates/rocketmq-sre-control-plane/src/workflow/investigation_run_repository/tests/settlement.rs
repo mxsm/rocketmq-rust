@@ -280,7 +280,8 @@ async fn saved_inconclusive_assessment_survives_reload_without_inventing_a_root_
         run_id: run.id,
         scope: run.effective_scope.clone(),
         control_epoch: run.control_epoch,
-        diagnosis_revision_id: saved.id,
+        diagnosis_revision_id: Some(saved.id),
+        run_revision_id: None,
         conclusion: HypothesisAssessmentConclusion::Inconclusive {
             reason: InvestigationStopReason::EvidenceInsufficient,
             considered_evidence_ids: vec![],

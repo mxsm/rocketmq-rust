@@ -47,6 +47,7 @@ mod integration;
 mod investigation_command;
 mod investigation_counter;
 mod investigation_event;
+mod investigation_progress;
 mod investigation_run;
 mod investigation_run_error;
 mod investigation_step;
@@ -362,7 +363,10 @@ pub use ids::TenantId;
 pub use ids::TimelineEventId;
 pub use ids::TopologyEdgeId;
 pub use ids::TopologySnapshotId;
-pub use ids::{HypothesisAssessmentId, InvestigationCommandId, InvestigationRunId, InvestigationStepId, StepAttemptId};
+pub use ids::{
+    HypothesisAssessmentId, InvestigationCommandId, InvestigationRunId, InvestigationRunRevisionId,
+    InvestigationStepId, StepAttemptId,
+};
 pub use incident::Incident;
 pub use incident::IncidentStatus;
 pub use incident::IncidentTransition;
@@ -396,6 +400,10 @@ pub use investigation_event::{
     INVESTIGATION_RUN_EVENT_PAGE_SCHEMA_VERSION, INVESTIGATION_RUN_EVENT_SCHEMA_VERSION, InvestigationCursorRecovery,
     InvestigationRunEvent, InvestigationRunEventKind, InvestigationRunEventPage,
 };
+pub use investigation_progress::{
+    INVESTIGATION_RUN_REVISION_SCHEMA_VERSION, InvestigationPackResult, InvestigationProgressAcceptance,
+    InvestigationRunFinding, SavedInvestigationRunRevision,
+};
 pub use investigation_run::{
     INVESTIGATION_RUN_SCHEMA_VERSION, InvestigationBudget, InvestigationBudgetCost, InvestigationEvidenceContext,
     InvestigationPackRef, InvestigationRequirementRef, InvestigationResource, InvestigationRun,
@@ -403,10 +411,10 @@ pub use investigation_run::{
 };
 pub use investigation_run_error::InvestigationRunFailure;
 pub use investigation_step::{
-    InvestigationInterruptionAcceptance, InvestigationInterruptionReason, InvestigationResultAcceptance,
-    InvestigationResultDisposition, InvestigationStep, InvestigationStepAdmission, InvestigationStepAttempt,
-    InvestigationStepFailure, InvestigationStepInterruption, InvestigationStepKind, InvestigationStepOutcome,
-    InvestigationStepResult, InvestigationStepSpec,
+    InvestigationInterruptAttemptRequest, InvestigationInterruptionAcceptance, InvestigationInterruptionReason,
+    InvestigationResultAcceptance, InvestigationResultDisposition, InvestigationStep, InvestigationStepAdmission,
+    InvestigationStepAttempt, InvestigationStepFailure, InvestigationStepInterruption, InvestigationStepKind,
+    InvestigationStepOutcome, InvestigationStepResult, InvestigationStepSpec,
 };
 pub use notification::NotificationChannel;
 pub use notification::NotificationDelivery;

@@ -75,9 +75,12 @@ pub(super) async fn evidence_context(
     }
     let rows = sqlx::query(
         "SELECT e.id, e.cluster_id, e.resource, e.time_range_start, e.time_range_end, e.observed_at,
-                EXISTS (SELECT 1 FROM investigation_diagnosis_revisions r
+                (EXISTS (SELECT 1 FROM investigation_diagnosis_revisions r
                         WHERE r.tenant_id=e.tenant_id AND r.cluster_id=e.cluster_id
-                          AND r.investigation_id=$3 AND e.id=ANY(r.evidence_ids)) AS saved_reference
+                          AND r.investigation_id=$3 AND e.id=ANY(r.evidence_ids))
+                 OR EXISTS (SELECT 1 FROM investigation_run_revisions r
+                            WHERE r.tenant_id=e.tenant_id AND r.cluster_id=e.cluster_id
+                              AND r.investigation_id=$3 AND r.revision_snapshot->'evidence_ids' ? e.id::text)) AS saved_reference
          FROM evidence_snapshots e
          WHERE e.tenant_id=$1 AND e.cluster_id=$2 AND e.id=ANY($4)",
     )
@@ -134,7 +137,7 @@ fn binding_matches(
     })
 }
 
-fn resource_subject(resource: &str, cluster_id: ClusterId) -> Option<InvestigationResource> {
+pub(in crate::workflow) fn resource_subject(resource: &str, cluster_id: ClusterId) -> Option<InvestigationResource> {
     let (prefix, suffix) = resource.split_once('/')?;
     if suffix.is_empty() {
         return None;

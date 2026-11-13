@@ -3,6 +3,8 @@
 
 /** Rust schema-export is the only source of investigation-run fields. */
 export const INVESTIGATION_RUN_SCHEMA_FILES = Object.freeze({
+  SavedInvestigationRunRevision: "saved-investigation-run-revision.schema.json",
+  InvestigationPackResult: "investigation-pack-result.schema.json",
   InvestigationRun: "investigation-run.schema.json",
   CreateInvestigationRunRequest: "create-investigation-run-request.schema.json",
   CreateInvestigationRunResponse: "create-investigation-run-response.schema.json",
@@ -57,7 +59,7 @@ export function extendInvestigationRunContracts({ schemas, readSchema }) {
   }
 }
 
-/** D14 persists and controls runs; it does not dispatch diagnostic work. */
+/** Bounded run control and read-only saved diagnostics; workers remain private. */
 export function extendInvestigationRunTransport({ document }) {
   const response = (name, description) => ({
     description,
@@ -77,7 +79,7 @@ export function extendInvestigationRunTransport({ document }) {
   register("/v1/investigations/{id}/runs", "post", {
     operationId: "createInvestigationRun",
     summary: "Persist a bounded read-only investigation run",
-    description: "Requires current diagnose/operator authority and a matching saved investigation. Exact authorized replay returns its original creation snapshot. Queued work awaits the D15 dispatcher; this operation performs no target query or mutation.",
+    description: "Requires current diagnose/operator authority and a matching saved investigation. Exact authorized replay returns its original creation snapshot. The managed dispatcher uses a bounded receipt-backed read-job delegation, exact selected compiled packs and shared budgets. This request performs no target mutation and exposes no arbitrary query operation.",
     parameters: [id],
     requestBody: body("CreateInvestigationRunRequest"),
     responses: {
@@ -91,6 +93,13 @@ export function extendInvestigationRunTransport({ document }) {
     summary: "Read the current authorized run snapshot",
     parameters: [id],
     responses: { 200: response("InvestigationRun", "Current persisted snapshot"), ...errors },
+  });
+  register("/v1/investigation-runs/{id}/revisions/{revision_id}", "get", {
+    operationId: "getInvestigationRunRevision",
+    summary: "Read one immutable run-owned diagnostic revision",
+    description: "Current authentication, tenant/cluster and saved-parent scope are checked for this run and revision together. This record has no fabricated conversation, turn or answer IDs and grants no execution authority.",
+    parameters: [id, { name: "revision_id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+    responses: { 200: response("SavedInvestigationRunRevision", "The actual persisted deterministic revision"), ...errors },
   });
   register("/v1/investigation-runs/{id}/commands", "post", {
     operationId: "commandInvestigationRun",

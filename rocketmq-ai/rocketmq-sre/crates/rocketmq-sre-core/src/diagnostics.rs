@@ -16,6 +16,7 @@
 
 mod confidence;
 mod engine;
+mod investigation;
 pub mod packs;
 mod registry;
 mod types;
@@ -24,6 +25,12 @@ pub use confidence::ConfidenceInputs;
 pub use confidence::calculate_confidence;
 pub use engine::DiagnosticContext;
 pub use engine::DiagnosticEngine;
+pub use investigation::{
+    InvestigationExplanationPolicy, InvestigationPlanDecision, InvestigationPlannedCollection,
+    InvestigationPlannedEvaluation, InvestigationPlannedExplanation, InvestigationPlanningInput,
+    InvestigationReadBinding, InvestigationReservationPolicy, investigation_findings, investigation_requirements,
+    plan_investigation,
+};
 pub use packs::full_pack_ids;
 pub use packs::full_registry;
 pub use packs::wave_a_registry;
