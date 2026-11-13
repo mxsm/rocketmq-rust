@@ -81,6 +81,20 @@ struct OidcRoleAccess {
 }
 
 impl AuthService {
+    /// Tests preload a public fixture key while retaining production JWT validation.
+    #[cfg(test)]
+    pub(crate) fn from_test_jwks(issuer: &str, audience: &str, keys: JwkSet) -> Self {
+        Self {
+            mode: Arc::new(AuthMode::Oidc {
+                issuer: issuer.to_owned(),
+                audience: audience.to_owned(),
+                jwks_url: url::Url::parse(issuer).expect("test issuer URL"),
+                client: reqwest::Client::new(),
+                keys: RwLock::new(keys),
+            }),
+        }
+    }
+
     pub(crate) fn development(token: impl Into<Arc<str>>) -> Self {
         Self {
             mode: Arc::new(AuthMode::Development { token: token.into() }),

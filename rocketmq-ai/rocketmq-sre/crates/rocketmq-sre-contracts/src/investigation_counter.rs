@@ -58,6 +58,10 @@ investigation_counter!(
     InvestigationControlEpoch,
     "Control generation, serialized as a lossless decimal string."
 );
+investigation_counter!(
+    InvestigationEventSequence,
+    "Independent durable event sequence, serialized as a lossless decimal string."
+);
 
 mod decimal_u64 {
     use serde::{Deserialize, Deserializer, Serializer};

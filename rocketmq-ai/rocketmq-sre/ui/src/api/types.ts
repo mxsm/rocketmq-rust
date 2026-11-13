@@ -2,7 +2,7 @@ import type { components as GeneratedComponents } from "./generated";
 
 type ApiSchemas = GeneratedComponents["schemas"];
 
-// D13 publishes data contracts only; run transport and coordination belong to D14.
+// D14 run transport is exposed through OpenAPI; this UI adds no run controls.
 export type InvestigationRun = ApiSchemas["InvestigationRun"];
 export type CreateInvestigationRunRequest = ApiSchemas["CreateInvestigationRunRequest"];
 export type CreateInvestigationRunResponse = ApiSchemas["CreateInvestigationRunResponse"];
@@ -12,6 +12,8 @@ export type InvestigationStep = ApiSchemas["InvestigationStep"];
 export type InvestigationStepResult = ApiSchemas["InvestigationStepResult"];
 export type HypothesisAssessment = ApiSchemas["HypothesisAssessment"];
 export type InvestigationRunFailure = ApiSchemas["InvestigationRunFailure"];
+export type InvestigationRunEvent = ApiSchemas["InvestigationRunEvent"];
+export type InvestigationRunEventPage = ApiSchemas["InvestigationRunEventPage"];
 
 export type Phase2ContractManifest =
   ApiSchemas["Phase2ContractManifest"];

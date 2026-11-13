@@ -19,6 +19,7 @@ import test from "node:test";
 
 import {
   extendInvestigationRunContracts,
+  extendInvestigationRunTransport,
   INVESTIGATION_RUN_SCHEMA_FILES,
 } from "./investigation_run.mjs";
 
@@ -27,7 +28,7 @@ const readSchema = (filename) =>
   JSON.parse(readFileSync(join(root, "schemas", filename), "utf8"));
 const existing = () => ({
   paths: { "/existing": { get: { operationId: "existingRead" } } },
-  components: { schemas: { Existing: { type: "string" } } },
+  components: { schemas: { Existing: { type: "string" }, ErrorEnvelope: { type: "object" } } },
 });
 
 function visit(value, callback) {
@@ -74,6 +75,7 @@ test("committed investigation components match the Rust-exported schemas", () =>
   );
   const regenerated = structuredClone(published);
   extendInvestigationRunContracts({ schemas: regenerated.components.schemas, readSchema });
+  extendInvestigationRunTransport({ document: regenerated });
   assert.deepEqual(
     regenerated.components.schemas,
     published.components.schemas,
@@ -149,7 +151,8 @@ test("the standalone extender preserves existing conversation contracts, line en
     execFileSync(process.execPath, [command]);
     const encoded = readFileSync(output, "utf8");
     const extended = JSON.parse(encoded);
-    assert.deepEqual(extended.paths, document.paths);
+    assert.deepEqual(extended.paths["/existing"], document.paths["/existing"]);
+    assert.ok(extended.paths["/v1/investigation-runs/{id}/events"].get);
     assert.deepEqual(
       extended.components.schemas.ConversationStreamEvent,
       document.components.schemas.ConversationStreamEvent,
@@ -168,6 +171,23 @@ test("the standalone extender preserves existing conversation contracts, line en
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+});
+
+test("registered run transport references exported DTOs without replacing legacy operations", () => {
+  const document = existing();
+  const original = structuredClone(document.paths["/existing"]);
+  extendInvestigationRunContracts({ schemas: document.components.schemas, readSchema });
+  extendInvestigationRunTransport({ document });
+  visit(document, (value) => {
+    if (value.$ref) assert.notEqual(referenced(document, value.$ref), undefined);
+  });
+  assert.deepEqual(document.paths["/existing"], original);
+  const first = structuredClone(document);
+  extendInvestigationRunTransport({ document });
+  assert.deepEqual(document, first);
+  const operationIds = Object.values(document.paths)
+    .flatMap((path) => Object.values(path).map((operation) => operation.operationId));
+  assert.equal(new Set(operationIds).size, operationIds.length);
 });
 
 test("unexpected non-local schema references are rejected without fetching them", () => {

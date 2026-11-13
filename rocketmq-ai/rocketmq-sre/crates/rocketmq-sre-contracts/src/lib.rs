@@ -46,6 +46,7 @@ mod incident;
 mod integration;
 mod investigation_command;
 mod investigation_counter;
+mod investigation_event;
 mod investigation_run;
 mod investigation_run_error;
 mod investigation_step;
@@ -390,7 +391,11 @@ pub use investigation_command::{
     InvestigationCommandClassification, InvestigationCommandReceipt, InvestigationCommandRequest,
     InvestigationRefinement,
 };
-pub use investigation_counter::{InvestigationControlEpoch, InvestigationRevision};
+pub use investigation_counter::{InvestigationControlEpoch, InvestigationEventSequence, InvestigationRevision};
+pub use investigation_event::{
+    INVESTIGATION_RUN_EVENT_PAGE_SCHEMA_VERSION, INVESTIGATION_RUN_EVENT_SCHEMA_VERSION, InvestigationCursorRecovery,
+    InvestigationRunEvent, InvestigationRunEventKind, InvestigationRunEventPage,
+};
 pub use investigation_run::{
     INVESTIGATION_RUN_SCHEMA_VERSION, InvestigationBudget, InvestigationBudgetCost, InvestigationEvidenceContext,
     InvestigationPackRef, InvestigationRequirementRef, InvestigationResource, InvestigationRun,
@@ -398,8 +403,9 @@ pub use investigation_run::{
 };
 pub use investigation_run_error::InvestigationRunFailure;
 pub use investigation_step::{
-    InvestigationResultAcceptance, InvestigationResultDisposition, InvestigationStep, InvestigationStepAdmission,
-    InvestigationStepAttempt, InvestigationStepFailure, InvestigationStepKind, InvestigationStepOutcome,
+    InvestigationInterruptionAcceptance, InvestigationInterruptionReason, InvestigationResultAcceptance,
+    InvestigationResultDisposition, InvestigationStep, InvestigationStepAdmission, InvestigationStepAttempt,
+    InvestigationStepFailure, InvestigationStepInterruption, InvestigationStepKind, InvestigationStepOutcome,
     InvestigationStepResult, InvestigationStepSpec,
 };
 pub use notification::NotificationChannel;

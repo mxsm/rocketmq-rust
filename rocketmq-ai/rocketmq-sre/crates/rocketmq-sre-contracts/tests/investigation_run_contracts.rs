@@ -238,5 +238,7 @@ mod steps;
 #[path = "investigation_run_contracts/assessment.rs"]
 mod assessment;
 
+#[path = "investigation_run_contracts/recovery.rs"]
+mod recovery;
 #[path = "investigation_run_contracts/validation.rs"]
 mod validation;

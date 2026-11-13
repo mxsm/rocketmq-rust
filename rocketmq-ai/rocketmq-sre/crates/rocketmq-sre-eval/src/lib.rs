@@ -748,6 +748,14 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
             serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationRunFailure))?,
         ),
         (
+            "investigation-run-event.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationRunEvent))?,
+        ),
+        (
+            "investigation-run-event-page.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationRunEventPage))?,
+        ),
+        (
             "capability-quality-projection.schema.json",
             serde_json::to_value(schema_for!(rocketmq_sre_contracts::CapabilityQualityProjection))?,
         ),
@@ -1168,6 +1176,14 @@ signals:
             (
                 "investigation-run-failure.schema.json",
                 include_str!("../../../schemas/investigation-run-failure.schema.json"),
+            ),
+            (
+                "investigation-run-event.schema.json",
+                include_str!("../../../schemas/investigation-run-event.schema.json"),
+            ),
+            (
+                "investigation-run-event-page.schema.json",
+                include_str!("../../../schemas/investigation-run-event-page.schema.json"),
             ),
             (
                 "capability-quality-projection.schema.json",

@@ -14387,6 +14387,386 @@
           }
         ]
       }
+    },
+    "/v1/investigations/{id}/runs": {
+      "post": {
+        "operationId": "createInvestigationRun",
+        "summary": "Persist a bounded read-only investigation run",
+        "description": "Requires current diagnose/operator authority and a matching saved investigation. Exact authorized replay returns its original creation snapshot. Queued work awaits the D15 dispatcher; this operation performs no target query or mutation.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvestigationRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Exact authorized creation replay; original snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "New queued run and original creation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateInvestigationRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/investigation-runs/{id}": {
+      "get": {
+        "operationId": "getInvestigationRun",
+        "summary": "Read the current authorized run snapshot",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current persisted snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigationRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/investigation-runs/{id}/commands": {
+      "post": {
+        "operationId": "commandInvestigationRun",
+        "summary": "Apply typed pause, resume, cancel or narrowing refinement",
+        "description": "Requires current diagnose/operator authority. Expected revisions and actor-bound idempotency are checked atomically. A replay reads the original receipt without reapplying its status or overwriting a newer snapshot. No tool, shell, model prompt or target mutation can be submitted.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvestigationCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Immediate command or exact authorized receipt replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigationCommandReceipt"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Newly accepted pause/cancel with admitted attempts still draining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigationCommandReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/investigation-runs/{id}/events": {
+      "get": {
+        "operationId": "listInvestigationRunEvents",
+        "summary": "Read bounded durable events or resynchronize a cursor",
+        "description": "Sequences are per-run lossless decimal strings, independent of revisions. Expired, ahead or gapped cursors return snapshot_required with the latest authorized snapshot; resume after next_sequence. Pages contain at most 100 events and no source bodies or worker lease tokens.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "default": "0"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contiguous events or an explicit snapshot reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigationRunEventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized request refusal; no source content is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -33025,6 +33405,12 @@
         "format": "uuid",
         "type": "string"
       },
+      "InvestigationRun__InvestigationInterruptionReason": {
+        "enum": [
+          "worker_lease_expired"
+        ],
+        "type": "string"
+      },
       "InvestigationRun__InvestigationPackRef": {
         "additionalProperties": false,
         "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
@@ -33194,6 +33580,17 @@
           "id": {
             "$ref": "#/components/schemas/InvestigationRun__StepAttemptId"
           },
+          "interruption": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRun__InvestigationStepInterruption"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unknown work retains its reservation without inventing a measured result."
+          },
           "reservation": {
             "$ref": "#/components/schemas/InvestigationRun__InvestigationBudgetCost"
           },
@@ -33230,6 +33627,23 @@
         "description": "Stable identity for one read-only investigation step.",
         "format": "uuid",
         "type": "string"
+      },
+      "InvestigationRun__InvestigationStepInterruption": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/InvestigationRun__InvestigationInterruptionReason"
+          },
+          "recovered_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "recovered_at"
+        ],
+        "type": "object"
       },
       "InvestigationRun__InvestigationStepKind": {
         "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
@@ -33968,6 +34382,12 @@
         "format": "uuid",
         "type": "string"
       },
+      "CreateInvestigationRunResponse__InvestigationInterruptionReason": {
+        "enum": [
+          "worker_lease_expired"
+        ],
+        "type": "string"
+      },
       "CreateInvestigationRunResponse__InvestigationPackRef": {
         "additionalProperties": false,
         "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
@@ -34240,6 +34660,17 @@
           "id": {
             "$ref": "#/components/schemas/CreateInvestigationRunResponse__StepAttemptId"
           },
+          "interruption": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationStepInterruption"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unknown work retains its reservation without inventing a measured result."
+          },
           "reservation": {
             "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationBudgetCost"
           },
@@ -34276,6 +34707,23 @@
         "description": "Stable identity for one read-only investigation step.",
         "format": "uuid",
         "type": "string"
+      },
+      "CreateInvestigationRunResponse__InvestigationStepInterruption": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/CreateInvestigationRunResponse__InvestigationInterruptionReason"
+          },
+          "recovered_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "recovered_at"
+        ],
+        "type": "object"
       },
       "CreateInvestigationRunResponse__InvestigationStepKind": {
         "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
@@ -34944,6 +35392,12 @@
         "format": "uuid",
         "type": "string"
       },
+      "InvestigationStep__InvestigationInterruptionReason": {
+        "enum": [
+          "worker_lease_expired"
+        ],
+        "type": "string"
+      },
       "InvestigationStep__InvestigationPackRef": {
         "additionalProperties": false,
         "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
@@ -35056,6 +35510,17 @@
           "id": {
             "$ref": "#/components/schemas/InvestigationStep__StepAttemptId"
           },
+          "interruption": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationStep__InvestigationStepInterruption"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unknown work retains its reservation without inventing a measured result."
+          },
           "reservation": {
             "$ref": "#/components/schemas/InvestigationStep__InvestigationBudgetCost"
           },
@@ -35092,6 +35557,23 @@
         "description": "Stable identity for one read-only investigation step.",
         "format": "uuid",
         "type": "string"
+      },
+      "InvestigationStep__InvestigationStepInterruption": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/InvestigationStep__InvestigationInterruptionReason"
+          },
+          "recovered_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "recovered_at"
+        ],
+        "type": "object"
       },
       "InvestigationStep__InvestigationStepKind": {
         "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
@@ -35998,6 +36480,1454 @@
         "description": "Monotonic run revision, serialized as a lossless decimal string.",
         "pattern": "^(0|[1-9][0-9]{0,19})$",
         "type": "string"
+      },
+      "InvestigationRunEvent": {
+        "additionalProperties": false,
+        "description": "Durable per-run sequence is independent of the run's control revision.",
+        "properties": {
+          "actor_subject": {
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__ClusterId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationControlEpoch"
+          },
+          "event": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationRunEventKind"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationId"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationRevision"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationEventSequence"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationRunStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationRunEvent__TenantId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "run_id",
+          "sequence",
+          "revision",
+          "control_epoch",
+          "status",
+          "actor_subject",
+          "event",
+          "occurred_at"
+        ],
+        "title": "InvestigationRunEvent",
+        "type": "object"
+      },
+      "InvestigationRunEvent__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEvent__HypothesisAssessmentId": {
+        "description": "Stable identifier for one evidence-bound hypothesis assessment.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationCommandId": {
+        "description": "Stable identifier for one investigation control command.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationEventSequence": {
+        "description": "Independent durable event sequence, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationInterruptionReason": {
+        "enum": [
+          "worker_lease_expired"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationResultDisposition": {
+        "enum": [
+          "applied",
+          "superseded"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationRevision": {
+        "description": "Monotonic run revision, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationRunEventKind": {
+        "description": "Event payloads carry bounded identities, never source bodies or worker lease tokens.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "created",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "command_id": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationCommandId"
+              },
+              "kind": {
+                "const": "command_accepted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "command_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "worker_claimed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "worker_released",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "started",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__StepAttemptId"
+              },
+              "kind": {
+                "const": "step_admitted",
+                "type": "string"
+              },
+              "step_id": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationStepId"
+              }
+            },
+            "required": [
+              "kind",
+              "step_id",
+              "attempt_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__StepAttemptId"
+              },
+              "disposition": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationResultDisposition"
+              },
+              "kind": {
+                "const": "step_settled",
+                "type": "string"
+              },
+              "step_id": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationStepId"
+              }
+            },
+            "required": [
+              "kind",
+              "step_id",
+              "attempt_id",
+              "disposition"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__StepAttemptId"
+              },
+              "kind": {
+                "const": "attempt_interrupted",
+                "type": "string"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationInterruptionReason"
+              },
+              "step_id": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__InvestigationStepId"
+              }
+            },
+            "required": [
+              "kind",
+              "step_id",
+              "attempt_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "assessment_id": {
+                "$ref": "#/components/schemas/InvestigationRunEvent__HypothesisAssessmentId"
+              },
+              "kind": {
+                "const": "assessment_recorded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "assessment_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "stopped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "InvestigationRunEvent__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationRunStatus": {
+        "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+        "enum": [
+          "queued",
+          "running",
+          "pausing",
+          "paused",
+          "needs_evidence",
+          "completed",
+          "inconclusive",
+          "cancelling",
+          "cancelled",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEvent__InvestigationStepId": {
+        "description": "Stable identity for one read-only investigation step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEvent__StepAttemptId": {
+        "description": "Stable identifier for one admitted investigation step attempt.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEvent__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage": {
+        "additionalProperties": false,
+        "description": "A reset includes the authorized latest snapshot and resumes after its head.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__ClusterId"
+          },
+          "current_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "earliest_sequence": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationEventSequence"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunEvent"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationId"
+          },
+          "latest_sequence": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationEventSequence"
+          },
+          "next_sequence": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationEventSequence"
+          },
+          "recovery_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationCursorRecovery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "snapshot_required": {
+            "type": "boolean"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__TenantId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "run_id",
+          "events",
+          "earliest_sequence",
+          "latest_sequence",
+          "next_sequence",
+          "has_more",
+          "snapshot_required"
+        ],
+        "title": "InvestigationRunEventPage",
+        "type": "object"
+      },
+      "InvestigationRunEventPage__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__DiagnosisRevisionId": {
+        "description": "Stable identifier for an immutable diagnosis revision.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__HypothesisAssessment": {
+        "additionalProperties": false,
+        "description": "Evidence-bound advisory assessment on an existing immutable diagnosis revision.\n\nNo execution-eligibility field exists: this object cannot grant execution.",
+        "properties": {
+          "conclusion": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__HypothesisAssessmentConclusion"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationControlEpoch"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "diagnosis_revision_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__DiagnosisRevisionId"
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__HypothesisAssessmentId"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunScope"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "run_id",
+          "scope",
+          "control_epoch",
+          "diagnosis_revision_id",
+          "conclusion",
+          "summary",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__HypothesisAssessmentConclusion": {
+        "description": "Advisory conclusions reference saved Evidence, never an inferred timestamp relation.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "counter_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "root_cause",
+                "type": "string"
+              },
+              "statement": {
+                "type": "string"
+              },
+              "supporting_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "statement",
+              "supporting_evidence_ids",
+              "counter_evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "healthy",
+                "type": "string"
+              },
+              "supporting_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "supporting_evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "considered_evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "inconclusive",
+                "type": "string"
+              },
+              "missing_requirements": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRequirementRef"
+                },
+                "type": "array"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStopReason"
+              }
+            },
+            "required": [
+              "kind",
+              "reason",
+              "considered_evidence_ids",
+              "missing_requirements"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "InvestigationRunEventPage__HypothesisAssessmentId": {
+        "description": "Stable identifier for one evidence-bound hypothesis assessment.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationBudget": {
+        "additionalProperties": false,
+        "description": "Hard limits: retries are admissions and cannot create a fresh budget.",
+        "properties": {
+          "limit": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationBudgetCost"
+          },
+          "max_attempts_per_step": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_in_flight": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_query_retries": {
+            "format": "uint8",
+            "maximum": 2,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_steps": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "max_steps",
+          "max_in_flight",
+          "max_attempts_per_step",
+          "max_query_retries"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationBudgetCost": {
+        "additionalProperties": false,
+        "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+        "properties": {
+          "evidence_items": {
+            "format": "uint64",
+            "maximum": 256,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_calls": {
+            "format": "uint64",
+            "maximum": 8,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "read_queries": {
+            "format": "uint64",
+            "maximum": 12,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "read_queries",
+          "model_calls",
+          "evidence_items",
+          "output_bytes"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationCommandId": {
+        "description": "Stable identifier for one investigation control command.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationControlEpoch": {
+        "description": "Control generation, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationCursorRecovery": {
+        "enum": [
+          "cursor_expired",
+          "cursor_ahead",
+          "retained_event_gap"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationEventSequence": {
+        "description": "Independent durable event sequence, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationId": {
+        "description": "Stable identifier for a multi-step investigation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationInterruptionReason": {
+        "enum": [
+          "worker_lease_expired"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationPackRef": {
+        "additionalProperties": false,
+        "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+        "properties": {
+          "pack_id": {
+            "type": "string"
+          },
+          "pack_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id",
+          "pack_version"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationRequirementRef": {
+        "additionalProperties": false,
+        "description": "Fixed collector requirement resolved by the server from a compiled pack.",
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationPackRef"
+          },
+          "requirement_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack",
+          "requirement_id"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationResource": {
+        "additionalProperties": false,
+        "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationResultDisposition": {
+        "enum": [
+          "applied",
+          "superseded"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationRevision": {
+        "description": "Monotonic run revision, serialized as a lossless decimal string.",
+        "pattern": "^(0|[1-9][0-9]{0,19})$",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationRun": {
+        "additionalProperties": false,
+        "description": "Durable read model for bounded read-only work. No deployed run route exists in D13.",
+        "properties": {
+          "assessments": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__HypothesisAssessment"
+            },
+            "type": "array"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationBudget"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationControlEpoch"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by_subject": {
+            "type": "string"
+          },
+          "deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "effective_packs": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationPackRef"
+            },
+            "type": "array"
+          },
+          "effective_scope": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunScope"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunId"
+          },
+          "initial_packs": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationPackRef"
+            },
+            "type": "array"
+          },
+          "initial_scope": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunScope"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRevision"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunStatus"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStep"
+            },
+            "type": "array"
+          },
+          "supplied_evidence_ids": {
+            "description": "Imported, already saved references consume the same distinct-Evidence budget.",
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "initial_scope",
+          "effective_scope",
+          "initial_packs",
+          "effective_packs",
+          "status",
+          "revision",
+          "control_epoch",
+          "budget",
+          "deadline",
+          "steps",
+          "evidence_ids",
+          "supplied_evidence_ids",
+          "assessments",
+          "created_by_subject",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationRunEvent": {
+        "additionalProperties": false,
+        "description": "Durable per-run sequence is independent of the run's control revision.",
+        "properties": {
+          "actor_subject": {
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__ClusterId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationControlEpoch"
+          },
+          "event": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunEventKind"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationId"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRevision"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationEventSequence"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__TenantId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "run_id",
+          "sequence",
+          "revision",
+          "control_epoch",
+          "status",
+          "actor_subject",
+          "event",
+          "occurred_at"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationRunEventKind": {
+        "description": "Event payloads carry bounded identities, never source bodies or worker lease tokens.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "created",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "command_id": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationCommandId"
+              },
+              "kind": {
+                "const": "command_accepted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "command_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "worker_claimed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "worker_released",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "started",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__StepAttemptId"
+              },
+              "kind": {
+                "const": "step_admitted",
+                "type": "string"
+              },
+              "step_id": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepId"
+              }
+            },
+            "required": [
+              "kind",
+              "step_id",
+              "attempt_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__StepAttemptId"
+              },
+              "disposition": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationResultDisposition"
+              },
+              "kind": {
+                "const": "step_settled",
+                "type": "string"
+              },
+              "step_id": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepId"
+              }
+            },
+            "required": [
+              "kind",
+              "step_id",
+              "attempt_id",
+              "disposition"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__StepAttemptId"
+              },
+              "kind": {
+                "const": "attempt_interrupted",
+                "type": "string"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationInterruptionReason"
+              },
+              "step_id": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepId"
+              }
+            },
+            "required": [
+              "kind",
+              "step_id",
+              "attempt_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "assessment_id": {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__HypothesisAssessmentId"
+              },
+              "kind": {
+                "const": "assessment_recorded",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "assessment_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "stopped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "InvestigationRunEventPage__InvestigationRunId": {
+        "description": "Stable identifier for one bounded investigation run.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationRunScope": {
+        "additionalProperties": false,
+        "description": "Immutable authority boundary and requested absolute observation window.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__ClusterId"
+          },
+          "investigation_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationId"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__TimeRange"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "investigation_id",
+          "time_range"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationRunStatus": {
+        "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+        "enum": [
+          "queued",
+          "running",
+          "pausing",
+          "paused",
+          "needs_evidence",
+          "completed",
+          "inconclusive",
+          "cancelling",
+          "cancelled",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationStep": {
+        "additionalProperties": false,
+        "description": "Logical work identity remains stable across bounded retries and restarts.",
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepAttempt"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepId"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepSpec"
+          }
+        },
+        "required": [
+          "id",
+          "spec",
+          "attempts"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationStepAttempt": {
+        "additionalProperties": false,
+        "properties": {
+          "admitted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "admitted_revision": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRevision"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationControlEpoch"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationResultDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__StepAttemptId"
+          },
+          "interruption": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepInterruption"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unknown work retains its reservation without inventing a measured result."
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationBudgetCost"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "control_epoch",
+          "admitted_revision",
+          "admitted_at",
+          "reservation"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationStepFailure": {
+        "enum": [
+          "source_unavailable",
+          "evidence_insufficient",
+          "model_unavailable",
+          "deadline_exceeded"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationStepId": {
+        "description": "Stable identity for one read-only investigation step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__InvestigationStepInterruption": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationInterruptionReason"
+          },
+          "recovered_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "recovered_at"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationStepKind": {
+        "description": "Closed read-only work: collectors are resolved from a trusted requirement catalog.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "collect_evidence",
+                "type": "string"
+              },
+              "requirement_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "requirement_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "evaluate_rules",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "evidence_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_ids": {
+                "items": {
+                  "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "explain_evidence",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "evidence_ids"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "InvestigationRunEventPage__InvestigationStepOutcome": {
+        "oneOf": [
+          {
+            "enum": [
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "cancelled_acknowledged",
+            "description": "Worker settlement with final usage; it does not assert that a remote RPC was withdrawn.",
+            "type": "string"
+          }
+        ]
+      },
+      "InvestigationRunEventPage__InvestigationStepResult": {
+        "additionalProperties": false,
+        "description": "Final observation and actual usage for exactly one admitted attempt.\n\nThe worker must join/cancel its owned read and know final consumption before\nacknowledging cancellation. No raw result, credentials or message body is carried.",
+        "properties": {
+          "actual_cost": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationBudgetCost"
+          },
+          "attempt_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__StepAttemptId"
+          },
+          "control_epoch": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationControlEpoch"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/InvestigationRunEventPage__EvidenceId"
+            },
+            "type": "array"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepOutcome"
+          },
+          "run_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "step_id",
+          "attempt_id",
+          "control_epoch",
+          "outcome",
+          "evidence_ids",
+          "actual_cost",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationStepSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationPackRef"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationRunScope"
+          },
+          "work": {
+            "$ref": "#/components/schemas/InvestigationRunEventPage__InvestigationStepKind"
+          }
+        },
+        "required": [
+          "scope",
+          "pack",
+          "work"
+        ],
+        "type": "object"
+      },
+      "InvestigationRunEventPage__InvestigationStopReason": {
+        "description": "Explicit stop reasons do not imply a root cause was established.",
+        "enum": [
+          "evidence_insufficient",
+          "budget_exhausted",
+          "deadline_exceeded",
+          "no_progress",
+          "model_unavailable",
+          "source_unavailable"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEventPage__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "InvestigationRunEventPage__StepAttemptId": {
+        "description": "Stable identifier for one admitted investigation step attempt.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "InvestigationRunEventPage__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
       }
     }
   },

@@ -179,6 +179,13 @@ impl ControlPlaneRequestFailure {
         Self::Rejected(ControlPlaneRejection::not_found())
     }
 
+    pub(crate) fn not_found_code(code: &'static str) -> Self {
+        Self::Rejected(ControlPlaneRejection {
+            kind: ControlPlaneRejectionKind::NotFound,
+            code,
+        })
+    }
+
     pub(crate) fn conflict_code(code: &'static str, _detail: impl Into<String>) -> Self {
         Self::Rejected(ControlPlaneRejection::conflict(code))
     }

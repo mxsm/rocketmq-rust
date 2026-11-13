@@ -91,6 +91,7 @@ impl InvestigationRun {
                     || !attempt.reservation.fits_within(self.budget.limit)
                     || previous_admission.is_some_and(|prior| attempt.admitted_revision <= prior)
                     || attempt.result.is_some() != attempt.disposition.is_some()
+                    || (attempt.result.is_some() && attempt.interruption.is_some())
                 {
                     return Err(InvestigationRunFailure::InvalidInput);
                 }
@@ -120,6 +121,14 @@ impl InvestigationRun {
                         completed = result.outcome == InvestigationStepOutcome::Succeeded;
                     }
                     None => {
+                        if let Some(interruption) = &attempt.interruption {
+                            if interruption.recovered_at < attempt.admitted_at
+                                || interruption.recovered_at > self.updated_at
+                            {
+                                return Err(InvestigationRunFailure::InvalidInput);
+                            }
+                            continue;
+                        }
                         open_seen = true;
                         if self.status == InvestigationRunStatus::Cancelling
                             && attempt.control_epoch == self.control_epoch

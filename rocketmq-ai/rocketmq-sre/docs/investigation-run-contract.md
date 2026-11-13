@@ -1,13 +1,14 @@
-# Investigation run contracts (D13)
+# Investigation run contracts and persistence (D13–D14)
 
 D13 defines serializable contracts and pure validation for bounded, read-only
 investigations. A run is independent of the existing `Investigation` and
 `Incident` lifecycles. Their enums and existing HTTP behavior remain unchanged.
 
-This is a contract delivery. There are no registered run HTTP routes, database
-migrations, durable coordinator, recovery worker, model or tool dispatch, or UI
-commands in this change. D14 must implement the durable runtime and transport
-before create, pause, resume, cancel, or steering operations can be called.
+D13 introduced the contracts and pure validation. D14 registers authenticated
+creation, snapshot, command and durable-event HTTP operations, backed by
+PostgreSQL transactions and fenced worker ownership. Managed recovery accounts
+for interrupted work without dispatching it again. New runs remain `queued`:
+the D15 diagnostic dispatcher and D16 UI controls are not delivered here.
 The existing workspace continues to display saved manual investigations.
 
 ## Published components
@@ -23,6 +24,8 @@ The existing workspace continues to display saved manual investigations.
 | `InvestigationStepResult` | `investigation-step-result.schema.json` | Attempt result and resource accounting |
 | `HypothesisAssessment` | `hypothesis-assessment.schema.json` | Evidence-bound hypothesis assessment |
 | `InvestigationRunFailure` | `investigation-run-failure.schema.json` | Closed, sanitized failures |
+| `InvestigationRunEvent` | `investigation-run-event.schema.json` | Scoped append-only event with an independent decimal sequence |
+| `InvestigationRunEventPage` | `investigation-run-event-page.schema.json` | Bounded contiguous replay or explicit snapshot recovery |
 
 `rocketmq-sre-contracts` owns all fields. JSON Schema describes serialization;
 cross-field, scope, budget and lifecycle rules also require the pure Rust
@@ -84,16 +87,27 @@ admission even when a failed worker reports zero actual calls. Actual worker
 costs remain available separately; exact replay does not charge another
 admission. Evidence and output reservations settle to their actual costs,
 including costs of superseded results. Evidence accounting counts distinct observed
-references, including supplied references, once. D14 must calculate that
-distinct-reference delta inside the same serialized persistence decision as
-result acceptance. An exact duplicate result does not charge again; a
-conflicting duplicate is rejected.
+references, including supplied references, once. D14 calculates that
+distinct-reference delta inside the same locked persistence decision as result
+acceptance, so concurrent results sharing an ID can both settle without a
+double charge. The original submitted result is retained in a separate
+append-only receipt; replay compares that original report, including its costs
+and timestamps, while the run stores the canonical distinct-reference charge.
+An exact duplicate does not charge again; a conflicting duplicate is rejected.
 
 Logical step identity includes its scope, exact pack/version and closed work
 kind. It excludes attempt IDs, reservation sizes and control epochs, so changing
 those fields cannot rerun already successful work. Rule evaluation and
 explanation results may reference only their declared Evidence inputs.
 Collection results require service-verified Evidence scope bindings.
+
+A worker whose ownership lease has expired cannot settle or admit work with
+its old fence. Recovery first closes admission, then records a typed
+`worker_lease_expired` attempt interruption. This is neither a measured result
+nor a zero-cost failure: no `actual_cost` or invented Evidence is attached.
+The unknown attempt's reservation continues to occupy the shared budget. An
+explicit retry consumes additional quota. Interrupted attempts no longer keep
+pause/cancel draining, and a late result from that attempt is rejected.
 
 Trusted authorization and Evidence contexts are not serializable request DTOs.
 D14 must construct them from current identity claims, compiled pack/requirement
@@ -113,28 +127,60 @@ Supporting, counter and missing references remain traceable; the assessment
 remains advisory, does not establish causality from timestamps, and grants no
 execution permission.
 
-## Proposed D14 transport (not registered)
+## Registered D14 transport
 
-These routes and status mappings describe the intended integration. D13 adds
-none of them to `paths`, the HTTP client or the UI.
+The public Control Plane router registers these operations. They change only
+the persisted read-only investigation lifecycle. They do not expose worker
+claim, arbitrary collection, shell, raw request or target execution endpoints.
+The fixed read-only SDK and existing UI receive no new mutation methods or
+control buttons.
 
-| Proposed operation | Contract | Proposed success mapping |
+| Operation | Contract | Success mapping |
 | --- | --- | --- |
-| `POST /v1/investigations/{investigation_id}/runs` | `CreateInvestigationRunRequest` → `CreateInvestigationRunResponse` | `201` for a newly recorded queued run; `200` for exact authorized creation replay |
-| `GET /v1/investigation-runs/{run_id}` | `InvestigationRun` | `200` for the authorized current snapshot |
-| `POST /v1/investigation-runs/{run_id}/commands` | `InvestigationCommandRequest` → `InvestigationCommandReceipt` | `202` when a newly accepted pause/cancel must drain; `200` for immediate application or exact authorized receipt replay |
+| `POST /v1/investigations/{id}/runs` | `CreateInvestigationRunRequest` → `CreateInvestigationRunResponse` | `201` for a newly recorded queued run; `200` for exact authorized creation replay |
+| `GET /v1/investigation-runs/{id}` | `InvestigationRun` | `200` for the authorized current snapshot |
+| `POST /v1/investigation-runs/{id}/commands` | `InvestigationCommandRequest` → `InvestigationCommandReceipt` | `202` when a newly accepted pause/cancel must drain; `200` for immediate application or exact authorized receipt replay |
+| `GET /v1/investigation-runs/{id}/events?after=0&limit=50` | `InvestigationRunEventPage` | `200` for contiguous durable events or an explicit snapshot reset |
 
 A replay returns the previously accepted receipt's semantic result without
 reapplying the command. Its `200` means that an existing receipt was read; it
 does not mean that a new command was accepted or that all admitted work has
 finished. A client must not replace a newer run snapshot with an older receipt's
-status or applied revision. D14 must validate path/body identities and preserve
-the original creation response and command receipt atomically with their effects.
+status or applied revision. Path/body identities must match. The original
+creation response and command receipt are persisted atomically with effects.
+
+Every public request authenticates the current identity. Tenant and cluster
+claims are checked against the saved run and investigation. Creation and
+commands also require an existing diagnose/operator role; another actor cannot
+replay the original actor's receipt. Saved subject strings are parsed into
+exact resource identities, including all key components, rather than matched
+by substring. An unrecognized constrained subject cannot become a cluster-wide
+run. Steering only narrows the initial scope and requires real saved revision
+references and same-tenant/cluster Evidence metadata. Related resources need a
+saved revision on the already bound investigation subject; narrowing a broad
+parent to a new subject does not supply that relationship.
+
+Evidence `time_range` must fit within the requested observation scope.
+`observed_at` is collection time and may legitimately follow the historical
+window's end; it is not a collection deadline. Metadata authorization does not
+convert freshness or retention into permission, or claim that stale Evidence
+is sufficient for a new conclusion. Diagnostic qualification remains separate.
+
+Event sequences are lossless decimal strings independent of run revision and
+control epoch. `after` is an exclusive cursor and `limit` is between 1 and 100.
+Expired, ahead or retained-gap cursors return `snapshot_required=true`, a typed
+`recovery_reason`, no events, and the current authorized snapshot. Resume after
+`next_sequence`; never silently skip a gap. Event payloads carry bounded IDs
+and lifecycle facts, not source bodies, prompts or worker lease tokens.
+PostgreSQL event and worker-fence sequences use checked nonnegative `BIGINT`
+counters. Storage exhaustion rejects the whole transaction with
+`counter_exhausted`; snapshots and receipts cannot partially advance. Run
+revisions and control epochs retain their independent full `u64` string counters.
 
 The following mapping applies to the dedicated `InvestigationRunFailure` codes;
 it does not change the existing public error enum or envelope:
 
-| Proposed status | Dedicated failure codes |
+| Status | Dedicated failure codes |
 | --- | --- |
 | `400` | `invalid_input`, `invalid_assessment` |
 | `403` | `unauthorized`, `scope_mismatch`, `pack_not_allowed` |
@@ -144,7 +190,7 @@ it does not change the existing public error enum or envelope:
 An invalid deadline in a new creation request is invalid input (`400`). A
 validly created run whose deadline or remaining budget now forbids admission
 has an admission conflict (`409`). Missing or invalid HTTP authentication is
-handled by D14's transport authentication (`401`), before the trusted pure
+handled by transport authentication (`401`), before the trusted pure
 context is constructed. Error text stays sanitized and does not echo directives,
 credentials, source content or model output.
 
@@ -169,7 +215,7 @@ It does not duplicate Rust DTO fields in JavaScript. Existing `Investigation`,
 `Incident`, Evidence and supervised-execution components keep their names.
 
 Both `scripts/generate_phase5_openapi.mjs` and the UI's `generate:api` pipeline
-include the helper. The UI runs it as a separate generation step after the
+include the component helper and D14 transport registration. The UI runs them as a separate generation step after the
 conversation extender, including when that extender detects an existing
 conversation contract and exits early. `check:api` remains a read-only check
 against the committed OpenAPI document.
@@ -193,13 +239,18 @@ requires an artifact for every exported root. Generator tests cover reference
 closure, stale-definition removal and repeatable component-only integration.
 No dependency or lockfile changes are required.
 
-## D14 implementation obligations
+## Ownership and remaining runtime work
 
-D14 must bind authenticated tenant and cluster claims before accepting a run or
-command, persist idempotency decisions atomically with their effects, enforce
-expected revisions, and retain pending pause/cancel work until admitted steps
-drain. It must coordinate attempts, duplicate results, evidence ownership and
-resource accounting across restart. The pure contracts describe those
-decisions; they do not supply storage atomicity, request authorization or a
-running scheduler. The proposed transport and status mappings above remain
-design contracts until D14 implements and registers them.
+The service binds authenticated scope before accepting operations, and the
+repository serializes the pure decision, expected revision, receipt, snapshot
+and event writes in one transaction. Worker transitions require current leased
+ownership and fencing. The recovery scan runs with a bounded batch under the
+existing `ChildServiceContext` scheduled-task owner; process shutdown cancels
+and awaits that owner's work. Recovery never dispatches queries, grants user
+authority or reports unknown consumption as measured cost.
+
+D15 must implement registered read-only collection and assessment dispatch,
+including actual metadata/quality proof, cancellation settlement and recovery
+coordination at the source boundary. D16 may add UI controls against these
+versioned operations. Persistence and an accepted control receipt alone do not
+claim that a diagnostic worker has run or that a conclusion was established.
