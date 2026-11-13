@@ -178,7 +178,8 @@ fn child_permit_reserves_every_ancestor_and_releases_on_drop() {
 fn deep_child_permit_preserves_ancestors_beyond_inline_storage() {
     let tree = ResourceBudgetTree::new("process", limit(8, 800, FullPolicy::Reject)).expect("root budget");
     let mut levels = vec![tree.root()];
-    for index in 0..6 {
+    // Deeper than the levels a permit holds inline.
+    for index in 0..10 {
         let child = levels
             .last()
             .expect("parent budget")
@@ -369,6 +370,49 @@ fn rate_limit_uses_injected_monotonic_time_and_preserves_control_tokens() {
     clock.advance(Duration::from_secs(1));
     assert!(root.try_acquire_control(1).is_ok());
     drop((data, control));
+}
+
+#[test]
+fn a_rejected_acquisition_returns_the_rate_tokens_it_took() {
+    let clock = Arc::new(ManualClock::default());
+    let tree = ResourceBudgetTree::with_clock(
+        "process",
+        limit(8, 800, FullPolicy::Reject).with_rate(RateLimit::new(2, 2)),
+        clock,
+    )
+    .expect("root budget");
+    let root = tree.root();
+    let child = root
+        .child(
+            "one-slot",
+            limit(1, 800, FullPolicy::Reject).with_rate(RateLimit::new(2, 2)),
+        )
+        .expect("child budget");
+
+    let held = child.try_acquire_data(1).expect("first child permit");
+    assert_eq!(
+        child
+            .try_acquire_data(1)
+            .expect_err("the child has one slot")
+            .dimension(),
+        Some(BudgetDimension::Count)
+    );
+    let snapshot = root.snapshot();
+    assert_eq!((snapshot.current_count, snapshot.admitted_count), (1, 1));
+
+    // The rejected attempt took the root's second token and must have returned it.
+    let direct = root.try_acquire_data(1).expect("the root token was returned");
+    assert_eq!(
+        root.try_acquire_data(1)
+            .expect_err("both root tokens are now spent")
+            .dimension(),
+        Some(BudgetDimension::Rate)
+    );
+
+    drop((held, direct));
+    let snapshot = root.snapshot();
+    assert_eq!(snapshot.current_count, 0);
+    assert_eq!((snapshot.admitted_count, snapshot.released_count), (2, 2));
 }
 
 #[test]
