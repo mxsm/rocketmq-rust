@@ -456,28 +456,22 @@ impl ResourceBudget {
         class: BudgetClass,
         record_failure: bool,
     ) -> Result<ResourcePermit, BudgetRejection> {
-        let mut reservations = SmallVec::<[NodeReservation; 4]>::with_capacity(self.chain.len());
+        let mut reservations = PendingReservations::new(bytes, class);
         for node in self.chain.iter() {
-            match node.try_reserve(bytes, class) {
-                Ok(reservation) => reservations.push(reservation),
-                Err(dimension) => {
-                    if record_failure {
-                        self.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
-                    }
-                    return Err(BudgetRejection {
-                        path: Arc::clone(&self.node.path),
-                        exhausted_path: Arc::clone(&node.path),
-                        reason: BudgetRejectionReason::Capacity(dimension),
-                        policy: self.node.limit.full_policy,
-                    });
+            if let Err(dimension) = reservations.reserve(node) {
+                if record_failure {
+                    self.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
                 }
+                return Err(BudgetRejection {
+                    path: Arc::clone(&self.node.path),
+                    exhausted_path: Arc::clone(&node.path),
+                    reason: BudgetRejectionReason::Capacity(dimension),
+                    policy: self.node.limit.full_policy,
+                });
             }
         }
-        for reservation in &mut reservations {
-            reservation.commit();
-        }
         Ok(ResourcePermit {
-            reservations,
+            nodes: reservations.commit(),
             bytes,
             class,
             capacity_notify: Arc::clone(&self.capacity_notify),
@@ -596,9 +590,21 @@ fn validated_name(name: String) -> Result<String, crate::RuntimeContractViolatio
     Ok(name.to_owned())
 }
 
+/// Budget levels a permit holds inline before its chain moves to the heap.
+///
+/// Admission chains are up to about six levels deep (process root, resource, IP, tenant,
+/// session and dynamic generations); each level is one pointer.
+const INLINE_CHAIN_LEVELS: usize = 8;
+
+/// The nodes of a permit's chain, root first.
+type HeldNodes = SmallVec<[Arc<BudgetNode>; INLINE_CHAIN_LEVELS]>;
+
 /// Represents resource permit.
+///
+/// The permit holds one count and its `bytes` of its `class` at every node of `nodes`, so a
+/// node needs no reservation record of its own.
 pub struct ResourcePermit {
-    reservations: SmallVec<[NodeReservation; 4]>,
+    nodes: HeldNodes,
     bytes: usize,
     class: BudgetClass,
     capacity_notify: Arc<CapacitySignal>,
@@ -608,10 +614,7 @@ impl fmt::Debug for ResourcePermit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ResourcePermit")
-            .field(
-                "path",
-                &self.reservations.last().map(|reservation| &reservation.node.path),
-            )
+            .field("path", &self.nodes.last().map(|node| &node.path))
             .field("bytes", &self.bytes)
             .field("class", &self.class)
             .finish()
@@ -636,7 +639,7 @@ impl ResourcePermit {
             return Ok(());
         }
         // Every live permit owns at least its root reservation.
-        let leaf = Arc::clone(&self.reservations.last().expect("permits own a root reservation").node);
+        let leaf = Arc::clone(self.nodes.last().expect("permits own a root reservation"));
         let mut guards = SmallVec::<[MutexGuard<'_, bool>; 2]>::new();
         for gate in leaf.admission_gates.iter() {
             let guard = gate.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -652,27 +655,24 @@ impl ResourcePermit {
             guards.push(guard);
         }
         let additional = bytes - self.bytes;
-        for (index, reservation) in self.reservations.iter().enumerate() {
-            if !reservation.node.try_reserve_bytes(additional, self.class) {
-                for reserved in &self.reservations[..index] {
-                    reserved.node.release_bytes(additional, self.class);
+        for (index, node) in self.nodes.iter().enumerate() {
+            if !node.try_reserve_bytes(additional, self.class) {
+                for reserved in &self.nodes[..index] {
+                    reserved.release_bytes(additional, self.class);
                 }
                 let reason = BudgetRejectionReason::Capacity(BudgetDimension::Bytes);
-                reservation.node.record_rejection(reason);
-                if !Arc::ptr_eq(&reservation.node, &leaf) {
+                node.record_rejection(reason);
+                if !Arc::ptr_eq(node, &leaf) {
                     leaf.record_rejection(reason);
                 }
                 self.capacity_notify.signal();
                 return Err(BudgetRejection {
                     path: leaf.path.clone(),
-                    exhausted_path: reservation.node.path.clone(),
+                    exhausted_path: node.path.clone(),
                     reason,
                     policy: leaf.limit.full_policy,
                 });
             }
-        }
-        for reservation in &mut self.reservations {
-            reservation.bytes = bytes;
         }
         self.bytes = bytes;
         Ok(())
@@ -683,9 +683,8 @@ impl ResourcePermit {
         if released == 0 {
             return;
         }
-        for reservation in &mut self.reservations {
-            reservation.node.release_bytes(released, self.class);
-            reservation.bytes = bytes;
+        for node in &self.nodes {
+            node.release_bytes(released, self.class);
         }
         self.bytes = bytes;
         self.capacity_notify.signal();
@@ -711,14 +710,12 @@ impl ResourcePermit {
         if self.class == BudgetClass::Control {
             return;
         }
-        for reservation in &mut self.reservations {
-            let node = &reservation.node;
+        for node in &self.nodes {
             release_reserved(&node.data_count, 1);
-            release_reserved(&node.data_bytes, reservation.bytes);
+            release_reserved(&node.data_bytes, self.bytes);
             if let Some(rate) = &node.rate {
                 BudgetNode::lock_rate(rate).restore_data(node.limit);
             }
-            reservation.class = BudgetClass::Control;
         }
         self.class = BudgetClass::Control;
         self.capacity_notify.signal();
@@ -753,50 +750,46 @@ impl ResourcePermit {
     }
 
     pub(super) fn belongs_to_tree(&self, target: &ResourceBudget) -> bool {
-        self.reservations
+        self.nodes
             .first()
             .zip(target.chain.first())
-            .is_some_and(|(reservation, node)| Arc::ptr_eq(&reservation.node, node))
+            .is_some_and(|(held, node)| Arc::ptr_eq(held, node))
     }
 
     pub(super) fn try_rebind_admitted(&mut self, admission: &BudgetAdmission<'_>) -> PermitBudgetTransferStatus {
         let target = admission.budget;
         let common_ancestors = self
-            .reservations
+            .nodes
             .iter()
             .zip(target.chain.iter())
-            .take_while(|(reservation, target_node)| Arc::ptr_eq(&reservation.node, target_node))
+            .take_while(|(held, target_node)| Arc::ptr_eq(held, target_node))
             .count();
         debug_assert!(
             common_ancestors > 0,
             "caller validates the permit tree before admission"
         );
-        if common_ancestors == self.reservations.len() && common_ancestors == target.chain.len() {
+        if common_ancestors == self.nodes.len() && common_ancestors == target.chain.len() {
             return PermitBudgetTransferStatus::Unchanged;
         }
 
-        let mut target_reservations =
-            SmallVec::<[NodeReservation; 4]>::with_capacity(target.chain.len() - common_ancestors);
+        let mut target_reservations = PendingReservations::new(self.bytes, self.class);
         for node in target.chain.iter().skip(common_ancestors) {
-            match node.try_reserve(self.bytes, self.class) {
-                Ok(reservation) => target_reservations.push(reservation),
-                Err(dimension) => {
-                    target.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
-                    return PermitBudgetTransferStatus::Rejected(BudgetRejection {
-                        path: Arc::clone(&target.node.path),
-                        exhausted_path: Arc::clone(&node.path),
-                        reason: BudgetRejectionReason::Capacity(dimension),
-                        policy: target.node.limit.full_policy,
-                    });
-                }
+            if let Err(dimension) = target_reservations.reserve(node) {
+                target.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
+                return PermitBudgetTransferStatus::Rejected(BudgetRejection {
+                    path: Arc::clone(&target.node.path),
+                    exhausted_path: Arc::clone(&node.path),
+                    reason: BudgetRejectionReason::Capacity(dimension),
+                    policy: target.node.limit.full_policy,
+                });
             }
         }
-        for reservation in &mut target_reservations {
-            reservation.commit();
-        }
+        let target_nodes = target_reservations.commit();
 
-        self.reservations.truncate(common_ancestors);
-        self.reservations.extend(target_reservations);
+        for node in self.nodes.drain(common_ancestors..) {
+            node.release_held(self.bytes, self.class);
+        }
+        self.nodes.extend(target_nodes);
         self.capacity_notify.signal();
         PermitBudgetTransferStatus::Rebound
     }
@@ -804,7 +797,9 @@ impl ResourcePermit {
 
 impl Drop for ResourcePermit {
     fn drop(&mut self) {
-        self.reservations.clear();
+        for node in self.nodes.drain(..) {
+            node.release_held(self.bytes, self.class);
+        }
         self.capacity_notify.signal();
     }
 }
@@ -914,7 +909,9 @@ impl BudgetNode {
         rate.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn try_reserve(self: &Arc<Self>, bytes: usize, class: BudgetClass) -> Result<NodeReservation, BudgetDimension> {
+    /// Reserves one count and `bytes` of `class`, and a rate token where the node has a rate.
+    /// [`PendingReservations`] owns the reservation until it is committed to a permit.
+    fn try_reserve(&self, bytes: usize, class: BudgetClass) -> Result<(), BudgetDimension> {
         let capacity = self.limit.capacity;
         let control_reserve = self.limit.control_reserve;
         if !try_reserve_within(&self.current_count, 1, capacity.count) {
@@ -954,12 +951,13 @@ impl BudgetNode {
             rate.consume(self.limit, class);
         }
 
-        Ok(NodeReservation {
-            node: Arc::clone(self),
-            bytes,
-            class,
-            committed: false,
-        })
+        Ok(())
+    }
+
+    /// Returns what a permit held at this node and counts the release.
+    fn release_held(&self, bytes: usize, class: BudgetClass) {
+        self.release_capacity(bytes, class);
+        self.counters.released.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Returns reserved count and bytes; data counters too for a data reservation.
@@ -1031,28 +1029,46 @@ impl BudgetNode {
     }
 }
 
-struct NodeReservation {
-    node: Arc<BudgetNode>,
+/// Reservations taken on a run of nodes for one acquisition or rebind, rolled back unless
+/// they are committed to a permit.
+struct PendingReservations {
+    nodes: HeldNodes,
     bytes: usize,
     class: BudgetClass,
-    committed: bool,
 }
 
-impl NodeReservation {
-    fn commit(&mut self) {
-        self.node.counters.admitted.fetch_add(1, Ordering::Relaxed);
-        self.committed = true;
+impl PendingReservations {
+    fn new(bytes: usize, class: BudgetClass) -> Self {
+        Self {
+            nodes: HeldNodes::new(),
+            bytes,
+            class,
+        }
+    }
+
+    fn reserve(&mut self, node: &Arc<BudgetNode>) -> Result<(), BudgetDimension> {
+        node.try_reserve(self.bytes, self.class)?;
+        self.nodes.push(Arc::clone(node));
+        Ok(())
+    }
+
+    /// Counts the admissions and hands the reservations to a permit.
+    fn commit(mut self) -> HeldNodes {
+        for node in &self.nodes {
+            node.counters.admitted.fetch_add(1, Ordering::Relaxed);
+        }
+        std::mem::take(&mut self.nodes)
     }
 }
 
-impl Drop for NodeReservation {
+impl Drop for PendingReservations {
     fn drop(&mut self) {
-        self.node.release_capacity(self.bytes, self.class);
-        if self.committed {
-            self.node.counters.released.fetch_add(1, Ordering::Relaxed);
-        } else if let Some(rate) = &self.node.rate {
-            // A rolled-back reservation returns the rate token it consumed.
-            BudgetNode::lock_rate(rate).restore(self.node.limit, self.class);
+        for node in &self.nodes {
+            node.release_capacity(self.bytes, self.class);
+            if let Some(rate) = &node.rate {
+                // A rolled-back reservation returns the rate token it consumed.
+                BudgetNode::lock_rate(rate).restore(node.limit, self.class);
+            }
         }
     }
 }
