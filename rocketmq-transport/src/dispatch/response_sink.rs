@@ -119,7 +119,7 @@ impl ResponseSink {
         Some(
             DeferredResponseSeed::new(
                 self.clone(),
-                session.connection().telemetry(),
+                session.telemetry(),
                 session.session_view().id(),
                 context.control().clone(),
             )
@@ -138,7 +138,7 @@ impl ResponseSink {
         let context = owner.response_context()?;
         Some(DeferredResponseSeed::new(
             self.clone(),
-            session.connection().telemetry(),
+            session.telemetry(),
             session.session_view().id(),
             context.control().clone(),
         ))

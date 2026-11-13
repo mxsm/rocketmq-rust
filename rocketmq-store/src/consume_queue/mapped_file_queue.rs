@@ -447,15 +447,7 @@ impl MappedFileQueueAppendHandle {
 
     /// Returns the current absolute append position without exposing the mapped-file generation.
     pub(crate) fn current_append_offset(&self) -> u64 {
-        self.mapped_files
-            .snapshot()
-            .last()
-            .map(|mapped_file| {
-                mapped_file
-                    .get_file_from_offset()
-                    .saturating_add(mapped_file.get_wrote_position().max(0) as u64)
-            })
-            .unwrap_or_default()
+        current_append_offset(&self.mapped_files)
     }
 
     pub(crate) fn get_last_mapped_file(&self, start_offset: u64, need_create: bool) -> Option<Arc<DefaultMappedFile>> {
@@ -470,6 +462,19 @@ impl MappedFileQueueAppendHandle {
             need_create,
         )
     }
+}
+
+/// The absolute offset just past the last written byte of the newest mapped file.
+fn current_append_offset(mapped_files: &MappedFileGeneration) -> u64 {
+    mapped_files
+        .snapshot()
+        .last()
+        .map(|mapped_file| {
+            mapped_file
+                .get_file_from_offset()
+                .saturating_add(mapped_file.get_wrote_position().max(0) as u64)
+        })
+        .unwrap_or_default()
 }
 
 fn get_last_mapped_file_for_append(
@@ -1284,6 +1289,13 @@ impl MappedFileQueue {
             mapped_file_size: self.storage.mapped_file_size(),
             runtime_state: self.runtime_state.clone(),
         }
+    }
+
+    /// Returns the current absolute append position, as an append handle would, without
+    /// building one: a handle clones the allocation service and allocates its store path.
+    #[inline]
+    pub(crate) fn current_append_offset(&self) -> u64 {
+        current_append_offset(self.storage.mapped_files())
     }
 
     #[inline]
@@ -2516,6 +2528,8 @@ mod tests {
 
         assert_eq!(read_handle.get_max_offset(), mapped_file.get_read_position() as i64);
         assert_eq!(append_handle.current_append_offset(), 512);
+        // The queue reads the same offset without building an append handle.
+        assert_eq!(queue.current_append_offset(), 512);
         assert!(Arc::ptr_eq(
             queue.get_mapped_files().first().expect("published file"),
             &mapped_file

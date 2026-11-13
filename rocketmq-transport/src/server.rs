@@ -49,7 +49,6 @@ use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
-use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::SessionIoModel;
@@ -59,6 +58,7 @@ use crate::config::TlsMode;
 use crate::connection::Connection;
 use crate::connection::ConnectionId;
 use crate::connection::ConnectionState;
+use crate::connection::QueuedWriterParts;
 use crate::connection::SessionLifecycle;
 use crate::connection::SessionSendLease;
 use crate::connection::SessionWriterDiagnostics;
@@ -504,7 +504,9 @@ struct SessionSendHandle {
     frame_limits: FrameLimits,
     writer: WriterLanes,
     writer_diagnostics: Arc<SessionWriterDiagnostics>,
-    admission: AdmissionScopeHandle,
+    /// The writer, its diagnostics, the session's admission scope and lifecycle, shared by
+    /// every [`Connection`] this session builds for a response.
+    queued_writer: Arc<QueuedWriterParts>,
     state_tx: tokio::sync::watch::Sender<ConnectionState>,
     state_rx: tokio::sync::watch::Receiver<ConnectionState>,
     session_closed_tx: tokio::sync::watch::Sender<bool>,
@@ -646,15 +648,12 @@ impl SessionHandle {
 
     pub fn connection(&self) -> Connection {
         Connection::new_queued(
-            self.send.writer.clone(),
-            self.send.writer_diagnostics.clone(),
-            self.send.admission.clone(),
+            Arc::clone(&self.send.queued_writer),
             self.send.state_tx.clone(),
             self.send.state_rx.clone(),
             self.send.connection_id.clone(),
             self.send.frame_limits,
             self.response_class,
-            self.send.lifecycle.clone(),
             self.send.telemetry.clone(),
         )
         .with_response_drop(
@@ -662,6 +661,11 @@ impl SessionHandle {
                 .as_ref()
                 .map(ResponseDeliveryContext::transport_drop_handle),
         )
+    }
+
+    /// Returns the session's transport telemetry without building a [`Connection`].
+    pub(crate) fn telemetry(&self) -> TransportTelemetry {
+        self.send.telemetry.clone()
     }
 
     pub fn task_group(&self) -> &TaskGroup {
@@ -1600,9 +1604,14 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
                 proxy_protocol,
                 connection_id,
                 frame_limits,
+                queued_writer: QueuedWriterParts::new(
+                    writer.clone(),
+                    Arc::clone(&writer_diagnostics),
+                    admission_scope,
+                    Arc::clone(&lifecycle),
+                ),
                 writer: writer.clone(),
                 writer_diagnostics,
-                admission: admission_scope,
                 state_tx: state_tx.clone(),
                 state_rx,
                 session_closed_tx,
