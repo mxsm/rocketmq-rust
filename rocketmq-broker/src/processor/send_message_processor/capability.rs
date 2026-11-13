@@ -291,21 +291,21 @@ impl<MS: BrokerWriteStore> SendMessageStorePort for EscapeBridge<MS> {
         &self,
         message: MessageExtBrokerInner,
     ) -> Pin<Box<dyn Future<Output = Result<PutMessageResult, MessageStoreUnavailable>> + Send + '_>> {
-        Box::pin(self.put_message_to_local_store(message))
+        rocketmq_runtime::task::box_in_place(|| self.put_message_to_local_store(message))
     }
 
     fn append_message(
         &self,
         message: MessageExtBrokerInner,
     ) -> Pin<Box<dyn Future<Output = Result<StoreAppendReceipt, StoreError>> + Send + '_>> {
-        Box::pin(self.send_append_message(message))
+        rocketmq_runtime::task::box_in_place(|| self.send_append_message(message))
     }
 
     fn append_batch(
         &self,
         message: MessageExtBatch,
     ) -> Pin<Box<dyn Future<Output = Result<StoreAppendReceipt, StoreError>> + Send + '_>> {
-        Box::pin(self.send_append_batch(message))
+        rocketmq_runtime::task::box_in_place(|| self.send_append_batch(message))
     }
 }
 

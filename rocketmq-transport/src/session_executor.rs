@@ -163,8 +163,9 @@ impl SessionExecutor {
         // measured 331 KB), and every request copies and allocates all of it. Boxed, the wrappers
         // hold a pointer. The processing path and the rejection response are boxed separately when
         // they start: a move copies a future's full size, so this admission wrapper stays small
-        // for the reader that boxes it, and only the path that runs is copied, once.
-        let request = Box::pin(async move {
+        // for the reader that boxes it, and only the path that runs is boxed. Both this wrapper
+        // and the processing path are built in their boxes, so their unused state is not copied.
+        let request = rocketmq_runtime::task::box_in_place(|| async move {
             let _task_count = task_count;
             let ordering_guard = ordering_ticket.acquire().await;
             let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
@@ -179,7 +180,11 @@ impl SessionExecutor {
             drop(queued);
             let _inflight = inflight;
             let _processor = processor;
-            run_ordered(ordering_guard, Box::pin(execute(request_operation_for_task))).await;
+            run_ordered(
+                ordering_guard,
+                rocketmq_runtime::task::box_in_place(|| execute(request_operation_for_task)),
+            )
+            .await;
         });
         match spawn_group.spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", request) {
             Ok(task_id) => Ok(SessionDispatchAttempt::Accepted(task_id)),
