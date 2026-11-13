@@ -35,6 +35,7 @@ use rocketmq_store::CqExtUnit;
 use rocketmq_store::MessageFilter;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredExpiryMargins;
@@ -61,6 +62,7 @@ use super::super::*;
 use crate::long_polling::pop_deferred::index::PopArrivalView;
 use crate::long_polling::pop_deferred::service::PopArrivalLatchStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredWakeupObserver;
+use crate::long_polling::pop_deferred::service::ResumePop;
 
 const SENTINEL_CODE: i32 = 98_281;
 const ORDERING_KEY: u64 = 9_828;
@@ -73,6 +75,18 @@ mod provenance_tests;
 
 fn nonzero(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).expect("test value is non-zero")
+}
+
+async fn claim_arrival(service: &PopDeferredService, arrival: &PopArrival) -> Option<ClaimedDeferred<ResumePop>> {
+    let candidate = service.reserve_arrival_candidate(arrival.view(), PopSelectionOrder::Oldest)?;
+    match service
+        .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
+        .await
+        .expect("claim reserved arrival candidate")
+    {
+        DeferredClaimResult::Claimed(claimed) => Some(claimed),
+        _ => panic!("reserved fixture candidate must be claimable"),
+    }
 }
 
 fn assert_clean_shutdown(owner: &str, report: &ShutdownReport) {
@@ -596,16 +610,14 @@ async fn provisional_oldest_claim_does_not_hide_active_second_waiter() {
     commit_barrier(&mut second_client, &second_barrier, 83).await;
 
     let arrival = PopArrival::new("TopicA".into(), "GroupA".into(), 0);
-    let mut pending_first = Box::pin(service.claim_message(&arrival, PopSelectionOrder::Oldest));
+    let mut pending_first = Box::pin(claim_arrival(&service, &arrival));
     tokio::select! {
         biased;
         _ = &mut pending_first => panic!("provisional oldest claim completed before commit"),
         _ = tokio::task::yield_now() => {}
     }
-    let second_claim = service
-        .claim_message(&arrival, PopSelectionOrder::Oldest)
+    let second_claim = claim_arrival(&service, &arrival)
         .await
-        .expect("second arrival remains claimable")
         .expect("active second waiter is not hidden by the provisional candidate");
     assert_eq!(second_claim.deferred_id(), second.id);
     drop(second_claim);
@@ -613,10 +625,8 @@ async fn provisional_oldest_claim_does_not_hide_active_second_waiter() {
     drop(pending_first);
     first_barrier.release_outcome.notify_one();
     commit_barrier(&mut first_client, &first_barrier, 84).await;
-    let first_claim = service
-        .claim_message(&arrival, PopSelectionOrder::Oldest)
+    let first_claim = claim_arrival(&service, &arrival)
         .await
-        .expect("cancelled provisional candidate reopens")
         .expect("oldest waiter remains claimable after commit");
     assert_eq!(first_claim.deferred_id(), first.id);
     drop(first_claim);
@@ -739,29 +749,23 @@ async fn matching_skips_filter_miss_then_advances_oldest_exact_wildcard_and_retr
     commit_barrier(&mut client, &barrier, 4).await;
 
     let miss = PopArrival::new("TopicA".into(), "GroupA".into(), 0).with_filter_metadata(Some(6), 0, None, None);
-    let first = service
-        .claim_message(&miss, PopSelectionOrder::Oldest)
+    let first = claim_arrival(&service, &miss)
         .await
-        .expect("filter miss is not a claim error")
         .expect("wildcard waiter remains eligible after the oldest filter miss");
     assert_eq!(first.deferred_id(), wildcard.id);
     drop(first);
 
     let matching = PopArrival::new("TopicA".into(), "GroupA".into(), 0).with_filter_metadata(Some(7), 0, None, None);
-    let second = service
-        .claim_message(&matching, PopSelectionOrder::Oldest)
+    let second = claim_arrival(&service, &matching)
         .await
-        .expect("matching arrival")
         .expect("oldest filtered exact waiter");
     assert_eq!(second.deferred_id(), filtered.id);
     drop(second);
 
     let retry_topic = rocketmq_model::common::key_builder::KeyBuilder::build_pop_retry_topic_v2("TopicA", "GroupA");
     let retry = PopArrival::from_retry_topic(retry_topic.into(), "GroupA".into(), 0);
-    let third = service
-        .claim_message(&retry, PopSelectionOrder::Oldest)
+    let third = claim_arrival(&service, &retry)
         .await
-        .expect("retry arrival")
         .expect("retry topic normalizes to the remaining exact waiter");
     assert_eq!(third.deferred_id(), second_exact.id);
     drop(third);
@@ -797,9 +801,7 @@ async fn topic_fanout_and_forced_refresh_bypass_filter_then_cleanup() {
     );
     let arrival = PopArrival::new("TopicA".into(), "GroupA".into(), 0).with_filter_metadata(Some(99), 0, None, None);
     assert!(service
-        .claim_message(&arrival, PopSelectionOrder::Oldest)
-        .await
-        .expect("normal filter miss")
+        .reserve_arrival_candidate(arrival.view(), PopSelectionOrder::Oldest)
         .is_none());
     let target = service
         .forced_target_batch(&"TopicA".into(), &"GroupA".into())
