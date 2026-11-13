@@ -52,12 +52,6 @@ pub(super) fn timestamp_to_java_long(operation: &'static str, timestamp: u64) ->
         .map_err(|_| ClientError::illegal_argument(format!("{operation} timestamp exceeds Java long range")))
 }
 
-pub(super) fn timeout_millis_to_u64(timeout_millis: Duration) -> crate::ClientResult<u64> {
-    u64::try_from(timeout_millis.as_millis()).map_err(|_| {
-        ClientError::illegal_argument("DefaultMQAdminExt timeoutMillis exceeds Rust u64 millisecond range")
-    })
-}
-
 pub(super) fn java_long_to_u64(operation: &'static str, field: &'static str, value: i64) -> crate::ClientResult<u64> {
     u64::try_from(value).map_err(|_| {
         ClientError::illegal_argument(format!(
