@@ -2106,6 +2106,18 @@ async fn start_stop_observing_server(
     Arc<tokio::sync::Notify>,
     Arc<tokio::sync::Notify>,
 ) {
+    start_stop_observing_server_with(name, SessionIoModel::SharedTask).await
+}
+
+async fn start_stop_observing_server_with(
+    name: &'static str,
+    io_model: SessionIoModel,
+) -> (
+    crate::connection::Connection,
+    harness::RunningServer,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+) {
     let runtime = TestRuntime::new(name);
     let waiting = Arc::new(tokio::sync::Notify::new());
     let stopped = Arc::new(tokio::sync::Notify::new());
@@ -2113,7 +2125,11 @@ async fn start_stop_observing_server(
         waiting: Arc::clone(&waiting),
         stopped: Arc::clone(&stopped),
     };
-    let server = TransportServer::new(loopback_server_config(), runtime.service_context(), processor);
+    let config = Arc::new(crate::config::ServerConfig {
+        session_io_model: io_model,
+        ..(*loopback_server_config()).clone()
+    });
+    let server = TransportServer::new(config, runtime.service_context(), processor);
     let (mut client, _address, running) = start_server(runtime, server).await;
     client
         .send_command(RemotingCommand::create_remoting_command(46).set_opaque(4_601))
@@ -2149,4 +2165,63 @@ async fn a_waiting_request_stops_when_the_server_shuts_down() {
         .expect("server shutdown stops the waiting request");
 
     running.finish().await;
+}
+
+#[tokio::test]
+async fn the_separate_writer_task_fallback_still_stops_a_waiting_request_on_peer_close() {
+    let (mut client, running, _waiting, stopped) =
+        start_stop_observing_server_with("transport-request-stop-separate-tasks", SessionIoModel::SeparateTasks).await;
+
+    client.shutdown().await.expect("close the client write half");
+    tokio::time::timeout(Duration::from_secs(1), stopped.notified())
+        .await
+        .expect("the session close stops the waiting request");
+
+    running.finish().await;
+}
+
+async fn answers_a_burst_longer_than_a_read_turn(name: &'static str, io_model: SessionIoModel) {
+    let runtime = TestRuntime::new(name);
+    let processor = StopObservingProcessor {
+        waiting: Arc::new(tokio::sync::Notify::new()),
+        stopped: Arc::new(tokio::sync::Notify::new()),
+    };
+    let config = Arc::new(crate::config::ServerConfig {
+        session_io_model: io_model,
+        ..(*loopback_server_config()).clone()
+    });
+    let server = TransportServer::new(config, runtime.service_context(), processor);
+    let (mut client, _address, running) = start_server(runtime, server).await;
+
+    // Many read turns of requests, sent before any response is read.
+    const REQUESTS: i32 = 200;
+    for opaque in 0..REQUESTS {
+        client
+            .send_command(RemotingCommand::create_remoting_command(701).set_opaque(opaque))
+            .await
+            .expect("send a burst request");
+    }
+    let mut answered = std::collections::BTreeSet::new();
+    while answered.len() < REQUESTS as usize {
+        let response = tokio::time::timeout(Duration::from_secs(5), client.receive_command())
+            .await
+            .expect("every request of the burst is answered")
+            .expect("the client stays connected")
+            .expect("a response frame");
+        assert_eq!(response.code(), ResponseCode::Success.to_i32());
+        assert!(answered.insert(response.opaque()), "one response per request");
+    }
+    assert_eq!(answered, (0..REQUESTS).collect());
+
+    running.finish().await;
+}
+
+#[tokio::test]
+async fn a_shared_task_session_answers_a_burst_longer_than_a_read_turn() {
+    answers_a_burst_longer_than_a_read_turn("transport-shared-task-burst", SessionIoModel::SharedTask).await;
+}
+
+#[tokio::test]
+async fn a_separate_tasks_session_answers_a_burst_longer_than_a_read_turn() {
+    answers_a_burst_longer_than_a_read_turn("transport-separate-tasks-burst", SessionIoModel::SeparateTasks).await;
 }

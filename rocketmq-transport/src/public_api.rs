@@ -51,6 +51,7 @@ pub use crate::codec::remoting_command_codec::FrameLimits;
 pub use crate::common::heartbeat_v2_result::HeartbeatV2Result;
 pub use crate::common::remoting_helper::RemotingHelper;
 pub use crate::config::ServerConfig;
+pub use crate::config::SessionIoModel;
 pub use crate::config::SocketOptions;
 pub use crate::config::TcpKeepaliveConfig;
 pub use crate::config::TlsClientAuth;

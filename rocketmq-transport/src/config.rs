@@ -17,6 +17,7 @@ pub mod socket_options;
 pub mod tls_config;
 
 pub use server_config::ServerConfig;
+pub use server_config::SessionIoModel;
 pub use socket_options::SocketOptions;
 pub use socket_options::TcpKeepaliveConfig;
 pub use tls_config::TlsClientAuth;
