@@ -639,6 +639,70 @@ async fn released_ordering_admits_the_next_same_key_request_before_its_predecess
     finish_session(runtime, service, peer, runner).await;
 }
 
+struct ArrivalOrderHandler {
+    entered: Arc<StdMutex<Vec<i32>>>,
+}
+
+impl ConnectionHandler for ArrivalOrderHandler {
+    fn connected(&self, _session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+
+    fn request_ordering(&self, _request: &RemotingCommand) -> RequestOrdering {
+        RequestOrdering::Ordered(ORDERING_KEY)
+    }
+
+    fn command(
+        &self,
+        session: SessionHandle,
+        request: RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let entered = Arc::clone(&self.entered);
+        Box::pin(async move {
+            entered.lock().expect("entry log").push(request.opaque());
+            send_success(session, request).await;
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn same_key_requests_run_in_arrival_order_when_a_session_reads_them_together() {
+    const BURSTS: i32 = 20;
+    const BURST: i32 = 200;
+    let entered = Arc::new(StdMutex::new(Vec::new()));
+    let handler = Arc::new(ArrivalOrderHandler {
+        entered: Arc::clone(&entered),
+    });
+    let (runtime, service, mut peer, runner) =
+        start_session("session-arrival-order", AdmissionLimits::default(), handler).await;
+
+    // Each burst reaches the session faster than it dispatches, so it reads many same-key
+    // requests at once and their tasks start on several workers.
+    for burst in 0..BURSTS {
+        for index in 0..BURST {
+            peer.send_command(
+                RemotingCommand::create_remoting_command(ORDERED_FIRST).set_opaque(burst * BURST + index),
+            )
+            .await
+            .expect("send ordered request");
+        }
+        for _ in 0..BURST {
+            tokio::time::timeout(Duration::from_secs(5), peer.receive_command())
+                .await
+                .expect("ordered response should arrive")
+                .expect("session should remain open")
+                .expect("ordered response should decode");
+        }
+    }
+
+    let entered = entered.lock().expect("entry log").clone();
+    assert_eq!(entered.len(), (BURSTS * BURST) as usize);
+    let out_of_order = entered.windows(2).filter(|pair| pair[1] < pair[0]).count();
+    assert_eq!(out_of_order, 0, "same-key requests started out of arrival order");
+
+    finish_session(runtime, service, peer, runner).await;
+}
+
 #[tokio::test]
 async fn shutdown_drains_accepted_requests_before_flushing_and_closing_writer() {
     let entered = Arc::new(Notify::new());
