@@ -127,6 +127,7 @@ async fn hard_write_stall_deadline_poison_closes_and_drains_session_writer() {
                 max_write_stall: Duration::from_millis(50),
                 ..WriterQueueConfig::default()
             },
+            ..SessionIoPolicy::default()
         },
         Arc::new(CaptureSessionHandler { sessions: sessions_tx }),
     ));

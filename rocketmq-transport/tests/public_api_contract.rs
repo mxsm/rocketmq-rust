@@ -26,6 +26,7 @@ use rocketmq_transport::api::RemotingSerializable;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::SessionIoModel;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
 use rocketmq_transport::api::TransportError;
@@ -58,6 +59,7 @@ fn api_reexports_capabilities_and_dtos() {
         bind_address: "127.0.0.1".to_owned(),
         tls_config: Default::default(),
         file_transfer_mode: FileTransferMode::Auto,
+        session_io_model: SessionIoModel::SharedTask,
     };
     let _ = TransportClientConfig {
         connect: Default::default(),

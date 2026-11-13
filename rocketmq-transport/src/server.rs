@@ -52,6 +52,7 @@ use crate::admission::AdmissionScope;
 use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
 use crate::codec::remoting_command_codec::FrameLimits;
+use crate::config::SessionIoModel;
 use crate::config::SocketOptions;
 use crate::config::TlsConfig;
 use crate::config::TlsMode;
@@ -445,6 +446,8 @@ pub struct SessionIoPolicy {
     pub idle_timeout: Duration,
     /// Queue, fairness, batching, and socket-stall bounds for the sole writer owner.
     pub writer_queue: WriterQueueConfig,
+    /// Whether the session task also runs the writer or the writer runs as its own task.
+    pub io_model: SessionIoModel,
 }
 
 impl Default for SessionIoPolicy {
@@ -452,6 +455,7 @@ impl Default for SessionIoPolicy {
         Self {
             idle_timeout: Duration::from_secs(120),
             writer_queue: WriterQueueConfig::default(),
+            io_model: SessionIoModel::SharedTask,
         }
     }
 }
@@ -518,8 +522,65 @@ struct SessionSendHandle {
     close_coordinator: SessionCloseCoordinator,
     writer_operation: OperationContext,
     lifecycle: Arc<SessionLifecycle>,
-    writer_task_id: TaskId,
+    /// The writer's own task under [`SessionIoModel::SeparateTasks`]; `None` when the session
+    /// task polls the writer.
+    writer_task_id: Option<TaskId>,
+    writer_exit: SessionWriterExit,
     telemetry: TransportTelemetry,
+}
+
+/// Completes once the session writer stops, whether it runs as its own task or inside the
+/// session task, and also when its future is dropped without completing.
+#[derive(Clone)]
+struct SessionWriterExit(CancellationToken);
+
+impl SessionWriterExit {
+    fn new() -> (Self, tokio_util::sync::DropGuard) {
+        let stopped = CancellationToken::new();
+        (Self(stopped.clone()), stopped.drop_guard())
+    }
+
+    async fn wait(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, self.0.cancelled()).await.is_ok()
+    }
+}
+
+/// Frames and bytes the reader handles before the writer that shares its task gets a turn.
+struct ReadTurn {
+    shares_task: bool,
+    frames: usize,
+    bytes: usize,
+}
+
+impl ReadTurn {
+    /// As many frames as Netty's `maxMessagesPerRead`, so a response waits at most one turn.
+    const FRAMES: usize = 16;
+    const BYTES: usize = 64 * 1024;
+
+    const fn new(shares_task: bool) -> Self {
+        Self {
+            shares_task,
+            frames: 0,
+            bytes: 0,
+        }
+    }
+
+    fn record(&mut self, frame_bytes: usize) {
+        if self.shares_task {
+            self.frames += 1;
+            self.bytes = self.bytes.saturating_add(frame_bytes);
+        }
+    }
+
+    /// Returns whether the turn is used up, starting the next one if it is.
+    fn take_exhausted(&mut self) -> bool {
+        if self.frames < Self::FRAMES && self.bytes < Self::BYTES {
+            return false;
+        }
+        self.frames = 0;
+        self.bytes = 0;
+        true
+    }
 }
 
 #[derive(Clone)]
@@ -643,11 +704,27 @@ impl SessionHandle {
         self.send.reader_cancellation.cancel();
         self.send.request_stop.cancel();
         self.request_operation.cancel();
-        self.send.writer_operation.cancel();
-        self.send.task_group.abort_task(self.send.writer_task_id);
+        self.abort_writer();
     }
 
-    /// Cancels both socket halves and waits for the owned writer task to exit.
+    /// Stops the writer now. Its own task is aborted; a writer polled by the session task stops
+    /// at its next poll, which the cancellation wakes.
+    fn abort_writer(&self) {
+        self.send.writer_operation.cancel();
+        if let Some(writer_task_id) = self.send.writer_task_id {
+            self.send.task_group.abort_task(writer_task_id);
+        }
+    }
+
+    /// Waits up to `timeout` for the writer to stop and returns whether it did.
+    async fn writer_stopped_within(&self, timeout: Duration) -> bool {
+        match self.send.writer_task_id {
+            Some(writer_task_id) => self.send.task_group.wait_task(writer_task_id, timeout).await,
+            None => self.send.writer_exit.wait(timeout).await,
+        }
+    }
+
+    /// Cancels both socket halves and waits for the owned writer to exit.
     /// A stuck writer is force-aborted after the normal retirement deadline.
     pub(crate) async fn terminate(&self) {
         self.send.server_outbound.close(SessionCloseCause::SessionEnded);
@@ -657,13 +734,8 @@ impl SessionHandle {
         self.send.request_stop.cancel();
         self.request_operation.cancel();
         self.send.writer_operation.cancel();
-        if !self
-            .send
-            .task_group
-            .wait_task(self.send.writer_task_id, SESSION_RETIREMENT_TIMEOUT)
-            .await
-        {
-            self.send.task_group.abort_task(self.send.writer_task_id);
+        if !self.writer_stopped_within(SESSION_RETIREMENT_TIMEOUT).await {
+            self.abort_writer();
         }
     }
 
@@ -780,8 +852,7 @@ impl SessionHandle {
             self.send.reader_cancellation.cancel();
             self.send.request_stop.cancel();
             self.request_operation.cancel();
-            self.send.writer_operation.cancel();
-            self.send.task_group.abort_task(self.send.writer_task_id);
+            self.abort_writer();
             return Err(connection_failed(TransportStage::Closed, source));
         }
         let close_result = self.send.writer.wait_for_close(result).await;
@@ -790,11 +861,7 @@ impl SessionHandle {
         self.send.reader_cancellation.cancel();
         self.send.request_stop.cancel();
         self.request_operation.cancel();
-        let _ = self
-            .send
-            .task_group
-            .wait_task(self.send.writer_task_id, SESSION_RETIREMENT_TIMEOUT)
-            .await;
+        let _ = self.writer_stopped_within(SESSION_RETIREMENT_TIMEOUT).await;
         close_result
     }
 
@@ -1059,6 +1126,13 @@ impl TransportListener {
     #[must_use]
     pub fn with_io_policy(mut self, io_policy: SessionIoPolicy) -> Self {
         self.io_policy = io_policy;
+        self
+    }
+
+    /// Selects how accepted sessions schedule their reads and writes.
+    #[must_use]
+    pub fn with_session_io_model(mut self, io_model: SessionIoModel) -> Self {
+        self.io_policy.io_model = io_model;
         self
     }
 
@@ -1469,6 +1543,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     let (session_closed_tx, session_closed_rx) = tokio::sync::watch::channel(false);
     let lifecycle = Arc::new(SessionLifecycle::new());
     let (writer, writes) = writer_lanes(io_policy.writer_queue);
+    let shares_task = io_policy.io_model == SessionIoModel::SharedTask;
     let writer_diagnostics = Arc::new(SessionWriterDiagnostics::new(io_policy.writer_queue.total_capacity()));
     let writer_task_diagnostics = Arc::clone(&writer_diagnostics);
     let writer_state = state_tx.clone();
@@ -1487,176 +1562,211 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
         reader_shutdown,
         telemetry.clone(),
     );
-    let writer_task_id = match writer_group.spawn("rocketmq.transport.session.writer", TaskKind::Worker, async move {
+    let writer_stop = writer_operation.cancellation_token();
+    let (writer_exit, writer_exit_guard) = SessionWriterExit::new();
+    let writer_future = async move {
+        let _exit = writer_exit_guard;
         tokio::select! {
             biased;
             () = writer_cancellation.cancelled() => {}
             () = writer_loop => {}
         }
-    }) {
-        Ok(writer_task_id) => writer_task_id,
-        Err(_) => return,
     };
-    let session_view = SessionView::network(
-        session_id,
-        local_addr,
-        remote_addr,
-        transport_peer_addr,
-        proxy_protocol.as_deref(),
-        state_rx.clone(),
-        session_closed_rx,
-    );
-    let session = SessionHandle {
-        send: Arc::new(SessionSendHandle {
+    let (writer_task_id, shared_writer) = if shares_task {
+        (None, Some(writer_future))
+    } else {
+        match writer_group.spawn("rocketmq.transport.session.writer", TaskKind::Worker, writer_future) {
+            Ok(writer_task_id) => (Some(writer_task_id), None),
+            Err(_) => return,
+        }
+    };
+    let session_body = async move {
+        let session_view = SessionView::network(
             session_id,
-            request_sequence,
             local_addr,
             remote_addr,
             transport_peer_addr,
-            proxy_protocol,
-            connection_id,
-            frame_limits,
-            writer: writer.clone(),
-            writer_diagnostics,
-            admission: admission_scope,
-            state_tx: state_tx.clone(),
-            state_rx,
-            session_closed_tx,
-            session_view,
-            task_group: task_group.clone(),
-            reader_cancellation: reader_cancellation.clone(),
-            _request_stop_on_drop: request_stop.clone().drop_guard(),
-            request_stop,
-            server_outbound: ServerOutboundAdmission::new(),
-            close_coordinator: SessionCloseCoordinator::new(),
-            writer_operation,
-            lifecycle,
-            writer_task_id,
-            telemetry,
-        }),
-        request_operation: request_operation.clone(),
-        response_class: None,
-        original_request_identity: None,
-        response_context: None,
-    };
-    let mut close_completion = SessionCloseCompletionGuard::new(session.clone());
+            proxy_protocol.as_deref(),
+            state_rx.clone(),
+            session_closed_rx,
+        );
+        let session = SessionHandle {
+            send: Arc::new(SessionSendHandle {
+                session_id,
+                request_sequence,
+                local_addr,
+                remote_addr,
+                transport_peer_addr,
+                proxy_protocol,
+                connection_id,
+                frame_limits,
+                writer: writer.clone(),
+                writer_diagnostics,
+                admission: admission_scope,
+                state_tx: state_tx.clone(),
+                state_rx,
+                session_closed_tx,
+                session_view,
+                task_group: task_group.clone(),
+                reader_cancellation: reader_cancellation.clone(),
+                _request_stop_on_drop: request_stop.clone().drop_guard(),
+                request_stop,
+                server_outbound: ServerOutboundAdmission::new(),
+                close_coordinator: SessionCloseCoordinator::new(),
+                writer_operation,
+                lifecycle,
+                writer_task_id,
+                writer_exit,
+                telemetry,
+            }),
+            request_operation: request_operation.clone(),
+            response_class: None,
+            original_request_identity: None,
+            response_context: None,
+        };
+        let mut close_completion = SessionCloseCompletionGuard::new(session.clone());
 
-    let Some(route_state) = route.connected(session.clone()).await else {
+        let Some(route_state) = route.connected(session.clone()).await else {
+            session.request_close(SessionCloseCause::SessionEnded);
+            executor.begin_close();
+            let request_deadline = task_group
+                .shutdown_deadline()
+                .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
+            let report = SessionCloseReport {
+                executor: executor.drain_report_until(request_deadline).await,
+                deferred_cleanup: DeferredSessionCleanupReport::empty_completed(),
+                remaining_wait_permits: 0,
+                writer: SessionWriterCompletionReport::new(
+                    session.retire_writer_owned().await,
+                    session.writer_snapshot(),
+                ),
+                remaining_server_outbound_leases: session.send.server_outbound.active(),
+                disconnected_panicked: false,
+            };
+            report.log(session.session_id());
+            close_completion.complete(&report);
+            return;
+        };
+        let cancellation = task_group.cancellation_token();
+        let mut read_turn = ReadTurn::new(shares_task);
+        loop {
+            if read_turn.take_exhausted() {
+                tokio::task::yield_now().await;
+            }
+            let next = tokio::select! {
+                () = cancellation.cancelled() => break,
+                () = reader_cancellation.cancelled() => break,
+                next = tokio::time::timeout(io_policy.idle_timeout, stream.next()) => next,
+            };
+            let decoded = match next {
+                Ok(Some(Ok(decoded))) => decoded,
+                Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
+            };
+            read_turn.record(decoded.retained_frame_bytes);
+            let received_at = std::time::Instant::now();
+            let command = decoded.command;
+            session
+                .send
+                .telemetry
+                .record_inbound_decoded_plaintext_bytes(decoded.retained_frame_bytes);
+
+            if command.get_type() == RemotingCommandType::RESPONSE {
+                route.response(&route_state, session.clone(), command).await;
+                continue;
+            }
+
+            let Some(original_request_identity) =
+                OriginalRequestIdentity::capture(session_id, &session.send.request_sequence, &command)
+            else {
+                #[cfg(test)]
+                if let Some(signal) = request_identity_exhausted.take() {
+                    let _ = signal.send(());
+                }
+                tracing::error!(
+                    reason = "sequence_exhausted",
+                    "transport session stopped accepting because request identity allocation is exhausted"
+                );
+                break;
+            };
+            let partial_frame_permit = decoded.partial_frame_permit;
+            let class = AdmissionClass::for_request_code(original_request_identity.original_code());
+            let bytes = decoded.retained_frame_bytes;
+            #[cfg(test)]
+            let request_deadline = test_request_deadline.map(crate::deadline::RequestDeadline::after);
+            #[cfg(not(test))]
+            let request_deadline = None;
+            let context = RequestContext::network_with_security_profile(
+                PeerInfo::new(remote_addr, peer_is_tls),
+                principal.clone(),
+                request_deadline,
+                dispatch.security_profile(),
+            );
+            let request_session = session
+                .clone()
+                .with_response_class(class)
+                .with_original_request_identity(Some(original_request_identity));
+            if !route
+                .request(
+                    &route_state,
+                    &executor,
+                    request_session,
+                    context,
+                    command,
+                    received_at,
+                    bytes,
+                    partial_frame_permit,
+                )
+                .await
+            {
+                break;
+            }
+        }
+        // Request dispatchers may still be draining accepted work, but the reader
+        // no longer accepts frames. Publish the session-close transition now so
+        // read-only views observe shutdown without closing the response writer.
         session.request_close(SessionCloseCause::SessionEnded);
         executor.begin_close();
+        let deferred_cleanup = route.close_pending(&route_state, session.clone());
         let request_deadline = task_group
             .shutdown_deadline()
             .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
+        let executor_drain = executor.drain_report_until(request_deadline).await;
+        let disconnected = std::panic::AssertUnwindSafe(route.disconnected(route_state, session.clone()))
+            .catch_unwind()
+            .await;
+        let (remaining_wait_permits, disconnected_panicked) = match disconnected {
+            Ok(remaining_wait_permits) => (remaining_wait_permits, false),
+            Err(_) => (0, true),
+        };
+        let writer_completion =
+            SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot());
         let report = SessionCloseReport {
-            executor: executor.drain_report_until(request_deadline).await,
-            deferred_cleanup: DeferredSessionCleanupReport::empty_completed(),
-            remaining_wait_permits: 0,
-            writer: SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot()),
+            executor: executor_drain,
+            deferred_cleanup,
+            remaining_wait_permits,
             remaining_server_outbound_leases: session.send.server_outbound.active(),
-            disconnected_panicked: false,
+            disconnected_panicked,
+            writer: writer_completion,
         };
         report.log(session.session_id());
         close_completion.complete(&report);
-        return;
     };
-    let cancellation = task_group.cancellation_token();
-    loop {
-        let next = tokio::select! {
-            () = cancellation.cancelled() => break,
-            () = reader_cancellation.cancelled() => break,
-            next = tokio::time::timeout(io_policy.idle_timeout, stream.next()) => next,
-        };
-        let decoded = match next {
-            Ok(Some(Ok(decoded))) => decoded,
-            Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
-        };
-        let received_at = std::time::Instant::now();
-        let command = decoded.command;
-        session
-            .send
-            .telemetry
-            .record_inbound_decoded_plaintext_bytes(decoded.retained_frame_bytes);
-
-        if command.get_type() == RemotingCommandType::RESPONSE {
-            route.response(&route_state, session.clone(), command).await;
-            continue;
+    match shared_writer {
+        Some(writer) => {
+            // Every path of the body that starts the writer also retires it; stopping it once the
+            // body ends keeps a path that does not from holding the session task open.
+            let body = async move {
+                session_body.await;
+                writer_stop.cancel();
+            };
+            // Both halves are polled on every wake of the session task. The writer writes while
+            // writes are queued and hands over once the queue is empty. Measured alternatives
+            // were slower: yielding after each batch put the session behind its own requests,
+            // and per-half wakers (`FuturesUnordered`) cut single-connection throughput.
+            futures::future::join(body, writer).await;
         }
-
-        let Some(original_request_identity) =
-            OriginalRequestIdentity::capture(session_id, &session.send.request_sequence, &command)
-        else {
-            #[cfg(test)]
-            if let Some(signal) = request_identity_exhausted.take() {
-                let _ = signal.send(());
-            }
-            tracing::error!(
-                reason = "sequence_exhausted",
-                "transport session stopped accepting because request identity allocation is exhausted"
-            );
-            break;
-        };
-        let partial_frame_permit = decoded.partial_frame_permit;
-        let class = AdmissionClass::for_request_code(original_request_identity.original_code());
-        let bytes = decoded.retained_frame_bytes;
-        #[cfg(test)]
-        let request_deadline = test_request_deadline.map(crate::deadline::RequestDeadline::after);
-        #[cfg(not(test))]
-        let request_deadline = None;
-        let context = RequestContext::network_with_security_profile(
-            PeerInfo::new(remote_addr, peer_is_tls),
-            principal.clone(),
-            request_deadline,
-            dispatch.security_profile(),
-        );
-        let request_session = session
-            .clone()
-            .with_response_class(class)
-            .with_original_request_identity(Some(original_request_identity));
-        if !route
-            .request(
-                &route_state,
-                &executor,
-                request_session,
-                context,
-                command,
-                received_at,
-                bytes,
-                partial_frame_permit,
-            )
-            .await
-        {
-            break;
-        }
+        None => session_body.await,
     }
-    // Request dispatchers may still be draining accepted work, but the reader
-    // no longer accepts frames. Publish the session-close transition now so
-    // read-only views observe shutdown without closing the response writer.
-    session.request_close(SessionCloseCause::SessionEnded);
-    executor.begin_close();
-    let deferred_cleanup = route.close_pending(&route_state, session.clone());
-    let request_deadline = task_group
-        .shutdown_deadline()
-        .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
-    let executor_drain = executor.drain_report_until(request_deadline).await;
-    let disconnected = std::panic::AssertUnwindSafe(route.disconnected(route_state, session.clone()))
-        .catch_unwind()
-        .await;
-    let (remaining_wait_permits, disconnected_panicked) = match disconnected {
-        Ok(remaining_wait_permits) => (remaining_wait_permits, false),
-        Err(_) => (0, true),
-    };
-    let writer_completion =
-        SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot());
-    let report = SessionCloseReport {
-        executor: executor_drain,
-        deferred_cleanup,
-        remaining_wait_permits,
-        remaining_server_outbound_leases: session.send.server_outbound.active(),
-        disconnected_panicked,
-        writer: writer_completion,
-    };
-    report.log(session.session_id());
-    close_completion.complete(&report);
 }
 
 /// Runs an already-connected socket through the canonical framed session

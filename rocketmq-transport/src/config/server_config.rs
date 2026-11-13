@@ -29,6 +29,23 @@ mod defaults {
     }
 }
 
+/// How a transport session schedules reading requests and writing responses on its socket.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionIoModel {
+    /// The session task reads and writes, taking turns between the two.
+    ///
+    /// The kernel serializes reads and writes on one socket. A reader and a writer on two
+    /// threads wait on each other's socket lock, which caps the throughput of a busy
+    /// connection; taking turns on one task removes that wait.
+    #[default]
+    SharedTask,
+    /// The writer runs as a task of its own, as before the shared task was introduced.
+    ///
+    /// Kept for one release as a fallback.
+    SeparateTasks,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerConfig {
@@ -43,6 +60,9 @@ pub struct ServerConfig {
 
     #[serde(default)]
     pub file_transfer_mode: FileTransferMode,
+
+    #[serde(default)]
+    pub session_io_model: SessionIoModel,
 }
 
 impl Default for ServerConfig {
@@ -52,6 +72,7 @@ impl Default for ServerConfig {
             bind_address: defaults::bind_address(),
             tls_config: TlsConfig::default(),
             file_transfer_mode: FileTransferMode::Auto,
+            session_io_model: SessionIoModel::SharedTask,
         }
     }
 }
@@ -72,6 +93,10 @@ impl ServerConfig {
     pub const fn file_transfer_mode(&self) -> FileTransferMode {
         self.file_transfer_mode
     }
+
+    pub const fn session_io_model(&self) -> SessionIoModel {
+        self.session_io_model
+    }
 }
 
 #[cfg(test)]
@@ -90,5 +115,18 @@ mod tests {
             config.tls_config().server.mode,
             crate::config::tls_config::TlsMode::Permissive
         );
+        assert_eq!(config.session_io_model(), SessionIoModel::SharedTask);
+    }
+
+    #[test]
+    fn the_session_io_model_defaults_to_the_shared_task_and_parses_the_fallback() {
+        let omitted: ServerConfig = serde_json::from_str("{}").expect("an empty config parses");
+        assert_eq!(omitted.session_io_model(), SessionIoModel::SharedTask);
+
+        let fallback: ServerConfig =
+            serde_json::from_str(r#"{"sessionIoModel":"separate-tasks"}"#).expect("the fallback parses");
+        assert_eq!(fallback.session_io_model(), SessionIoModel::SeparateTasks);
+
+        assert!(serde_json::from_str::<ServerConfig>(r#"{"sessionIoModel":"threads"}"#).is_err());
     }
 }

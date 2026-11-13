@@ -48,6 +48,7 @@ struct PreparedServer<P> {
     task_group: TaskGroup,
     file_region_blocking: BlockingExecutor,
     file_transfer_mode: FileTransferMode,
+    session_io_model: SessionIoModel,
     transport_principal: Option<Principal>,
     telemetry: TransportTelemetry,
     frame_limits: FrameLimits,
@@ -446,6 +447,7 @@ where
             task_group: remoting_context.task_group().clone(),
             file_region_blocking: remoting_context.storage_io().clone(),
             file_transfer_mode: self.config.file_transfer_mode,
+            session_io_model: self.config.session_io_model,
             transport_principal: self.transport_principal,
             telemetry: self.telemetry,
             frame_limits: self.frame_limits,
@@ -492,6 +494,7 @@ where
         task_group,
         file_region_blocking,
         file_transfer_mode,
+        session_io_model,
         transport_principal,
         telemetry,
         frame_limits,
@@ -518,6 +521,7 @@ where
     )
     .with_authorized_dispatch(dispatcher.boundary(), transport_principal)
     .with_file_region_io(file_region_blocking, file_transfer_mode)
+    .with_session_io_model(session_io_model)
     .with_validated_frame_limits(frame_limits)
     .with_validated_proxy_protocol(proxy_protocol)
     .with_telemetry(telemetry);
