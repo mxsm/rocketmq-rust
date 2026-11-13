@@ -122,7 +122,9 @@ where
     M: Send,
     B: FnOnce(Result<S::Receipt, StoreError>) -> (RemotingCommand, StoreHookCompletion),
 {
-    await_store_reply(control, store.append_message(message), build_response).await
+    // Each layer above takes the store future by value, and a move copies a future's full size.
+    // Boxed where it is created, the future is copied once and the layers move a pointer.
+    await_store_reply(control, Box::pin(store.append_message(message)), build_response).await
 }
 
 #[cfg(test)]
