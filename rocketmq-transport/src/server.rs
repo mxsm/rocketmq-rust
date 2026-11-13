@@ -1841,8 +1841,12 @@ pub(crate) async fn run_connected_session_authorized<R>(
         dispatch,
         principal,
         false,
+        // A client connection mostly writes requests and reads small responses, the reverse of a
+        // server session. Its writer then needs a core of its own: on one task with the reader,
+        // a client sending async against a Java Broker lost about 15% of its throughput.
         SessionIoPolicy {
             idle_timeout,
+            io_model: SessionIoModel::SeparateTasks,
             ..SessionIoPolicy::default()
         },
         #[cfg(test)]
