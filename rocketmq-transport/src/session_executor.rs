@@ -151,7 +151,9 @@ impl SessionExecutor {
             },
         };
         let admission = self.inner.admission.clone();
-        let sequencer = self.inner.sequencer.clone();
+        // Claimed here, on the reader, in arrival order: the runtime may start request tasks in
+        // any order, and a same-key request must still run after the one that arrived first.
+        let ordering_ticket = self.inner.sequencer.claim(ordering);
         let request_operation = self.inner.operation.clone();
         let request_operation_for_task = request_operation.clone();
         let spawn_group = self.inner.request_group.clone();
@@ -164,7 +166,7 @@ impl SessionExecutor {
         // for the reader that boxes it, and only the path that runs is copied, once.
         let request = Box::pin(async move {
             let _task_count = task_count;
-            let ordering_guard = sequencer.acquire(ordering).await;
+            let ordering_guard = ordering_ticket.acquire().await;
             let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
                 Ok(processor) => processor,
                 Err(error) => {
@@ -343,7 +345,8 @@ impl DeferredResumeExecutor {
             Err(error) => return DeferredResumeSubmissionResult::AdmissionRejected { error, cell },
         };
         let admission = inner.admission.clone();
-        let sequencer = inner.sequencer.clone();
+        // Claimed when the resume is submitted, so same-key resumes keep their submission order.
+        let ordering_ticket = inner.sequencer.claim(ordering);
         let operation = inner.operation.clone();
         let operation_for_task = operation.clone();
         let spawn_group = inner.request_group.clone();
@@ -372,7 +375,7 @@ impl DeferredResumeExecutor {
                     return;
                 }
                 let ordering_result = {
-                    let ordering_wait = sequencer.acquire(ordering);
+                    let ordering_wait = ordering_ticket.acquire();
                     let stop_wait = job.wait_before_resume();
                     tokio::pin!(ordering_wait);
                     tokio::pin!(stop_wait);
