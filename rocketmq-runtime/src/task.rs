@@ -15,4 +15,19 @@
 /// Service task types and operations.
 pub mod service_task;
 
+use std::pin::Pin;
+
 pub use service_task::ServiceManager;
+
+/// Allocates a box and then builds `make`'s value into it.
+///
+/// `Box::pin(make())` builds the value first, on the stack, and copies it into the allocation:
+/// for a future that copy is its whole type size, mostly the uninitialized space of states it
+/// has not reached. Allocating first gives the value a destination when it is built, so the
+/// optimizer can build it in the allocation directly; for a large future that saves copying
+/// kilobytes of unused state on every call.
+#[inline]
+pub fn box_in_place<T>(make: impl FnOnce() -> T) -> Pin<Box<T>> {
+    let slot = Box::new_uninit();
+    Box::into_pin(Box::write(slot, make()))
+}
