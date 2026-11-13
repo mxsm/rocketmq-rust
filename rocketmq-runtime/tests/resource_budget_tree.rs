@@ -1385,3 +1385,232 @@ fn budgeted_push_reports_a_rejection_without_retaining_a_charge() {
     drop(held);
     assert_eq!(tree.root().snapshot().current_bytes, 0);
 }
+
+#[test]
+fn a_level_holds_bytes_up_to_the_packed_maximum_of_one_tebibyte() {
+    const PACKED_MAX_BYTES: usize = (1 << 40) - 1;
+    let tree = ResourceBudgetTree::new("process", limit(usize::MAX, 1 << 41, FullPolicy::Reject)).expect("root budget");
+    let root = tree.root();
+
+    let mut held = root
+        .try_acquire_data(PACKED_MAX_BYTES)
+        .expect("the packed maximum fits");
+    let rejection = root
+        .try_acquire_data(1)
+        .expect_err("no byte is left above the packed maximum");
+    assert_eq!(rejection.dimension(), Some(BudgetDimension::Bytes));
+    assert!(held.try_resize(PACKED_MAX_BYTES + 1).is_err());
+    assert_eq!(root.snapshot().current_bytes, PACKED_MAX_BYTES);
+
+    held.try_resize(1).expect("shrinking always succeeds");
+    let second = root
+        .try_acquire_data(PACKED_MAX_BYTES - 1)
+        .expect("the shrunk bytes are free again");
+    assert_eq!(root.snapshot().current_bytes, PACKED_MAX_BYTES);
+    drop((held, second));
+    let snapshot = root.snapshot();
+    assert_eq!((snapshot.current_count, snapshot.current_bytes), (0, 0));
+    assert_eq!(snapshot.admitted_count, snapshot.released_count);
+}
+
+#[test]
+fn a_group_whose_children_fit_keeps_every_child_limit_and_rebinds_between_them() {
+    let tree = ResourceBudgetTree::new("process", limit(64, 1024, FullPolicy::Reject)).expect("root budget");
+    let [first, second] = tree
+        .root()
+        .child_group(
+            "transport",
+            limit(4, 64, FullPolicy::Reject),
+            [
+                ("first", limit(2, 32, FullPolicy::Reject)),
+                ("second", limit(2, 32, FullPolicy::Reject)),
+            ],
+        )
+        .expect("group budgets");
+    assert_eq!(first.path(), "process/transport/first");
+    assert_eq!(second.path(), "process/transport/second");
+
+    let mut held = vec![
+        first.try_acquire_data(16).expect("first permit"),
+        first.try_acquire_data(16).expect("second permit"),
+    ];
+    let rejection = first.try_acquire_data(1).expect_err("the child is full");
+    assert_eq!(rejection.exhausted_path(), "process/transport/first");
+    held.push(second.try_acquire_data(8).expect("the sibling still has room"));
+    assert_eq!(tree.root().snapshot().current_count, 3);
+    assert_eq!(tree.root().snapshot().current_bytes, 40);
+
+    let mut moved = held.remove(0);
+    assert_eq!(
+        moved.try_rebind(&second).expect("same tree"),
+        PermitBudgetTransferStatus::Rebound
+    );
+    assert_eq!(first.snapshot().current_count, 1);
+    assert_eq!(second.snapshot().current_count, 2);
+    assert_eq!(tree.root().snapshot().current_count, 3);
+
+    drop((held, moved));
+    for budget in [tree.root(), first, second] {
+        let snapshot = budget.snapshot();
+        assert_eq!((snapshot.current_count, snapshot.current_bytes), (0, 0));
+        assert_eq!(snapshot.admitted_count, snapshot.released_count);
+    }
+}
+
+#[test]
+fn a_group_whose_children_do_not_fit_enforces_its_own_limit() {
+    let tree = ResourceBudgetTree::new("process", limit(64, 1024, FullPolicy::Reject)).expect("root budget");
+    let [first, second] = tree
+        .root()
+        .child_group(
+            "transport",
+            limit(3, 64, FullPolicy::Reject),
+            [
+                ("first", limit(2, 32, FullPolicy::Reject)),
+                ("second", limit(2, 32, FullPolicy::Reject)),
+            ],
+        )
+        .expect("group budgets");
+
+    let held = [
+        first.try_acquire_data(1).expect("first permit"),
+        first.try_acquire_data(1).expect("second permit"),
+        second.try_acquire_data(1).expect("third permit"),
+    ];
+    let rejection = second.try_acquire_data(1).expect_err("the group is full");
+    assert_eq!(rejection.exhausted_path(), "process/transport");
+    assert_eq!(rejection.dimension(), Some(BudgetDimension::Count));
+    drop(held);
+    assert!(second.try_acquire_data(1).is_ok());
+}
+
+#[test]
+fn a_rate_limited_group_still_takes_its_tokens() {
+    let clock = Arc::new(ManualClock::default());
+    let tree = ResourceBudgetTree::with_clock("process", limit(64, 1024, FullPolicy::Reject), clock.clone())
+        .expect("root budget");
+    let rated = |count, bytes| BudgetLimit {
+        capacity: BudgetCapacity::new(count, bytes).with_rate(RateLimit::new(1, 1)),
+        ..limit(count, bytes, FullPolicy::Reject)
+    };
+    // The children's capacities fit within the group, but a rate is never derived from them.
+    let [first, _second] = tree
+        .root()
+        .child_group(
+            "transport",
+            rated(4, 64),
+            [("first", rated(2, 32)), ("second", rated(2, 32))],
+        )
+        .expect("group budgets");
+
+    let _held = first.try_acquire_data(1).expect("the burst token");
+    let rejection = first.try_acquire_data(1).expect_err("the group rate is spent");
+    assert_eq!(rejection.dimension(), Some(BudgetDimension::Rate));
+    assert_eq!(rejection.exhausted_path(), "process/transport");
+    clock.advance(Duration::from_secs(1));
+    assert!(first.try_acquire_data(1).is_ok());
+}
+
+#[test]
+fn concurrent_permit_operations_keep_every_level_within_its_limits_and_return_to_zero() {
+    const THREADS: u64 = 8;
+    const ROUNDS: usize = 20_000;
+    let root_limit = limit(48, 48 * 1024, FullPolicy::Reject).with_control_reserve(BudgetCapacity::new(4, 4 * 1024));
+    let tree = ResourceBudgetTree::new("process", root_limit).expect("root budget");
+    let leaf_limit = limit(32, 32 * 1024, FullPolicy::Reject).with_control_reserve(BudgetCapacity::new(2, 2 * 1024));
+    let [left, right] = tree
+        .root()
+        .child_group(
+            "group",
+            limit(48, 48 * 1024, FullPolicy::Reject).with_control_reserve(BudgetCapacity::new(4, 4 * 1024)),
+            [("left", leaf_limit), ("right", leaf_limit)],
+        )
+        .expect("group budgets");
+    let leaves = [
+        left.child("leaf", limit(24, 24 * 1024, FullPolicy::Reject))
+            .expect("left leaf"),
+        right
+            .child("leaf", limit(24, 24 * 1024, FullPolicy::Reject))
+            .expect("right leaf"),
+    ];
+    let levels = [
+        tree.root(),
+        left.clone(),
+        right.clone(),
+        leaves[0].clone(),
+        leaves[1].clone(),
+    ];
+
+    std::thread::scope(|scope| {
+        for seed in 0..THREADS {
+            let leaves = &leaves;
+            let levels = &levels;
+            scope.spawn(move || {
+                let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+                let mut next = move |bound: u64| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state % bound
+                };
+                let mut held = Vec::new();
+                for _ in 0..ROUNDS {
+                    match next(6) {
+                        0 | 1 => {
+                            let leaf = &leaves[next(2) as usize];
+                            let bytes = next(2048) as usize;
+                            let acquired = if next(4) == 0 {
+                                leaf.try_acquire_control(bytes)
+                            } else {
+                                leaf.try_acquire_data(bytes)
+                            };
+                            if let Ok(permit) = acquired {
+                                held.push(permit);
+                            }
+                        }
+                        2 if !held.is_empty() => {
+                            let index = next(held.len() as u64) as usize;
+                            let _ = held[index].try_resize(next(4096) as usize);
+                        }
+                        3 if !held.is_empty() => {
+                            let index = next(held.len() as u64) as usize;
+                            held[index].promote_to_control();
+                        }
+                        4 if !held.is_empty() => {
+                            let index = next(held.len() as u64) as usize;
+                            let target = &leaves[next(2) as usize];
+                            let _ = held[index].try_rebind(target).expect("same tree");
+                        }
+                        _ if !held.is_empty() => {
+                            let index = next(held.len() as u64) as usize;
+                            held.swap_remove(index);
+                        }
+                        _ => {}
+                    }
+                    for level in levels {
+                        let snapshot = level.snapshot();
+                        let capacity = level.limit().capacity;
+                        assert!(snapshot.current_count <= capacity.count, "{} count", snapshot.path);
+                        assert!(snapshot.current_bytes <= capacity.bytes, "{} bytes", snapshot.path);
+                    }
+                }
+            });
+        }
+    });
+
+    for level in &levels {
+        let snapshot = level.snapshot();
+        assert_eq!(
+            (snapshot.current_count, snapshot.current_bytes),
+            (0, 0),
+            "{}",
+            snapshot.path
+        );
+        assert_eq!(snapshot.admitted_count, snapshot.released_count, "{}", snapshot.path);
+    }
+    // Every level returned its data-class capacity too: a full data load fits again.
+    let refill: Vec<_> = (0..22)
+        .map(|_| leaves[0].try_acquire_data(1024).expect("data capacity was returned"))
+        .collect();
+    drop(refill);
+}
