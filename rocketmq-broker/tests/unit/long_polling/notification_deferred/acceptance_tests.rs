@@ -59,7 +59,7 @@ use tokio::sync::oneshot;
 
 use super::index::NotificationArrivalView;
 use super::index::NotificationCriteriaLimits;
-use super::service::NotificationContinuationDecision;
+use super::service::NotificationArrivalLatchStatus;
 use super::service::NotificationDeferredPreparationStatus;
 use super::service::NotificationDeferredPrepareFailure;
 use super::service::NotificationDeferredRegisterFailure;
@@ -94,6 +94,37 @@ fn service_with_scan(controller: &AdmissionController, scan_limit: usize) -> Arc
 
 fn request_command() -> RemotingCommand {
     request_command_for("GroupA", ORIGINAL_OPAQUE, 60_000)
+}
+
+async fn claim_pending_arrival(
+    service: &NotificationDeferredService,
+) -> Vec<rocketmq_transport::api::ClaimedDeferred<super::service::ResumeNotification>> {
+    let mut pending = service
+        .pending_arrival_reservations()
+        .pop()
+        .expect("pending arrival reservation")
+        .claim()
+        .expect("claim pending arrival");
+    let mut claims = Vec::new();
+    for _ in 0..4 {
+        let batch = service.reserve_pending_arrival_batch(pending.value_mut());
+        let exhausted = batch.exhausted();
+        for candidate in batch.into_candidates() {
+            match service
+                .claim_arrival_candidate(candidate)
+                .await
+                .expect("claim arrival candidate")
+            {
+                rocketmq_transport::api::DeferredClaimResult::Claimed(claim) => claims.push(claim),
+                _ => panic!("fixture candidate must remain claimable"),
+            }
+        }
+        if exhausted {
+            assert!(pending.finish_if_clean());
+            return claims;
+        }
+    }
+    panic!("bounded fixture must exhaust its pending arrival");
 }
 
 fn request_command_for(group: &str, opaque: i32, poll_time: i64) -> RemotingCommand {
@@ -562,7 +593,7 @@ async fn notification_deferred_timeout_winner_excludes_prepared_arrival_and_dupl
 }
 
 #[tokio::test]
-async fn notification_deferred_newest_first_bounded_batch_continuation_advances_other_key() {
+async fn notification_deferred_newest_first_pending_arrival_advances_other_key() {
     let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let service = service_with_scan(controller.as_ref(), 1);
     let (registration_tx, mut registrations) = mpsc::unbounded_channel();
@@ -604,27 +635,11 @@ async fn notification_deferred_newest_first_bounded_batch_continuation_advances_
         "same-key selection is newest-first"
     );
 
-    let continuation = match service.admit_continuation(arrival, cursor) {
-        Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
-        Ok(NotificationContinuationDecision::Rejected(rejection)) => {
-            panic!("admit bounded continuation: {rejection:?}")
-        }
-        Err(error) => panic!("admit bounded continuation: {error:?}"),
-    };
-    let (claims_tx, mut claims_rx) = mpsc::unbounded_channel();
-    let handle_claims = Arc::new(move |claims| {
-        let claims_tx = claims_tx.clone();
-        async move {
-            let _ = claims_tx.send(claims);
-        }
-    });
-    service
-        .spawn_continuation(running.action_context.task_group(), continuation, handle_claims)
-        .expect("spawn lifecycle-owned Notification continuation");
-    let mut continued_claims = tokio::time::timeout(Duration::from_secs(2), claims_rx.recv())
-        .await
-        .expect("bounded continuation completes")
-        .expect("continuation claim batch");
+    assert!(matches!(
+        service.latch_arrival(arrival, cursor),
+        Ok(NotificationArrivalLatchStatus::Latched)
+    ));
+    let mut continued_claims = claim_pending_arrival(&service).await;
     assert_eq!(continued_claims.len(), 1);
     let continued_claim = continued_claims.pop().expect("GroupB waiter claimed by continuation");
     assert_eq!(
@@ -633,13 +648,8 @@ async fn notification_deferred_newest_first_bounded_batch_continuation_advances_
     );
 
     drop((first_claim, continued_claim));
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while service.snapshot().active_continuations() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("continuation permit released");
+    assert_eq!(service.snapshot().pending_arrivals(), 0);
+    assert_eq!(service.snapshot().pending_arrival_bytes(), 0);
     assert_eq!(
         service.snapshot().index().live(),
         1,

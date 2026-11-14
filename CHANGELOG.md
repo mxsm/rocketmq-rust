@@ -159,6 +159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(broker):** Remove the unused internal send-message-back stub that cleared messages and returned success without sending them ([#12298](https://github.com/mxsm/rocketmq-rust/issues/12298)).
 - **refactor(client):** Remove the obsolete internal admin error text parser; response codes continue to use structured errors ([#12063](https://github.com/mxsm/rocketmq-rust/issues/12063)).
 - **refactor(broker):** Remove obsolete Lite dispatcher wakeup state and observer mutation helpers; owned event notification and replay remain intact ([#12288](https://github.com/mxsm/rocketmq-rust/issues/12288)).
+- **refactor(broker):** Remove unused Notification arrival continuation entry points and migrate their coverage to pending-arrival processing; offset replay admission remains intact ([#12521](https://github.com/mxsm/rocketmq-rust/issues/12521)).
 - **refactor(broker):** Remove unused legacy PopLite command assembly; current response and deferred reply paths are unchanged ([#12062](https://github.com/mxsm/rocketmq-rust/issues/12062)).
 - **refactor(broker):** Remove the unused internal consumer session expiry helper; manager-owned expiry and transport retirement are unchanged ([#11995](https://github.com/mxsm/rocketmq-rust/issues/11995)).
 - **refactor(broker):** Remove unused private deferred candidate spawners; active replay and shutdown paths are unchanged ([#11993](https://github.com/mxsm/rocketmq-rust/issues/11993)).

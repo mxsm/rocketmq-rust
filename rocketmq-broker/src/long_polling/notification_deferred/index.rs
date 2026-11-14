@@ -246,14 +246,6 @@ impl NotificationScanCursor {
         self.key_position >= self.keys.len()
     }
 
-    pub(crate) fn retain_remaining_targets(&mut self, mut retain: impl FnMut(&NotificationCriteriaKey) -> bool) {
-        if self.key_position > 0 {
-            self.keys.drain(..self.key_position);
-            self.key_position = 0;
-        }
-        self.keys.retain(|key| retain(&key.key));
-    }
-
     pub(super) fn try_retained_bytes(&self) -> Option<usize> {
         let mut bytes = self
             .keys

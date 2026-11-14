@@ -18,7 +18,6 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,8 +25,6 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_runtime::RuntimeConfig;
-use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::CqExtUnit;
 use rocketmq_store::MessageFilter;
 use rocketmq_transport::api::AdmissionController;
@@ -51,14 +48,15 @@ use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
 use super::index::NotificationScanCursor;
-use super::service::NotificationContinuationDecision;
+use super::service::NotificationArrivalLatchStatus;
 use super::service::NotificationContinuationOperationalError;
-use super::service::NotificationContinuationRejection;
 use super::service::NotificationDeferredPreparationStatus;
 use super::service::NotificationDeferredPrepareRejectionKind;
 use super::service::NotificationDeferredService;
+use super::service::NotificationPendingArrivalRejection;
 use super::service::NotificationRequestData;
 use super::service::NotificationRetainedEstimate;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertRejection;
 
 fn nonzero(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).expect("test limit is non-zero")
@@ -91,18 +89,6 @@ macro_rules! expect_reserved {
         match $result {
             Ok(NotificationIndexReservationStatus::Reserved(reservation)) => reservation,
             Ok(NotificationIndexReservationStatus::Rejected(rejection)) => {
-                panic!("{}: {rejection:?}", $message)
-            }
-            Err(error) => panic!("{}: {error:?}", $message),
-        }
-    };
-}
-
-macro_rules! expect_continued {
-    ($result:expr, $message:literal) => {
-        match $result {
-            Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
-            Ok(NotificationContinuationDecision::Rejected(rejection)) => {
                 panic!("{}: {rejection:?}", $message)
             }
             Err(error) => panic!("{}: {error:?}", $message),
@@ -390,44 +376,6 @@ fn notification_deferred_prepare_failures_release_index_and_wait_capacity() {
 }
 
 #[test]
-fn notification_deferred_continuation_has_independent_count_and_bytes_admission() {
-    let deferred_service = service(1, 1, 1, 4096);
-    let topic = CheetahString::from_static_str("topic");
-    let arrival = NotificationArrivalView::new(&topic, 0);
-    let continuation = expect_continued!(
-        deferred_service.admit_continuation(arrival, NotificationScanCursor::for_test(1)),
-        "first continuation is admitted"
-    );
-    assert_eq!(deferred_service.snapshot().active_continuations(), 1);
-    let second = match deferred_service.admit_continuation(arrival, NotificationScanCursor::for_test(1)) {
-        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
-            panic!("second continuation exceeds the count cap")
-        }
-    };
-    assert_eq!(second, NotificationContinuationRejection::CountFull);
-    drop(continuation);
-    assert_eq!(deferred_service.snapshot().active_continuations(), 0);
-    assert_eq!(deferred_service.snapshot().continuation_bytes(), 0);
-    assert_eq!(deferred_service.snapshot().continuation_rejected(), 1);
-
-    let bytes_limited = service(1, 1, 2, 4);
-    let large_topic = CheetahString::from_static_str("topic-larger-than-four-bytes");
-    let bytes_error = match bytes_limited.admit_continuation(
-        NotificationArrivalView::new(&large_topic, 0),
-        NotificationScanCursor::for_test(1),
-    ) {
-        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
-            panic!("arrival payload exceeds continuation byte capacity")
-        }
-    };
-    assert_eq!(bytes_error, NotificationContinuationRejection::BytesFull);
-    assert_eq!(bytes_limited.snapshot().active_continuations(), 0);
-    assert_eq!(bytes_limited.snapshot().continuation_bytes(), 0);
-}
-
-#[test]
 fn notification_index_allocation_failure_keeps_the_typed_source() {
     let source = Vec::<u8>::new()
         .try_reserve(usize::MAX)
@@ -454,7 +402,7 @@ fn notification_continuation_allocation_failure_keeps_the_typed_source() {
 }
 
 #[test]
-fn notification_deferred_continuation_charges_fixed_cursor_and_property_storage_before_copy() {
+fn notification_pending_arrival_charges_fixed_cursor_and_property_storage() {
     let topic = CheetahString::from_string("topic".repeat(32));
     let properties = (0..32)
         .map(|index| {
@@ -465,34 +413,53 @@ fn notification_deferred_continuation_charges_fixed_cursor_and_property_storage_
         })
         .collect::<HashMap<_, _>>();
     let arrival = NotificationArrivalView::new(&topic, 0).with_filter_metadata(None, 0, None, Some(&properties));
-    let constrained = service(1, 1, 1, 4096);
-    let error = match constrained.admit_continuation(arrival, NotificationScanCursor::for_test(64)) {
-        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
-            panic!("fixed owners, cursor backing, buckets, and short properties exceed the byte cap")
-        }
+    let with_wait_bytes = |bytes| {
+        let controller = AdmissionController::new(AdmissionLimits::default());
+        let admission = DeferredAdmission::try_configure(&controller, DeferredWaitLimits::new(16, bytes))
+            .expect("Notification wait admission");
+        NotificationDeferredService::new(
+            admission,
+            NotificationCriteriaLimits::new(nonzero(16), 7, 1),
+            DeferredExpiryMargins::new(Duration::from_millis(2), Duration::from_millis(2)),
+            nonzero(1),
+            nonzero(1),
+            nonzero(1),
+            nonzero(4096),
+        )
     };
-    assert_eq!(error, NotificationContinuationRejection::BytesFull);
-    assert_eq!(constrained.snapshot().active_continuations(), 0);
-    assert_eq!(constrained.snapshot().continuation_bytes(), 0);
+    let constrained = with_wait_bytes(4096);
+    assert!(matches!(
+        constrained.latch_arrival(arrival, NotificationScanCursor::for_test(64)),
+        Ok(NotificationArrivalLatchStatus::Rejected(
+            NotificationPendingArrivalRejection::Latch(PendingArrivalInsertRejection::BytesFull)
+        ))
+    ));
+    assert_eq!(constrained.snapshot().pending_arrivals(), 0);
+    assert_eq!(constrained.snapshot().pending_arrival_bytes(), 0);
 
-    let admitted = service(1, 1, 1, 1024 * 1024);
-    let continuation = expect_continued!(
-        admitted.admit_continuation(arrival, NotificationScanCursor::for_test(64)),
-        "the conservative retained oracle fits the generous cap"
-    );
+    let admitted = with_wait_bytes(1024 * 1024);
+    assert!(matches!(
+        admitted.latch_arrival(arrival, NotificationScanCursor::for_test(64)),
+        Ok(NotificationArrivalLatchStatus::Latched)
+    ));
     assert!(
-        admitted.snapshot().continuation_bytes() > topic.len() + properties.len(),
+        admitted.snapshot().pending_arrival_bytes() > topic.len() + properties.len(),
         "the charge includes fixed owners and collection backing, not only string payload bytes"
     );
-    drop(continuation);
-    assert_eq!(admitted.snapshot().active_continuations(), 0);
-    assert_eq!(admitted.snapshot().continuation_bytes(), 0);
+    let mut pending = admitted
+        .pending_arrival_reservations()
+        .pop()
+        .expect("pending arrival reservation")
+        .claim()
+        .expect("claim pending arrival");
+    assert!(pending.finish_if_clean());
+    assert_eq!(admitted.snapshot().pending_arrivals(), 0);
+    assert_eq!(admitted.snapshot().pending_arrival_bytes(), 0);
 }
 
 #[tokio::test]
-async fn notification_deferred_continuation_spends_one_conflict_budget_across_batches() {
-    let service = Arc::new(service(1, 2, 1, 1024 * 1024));
+async fn notification_pending_arrival_spends_one_conflict_budget_across_batches() {
+    let service = service(1, 2, 1, 1024 * 1024);
     service.index.force_conflicts(8);
     let topic = CheetahString::from_static_str("topic");
     let arrival = NotificationArrivalView::new(&topic, 0);
@@ -501,44 +468,21 @@ async fn notification_deferred_continuation_spends_one_conflict_budget_across_ba
     let initial = service.claim_prepared_arrival(initial).await;
     let (initial_claims, cursor) = initial.into_parts();
     assert!(initial_claims.is_empty());
-    let continuation = expect_continued!(
-        service.admit_continuation(arrival, cursor),
-        "conflict continuation admission"
-    );
-    assert_eq!(service.snapshot().active_continuations(), 1);
-    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("notification-conflict-budget"))
-        .expect("test runtime configuration is valid")
-        .build()
-        .expect("conflict-budget runtime owner");
-    let calls = Arc::new(AtomicUsize::new(0));
-    let observed = Arc::clone(&calls);
-    service
-        .spawn_continuation(
-            runtime.root_context().component("notification.conflict").task_group(),
-            continuation,
-            Arc::new(
-                move |claims: Vec<rocketmq_transport::api::ClaimedDeferred<super::service::ResumeNotification>>| {
-                    let observed = Arc::clone(&observed);
-                    async move {
-                        assert!(claims.is_empty());
-                        observed.fetch_add(1, Ordering::AcqRel);
-                    }
-                },
-            ),
-        )
-        .expect("spawn conflict continuation");
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while calls.load(Ordering::Acquire) != 1 || service.snapshot().active_continuations() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("continuation terminates when its shared conflict budget is exhausted");
-    assert_eq!(calls.load(Ordering::Acquire), 1);
+    assert!(matches!(
+        service.latch_arrival(arrival, cursor),
+        Ok(NotificationArrivalLatchStatus::Latched)
+    ));
+    let mut pending = service
+        .pending_arrival_reservations()
+        .pop()
+        .expect("pending conflict reservation")
+        .claim()
+        .expect("claim pending conflict arrival");
+    let batch = service.reserve_pending_arrival_batch(pending.value_mut());
+    assert!(batch.exhausted(), "the shared conflict budget is exhausted");
+    assert!(batch.into_candidates().is_empty());
     assert_eq!(service.index.forced_conflicts_remaining(), 6);
-    assert_eq!(service.snapshot().continuation_bytes(), 0);
-    let report = runtime.shutdown_tasks().await;
-    assert!(report.is_healthy(), "{}", report.to_json());
-    let final_report = runtime.shutdown_background();
-    assert!(final_report.is_healthy(), "{}", final_report.to_json());
+    assert!(pending.finish_if_clean());
+    assert_eq!(service.snapshot().pending_arrivals(), 0);
+    assert_eq!(service.snapshot().pending_arrival_bytes(), 0);
 }

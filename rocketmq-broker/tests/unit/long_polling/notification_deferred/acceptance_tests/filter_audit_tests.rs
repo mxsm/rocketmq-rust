@@ -83,7 +83,7 @@ fn success_plan(has_msg: bool) -> crate::broker_error::BrokerResult<RemotingResp
 }
 
 #[tokio::test]
-async fn notification_deferred_miss_prefix_beyond_callback_batch_continuation_claims_and_resumes_match() {
+async fn notification_deferred_miss_prefix_pending_arrival_claims_and_resumes_match() {
     let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let service = service_with_scan(controller.as_ref(), 1);
     let (registration_tx, mut registrations) = mpsc::unbounded_channel();
@@ -113,45 +113,29 @@ async fn notification_deferred_miss_prefix_beyond_callback_batch_continuation_cl
     assert_eq!(service.snapshot().index().live(), 2);
     assert_eq!(service.snapshot().admission().waiting_count(), 2);
 
-    let continuation = match service.admit_continuation(arrival, cursor) {
-        Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
-        Ok(NotificationContinuationDecision::Rejected(rejection)) => {
-            panic!("admit miss-prefix continuation: {rejection:?}")
-        }
-        Err(error) => panic!("admit miss-prefix continuation: {error:?}"),
-    };
-    let service_for_handler = Arc::clone(&service);
-    let (resumed_tx, mut resumed_rx) = mpsc::unbounded_channel();
-    let handle_claims = Arc::new(move |claims| {
-        let service = Arc::clone(&service_for_handler);
-        let resumed = resumed_tx.clone();
-        async move {
-            for claim in claims {
-                let result = service
-                    .resume_claimed(
-                        claim,
-                        DeferredResumeRetainedSize::default(),
-                        |_resume, reason| async move {
-                            assert_eq!(reason, DeferredWakeReason::MessageArrived);
-                            success_plan(true)
-                        },
-                    )
-                    .await;
-                let _ = resumed.send(result);
-            }
-        }
-    });
-    service
-        .spawn_continuation(running.action_context.task_group(), continuation, handle_claims)
-        .expect("spawn miss-prefix continuation");
     assert!(matches!(
-        resumed_rx
-            .recv()
-            .await
-            .expect("continuation resumes matching waiter")
-            .expect("matching continuation writes canonically"),
+        service.latch_arrival(arrival, cursor),
+        Ok(NotificationArrivalLatchStatus::Latched)
+    ));
+    let mut claims = claim_pending_arrival(&service).await;
+    assert_eq!(claims.len(), 1);
+    let result = service
+        .resume_claimed(
+            claims.pop().expect("matching pending arrival claim"),
+            DeferredResumeRetainedSize::default(),
+            |_resume, reason| async move {
+                assert_eq!(reason, DeferredWakeReason::MessageArrived);
+                success_plan(true)
+            },
+        )
+        .await
+        .expect("matching pending arrival writes canonically");
+    assert!(matches!(
+        result,
         rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
+    assert_eq!(service.snapshot().pending_arrivals(), 0);
+    assert_eq!(service.snapshot().pending_arrival_bytes(), 0);
     let response = client
         .receive_command()
         .await

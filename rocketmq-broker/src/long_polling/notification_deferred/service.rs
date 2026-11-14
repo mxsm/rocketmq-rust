@@ -93,10 +93,8 @@ mod data;
 
 use continuation::ContinuationAdmission;
 use continuation::ContinuationPermit;
-pub(crate) use continuation::NotificationArrivalContinuation;
 use continuation::NotificationPendingArrival;
 use continuation::NotificationPendingArrivalKey;
-use continuation::OwnedNotificationArrival;
 use data::CounterObservation;
 pub(crate) use data::NotificationRequestData;
 pub(crate) use data::NotificationRetainedEstimate;
@@ -490,12 +488,7 @@ impl NotificationDeferredService {
         prepared: NotificationPreparedArrivalBatch,
     ) -> NotificationClaimBatch {
         let _observation = CounterObservation::new(Arc::clone(&self.pending_claims));
-        let NotificationPreparedArrivalBatch {
-            candidates,
-            cursor,
-            inspected,
-            conflicts,
-        } = prepared;
+        let NotificationPreparedArrivalBatch { candidates, cursor, .. } = prepared;
         let mut claims = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let id = candidate.id();
@@ -506,12 +499,7 @@ impl NotificationDeferredService {
             }
             drop(candidate);
         }
-        NotificationClaimBatch {
-            claims,
-            cursor,
-            inspected,
-            conflicts,
-        }
+        NotificationClaimBatch { claims, cursor }
     }
 
     async fn claim(
@@ -535,43 +523,6 @@ impl NotificationDeferredService {
         let result = self.claim(candidate.id(), DeferredWakeReason::MessageArrived).await;
         drop(candidate);
         result
-    }
-
-    pub(crate) fn admit_continuation(
-        &self,
-        arrival: NotificationArrivalView<'_>,
-        cursor: NotificationScanCursor,
-    ) -> Result<
-        NotificationContinuationDecision<NotificationArrivalContinuation>,
-        NotificationContinuationOperationalError,
-    > {
-        if cursor.is_complete() {
-            return Ok(NotificationContinuationDecision::Rejected(
-                NotificationContinuationRejection::AlreadyComplete,
-            ));
-        }
-        let remaining_conflicts = self.conflict_limit.get().saturating_sub(cursor.conflicts_spent());
-        if remaining_conflicts == 0 {
-            return Ok(NotificationContinuationDecision::Rejected(
-                NotificationContinuationRejection::ConflictBudgetExhausted,
-            ));
-        }
-        let retained_bytes = OwnedNotificationArrival::retained_bytes(arrival, &cursor)?;
-        let permit = match self.continuation_admission.reserve(retained_bytes)? {
-            NotificationContinuationDecision::Ready(permit) => permit,
-            NotificationContinuationDecision::Rejected(rejection) => {
-                return Ok(NotificationContinuationDecision::Rejected(rejection));
-            }
-        };
-        let owned = OwnedNotificationArrival::try_from_view(arrival)?;
-        Ok(NotificationContinuationDecision::Ready(
-            NotificationArrivalContinuation {
-                owned,
-                cursor,
-                remaining_conflicts,
-                _permit: permit,
-            },
-        ))
     }
 
     pub(crate) fn latch_arrival(
@@ -694,41 +645,6 @@ impl NotificationDeferredService {
 
     pub(crate) fn replay_read_limit(&self) -> i32 {
         i32::try_from(self.scan_limit.get()).unwrap_or(i32::MAX)
-    }
-
-    /// Runs all post-callback batches in one injected, lifecycle-owned task.
-    pub(crate) fn spawn_continuation<F, Fut>(
-        self: &Arc<Self>,
-        task_group: &TaskGroup,
-        mut continuation: NotificationArrivalContinuation,
-        handle_claims: Arc<F>,
-    ) -> RuntimeResult<TaskId>
-    where
-        F: Fn(Vec<ClaimedDeferred<ResumeNotification>>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let service = Arc::clone(self);
-        task_group.spawn_service("broker.notification-deferred.arrival", async move {
-            loop {
-                let prepared = {
-                    let view = continuation.owned.view();
-                    let batch_conflicts = continuation.remaining_conflicts.min(service.scan_limit.get());
-                    service.prepare_arrival_batch_with_conflict_budget(view, Some(continuation.cursor), batch_conflicts)
-                };
-                let batch = service.claim_prepared_arrival(prepared).await;
-                continuation.remaining_conflicts = continuation.remaining_conflicts.saturating_sub(batch.conflicts());
-                let (claims, cursor) = batch.into_parts();
-                handle_claims(claims).await;
-                continuation.cursor = cursor;
-                if continuation.cursor.is_complete()
-                    || continuation.remaining_conflicts == 0
-                    || service.closed.load(Ordering::Acquire)
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
     }
 
     pub(crate) fn sweep_expired(&self) -> NotificationDeferredSweepBatch {
@@ -898,21 +814,9 @@ impl NotificationPreparedArrivalBatch {
 pub(crate) struct NotificationClaimBatch {
     claims: Vec<ClaimedDeferred<ResumeNotification>>,
     cursor: NotificationScanCursor,
-    inspected: usize,
-    conflicts: usize,
 }
 
 impl NotificationClaimBatch {
-    #[must_use]
-    pub(crate) const fn inspected(&self) -> usize {
-        self.inspected
-    }
-
-    #[must_use]
-    pub(crate) const fn conflicts(&self) -> usize {
-        self.conflicts
-    }
-
     pub(crate) fn into_parts(self) -> (Vec<ClaimedDeferred<ResumeNotification>>, NotificationScanCursor) {
         (self.claims, self.cursor)
     }
