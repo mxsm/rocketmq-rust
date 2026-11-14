@@ -326,20 +326,6 @@ impl ResumePull {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn without_index_for_test(
-        request: PullRequestData,
-        criteria: Arc<PullMatchCriteria>,
-        protocol_wait_deadline: PullWaitDeadline,
-    ) -> Self {
-        Self {
-            request,
-            criteria,
-            protocol_wait_deadline,
-            index_lease: None,
-        }
-    }
-
     #[must_use]
     pub(crate) const fn request(&self) -> &PullRequestData {
         &self.request

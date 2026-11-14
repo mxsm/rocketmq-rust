@@ -15,14 +15,10 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::OnceLock;
 use std::sync::Weak;
 
 #[cfg(test)]
 use std::any::Any;
-#[cfg(test)]
-use tokio::sync::Notify;
 
 use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
@@ -256,32 +252,6 @@ impl<MS: BrokerReadStore> PullMessageStorePort for EscapeBridge<MS> {
 /// Non-owning access to the local Store operations used by pull paths.
 pub(crate) struct PullMessageStoreCapability {
     provider: Weak<dyn PullMessageStorePort>,
-    #[cfg(test)]
-    read_barrier: OnceLock<Arc<PullStoreReadBarrier>>,
-}
-
-#[cfg(test)]
-pub(crate) struct PullStoreReadBarrier {
-    entered: Notify,
-    release: Notify,
-}
-
-#[cfg(test)]
-impl PullStoreReadBarrier {
-    pub(crate) fn new() -> Self {
-        Self {
-            entered: Notify::new(),
-            release: Notify::new(),
-        }
-    }
-
-    pub(crate) async fn wait_until_entered(&self) {
-        self.entered.notified().await;
-    }
-
-    pub(crate) fn release(&self) {
-        self.release.notify_one();
-    }
 }
 
 impl PullMessageStoreCapability {
@@ -289,8 +259,6 @@ impl PullMessageStoreCapability {
         let provider: Arc<dyn PullMessageStorePort> = provider.clone();
         Self {
             provider: Arc::downgrade(&provider),
-            #[cfg(test)]
-            read_barrier: std::sync::OnceLock::new(),
         }
     }
 
@@ -320,11 +288,6 @@ impl PullMessageStoreCapability {
         max_msg_bytes: i32,
         message_filter: ArcMessageFilter,
     ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
-        #[cfg(test)]
-        if let Some(barrier) = self.read_barrier.get() {
-            barrier.entered.notify_one();
-            barrier.release.notified().await;
-        }
         self.provider()?
             .get_message(
                 group,
@@ -336,11 +299,6 @@ impl PullMessageStoreCapability {
                 message_filter,
             )
             .await
-    }
-
-    #[cfg(test)]
-    pub(crate) fn install_read_barrier_for_test(&self, barrier: Arc<PullStoreReadBarrier>) -> bool {
-        self.read_barrier.set(barrier).is_ok()
     }
 
     #[cfg(test)]
@@ -595,10 +553,7 @@ mod tests {
     #[test]
     fn pull_store_capability_fails_closed_without_provider() {
         let provider: Weak<dyn PullMessageStorePort> = Weak::<EscapeBridge<MessageStore>>::new();
-        let capability = PullMessageStoreCapability {
-            provider,
-            read_barrier: std::sync::OnceLock::new(),
-        };
+        let capability = PullMessageStoreCapability { provider };
 
         assert!(capability
             .max_offset(&CheetahString::from_static_str("topic"), 0)
