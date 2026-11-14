@@ -24,7 +24,7 @@ preserves the old Boolean-input qualification baseline without adding legacy
 noise to ordinary inspection results. Existing saved results are unchanged.
 This is an additive inspection enum value on the existing authenticated route,
 not a generic pack selector. Closed generated clients must include the new value.
-The full compiled catalog has 33 major-qualified IDs, current selection has 32,
+The full compiled catalog now has 34 major-qualified IDs (including latency v2), current selection has 32,
 and the separately named 32-pack fixture baseline still pins its original IDs.
 The default `backlog_store` evidence chain selects v2. Only an authorized saved
 revision whose primary pack is exactly `store-pressure.v1` pins that chain to

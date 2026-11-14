@@ -8221,9 +8221,11 @@ export interface components {
          *     domain-complete templates used by preventive operations.
          *     `StorePressureLegacyV1` explicitly pins the original Boolean Store pack;
          *     ordinary Store inspections select the active numeric observation version.
+         *     `SendLatencyLegacyV1` likewise preserves saved Boolean latency fixtures;
+         *     ordinary latency inspections use the active window-distribution version.
          * @enum {string}
          */
-        InspectionTemplate: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery" | "store_pressure_legacy_v1";
+        InspectionTemplate: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery" | "store_pressure_legacy_v1" | "send_latency_legacy_v1";
         /** InvestigationRunListPage */
         InvestigationRunListPage: {
             cluster_id: components["schemas"]["InvestigationRunListPage__ClusterId"];

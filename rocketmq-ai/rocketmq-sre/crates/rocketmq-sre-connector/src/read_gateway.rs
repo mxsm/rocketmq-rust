@@ -244,12 +244,26 @@ where
         let started_at = Instant::now();
         let adapter_kind = request.adapter_kind();
         let resource_class = request.resource_class();
+        // Keep each large adapter child outside this common dispatch state.
+        // Otherwise the largest variant is embedded in every admitted MCP or
+        // Admin caller, including the nested startup inventory pipeline.
+        // The original session, deadline and cancellation still own the await.
         let adapter_result = match adapter_kind {
             ReadAdapterKind::Mcp => {
-                bounded_future(context.deadline, context.cancel, self.mcp.read(context, &request)).await
+                bounded_future(
+                    context.deadline,
+                    context.cancel,
+                    Box::pin(self.mcp.read(context, &request)),
+                )
+                .await
             }
             ReadAdapterKind::Admin => {
-                bounded_future(context.deadline, context.cancel, self.admin.read(context, &request)).await
+                bounded_future(
+                    context.deadline,
+                    context.cancel,
+                    Box::pin(self.admin.read(context, &request)),
+                )
+                .await
             }
         };
         let result = match adapter_result {
@@ -795,6 +809,32 @@ mod tests {
         let event = &events[0];
         assert_eq!(event.outcome, ReadAuditOutcome::SourceFailed);
         assert_eq!(event.resource_class, "mcp_operation");
+    }
+
+    #[tokio::test]
+    async fn parent_cancel_settles_an_admitted_read_and_its_audit() {
+        let owner = rocketmq_runtime::RuntimeContext::from_current("admitted-read-owner");
+        let tenant_id = TenantId::new();
+        let cluster_id = ClusterId::new();
+        let gateway = gateway(tenant_id, cluster_id, 8, FakeBehavior::Pending, FakeBehavior::Available);
+        let cancel = CancelSignal::for_owner(owner.root_group());
+        let context = context(tenant_id, cluster_id, "operator", future_deadline(), &cancel);
+        let (result, ()) = tokio::join!(mcp_read(&gateway, &context), async {
+            while gateway.mcp.calls.load(Ordering::Relaxed) == 0 {
+                tokio::task::yield_now().await;
+            }
+            owner.root_group().cancel();
+        });
+        assert_eq!(result.unwrap_err().failure(), ConnectorFailure::QueryCancelled);
+        let events = gateway.audit_events().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].outcome, ReadAuditOutcome::Cancelled);
+        assert!(
+            owner
+                .shutdown_tasks(std::time::Duration::from_secs(1))
+                .await
+                .is_healthy()
+        );
     }
 
     #[tokio::test]

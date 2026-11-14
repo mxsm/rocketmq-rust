@@ -134,7 +134,7 @@ pub(super) fn project(
         .collect::<Vec<_>>();
     let scenarios = [
         ("backlog_store", ["consumer-lag.v2", "store-pressure.v2"]),
-        ("send_latency_ha", ["send-latency.v1", "broker-ha.v1"]),
+        ("send_latency_ha", ["send-latency.v2", "broker-ha.v1"]),
         ("routing_disconnect", ["namesrv-route.v1", "producer-connectivity.v1"]),
     ]
     .into_iter()
@@ -168,16 +168,18 @@ pub(super) fn project(
     }
 }
 
-// Only the authorized saved primary pack pins the historical Store contract.
+// Only the authorized saved primary pack pins a historical signal contract.
 // The public query cannot request a pack override or reinterpret old evidence.
 pub(super) fn bind_primary_revision(projection: &mut CapabilityQualityProjection, primary_pack: &str) {
-    if primary_pack != "store-pressure.v1" {
-        return;
-    }
-    let Some(scenario) = projection.scenarios.iter_mut().find(|item| item.id == "backlog_store") else {
+    let (scenario_id, ids) = match primary_pack {
+        "store-pressure.v1" => ("backlog_store", ["consumer-lag.v2", "store-pressure.v1"]),
+        "send-latency.v1" => ("send_latency_ha", ["send-latency.v1", "broker-ha.v1"]),
+        _ => return,
+    };
+    let Some(scenario) = projection.scenarios.iter_mut().find(|item| item.id == scenario_id) else {
         return;
     };
-    scenario.pack_ids = vec!["consumer-lag.v2".to_owned(), "store-pressure.v1".to_owned()];
+    scenario.pack_ids = ids.into_iter().map(str::to_owned).collect();
     scenario.required_signal_ids = projection
         .packs
         .iter()

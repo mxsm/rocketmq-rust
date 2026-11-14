@@ -87,7 +87,7 @@ const packs = [
     bool("client_or_proxy_slow", false, true),
     bool("remoting_or_broker_slow", false, true),
     bool("store_slow", false, true),
-  ], ["segment_p99_ms: 500"], "5m"),
+  ], ["signal_contract: legacy_explicit_booleans", "numeric_policy: not_implemented_by_v1"], "5m"),
   pack("B", "proxy-connectivity", "prometheus", "proxy-connectivity/", "PROXY_GRPC_REMOTING_UNHEALTHY", "PROXY_CONNECTIVITY_HEALTHY", "PROXY_CONNECTIVITY_EVIDENCE_INCOMPLETE", [
     bool("transport_healthy", true, false),
     bool("backend_route_available", true, false),

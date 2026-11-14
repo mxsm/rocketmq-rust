@@ -41,6 +41,13 @@ struct Projected {
 /// field names consumed by Wave A. A projection never supplies neutral
 /// defaults for unavailable fields.
 pub(super) fn apply(mut output: SourceOutput, projection: CanonicalProjection) -> Result<SourceOutput, ConnectorError> {
+    if projection == CanonicalProjection::MetricDiagnostics(super::canonical::MetricDiagnosticProfile::SendLatency)
+        && output.content["observation_schema"].as_str() == Some("rocketmq.send-latency-window.v1")
+    {
+        // The closed three-read collector has already projected and checked its
+        // per-series proof. The legacy single-value metric projector is inapplicable.
+        return Ok(output);
+    }
     if matches!(
         projection,
         CanonicalProjection::BrokerDiagnostics(_)

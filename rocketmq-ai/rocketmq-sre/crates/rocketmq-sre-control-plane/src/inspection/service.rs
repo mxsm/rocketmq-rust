@@ -173,7 +173,8 @@ impl InspectionService {
         }
         for pack_id in template_packs(run.template) {
             let started_at = Utc::now();
-            let report = self.diagnostics.evaluate(pack_id, &page.items).map_err(|source| {
+            let inputs = inspection_inputs(pack_id, &page.items, started_at.timestamp_millis());
+            let report = self.diagnostics.evaluate(pack_id, &inputs).map_err(|source| {
                 ControlPlaneRequestFailure::contract(
                     crate::ControlPlaneFailure::Validation,
                     "diagnostic_evaluation_failed",
@@ -191,7 +192,7 @@ impl InspectionService {
             pack_runs.push(InspectionPackRun {
                 pack_id: report.pack_id.clone(),
                 pack_version: report.pack_version.to_string(),
-                input_evidence_ids: page.items.iter().map(|snapshot| snapshot.evidence_id).collect(),
+                input_evidence_ids: inputs.iter().map(|snapshot| snapshot.evidence_id).collect(),
                 output: report_json(&report),
                 partial: pack_partial,
                 started_at,
@@ -241,9 +242,32 @@ const fn diagnostic_pack_is_partial(
         || matches!(status, DiagnosticStatus::Inconclusive | DiagnosticStatus::Unsupported)
 }
 
+fn inspection_inputs<'a>(
+    pack_id: &str,
+    evidence: &'a [rocketmq_sre_contracts::EvidenceSnapshot],
+    as_of_unix_ms: i64,
+) -> std::borrow::Cow<'a, [rocketmq_sre_contracts::EvidenceSnapshot]> {
+    if pack_id != "send-latency.v2" {
+        return std::borrow::Cow::Borrowed(evidence);
+    }
+    // This version's observed_at is capture time, and its source age describes
+    // actual used scrapes. A later inspection must not replay a stale local
+    // predicate as a current observation. Legacy pack interpretation is retained.
+    std::borrow::Cow::Owned(
+        evidence
+            .iter()
+            .filter(|snapshot| {
+                rocketmq_sre_core::diagnostics::packs::assess_send_latency_observation(snapshot, as_of_unix_ms).is_ok()
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
 fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
     match template {
         InspectionTemplate::StorePressureLegacyV1 => &["store-pressure.v1"],
+        InspectionTemplate::SendLatencyLegacyV1 => &["send-latency.v1"],
         InspectionTemplate::ClusterHealth => &[
             "cluster-topology.v1",
             "deployment-drift.v1",
@@ -278,7 +302,7 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
         InspectionTemplate::Telemetry => &[
             "telemetry-pipeline.v1",
             "runtime-saturation.v1",
-            "send-latency.v1",
+            "send-latency.v2",
             "proxy-connectivity.v1",
             "auth-failure.v1",
         ],
@@ -303,7 +327,7 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
         InspectionTemplate::ProducerConsumer => &[
             "producer-connectivity.v1",
             "message-path.v1",
-            "send-latency.v1",
+            "send-latency.v2",
             "consumer-lag.v2",
             "consumer-runtime.v1",
             "retry-dlq.v1",
@@ -328,7 +352,7 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
             "namesrv-route.v1",
             "static-topic-route.v1",
             "proxy-connectivity.v1",
-            "send-latency.v1",
+            "send-latency.v2",
             "deployment-drift.v1",
         ],
         InspectionTemplate::Security => &[
@@ -537,6 +561,7 @@ mod tests {
             InspectionTemplate::Upgrade,
             InspectionTemplate::DisasterRecovery,
             InspectionTemplate::StorePressureLegacyV1,
+            InspectionTemplate::SendLatencyLegacyV1,
         ] {
             assert!(!template_packs(template).is_empty());
         }
@@ -580,6 +605,80 @@ mod tests {
             assert!(template_packs(template).contains(&"store-pressure.v2"));
             assert!(!template_packs(template).contains(&"store-pressure.v1"));
         }
+    }
+
+    #[test]
+    fn explicit_legacy_latency_template_is_pinned_while_new_inspections_use_the_window_version() {
+        assert_eq!(
+            template_packs(InspectionTemplate::SendLatencyLegacyV1),
+            &["send-latency.v1"]
+        );
+        for template in [
+            InspectionTemplate::Telemetry,
+            InspectionTemplate::ProducerConsumer,
+            InspectionTemplate::RoutingProxy,
+        ] {
+            assert!(template_packs(template).contains(&"send-latency.v2"));
+            assert!(!template_packs(template).contains(&"send-latency.v1"));
+        }
+    }
+
+    #[test]
+    fn send_latency_inspection_rechecks_current_data_age_without_changing_saved_legacy_inputs() {
+        use rocketmq_sre_contracts::*;
+        let body: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/diagnostics/send-latency-window.v1.json"
+        ))
+        .unwrap();
+        let at: chrono::DateTime<Utc> = body["collected_at"].as_str().unwrap().parse().unwrap();
+        let query = EvidenceQuery {
+            query_id: QueryId::new(),
+            correlation_id: CorrelationId::new(),
+            tenant_id: body["scope"]["tenant_id"].as_str().unwrap().parse().unwrap(),
+            cluster_id: body["scope"]["cluster_id"].as_str().unwrap().parse().unwrap(),
+            source: "prometheus".to_owned(),
+            resource: "send-latency/orders".to_owned(),
+            time_range: TimeRange::new(
+                body["window"]["requested_start"].as_str().unwrap().parse().unwrap(),
+                body["window"]["requested_end"].as_str().unwrap().parse().unwrap(),
+            )
+            .unwrap(),
+        };
+        let mut sample =
+            EvidenceSnapshot::capture(query, current_evidence_schema(), at, EvidenceContent::Inline(body)).unwrap();
+        sample.freshness_seconds = 1;
+        let evidence = [sample];
+        let engine = DiagnosticEngine::new(full_registry().unwrap());
+        let fresh = inspection_inputs(
+            "send-latency.v2",
+            &evidence,
+            (at + chrono::Duration::seconds(299)).timestamp_millis(),
+        );
+        assert_eq!(fresh.len(), 1);
+        assert!(
+            engine
+                .evaluate("send-latency.v2", &fresh)
+                .unwrap()
+                .findings
+                .iter()
+                .any(|finding| finding.reason_code == "BROKER_SEND_LATENCY_ESTIMATE_EXCEEDS_POLICY")
+        );
+        let old = inspection_inputs(
+            "send-latency.v2",
+            &evidence,
+            (at + chrono::Duration::seconds(301)).timestamp_millis(),
+        );
+        assert!(old.is_empty());
+        assert!(engine.evaluate("send-latency.v2", &old).unwrap().findings.is_empty());
+        assert_eq!(
+            inspection_inputs(
+                "send-latency.v1",
+                &evidence,
+                (at + chrono::Duration::days(1)).timestamp_millis()
+            )
+            .len(),
+            1
+        );
     }
 
     #[test]

@@ -354,6 +354,7 @@ mod tests {
             max_response_bytes: 4096,
             expected_tool_surface_digest: None,
             prometheus_url: None,
+            send_latency_policies: Vec::new(),
             alertmanager_url: None,
             loki_url: None,
             tempo_url: None,

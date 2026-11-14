@@ -25,6 +25,8 @@ mod inventory;
 mod kubernetes;
 mod kubernetes_events;
 #[cfg(test)]
+mod live_send_latency;
+#[cfg(test)]
 mod live_store_pressure;
 mod loki;
 mod mcp;
@@ -318,6 +320,21 @@ where
         .map_err(|error| error.with_correlation_id(query.correlation_id))?;
         output.content = content;
         if bounded {
+            if output.content["observation_schema"].as_str() == Some("rocketmq.send-latency-window.v1") {
+                // A truncated proof cannot retain a displayed qualified estimate.
+                output.content["raw_histograms"] = serde_json::json!([]);
+                if let Some(segments) = output.content["segments"].as_array_mut() {
+                    for segment in segments {
+                        if segment["id"].as_str() == Some("broker") {
+                            segment["availability"] = serde_json::json!("unknown");
+                            segment["reason_code"] = serde_json::json!("source_response_bounded");
+                            segment["observation"] = serde_json::Value::Null;
+                        }
+                    }
+                }
+                output.content["policy"]["status"] = serde_json::json!("not_qualified");
+                output.content["policy"]["reason_code"] = serde_json::json!("source_response_bounded");
+            }
             output.partial = true;
             if output.coverage == CoverageStatus::Available {
                 output.coverage = CoverageStatus::Partial;
@@ -371,7 +388,11 @@ where
                 return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
             }
         };
-        let inventory = inventory::collect(
+        // Inventory contains several large adapter futures. Keep this child
+        // state on the heap so normal reverse-channel startup does not embed
+        // it in every parent poll frame. The same admitted session owns and
+        // awaits collection, including cancellation and completion validation.
+        let inventory = Box::pin(inventory::collect(
             &self.read_gateway,
             &self.kubernetes,
             cluster_id,
@@ -379,7 +400,7 @@ where
             self.config.source_limits.max_bytes,
             self.config.pseudonymization_key(),
             &session,
-        )
+        ))
         .await?;
         if let Err(rejection) = validate_query_completion(&context) {
             return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
@@ -435,19 +456,40 @@ where
             CanonicalQuery::Mcp(operation) => self.read_gateway.mcp_query(session, &operation).await,
             CanonicalQuery::Admin(resource) => self.read_gateway.admin_query(session, &resource).await,
             CanonicalQuery::Prometheus { resource, matchers } => {
-                self.prometheus
-                    .query_with_matchers(
-                        context.external_cluster,
-                        &resource,
-                        &matchers,
-                        query.time_range.start,
-                        query.time_range.end,
-                        self.config.source_limits.max_rows,
-                        self.config.source_limits.max_bytes,
-                        context.deadline,
-                        context.cancel,
+                if projection
+                    == canonical::CanonicalProjection::MetricDiagnostics(
+                        canonical::MetricDiagnosticProfile::SendLatency,
                     )
-                    .await
+                {
+                    self.prometheus
+                        .query_send_latency(prometheus::SendLatencyRequest {
+                            external_cluster: context.external_cluster,
+                            query,
+                            policy: self.config.send_latency_policies.iter().find(|policy| {
+                                policy.cluster_id == query.cluster_id
+                                    && query.resource.strip_prefix("send-latency/") == Some(policy.topic.as_str())
+                            }),
+                            max_rows: self.config.source_limits.max_rows,
+                            max_bytes: self.config.source_limits.max_bytes,
+                            deadline: context.deadline,
+                            cancel: context.cancel,
+                        })
+                        .await
+                } else {
+                    self.prometheus
+                        .query_with_matchers(
+                            context.external_cluster,
+                            &resource,
+                            &matchers,
+                            query.time_range.start,
+                            query.time_range.end,
+                            self.config.source_limits.max_rows,
+                            self.config.source_limits.max_bytes,
+                            context.deadline,
+                            context.cancel,
+                        )
+                        .await
+                }
             }
             CanonicalQuery::Kubernetes(resource) => {
                 self.kubernetes
@@ -1255,6 +1297,7 @@ mod tests {
             max_response_bytes: 4096,
             expected_tool_surface_digest: None,
             prometheus_url: None,
+            send_latency_policies: Vec::new(),
             alertmanager_url: None,
             loki_url: None,
             tempo_url: None,

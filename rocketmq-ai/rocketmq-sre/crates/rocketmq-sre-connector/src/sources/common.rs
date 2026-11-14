@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use chrono::DateTime;
 use chrono::Utc;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_sre_contracts::CoverageStatus;
 use rocketmq_sre_contracts::EvidenceExposure;
 use rocketmq_sre_contracts::Sensitivity;
@@ -41,9 +42,19 @@ const MAX_SAFE_STRING_BYTES: usize = 4096;
 pub(crate) struct CancelSignal {
     cancelled: Arc<AtomicBool>,
     notify: Arc<Notify>,
+    owner: Option<TaskGroup>,
 }
 
 impl CancelSignal {
+    /// Observe the existing owner without creating a forwarding task. Local
+    /// query cancellation never cancels the parent or its other queries.
+    pub(crate) fn for_owner(owner: &TaskGroup) -> Self {
+        Self {
+            owner: Some(owner.clone()),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn cancel(&self) {
         if !self.cancelled.swap(true, Ordering::AcqRel) {
             self.notify.notify_waiters();
@@ -52,13 +63,27 @@ impl CancelSignal {
 
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.cancellation_token().is_cancelled())
     }
 
     pub(crate) async fn cancelled(&self) {
+        let notified = self.notify.notified();
         if self.is_cancelled() {
             return;
         }
-        self.notify.notified().await;
+        match &self.owner {
+            Some(owner) => {
+                let shutdown = owner.cancellation_token();
+                tokio::select! {
+                    _ = shutdown.cancelled() => {},
+                    _ = notified => {},
+                }
+            }
+            None => notified.await,
+        }
     }
 }
 
@@ -535,5 +560,107 @@ mod tests {
             result.expect_err("cancelled").failure(),
             ConnectorFailure::QueryCancelled
         );
+    }
+
+    #[tokio::test]
+    async fn owner_cancellation_wakes_existing_waiters_without_local_cancellation_escaping() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("cancel-owner-test");
+        let local = CancelSignal::for_owner(context.root_group());
+        local.cancel();
+        assert!(!context.root_group().cancellation_token().is_cancelled());
+
+        let signal = CancelSignal::for_owner(context.root_group());
+        let started = Notify::new();
+        let read = bounded_future(Utc::now() + chrono::Duration::seconds(10), &signal, async {
+            started.notify_one();
+            std::future::pending::<Result<(), ConnectorError>>().await
+        });
+        let (result, ()) = tokio::join!(read, async {
+            started.notified().await;
+            context.root_group().cancel();
+        });
+        assert_eq!(result.unwrap_err().failure(), ConnectorFailure::QueryCancelled);
+        assert!(signal.is_cancelled());
+        signal.cancelled().await;
+        assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
+    }
+
+    #[tokio::test]
+    async fn owned_http_wait_obeys_the_original_deadline_and_cancellation_after_send() {
+        use axum::Router;
+        use axum::routing::post;
+        use std::sync::atomic::AtomicUsize;
+
+        let owner = rocketmq_runtime::RuntimeContext::from_current("owned-upload-test");
+        let context = owner.service_context("owned-upload-fixture");
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/upload",
+            post({
+                let entered = entered.clone();
+                let release = release.clone();
+                let calls = calls.clone();
+                move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let calls = calls.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        entered.notify_one();
+                        release.notified().await;
+                        axum::http::StatusCode::NO_CONTENT
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/upload", listener.local_addr().unwrap());
+        let shutdown = context.task_group().cancellation_token();
+        context
+            .task_group()
+            .spawn_service("owned-upload-server", async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(shutdown.cancelled_owned())
+                    .await
+                    .unwrap();
+            })
+            .unwrap();
+        let client = reqwest::Client::new();
+        let cancel = CancelSignal::for_owner(owner.root_group());
+        let request = || async {
+            client
+                .post(&url)
+                .body("bounded-inventory")
+                .send()
+                .await
+                .map_err(|error| ConnectorError::from_source(ConnectorFailure::ChannelUnavailable, true, error))
+        };
+        let expired = bounded_future(Utc::now() - chrono::Duration::seconds(1), &cancel, request())
+            .await
+            .unwrap_err();
+        assert_eq!(expired.failure(), ConnectorFailure::DeadlineExceeded);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a spent inventory budget must not renew for POST"
+        );
+
+        let (result, ()) = tokio::join!(
+            bounded_future(Utc::now() + chrono::Duration::seconds(10), &cancel, request()),
+            async {
+                entered.notified().await;
+                owner.root_group().cancel();
+            }
+        );
+        assert_eq!(result.unwrap_err().failure(), ConnectorFailure::QueryCancelled);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "local cancellation is not remote non-admission or acknowledgement"
+        );
+        release.notify_one();
+        assert!(owner.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
     }
 }

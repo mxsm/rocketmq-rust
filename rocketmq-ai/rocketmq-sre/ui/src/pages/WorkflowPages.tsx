@@ -89,6 +89,7 @@ const templateLabels: Record<InspectionTemplate, string> = {
   upgrade: "Upgrade",
   disaster_recovery: "DR",
   store_pressure_legacy_v1: "Store v1（历史布尔契约）",
+  send_latency_legacy_v1: "发送延迟 v1（历史布尔契约）",
 };
 
 export function AskSrePage() {

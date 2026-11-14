@@ -226,6 +226,7 @@ pub(super) fn generated_manifest() -> Result<DiagnosticQualificationManifest, Di
             "telemetry".to_owned(),
             "producer_consumer".to_owned(),
             "store_pressure_legacy_v1".to_owned(),
+            "send_latency_legacy_v1".to_owned(),
         ],
         fixture_assets: WAVE_A_FIXTURES
             .iter()
@@ -317,6 +318,7 @@ pub(super) fn materialize_pack_scenario(
 fn inspection_template_for(pack_id: &str) -> Result<&'static str, DiagnosticQualificationFailure> {
     match pack_id {
         "store-pressure.v1" => Ok("store_pressure_legacy_v1"),
+        "send-latency.v1" => Ok("send_latency_legacy_v1"),
         "cluster-topology.v1"
         | "deployment-drift.v1"
         | "namesrv-route.v1"
@@ -341,11 +343,9 @@ fn inspection_template_for(pack_id: &str) -> Result<&'static str, DiagnosticQual
         | "static-topic-route.v1"
         | "cold-data-flow.v1"
         | "dr-readiness.v1" => Ok("broker"),
-        "telemetry-pipeline.v1"
-        | "runtime-saturation.v1"
-        | "send-latency.v1"
-        | "proxy-connectivity.v1"
-        | "auth-failure.v1" => Ok("telemetry"),
+        "telemetry-pipeline.v1" | "runtime-saturation.v1" | "proxy-connectivity.v1" | "auth-failure.v1" => {
+            Ok("telemetry")
+        }
         "producer-connectivity.v1" | "message-path.v1" => Ok("producer_consumer"),
         _ => Err(DiagnosticQualificationFailure::InvalidManifest(format!(
             "pack `{pack_id}` has no inspection template"

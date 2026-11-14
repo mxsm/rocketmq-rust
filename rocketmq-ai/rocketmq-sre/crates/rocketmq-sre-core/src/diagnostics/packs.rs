@@ -28,6 +28,7 @@ mod prevention;
 mod producer_connectivity_v1;
 mod routing_proxy;
 mod security_runtime;
+mod send_latency_v2;
 mod storage;
 mod store_pressure_v2;
 mod telemetry_pipeline_v1;
@@ -39,6 +40,12 @@ pub use consumer_runtime_v1::ConsumerRuntimeV1;
 pub use deployment_drift_v1::DeploymentDriftV1;
 pub use message_path_v1::MessagePathV1;
 pub use producer_connectivity_v1::ProducerConnectivityV1;
+pub use send_latency_v2::{
+    LATENCY_FAMILIES, LATENCY_GRID, LatencyBucket, LatencyCounterSample, LatencyHistogram, LatencyObservationIssue,
+    LatencyPolicyState, LatencyQuantile, LatencyResolution, LatencyWindowAssessment, LatencyWindowIssue,
+    LatencyWindowState, SendLatencyObservation, SendLatencyV2, assess_latency_histograms,
+    assess_send_latency_observation,
+};
 pub use store_pressure_v2::{
     StorePressureSignal, StorePressureSignalState, StorePressureV2, assess_store_pressure_observation,
 };
@@ -80,6 +87,7 @@ pub fn wave_b_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRej
     let mut registry = DiagnosticPackRegistry::default();
     register_specs(&mut registry, wave_b_specs())?;
     registry.register(StorePressureV2)?;
+    registry.register(SendLatencyV2)?;
     Ok(registry)
 }
 
@@ -106,6 +114,7 @@ pub fn full_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejec
     register_wave_a(&mut registry)?;
     register_specs(&mut registry, wave_b_specs())?;
     registry.register(StorePressureV2)?;
+    registry.register(SendLatencyV2)?;
     register_specs(&mut registry, prevention::specs())?;
     Ok(registry)
 }
@@ -115,7 +124,7 @@ pub fn full_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejec
 pub fn full_pack_ids() -> Vec<String> {
     qualification_baseline_pack_ids()
         .into_iter()
-        .chain(std::iter::once("store-pressure.v2".to_owned()))
+        .chain(["store-pressure.v2".to_owned(), "send-latency.v2".to_owned()])
         .collect()
 }
 
@@ -140,12 +149,10 @@ pub fn qualification_baseline_pack_ids() -> Vec<String> {
 pub fn active_pack_ids() -> Vec<String> {
     qualification_baseline_pack_ids()
         .into_iter()
-        .map(|id| {
-            if id == "store-pressure.v1" {
-                "store-pressure.v2".to_owned()
-            } else {
-                id
-            }
+        .map(|id| match id.as_str() {
+            "store-pressure.v1" => "store-pressure.v2".to_owned(),
+            "send-latency.v1" => "send-latency.v2".to_owned(),
+            _ => id,
         })
         .collect()
 }
@@ -226,7 +233,7 @@ mod tests {
         let ids = full_pack_ids();
 
         assert_eq!(registry.len(), 32);
-        assert_eq!(ids.len(), 33);
+        assert_eq!(ids.len(), 34);
         for id in ids {
             assert!(registry.resolve(&id).is_some(), "{id} should be registered");
         }
@@ -237,5 +244,7 @@ mod tests {
         assert_eq!(active, active_pack_ids().into_iter().collect());
         assert!(active.contains("store-pressure.v2"));
         assert!(!active.contains("store-pressure.v1"));
+        assert!(active.contains("send-latency.v2"));
+        assert!(!active.contains("send-latency.v1"));
     }
 }

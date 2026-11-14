@@ -43,6 +43,7 @@ use crate::mcp::McpGateway;
 use crate::sources::CancelSignal;
 use crate::sources::InventoryUpload;
 use crate::sources::SourceManager;
+use crate::sources::bounded_future;
 
 /// Request accepted by the protected evidence endpoint.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -259,6 +260,8 @@ where
         &self,
         cluster_id: rocketmq_sre_contracts::ClusterId,
         subject: &str,
+        deadline: DateTime<Utc>,
+        cancel: &CancelSignal,
     ) -> Result<ConnectorAdmissionOutcome<InventoryUpload>, ConnectorError> {
         let external_cluster = self
             .config
@@ -270,15 +273,15 @@ where
             Ok(cluster) => cluster,
             Err(rejection) => return Ok(ConnectorAdmissionOutcome::Rejected(rejection)),
         };
-        if !self.is_mcp_ready().await {
-            match self.reconcile().await? {
+        if !bounded_future(deadline, cancel, async { Ok(self.is_mcp_ready().await) }).await? {
+            match bounded_future(deadline, cancel, Box::pin(self.reconcile())).await? {
                 ConnectorAdmissionOutcome::Accepted(()) => {}
                 ConnectorAdmissionOutcome::Rejected(rejection) => {
                     return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
                 }
             }
         }
-        match self.gateway.ensure_cluster_active(external_cluster).await {
+        match bounded_future(deadline, cancel, self.gateway.ensure_cluster_active(external_cluster)).await {
             Ok(ConnectorAdmissionOutcome::Accepted(())) => {}
             Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => {
                 self.record_collection_block(rejection.failure()).await;
@@ -289,16 +292,10 @@ where
                 return Err(error);
             }
         }
-        let deadline = Utc::now()
-            + chrono::Duration::from_std(self.config.request_timeout).unwrap_or_else(|_| chrono::Duration::seconds(15));
         self.sources
-            .inventory(
-                cluster_id,
-                external_cluster,
-                subject,
-                deadline,
-                &CancelSignal::default(),
-            )
+            // Admitted reads observe the same budget and settle their audit on
+            // timeout/cancel; do not drop the whole collect future around them.
+            .inventory(cluster_id, external_cluster, subject, deadline, cancel)
             .await
     }
 
@@ -426,10 +423,16 @@ mod tests {
         wire: WireEvidenceEnvelope,
         active: AtomicBool,
         query_count: AtomicUsize,
+        pending_handshake: AtomicBool,
+        handshake_entered: tokio::sync::Notify,
     }
 
     impl McpGateway for FakeGateway {
         async fn handshake(&self) -> Result<BTreeMap<String, VerifiedCapability>, ConnectorError> {
+            if self.pending_handshake.load(Ordering::SeqCst) {
+                self.handshake_entered.notify_one();
+                return std::future::pending().await;
+            }
             Ok(BTreeMap::from([("local".to_owned(), self.capability.clone())]))
         }
 
@@ -475,6 +478,7 @@ mod tests {
             max_response_bytes: 4096,
             expected_tool_surface_digest: None,
             prometheus_url: None,
+            send_latency_policies: Vec::new(),
             alertmanager_url: None,
             loki_url: None,
             tempo_url: None,
@@ -517,6 +521,8 @@ mod tests {
             },
             active: AtomicBool::new(true),
             query_count: AtomicUsize::new(0),
+            pending_handshake: AtomicBool::new(false),
+            handshake_entered: tokio::sync::Notify::new(),
         })
     }
 
@@ -690,5 +696,50 @@ mod tests {
                 panic!("expected evidence admission, got {rejection:?}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn inventory_uses_callers_deadline_before_readiness_or_source_dispatch() {
+        let tenant_id = rocketmq_sre_contracts::TenantId::new();
+        let cluster_id = ClusterId::new();
+        let gateway = gateway();
+        gateway.pending_handshake.store(true, Ordering::SeqCst);
+        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway.clone()).unwrap();
+        let error = engine
+            .inventory(
+                cluster_id,
+                "operator",
+                Utc::now() - chrono::Duration::seconds(1),
+                &CancelSignal::default(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.failure(), ConnectorFailure::DeadlineExceeded);
+        assert_eq!(gateway.query_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn inventory_parent_cancel_ends_pending_readiness_without_dispatching_inventory() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("inventory-owner-test");
+        let tenant_id = rocketmq_sre_contracts::TenantId::new();
+        let cluster_id = ClusterId::new();
+        let gateway = gateway();
+        gateway.pending_handshake.store(true, Ordering::SeqCst);
+        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway.clone()).unwrap();
+        let cancel = CancelSignal::for_owner(context.root_group());
+        let read = engine.inventory(
+            cluster_id,
+            "operator",
+            Utc::now() + chrono::Duration::seconds(1),
+            &cancel,
+        );
+        let (result, ()) = tokio::join!(read, async {
+            gateway.handshake_entered.notified().await;
+            context.root_group().cancel();
+        });
+        assert_eq!(result.unwrap_err().failure(), ConnectorFailure::QueryCancelled);
+        assert_eq!(gateway.query_count.load(Ordering::SeqCst), 0);
+        assert!(!engine.is_ready().await);
+        assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
     }
 }

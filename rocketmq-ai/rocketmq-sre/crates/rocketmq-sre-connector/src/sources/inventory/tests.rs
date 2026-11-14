@@ -26,6 +26,8 @@ use super::k8s;
 use super::rocketmq;
 use crate::sources::common::SourceOutput;
 
+mod graph;
+
 fn at() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc
         .with_ymd_and_hms(2026, 7, 27, 8, 0, 0)

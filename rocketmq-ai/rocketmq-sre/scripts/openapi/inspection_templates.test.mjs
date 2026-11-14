@@ -29,6 +29,7 @@ test("inspection templates use the Rust enum and preserve existing transport and
   extendInspectionTemplates({ document, schema });
   assert.deepEqual(document.components.schemas.InspectionTemplate.enum, schema.enum);
   assert.ok(schema.enum.includes("store_pressure_legacy_v1"));
+  assert.ok(schema.enum.includes("send_latency_legacy_v1"));
   for (const name of ["CreateInspectionRequest", "InspectionRun", "ScheduledInspectionEventEntryRequest"]) {
     expected.components.schemas[name].properties.template = { $ref: "#/components/schemas/InspectionTemplate" };
   }

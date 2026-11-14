@@ -44,7 +44,7 @@ pub(crate) fn verification_routes() -> axum::Router<AppState> {
     verification::routes()
 }
 
-const PACK_ORDER: [&str; 33] = [
+const PACK_ORDER: [&str; 34] = [
     "cluster-topology.v1",
     "consumer-lag.v2",
     "consumer-runtime.v1",
@@ -62,6 +62,7 @@ const PACK_ORDER: [&str; 33] = [
     "controller-ha.v1",
     "namesrv-route.v1",
     "send-latency.v1",
+    "send-latency.v2",
     "proxy-connectivity.v1",
     "retry-dlq.v1",
     "transaction-message.v1",
@@ -570,7 +571,7 @@ mod tests {
             .iter()
             .map(|id| registry.resolve(id).expect("registered pack"))
             .collect::<Vec<_>>();
-        assert_eq!(packs.len(), 33);
+        assert_eq!(packs.len(), 34);
         assert_eq!(
             packs.iter().map(|pack| pack.qualified_id()).collect::<BTreeSet<_>>(),
             rocketmq_sre_core::diagnostics::full_pack_ids().into_iter().collect()

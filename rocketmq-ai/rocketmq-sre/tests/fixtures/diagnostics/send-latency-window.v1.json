@@ -1,0 +1,533 @@
+{
+  "schema_version": "rocketmq.sre-diagnostic-source.v1",
+  "profile": "send_latency",
+  "observation_schema": "rocketmq.send-latency-window.v1",
+  "measurement_kind": "classic_histogram_window_estimate",
+  "unit": "milliseconds",
+  "scope": {
+    "tenant_id": "00000000-0000-4000-8000-00000000c031",
+    "cluster_id": "00000000-0000-4000-8000-00000000c032",
+    "canonical_resource": "send-latency/orders",
+    "topic": "orders"
+  },
+  "window": {
+    "requested_start": "2026-11-14T18:00:00.000000500Z",
+    "requested_end": "2026-11-14T18:00:00.100000800Z",
+    "query_start": "2026-11-14T18:00:00Z",
+    "query_end": "2026-11-14T18:00:00.100Z",
+    "interval": "left_open_right_closed",
+    "time_resolution_millis": 1,
+    "data_first_at": "2026-11-14T18:00:00.001Z",
+    "data_last_at": "2026-11-14T18:00:00.099Z",
+    "oldest_last_sample_at": "2026-11-14T18:00:00.099Z"
+  },
+  "collected_at": "2026-11-14T18:00:00.102000900Z",
+  "source_age_seconds": 1,
+  "metric_family": "rocketmq_send_message_latency_bucket",
+  "method": {
+    "name": "classic_linear_p99_strict.v1",
+    "counter_method": "prometheus_increase_per_series",
+    "grid_ref": "otel_default_explicit_ms.v1",
+    "quantile": 0.99,
+    "minimum_scrape_samples": 2,
+    "minimum_observed_increments": 100,
+    "minimum_span_ratio": 0.8,
+    "maximum_gap_millis": 60000
+  },
+  "segments": [
+    {
+      "id": "client",
+      "availability": "unsupported_scope",
+      "reason_code": "exact_topic_scope_unavailable",
+      "population": "client_kernel_send_attempts_without_topic",
+      "observation": null
+    },
+    {
+      "id": "proxy",
+      "availability": "unsupported_scope",
+      "reason_code": "exact_topic_scope_unavailable",
+      "population": "mixed_proxy_rpc_and_forward_calls_without_topic",
+      "observation": null
+    },
+    {
+      "id": "remoting",
+      "availability": "unsupported_scope",
+      "reason_code": "exact_topic_scope_unavailable",
+      "population": "mixed_rpc_terminal_outcomes_without_topic",
+      "observation": null
+    },
+    {
+      "id": "broker",
+      "availability": "available",
+      "reason_code": "broker_histogram_window_available",
+      "population": "recorded_broker_store_submit_result_attempts",
+      "observation": {
+        "quantile": "p99",
+        "estimate_millis": 248.5,
+        "lower_bound_millis": 100,
+        "upper_bound_millis": 250,
+        "resolution": "finite_bucket",
+        "observed_increments": 200,
+        "estimated_increments": 202.0408163265306,
+        "observed_nodes": 1,
+        "scrape_samples": 5,
+        "observed_resets": 0
+      }
+    },
+    {
+      "id": "store",
+      "availability": "unsupported_scope",
+      "reason_code": "exact_topic_scope_unavailable",
+      "population": "append_microbatches_and_flush_dispatch_calls_without_topic",
+      "observation": null
+    }
+  ],
+  "policy": {
+    "status": "exceeded",
+    "reason_code": "estimate_exceeds_operator_policy",
+    "source": "operator_configuration",
+    "scope": {
+      "cluster_id": "00000000-0000-4000-8000-00000000c032",
+      "topic": "orders",
+      "canonical_resource": "send-latency/orders"
+    },
+    "unit": "milliseconds",
+    "comparison": "strictly_greater",
+    "p99_millis": 200,
+    "configuration_generation": null,
+    "generation_reason": "operator_policy_without_runtime_generation"
+  },
+  "missing_dimensions": [
+    "client_exact_topic_latency",
+    "proxy_exact_topic_latency",
+    "remoting_exact_topic_latency",
+    "store_exact_topic_latency",
+    "correlated_segment_population"
+  ],
+  "partial": true,
+  "provenance": "synthetic_contract_fixture_not_production_verification",
+  "collection_started_at": "2026-11-14T18:00:00.101000100Z",
+  "raw_histograms": [
+    {
+      "node_id": "broker-a:0",
+      "buckets": [
+        {
+          "upper_bound_millis": 0,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              0
+            ],
+            [
+              1794679200050,
+              0
+            ],
+            [
+              1794679200075,
+              0
+            ],
+            [
+              1794679200099,
+              0
+            ]
+          ],
+          "increase": 0
+        },
+        {
+          "upper_bound_millis": 5,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              0
+            ],
+            [
+              1794679200050,
+              0
+            ],
+            [
+              1794679200075,
+              0
+            ],
+            [
+              1794679200099,
+              0
+            ]
+          ],
+          "increase": 0
+        },
+        {
+          "upper_bound_millis": 10,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              0
+            ],
+            [
+              1794679200050,
+              0
+            ],
+            [
+              1794679200075,
+              0
+            ],
+            [
+              1794679200099,
+              0
+            ]
+          ],
+          "increase": 0
+        },
+        {
+          "upper_bound_millis": 25,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              0
+            ],
+            [
+              1794679200050,
+              0
+            ],
+            [
+              1794679200075,
+              0
+            ],
+            [
+              1794679200099,
+              0
+            ]
+          ],
+          "increase": 0
+        },
+        {
+          "upper_bound_millis": 50,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              0
+            ],
+            [
+              1794679200050,
+              0
+            ],
+            [
+              1794679200075,
+              0
+            ],
+            [
+              1794679200099,
+              0
+            ]
+          ],
+          "increase": 0
+        },
+        {
+          "upper_bound_millis": 75,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              0
+            ],
+            [
+              1794679200050,
+              0
+            ],
+            [
+              1794679200075,
+              0
+            ],
+            [
+              1794679200099,
+              0
+            ]
+          ],
+          "increase": 0
+        },
+        {
+          "upper_bound_millis": 100,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              0
+            ],
+            [
+              1794679200050,
+              0
+            ],
+            [
+              1794679200075,
+              0
+            ],
+            [
+              1794679200099,
+              0
+            ]
+          ],
+          "increase": 0
+        },
+        {
+          "upper_bound_millis": 250,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        },
+        {
+          "upper_bound_millis": 500,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        },
+        {
+          "upper_bound_millis": 750,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        },
+        {
+          "upper_bound_millis": 1000,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        },
+        {
+          "upper_bound_millis": 2500,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        },
+        {
+          "upper_bound_millis": 5000,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        },
+        {
+          "upper_bound_millis": 7500,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        },
+        {
+          "upper_bound_millis": 10000,
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        },
+        {
+          "upper_bound_millis": "+Inf",
+          "samples": [
+            [
+              1794679200001,
+              0
+            ],
+            [
+              1794679200025,
+              50
+            ],
+            [
+              1794679200050,
+              100
+            ],
+            [
+              1794679200075,
+              150
+            ],
+            [
+              1794679200099,
+              200
+            ]
+          ],
+          "increase": 202.0408163265306
+        }
+      ]
+    }
+  ]
+}

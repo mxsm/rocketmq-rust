@@ -19,6 +19,8 @@ use serde_json::json;
 
 #[path = "investigation_planner/compiled_fields.rs"]
 mod compiled_fields;
+#[path = "investigation_planner/send_latency.rs"]
+mod send_latency;
 
 const fn requirement(source: &'static str) -> EvidenceRequirement {
     EvidenceRequirement {

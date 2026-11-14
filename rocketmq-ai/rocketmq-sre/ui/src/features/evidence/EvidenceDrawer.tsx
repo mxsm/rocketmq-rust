@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -30,6 +31,8 @@ import {
   SELECTED_RESOURCE,
   useEvidenceMetadata,
 } from "./useEvidenceMetadata";
+import { SendLatencySummary } from "./SendLatencySummary";
+import { sendLatencyDisplay, type LatencyEvidence } from "./sendLatencyPresentation";
 
 interface EvidenceDrawerProps {
   evidenceId: string;
@@ -68,13 +71,40 @@ function EvidenceDrawerSession({
     ? `${scope.scopeKey}:${evidence.evidence_id}:${evidence.content_hash}`
     : "";
   const canRead = !!evidence && evidenceAvailability(evidence) !== "missing";
+  const displayTenant = evidence?.tenant_id;
+  const displayCluster = evidence?.cluster_id;
+  const displayResource = evidence?.resource;
+  const displaySource = evidence?.source;
+  const displayExposure = evidence?.exposure;
+  const displayStart = evidence?.time_range.start;
+  const displayEnd = evidence?.time_range.end;
+  const displayObservedAt = evidence?.observed_at;
+  const displayBinding = useMemo<LatencyEvidence | undefined>(
+    () => displayTenant && displayCluster && displayResource && displayStart && displayEnd && displayObservedAt
+      ? {
+          tenant_id: displayTenant,
+          cluster_id: displayCluster,
+          resource: displayResource,
+          source: displaySource ?? "",
+          exposure: displayExposure ?? "unknown",
+          time_range: { start: displayStart, end: displayEnd },
+          observed_at: displayObservedAt,
+        }
+      : undefined,
+    [displayTenant, displayCluster, displayResource, displaySource, displayExposure, displayStart, displayEnd, displayObservedAt],
+  );
   const load = useCallback(
     async (signal: AbortSignal) => {
       if (!canRead || !contentKey || requested !== contentKey) return undefined;
       const content = await api.getEvidenceContent(evidenceId, signal);
-      return safeEvidenceJson(content);
+      return {
+        json: safeEvidenceJson(content),
+        latency: displayBinding
+          ? sendLatencyDisplay(content, displayBinding)
+          : undefined,
+      };
     },
-    [api, canRead, contentKey, evidenceId, requested],
+    [api, canRead, contentKey, displayBinding, evidenceId, requested],
   );
   const content = useAsyncResource(load);
   const panel = useRef<HTMLElement | null>(null);
@@ -216,7 +246,9 @@ function EvidenceDrawerSession({
               )}
               {evidenceOutsideWindow(evidence, scope) && (
                 <p className="inline-alert warning" role="status">
-                  {m.outside}
+                  {content.data?.latency?.kind === "summary"
+                    ? m.collectionOutside
+                    : m.outside}
                 </p>
               )}
               <DefinitionGrid
@@ -326,7 +358,20 @@ function EvidenceDrawerSession({
                   <p role="alert">{m[evidenceErrorKind(content.error)]}</p>
                 )}
                 {requested === contentKey && !content.error && content.data && (
-                  <pre>{content.data}</pre>
+                  <>
+                    {content.data.latency && (
+                      <SendLatencySummary display={content.data.latency} />
+                    )}
+                    {content.data.latency?.kind === "summary" ? (
+                      <details className="investigation-audit-details">
+                        <summary>{m.contentAudit}</summary>
+                        <pre>{content.data.json}</pre>
+                      </details>
+                    ) : !(
+                      content.data.latency?.kind === "invalid" &&
+                      content.data.latency.reason === "scope"
+                    ) && <pre>{content.data.json}</pre>}
+                  </>
                 )}
               </section>
             </>

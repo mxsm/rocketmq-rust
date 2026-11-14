@@ -92,7 +92,8 @@ packs:
     required_evidence: prometheus:send-latency/
     max_window: 5m
     thresholds:
-      - segment_p99_ms: 500
+      - signal_contract: legacy_explicit_booleans
+      - numeric_policy: not_implemented_by_v1
     fixture_scenarios: [normal, fault, missing]
     fault_reason_code: SEND_CLIENT_PROXY_LATENCY
     healthy_reason_code: SEND_LATENCY_HEALTHY
