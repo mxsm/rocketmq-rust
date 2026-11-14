@@ -20,7 +20,6 @@ use rocketmq_model::common::message::timer_request::normalize_timer_request;
 use rocketmq_model::common::message::timer_request::TimerPolicySnapshot;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
-use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_runtime::common::time_utils;
 use rocketmq_store::TIMER_TOPIC;
@@ -61,15 +60,6 @@ pub(super) fn should_create_uniq_key(properties: &HashMap<CheetahString, Cheetah
         .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
         .map(|uniq_key| uniq_key.is_empty())
         .unwrap_or(true)
-}
-
-pub(super) fn enrich_send_message_request_properties(
-    request_header: &mut SendMessageRequestHeader,
-    region_id: &str,
-    trace_on: bool,
-) -> HashMap<CheetahString, CheetahString> {
-    let properties = string_to_message_properties(request_header.properties.as_ref());
-    enrich_parsed_send_message_request_properties(request_header, properties, region_id, trace_on)
 }
 
 pub(super) fn enrich_parsed_send_message_request_properties(
@@ -130,6 +120,7 @@ pub(super) fn clear_reserved_properties(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
     use rocketmq_store::MessageStoreConfig;
 
     fn recall_handle_topic_and_timestamp_with_defaults(
@@ -241,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn enrich_send_message_request_properties_returns_map_and_updates_header() {
+    fn enrich_parsed_send_message_request_properties_returns_map_and_updates_header() {
         let mut initial_properties = HashMap::new();
         initial_properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
@@ -256,7 +247,8 @@ mod tests {
             ..SendMessageRequestHeader::default()
         };
 
-        let properties = enrich_send_message_request_properties(&mut request_header, "region-a", true);
+        let properties =
+            enrich_parsed_send_message_request_properties(&mut request_header, initial_properties, "region-a", true);
 
         assert_eq!(
             properties.get(MessageConst::PROPERTY_KEYS),
