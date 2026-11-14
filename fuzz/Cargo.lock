@@ -1781,9 +1781,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-macros"
-version = "0.10.0-alpha.38"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa80918e4dda9ff26f9b59bbfae05833db6a113df31cd0f25c19018adeaf3501"
+checksum = "fb0e4b4a60803c9e1be56f6d68a3792b55575800e12632702b4917462dfcbe3a"
 dependencies = [
  "chrono",
  "proc-macro2",
@@ -1807,9 +1807,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-rt-tokio"
-version = "0.10.0-alpha.37"
+version = "0.10.0-alpha.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc4f79eaaf4c90b816235b72376b48b96f72167d15f0aaadaee50f965e8ba909"
+checksum = "b8298c6d826ae33bf3eabb65cc42b8e6c6aad8d8405b8a593e6480895c5cd761"
 dependencies = [
  "futures-util",
  "openraft-rt",
