@@ -289,11 +289,18 @@ fn qualify(
     now: DateTime<Utc>,
 ) -> (DiagnosticEvidenceQuality, &'static str, Vec<String>) {
     use DiagnosticEvidenceQuality as Quality;
-    let age = now.signed_duration_since(snapshot.observed_at).num_seconds();
     if snapshot.observed_at > now {
         return (Quality::Unknown, "observation_in_future", Vec::new());
     }
-    if snapshot.freshness_seconds.max(age as u64) > max_age {
+    // Source freshness is the age at observation, so time spent in storage
+    // adds to it. Preserve millisecond precision at the compiled age boundary.
+    let elapsed = now.signed_duration_since(snapshot.observed_at).num_milliseconds();
+    let age = snapshot
+        .freshness_seconds
+        .checked_mul(1000)
+        .and_then(|age| age.checked_add(elapsed as u64));
+    let maximum = max_age.checked_mul(1000);
+    if age.zip(maximum).is_none_or(|(age, maximum)| age > maximum) {
         return (Quality::Stale, "evidence_age_exceeded", Vec::new());
     }
     if snapshot.coverage == CoverageStatus::Missing {
@@ -504,6 +511,43 @@ mod tests {
         evidence.freshness_seconds = age + 1;
         assert_eq!(
             qualify(&evidence, &fields, age, at()).0,
+            DiagnosticEvidenceQuality::Stale
+        );
+    }
+
+    #[test]
+    fn source_age_accumulates_in_storage_and_cannot_wrap_or_round_past_the_limit() {
+        let registry = full_registry().unwrap();
+        let pack = registry.resolve("consumer-lag.v2").unwrap();
+        let fields = pack.evidence_fields("consumer-lag");
+        let maximum = pack.max_evidence_freshness_seconds();
+        let mut evidence = snapshot(TenantId::new(), ClusterId::new(), at(), complete());
+        evidence.freshness_seconds = 250;
+        for (elapsed, expected) in [
+            (Duration::seconds(49), DiagnosticEvidenceQuality::Available),
+            (Duration::seconds(50), DiagnosticEvidenceQuality::Available),
+            (
+                Duration::seconds(50) + Duration::milliseconds(1),
+                DiagnosticEvidenceQuality::Stale,
+            ),
+            (Duration::seconds(250), DiagnosticEvidenceQuality::Stale),
+            (-Duration::milliseconds(1), DiagnosticEvidenceQuality::Unknown),
+        ] {
+            assert_eq!(qualify(&evidence, &fields, maximum, at() + elapsed).0, expected);
+        }
+        evidence.freshness_seconds = u64::MAX;
+        assert_eq!(
+            qualify(&evidence, &fields, maximum, at()).0,
+            DiagnosticEvidenceQuality::Stale
+        );
+        evidence.freshness_seconds = u64::MAX / 1000;
+        assert_eq!(
+            qualify(&evidence, &fields, maximum, at() + Duration::seconds(1)).0,
+            DiagnosticEvidenceQuality::Stale
+        );
+        evidence.freshness_seconds = 0;
+        assert_eq!(
+            qualify(&evidence, &fields, u64::MAX, at()).0,
             DiagnosticEvidenceQuality::Stale
         );
     }
