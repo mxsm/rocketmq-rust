@@ -1099,20 +1099,7 @@ pub async fn run(
             }
         })
         .map_err(ControlPlaneError::configuration_source)?;
-    let forecast_worker = routers.forecast.clone();
-    let forecast_tasks = service_context.scheduled_tasks("forecast-evaluator");
-    let mut forecast_schedule =
-        ScheduledTaskConfig::fixed_rate_no_overlap("phase2-forecast-evaluator", forecast_worker.worker_interval());
-    forecast_schedule.initial_delay = std::time::Duration::from_secs(7);
-    forecast_schedule.max_run_time = Some(std::time::Duration::from_secs(10 * 60));
-    forecast_tasks
-        .schedule(forecast_schedule, ScheduledExecutionPolicy::default(), move || {
-            let forecast = forecast_worker.clone();
-            async move {
-                forecast.run_due().await;
-            }
-        })
-        .map_err(ControlPlaneError::configuration_source)?;
+    routers.forecast.schedule(&service_context)?;
     let change_worker = routers.change_management.clone();
     let change_tasks = service_context.scheduled_tasks("change-scheduler");
     let mut change_schedule =

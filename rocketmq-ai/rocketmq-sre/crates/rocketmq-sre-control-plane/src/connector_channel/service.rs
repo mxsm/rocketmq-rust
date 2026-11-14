@@ -56,6 +56,8 @@ const MAX_HEALTH_SAMPLES: usize = 256;
 const MAX_SOURCE_NAME_BYTES: usize = 128;
 const MAX_RESOURCE_BYTES: usize = 2048;
 
+mod owned_query;
+
 #[derive(Clone)]
 pub(crate) struct ConnectorChannelService<S = PostgresConnectorChannelStore> {
     store: S,
@@ -244,35 +246,16 @@ where
         query: EvidenceQuery,
         deadline: chrono::DateTime<Utc>,
     ) -> Result<ConnectorResponseEnvelope, ControlPlaneRequestFailure> {
-        let mut response_signal = self.response_signal.subscribe();
-        let command = self.enqueue_query(tenant_id, cluster_id, query, deadline).await?;
-        let session_id = match &command {
-            ConnectorCommand::Query { envelope } => envelope.session_id,
-            ConnectorCommand::Cancel { .. } => {
-                return Err(ControlPlaneRequestFailure::configuration(
-                    "connector query was persisted as an invalid command kind",
-                ));
-            }
-        };
-        let sequence = command.sequence();
-        let correlation_id = command.correlation_id();
-        loop {
-            if let Some(response) = self.store.response(session_id, sequence).await? {
-                return Ok(response);
-            }
-            let Ok(remaining) = (deadline - Utc::now()).to_std() else {
-                let _ = self.enqueue_cancel(tenant_id, cluster_id, correlation_id).await;
-                return Ok(deadline_response(session_id, sequence, correlation_id));
-            };
-            if remaining.is_zero()
-                || tokio::time::timeout(remaining, response_signal.changed())
-                    .await
-                    .is_err()
-            {
-                let _ = self.enqueue_cancel(tenant_id, cluster_id, correlation_id).await;
-                return Ok(deadline_response(session_id, sequence, correlation_id));
-            }
+        let mut pending = self.begin_query_wait(tenant_id, cluster_id, query, deadline).await?;
+        if let Some(response) = self.wait_query_response(&mut pending, deadline).await? {
+            return Ok(response);
         }
+        let _ = self.enqueue_cancel(tenant_id, cluster_id, pending.correlation_id).await;
+        Ok(deadline_response(
+            pending.session_id,
+            pending.sequence,
+            pending.correlation_id,
+        ))
     }
 
     pub(crate) async fn status(
@@ -481,9 +464,18 @@ mod tests {
     use crate::connector_channel::model::CHANNEL_SCHEMA_FAMILY;
     use crate::connector_channel::repository::RegistrationResult;
 
+    mod owned_wait_tests;
+
+    #[derive(Default)]
+    struct AdmissionGate {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
     #[derive(Clone, Default)]
     struct MemoryStore {
         state: Arc<Mutex<MemoryState>>,
+        admission_gate: Option<Arc<AdmissionGate>>,
     }
 
     #[derive(Default)]
@@ -612,6 +604,10 @@ mod tests {
             deadline: DateTime<Utc>,
             stale_before: DateTime<Utc>,
         ) -> Result<ConnectorCommand, ControlPlaneRequestFailure> {
+            if let Some(gate) = &self.admission_gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
             let mut state = self.state.lock().await;
             let scope = state
                 .sessions

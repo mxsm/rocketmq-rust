@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use chrono::Duration;
 use chrono::Utc;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_sre_contracts::ClusterForecastReport;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
@@ -72,6 +74,23 @@ const MAX_SIMULATION_RESOURCES: usize = 128;
 const MAX_READINESS_TEXT: usize = 128;
 const READINESS_TTL_SECONDS: i64 = 3_600;
 
+mod worker;
+
+enum CollectedForecastEvidence {
+    Cancelled,
+    Ready(Option<EvidenceSnapshot>),
+}
+
+/// Only use for side-effect-free reads, never a durable write or blob upload.
+async fn owned_read<T>(owner: &TaskGroup, read: impl Future<Output = T>) -> Option<T> {
+    let cancellation = owner.cancellation_token();
+    tokio::select! {
+        biased;
+        () = cancellation.cancelled() => None,
+        value = read => Some(value),
+    }
+}
+
 /// Capacity forecasting, deterministic simulation, and readiness facade.
 #[derive(Clone)]
 pub(crate) struct ForecastService {
@@ -123,20 +142,36 @@ impl ForecastService {
     )]
     async fn evaluate_target(
         &self,
+        owner: &TaskGroup,
         auth: &AuthContext,
         cluster_id: ClusterId,
         target: &ForecastTarget,
         window: &ForecastWindowPolicy,
     ) -> Result<(), ControlPlaneRequestFailure> {
-        self.validate_cluster(auth, cluster_id).await?;
+        let Some(validated) = owned_read(owner, self.validate_cluster(auth, cluster_id)).await else {
+            return Ok(());
+        };
+        validated?;
+        let cancellation = owner.cancellation_token();
         let now = Utc::now();
-        let evidence = self.collect_evidence(auth, cluster_id, target, window, now).await?;
+        let evidence = match self
+            .collect_evidence(owner, auth, cluster_id, target, window, now)
+            .await?
+        {
+            CollectedForecastEvidence::Cancelled => return Ok(()),
+            CollectedForecastEvidence::Ready(evidence) => evidence,
+        };
         let evidence_ids = evidence
             .as_ref()
             .map(|snapshot| vec![snapshot.evidence_id])
             .unwrap_or_default();
         let content = match evidence.as_ref() {
-            Some(snapshot) => Some(self.evidence_content(auth, snapshot).await?),
+            Some(snapshot) => {
+                let Some(content) = owned_read(owner, self.evidence_content(auth, snapshot)).await else {
+                    return Ok(());
+                };
+                Some(content?)
+            }
             None => None,
         };
         let points = content
@@ -156,9 +191,17 @@ impl ForecastService {
             .iter()
             .filter_map(|point| chrono::DateTime::from_timestamp(point.at_seconds, 0).map(|at| (at, point.value)))
             .collect::<Vec<_>>();
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
+        // Each admitted persistence operation drains. Cancellation is observed
+        // between independent artifacts, never by dropping a write future.
         self.repository
             .record_forecast_outcomes(auth, cluster_id, &target.metric, &actual_points)
             .await?;
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
         match target.kind {
             ForecastTargetKind::Capacity | ForecastTargetKind::Expiry => {
                 let forecast = capacity_forecast(
@@ -189,6 +232,9 @@ impl ForecastService {
         }
         if window.window == rocketmq_sre_contracts::ForecastWindow::ThirtyDays {
             for policy in &self.config.baselines {
+                if cancellation.is_cancelled() {
+                    return Ok(());
+                }
                 let (baseline, anomaly) = baseline_artifacts(
                     auth.tenant_id,
                     cluster_id,
@@ -202,7 +248,13 @@ impl ForecastService {
                 if let Some(baseline) = baseline {
                     self.repository.store_anomaly_baseline(auth, &baseline).await?;
                 }
+                if cancellation.is_cancelled() {
+                    return Ok(());
+                }
                 self.repository.store_anomaly_assessment(auth, &anomaly).await?;
+            }
+            if cancellation.is_cancelled() {
+                return Ok(());
             }
             if let Some(change) = change_point_artifact(
                 auth.tenant_id,
@@ -222,8 +274,11 @@ impl ForecastService {
 
     /// Evaluates a rotating bounded set of cluster/target/window tuples. A
     /// failed data source is isolated and cannot stop the scheduler.
-    pub(crate) async fn run_due(&self) {
-        let clusters = match self.repository.list().await {
+    pub(crate) async fn run_due(&self, owner: &TaskGroup) {
+        let Some(clusters) = owned_read(owner, self.repository.list()).await else {
+            return;
+        };
+        let clusters = match clusters {
             Ok(clusters) => clusters
                 .into_iter()
                 .filter(|cluster| {
@@ -247,6 +302,9 @@ impl ForecastService {
             .worker_cursor
             .fetch_add(self.config.max_evaluations_per_run, Ordering::Relaxed);
         for offset in 0..self.config.max_evaluations_per_run.min(total) {
+            if owner.cancellation_token().is_cancelled() {
+                break;
+            }
             let flat = start.wrapping_add(offset) % total;
             let cluster_index = flat / tuples_per_cluster;
             let tuple_index = flat % tuples_per_cluster;
@@ -265,6 +323,7 @@ impl ForecastService {
             };
             if let Err(error) = self
                 .evaluate_target(
+                    owner,
                     &auth,
                     cluster.id,
                     &self.config.targets[target_index],
@@ -427,12 +486,13 @@ impl ForecastService {
 
     async fn collect_evidence(
         &self,
+        owner: &TaskGroup,
         auth: &AuthContext,
         cluster_id: ClusterId,
         target: &ForecastTarget,
         window: &ForecastWindowPolicy,
         now: chrono::DateTime<Utc>,
-    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneRequestFailure> {
+    ) -> Result<CollectedForecastEvidence, ControlPlaneRequestFailure> {
         let window_name = match window.window {
             rocketmq_sre_contracts::ForecastWindow::SevenDays => "7d",
             rocketmq_sre_contracts::ForecastWindow::ThirtyDays => "30d",
@@ -459,10 +519,11 @@ impl ForecastService {
                 .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))?;
         match self
             .connector
-            .query_and_wait(auth.tenant_id, cluster_id, query, deadline)
+            .query_and_wait_owned(auth.tenant_id, cluster_id, query, deadline, owner)
             .await
         {
-            Ok(response) => {
+            Ok(None) => return Ok(CollectedForecastEvidence::Cancelled),
+            Ok(Some(response)) => {
                 if let Some(snapshot) = response.evidence {
                     if snapshot.source != "prometheus" || snapshot.resource != resource {
                         return Err(ControlPlaneRequestFailure::validation(
@@ -470,7 +531,14 @@ impl ForecastService {
                             "connector returned forecast evidence from an unexpected source or resource",
                         ));
                     }
-                    return self.evidence.persist_cluster(auth, snapshot).await.map(Some);
+                    if owner.cancellation_token().is_cancelled() {
+                        return Ok(CollectedForecastEvidence::Cancelled);
+                    }
+                    return self
+                        .evidence
+                        .persist_cluster(auth, snapshot)
+                        .await
+                        .map(|snapshot| CollectedForecastEvidence::Ready(Some(snapshot)));
                 }
             }
             Err(error) => {
@@ -482,9 +550,16 @@ impl ForecastService {
                 );
             }
         }
-        self.evidence
-            .latest_cluster_source(auth, cluster_id, "prometheus", &resource)
-            .await
+        match owned_read(
+            owner,
+            self.evidence
+                .latest_cluster_source(auth, cluster_id, "prometheus", &resource),
+        )
+        .await
+        {
+            None => Ok(CollectedForecastEvidence::Cancelled),
+            Some(result) => result.map(CollectedForecastEvidence::Ready),
+        }
     }
 
     async fn evidence_content(
