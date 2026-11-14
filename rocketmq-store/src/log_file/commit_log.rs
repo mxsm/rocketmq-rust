@@ -23,7 +23,6 @@ pub(crate) use handles::CommitLogReadHandle;
 pub(crate) use handles::CommitLogReplicaHandle;
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::atomic::AtomicBool;
@@ -46,7 +45,7 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_model::common::message::message_single::tags_string2tags_code;
+use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::MessageVersion;
@@ -57,7 +56,6 @@ use rocketmq_model::utils::crc32_utils::crc32;
 use rocketmq_model::utils::crc32_utils::crc32_bytes;
 use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_protocol::common::message::message_decoder::cheetah_from_utf8_lossy;
-use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::resource_budget::QueueSnapshot;
 use rocketmq_store_api::WriteLeaseToken;
@@ -317,8 +315,8 @@ fn encode_message_ext(
     message_encoder_pool::encode_message_with_pool(message_ext, message_store_config)
 }
 
-fn parse_property_crc(properties_map: &HashMap<CheetahString, CheetahString>) -> Result<Option<u32>, ()> {
-    let Some(crc_32) = properties_map.get(MessageConst::PROPERTY_CRC32) else {
+fn parse_property_crc(properties: &MessageProperties) -> Result<Option<u32>, ()> {
+    let Some(crc_32) = properties.get_str(MessageConst::PROPERTY_CRC32) else {
         return Ok(None);
     };
 
@@ -2831,18 +2829,15 @@ pub(crate) fn check_message_and_return_size_in_segment(
     let topic_len = record.topic.len();
     let properties_length = record.properties_len;
     let topic = cheetah_from_utf8_lossy(record.topic.as_ref());
-    let (tags_code, keys, uniq_key, properties_map) = if properties_length > 0 {
-        let properties_content = cheetah_from_utf8_lossy(record.properties.as_ref());
-        let properties_map = string_to_message_properties(Some(&properties_content));
-        let keys = properties_map.get(MessageConst::PROPERTY_KEYS).cloned();
-        let uniq_key = properties_map
-            .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
-            .cloned();
+    let (tags_code, keys, uniq_key, properties) = if properties_length > 0 {
+        // Kept as the stored text and looked up by key: dispatch reads a few properties, and only
+        // a reader that needs every property, such as an SQL filter, builds the map.
+        let properties = MessageProperties::from_encoded(record.properties.clone());
+        let keys = properties.get_owned(MessageConst::PROPERTY_KEYS);
+        let uniq_key = properties.get_owned(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
         if check_dup_info {
-            let dup_info = properties_map.get(MessageConst::DUP_INFO).cloned();
-            if let Some(content) = dup_info {
-                let vec = content.split_char('_').collect::<Vec<&str>>();
-                if vec.len() != 2 {
+            if let Some(content) = properties.get_str(MessageConst::DUP_INFO) {
+                if content.split('_').count() != 2 {
                     warn!("DupInfo in properties check failed. dupInfo={}", content);
                     return DispatchRequest {
                         msg_size: -1,
@@ -2859,12 +2854,12 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 };
             }
         }
-        let tags = properties_map.get(MessageConst::PROPERTY_TAGS);
-        let mut tags_code = tags_string2tags_code(tags);
+        let tags = properties.get_str(MessageConst::PROPERTY_TAGS).unwrap_or_default();
+        let mut tags_code = MessageExtBrokerInner::tags_string_to_tags_code(tags);
 
         {
             // Timing message processing
-            let delay_time_level = properties_map.get(MessageConst::PROPERTY_DELAY_TIME_LEVEL);
+            let delay_time_level = properties.get_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL);
             if let (Some(delay_time_level_str), true) =
                 (delay_time_level, TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic)
             {
@@ -2882,13 +2877,13 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 }
             }
         }
-        (tags_code, keys.unwrap_or_default(), uniq_key, properties_map)
+        (tags_code, keys.unwrap_or_default(), uniq_key, properties)
     } else {
-        (0, CheetahString::new(), None, HashMap::new())
+        (0, CheetahString::new(), None, MessageProperties::default())
     };
 
     if force_verify_prop_crc {
-        match parse_property_crc(&properties_map) {
+        match parse_property_crc(&properties) {
             Ok(Some(expected_crc)) => {
                 if total_size < CRC32_RESERVED_LEN {
                     warn!(
@@ -2970,25 +2965,22 @@ pub(crate) fn check_message_and_return_size_in_segment(
         prepared_transaction_offset: record.prepared_transaction_offset,
         ..DispatchRequest::default()
     };
-    if !set_batch_size_if_needed(&properties_map, &mut dispatch_request) {
+    if !set_batch_size_if_needed(&properties, &mut dispatch_request) {
         return DispatchRequest {
             msg_size: -1,
             success: false,
             ..Default::default()
         };
     }
-    dispatch_request.properties_map = Some(properties_map);
+    dispatch_request.properties_map = Some(properties);
     bytes.advance(total_size as usize);
     dispatch_request
 }
 
-fn set_batch_size_if_needed(
-    properties_map: &HashMap<CheetahString, CheetahString>,
-    dispatch_request: &mut DispatchRequest,
-) -> bool {
+fn set_batch_size_if_needed(properties: &MessageProperties, dispatch_request: &mut DispatchRequest) -> bool {
     let (Some(inner_base), Some(inner_num)) = (
-        properties_map.get(MessageConst::PROPERTY_INNER_BASE),
-        properties_map.get(MessageConst::PROPERTY_INNER_NUM),
+        properties.get_str(MessageConst::PROPERTY_INNER_BASE),
+        properties.get_str(MessageConst::PROPERTY_INNER_NUM),
     ) else {
         return true;
     };
@@ -3072,6 +3064,7 @@ mod tests {
     use rocketmq_model::common::message::MessageTrait;
     use rocketmq_model::utils::crc32_utils::crc32;
     use rocketmq_protocol::common::message::message_decoder::create_crc32;
+    use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
     use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_store_api::MasterEpoch;
     use rocketmq_store_api::StoreComponent;
@@ -3191,6 +3184,45 @@ mod tests {
 
     fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         haystack.windows(needle.len()).position(|window| window == needle)
+    }
+
+    #[test]
+    fn dispatch_properties_read_like_the_decoded_property_map() {
+        // Reput used to decode the text lossily into a map; dispatch now keeps the stored bytes.
+        // A small alphabet makes separators, duplicates, empty parts and invalid UTF-8 frequent.
+        const ALPHABET: &[u8] = b"ab\x01\x02\xff";
+        let replacement = char::REPLACEMENT_CHARACTER.to_string();
+        let keys = [
+            "a".to_owned(),
+            "b".to_owned(),
+            "ab".to_owned(),
+            "ba".to_owned(),
+            "aa".to_owned(),
+            format!("a{replacement}"),
+            replacement.clone(),
+            String::new(),
+        ];
+        let mut state: u64 = 0x5851_f42d_4c95_7f2d;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..10_000 {
+            let len = (next() % 24) as usize;
+            let encoded: Vec<u8> = (0..len).map(|_| ALPHABET[(next() % 5) as usize]).collect();
+            let expected = string_to_message_properties(Some(&cheetah_from_utf8_lossy(&encoded)));
+            let properties = MessageProperties::from_encoded(Bytes::from(encoded.clone()));
+            for key in &keys {
+                assert_eq!(
+                    properties.get_str(key),
+                    expected.get(key.as_str()).map(CheetahString::as_str),
+                    "key {key:?} in {encoded:?}"
+                );
+            }
+            assert_eq!(properties.as_map(), &expected, "properties of {encoded:?}");
+        }
     }
 
     #[test]

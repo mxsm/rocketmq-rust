@@ -16,6 +16,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use futures_util::future::join_all;
+use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::FullPolicy;
@@ -233,11 +234,10 @@ fn batch_end_offset(dispatch_batch: &[DispatchRequest]) -> Option<i64> {
 
 fn estimate_batch_bytes(dispatch_batch: &[DispatchRequest]) -> usize {
     dispatch_batch.iter().fold(0usize, |total, request| {
-        let properties_bytes = request.properties_map.as_ref().map_or(0, |properties| {
-            properties.iter().fold(0usize, |size, (key, value)| {
-                size.saturating_add(key.len()).saturating_add(value.len())
-            })
-        });
+        let properties_bytes = request
+            .properties_map
+            .as_ref()
+            .map_or(0, MessageProperties::approximate_byte_len);
         total
             .saturating_add(size_of::<DispatchRequest>())
             .saturating_add(request.topic.len())

@@ -52,24 +52,21 @@ impl RocksDbTransactionDispatch for DispatchRequest {
     fn real_topic(&self) -> Option<&str> {
         self.properties_map
             .as_ref()?
-            .get(MessageConst::PROPERTY_REAL_TOPIC)
+            .get_str(MessageConst::PROPERTY_REAL_TOPIC)
             .filter(|topic| !topic.is_empty())
-            .map(|topic| topic.as_str())
     }
 
     fn transaction_id(&self) -> Option<&str> {
         self.properties_map
             .as_ref()?
-            .get(MessageConst::PROPERTY_TRANSACTION_ID)
+            .get_str(MessageConst::PROPERTY_TRANSACTION_ID)
             .filter(|id| !id.is_empty())
-            .map(|id| id.as_str())
     }
 
     fn transaction_offset(&self) -> Option<i64> {
         self.properties_map
             .as_ref()?
-            .get(PROPERTY_TRANS_OFFSET)?
-            .as_str()
+            .get_str(PROPERTY_TRANS_OFFSET)?
             .parse::<i64>()
             .ok()
     }

@@ -135,12 +135,9 @@ pub(crate) mod multi_dispatch_utils {
         let Some(props) = &dr.properties_map else {
             return false;
         };
-        if props.is_empty() {
-            return false;
-        }
 
-        let mdq = props.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH);
-        let mqo = props.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET);
+        let mdq = props.get_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH);
+        let mqo = props.get_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET);
 
         matches!((mdq, mqo), (Some(a), Some(b)) if !a.is_empty() && !b.is_empty())
     }
@@ -148,6 +145,7 @@ pub(crate) mod multi_dispatch_utils {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_model::common::message::message_property::MessageProperties;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::common::topic::TopicValidator;
 
@@ -205,7 +203,7 @@ mod tests {
 
         // Empty props
         let dr = DispatchRequest {
-            properties_map: Some(HashMap::new()),
+            properties_map: Some(MessageProperties::default()),
             ..Default::default()
         };
         assert!(!multi_dispatch_utils::check_multi_dispatch_queue(&cfg, &dr));
@@ -215,7 +213,7 @@ mod tests {
         props.insert(MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(), "q1,q2".into());
         props.insert(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(), "1,2".into());
         let dr = DispatchRequest {
-            properties_map: Some(props),
+            properties_map: Some(MessageProperties::from_map(props)),
             ..Default::default()
         };
         assert!(multi_dispatch_utils::check_multi_dispatch_queue(&cfg, &dr));
@@ -225,7 +223,7 @@ mod tests {
         props_blank.insert(MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(), " ".into());
         props_blank.insert(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(), "2".into());
         let dr = DispatchRequest {
-            properties_map: Some(props_blank),
+            properties_map: Some(MessageProperties::from_map(props_blank)),
             ..Default::default()
         };
         assert!(multi_dispatch_utils::check_multi_dispatch_queue(&cfg, &dr));

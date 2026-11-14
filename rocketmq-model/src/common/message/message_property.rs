@@ -29,15 +29,19 @@ const NAME_VALUE_SEPARATOR: char = '\u{1}';
 ///
 /// Properties decoded from a message keep their encoded `key\u{1}value\u{2}` text and are parsed
 /// into a map only when the whole map is needed: [`Self::as_map`], [`Self::as_map_mut`],
-/// [`Self::len`] or a removal. Until then, single-key reads scan the text and writes collect in a
-/// small overlay that takes precedence over it, so a consumer that reads a few properties and sets
-/// a few more never builds a map, and cloning the message copies no map. Lookups return the same
-/// values the map would: entries with an empty key or value are skipped, and the last of
-/// duplicate keys wins.
+/// [`Self::len`] or a removal. Until then, the first single-key read indexes the text in one pass
+/// that records offsets and copies no string, later reads compare keys through that index, and
+/// writes collect in a small overlay that takes precedence over the text. A reader that looks up
+/// a few properties and sets a few more therefore never builds a map, and cloning the message
+/// copies no map. Lookups return the same values the map would: entries with an empty key or value
+/// are skipped, and the last of duplicate keys wins.
 #[derive(Clone, Default)]
 pub struct MessageProperties {
     /// Encoded properties not parsed into `map` yet; always valid UTF-8.
     encoded: Option<CheetahString>,
+    /// Offsets of the entries of `encoded` that a map would keep, in text order; built by the first
+    /// lookup and dropped with `encoded`.
+    index: OnceLock<Vec<EncodedEntry>>,
     /// Entries set since decoding, at most one per key, taking precedence over `encoded`.
     overlay: Vec<(CheetahString, CheetahString)>,
     /// The authoritative map once a mutable whole-map access or a removal built it.
@@ -89,7 +93,7 @@ impl MessageProperties {
         if let Some((_, value)) = self.overlay.iter().find(|(name, _)| name.as_str() == key) {
             return Some(value.as_str());
         }
-        self.encoded.as_deref().and_then(|encoded| find_encoded(encoded, key))
+        self.find_in_text(key)
     }
 
     /// Gets an owned copy of a property value without building the whole map.
@@ -100,10 +104,41 @@ impl MessageProperties {
         if let Some((_, value)) = self.overlay.iter().find(|(name, _)| name.as_str() == key) {
             return Some(value.clone());
         }
-        self.encoded
-            .as_deref()
-            .and_then(|encoded| find_encoded(encoded, key))
-            .map(CheetahString::from_slice)
+        self.find_in_text(key).map(CheetahString::from_slice)
+    }
+
+    /// Returns whether a property is set, without building the whole map.
+    #[inline]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.get_str(key).is_some()
+    }
+
+    /// An estimate of the bytes the properties occupy: the encoded text while it is unparsed, and
+    /// the key and value bytes of the map or the overlay otherwise. It builds no map.
+    pub fn approximate_byte_len(&self) -> usize {
+        let entries = |entries: &mut dyn Iterator<Item = (&CheetahString, &CheetahString)>| {
+            entries.fold(0usize, |size, (key, value)| {
+                size.saturating_add(key.len()).saturating_add(value.len())
+            })
+        };
+        if let Some(map) = self.built() {
+            return entries(&mut map.iter());
+        }
+        let text = self.encoded.as_ref().map_or(0, CheetahString::len);
+        text.saturating_add(entries(&mut self.overlay.iter().map(|(key, value)| (key, value))))
+    }
+
+    /// The index of `encoded`, built on first use.
+    #[inline]
+    fn index(&self, encoded: &str) -> &[EncodedEntry] {
+        self.index.get_or_init(|| index_entries(encoded))
+    }
+
+    /// The value of `key` in the encoded text, as a map built from it would hold it.
+    #[inline]
+    fn find_in_text(&self, key: &str) -> Option<&str> {
+        let encoded = self.encoded.as_deref()?;
+        find_indexed(encoded, self.index(encoded), key)
     }
 
     /// Sets a property, replacing any earlier value of `key`.
@@ -182,6 +217,7 @@ impl MessageProperties {
                 .take()
                 .unwrap_or_else(|| build_map(self.encoded.as_deref(), &self.overlay));
             self.encoded = None;
+            self.index = OnceLock::new();
             self.overlay = Vec::new();
             self.map = Some(map);
         }
@@ -308,12 +344,79 @@ fn encoded_entries(encoded: &str) -> impl Iterator<Item = (&str, &str)> {
     })
 }
 
+/// One entry of encoded text that a map would keep: key `key_start..key_end`, value
+/// `key_end + 1..value_end`.
+#[derive(Clone, Copy, Debug)]
+struct EncodedEntry {
+    key_start: u32,
+    key_end: u32,
+    value_end: u32,
+}
+
+impl EncodedEntry {
+    #[inline]
+    fn text(self, encoded: &str) -> (&str, &str) {
+        // The offsets sit next to ASCII separators of `encoded`, so they are character boundaries.
+        let key = &encoded[self.key_start as usize..self.key_end as usize];
+        let value = &encoded[self.key_end as usize + 1..self.value_end as usize];
+        (key, value)
+    }
+}
+
+/// Indexes the entries a map would keep, in one pass that copies no string: an entry splits at its
+/// first name-value separator, and an empty key or value drops it, as the Java decoder does.
+fn index_entries(encoded: &str) -> Vec<EncodedEntry> {
+    fn keep(entries: &mut Vec<EncodedEntry>, entry_start: u32, separator: Option<u32>, end: u32) {
+        if let Some(key_end) = separator {
+            if key_end > entry_start && end > key_end + 1 {
+                entries.push(EncodedEntry {
+                    key_start: entry_start,
+                    key_end,
+                    value_end: end,
+                });
+            }
+        }
+    }
+
+    let bytes = encoded.as_bytes();
+    let Ok(length) = u32::try_from(bytes.len()) else {
+        // Text this large is not a message property block; lookups fall back to scanning it.
+        return Vec::new();
+    };
+    let mut entries = Vec::with_capacity(16);
+    let mut entry_start = 0u32;
+    let mut separator = None;
+    for (offset, &byte) in bytes.iter().enumerate() {
+        // `offset < length <= u32::MAX`.
+        let offset = offset as u32;
+        if byte == NAME_VALUE_SEPARATOR as u8 {
+            separator.get_or_insert(offset);
+        } else if byte == PROPERTY_SEPARATOR as u8 {
+            keep(&mut entries, entry_start, separator, offset);
+            entry_start = offset + 1;
+            separator = None;
+        }
+    }
+    keep(&mut entries, entry_start, separator, length);
+    entries
+}
+
 /// The value the parsed map would hold for `key`: the last entry wins.
-fn find_encoded<'a>(encoded: &'a str, key: &str) -> Option<&'a str> {
-    encoded_entries(encoded)
-        .filter(|(name, _)| *name == key)
-        .last()
-        .map(|(_, value)| value)
+#[inline]
+fn find_indexed<'a>(encoded: &'a str, index: &[EncodedEntry], key: &str) -> Option<&'a str> {
+    if index.is_empty() && u32::try_from(encoded.len()).is_err() {
+        return encoded_entries(encoded)
+            .filter(|(name, _)| *name == key)
+            .last()
+            .map(|(_, value)| value);
+    }
+    index.iter().rev().find_map(|entry| {
+        if (entry.key_end - entry.key_start) as usize != key.len() {
+            return None;
+        }
+        let (name, value) = entry.text(encoded);
+        (name == key).then_some(value)
+    })
 }
 
 fn build_map(
@@ -589,6 +692,25 @@ mod tests {
             assert_eq!(properties.as_map(), &expected, "map of {encoded:?}");
             assert_eq!(properties.len(), expected.len());
         }
+    }
+
+    #[test]
+    fn byte_length_estimates_build_no_map() {
+        let properties = MessageProperties::from_encoded(bytes::Bytes::from_static(b"TAGS\x01a\x02KEYS\x01k\x02"));
+        assert_eq!(properties.approximate_byte_len(), 14, "the encoded text");
+        assert_eq!(properties.get_str("KEYS"), Some("k"));
+        assert!(properties.built().is_none(), "neither call builds the map");
+
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("TAGS"),
+            CheetahString::from_static_str("a"),
+        );
+        assert_eq!(
+            MessageProperties::from_map(map).approximate_byte_len(),
+            5,
+            "key and value bytes"
+        );
     }
 
     #[test]

@@ -428,15 +428,15 @@ impl ConsumeQueue {
         let Some(properties_map) = request.properties_map.as_ref() else {
             return;
         };
-        let Some(multi_dispatch_queue) = properties_map.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
+        let Some(multi_dispatch_queue) = properties_map.get_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
             return;
         };
-        let Some(multi_queue_offset) = properties_map.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET) else {
+        let Some(multi_queue_offset) = properties_map.get_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET) else {
             return;
         };
 
-        let queues: Vec<&str> = multi_dispatch_queue.split_str(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
-        let queue_offsets: Vec<&str> = multi_queue_offset.split_str(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+        let queues: Vec<&str> = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+        let queue_offsets: Vec<&str> = multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
         if queues.len() != queue_offsets.len() {
             error!(
                 "[BUG] queues length mismatches queueOffsets length for topic {}",

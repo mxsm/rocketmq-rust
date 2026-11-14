@@ -18,6 +18,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::BrokerReadStore;
@@ -1772,7 +1773,7 @@ fn rocksdb_index_build_service_batches_dispatch_request_records_into_message_roc
         store_timestamp: store_time,
         keys: CheetahString::from_static_str("KeyA KeyB"),
         uniq_key: Some(CheetahString::from_static_str("UniqA")),
-        properties_map: Some(properties),
+        properties_map: Some(MessageProperties::from_map(properties)),
         ..DispatchRequest::default()
     };
     service
@@ -3327,7 +3328,7 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
         CheetahString::from_static_str(MessageConst::PROPERTY_TAGS),
         CheetahString::from_static_str("TagA"),
     );
-    request.properties_map = Some(properties);
+    request.properties_map = Some(MessageProperties::from_map(properties));
 
     // Direct dispatch bypasses recovery, which normally seeds the first retained CommitLog offset.
     let index_service = message_store.rocksdb_index_service();
@@ -3771,7 +3772,7 @@ fn trans_dispatch_request(
         topic: CheetahString::from_static_str(topic),
         commit_log_offset,
         msg_size,
-        properties_map: Some(properties),
+        properties_map: Some(MessageProperties::from_map(properties)),
         success: true,
         ..DispatchRequest::default()
     }
@@ -3806,7 +3807,7 @@ fn timer_dispatch_request(
         commit_log_offset,
         msg_size,
         consume_queue_offset: queue_offset,
-        properties_map: Some(properties),
+        properties_map: Some(MessageProperties::from_map(properties)),
         uniq_key: Some(CheetahString::from_static_str(uniq_key)),
         success: true,
         ..DispatchRequest::default()
