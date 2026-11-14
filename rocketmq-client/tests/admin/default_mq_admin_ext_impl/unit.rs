@@ -334,13 +334,17 @@ fn timestamp_to_java_long_rejects_values_outside_java_range() {
 }
 
 #[test]
-fn timeout_millis_to_u64_rejects_values_outside_rust_range() {
+fn remoting_timeout_millis_rejects_values_outside_rust_range() {
+    let mut admin = new_unstarted_admin();
+    admin.timeout_millis = Duration::from_millis(u64::MAX);
     assert_eq!(
-        timeout_millis_to_u64(Duration::from_millis(u64::MAX)).expect("max u64 millis is valid"),
+        admin.remoting_timeout_millis().expect("max u64 millis is valid"),
         u64::MAX
     );
 
-    let error = timeout_millis_to_u64(Duration::from_secs(u64::MAX))
+    admin.timeout_millis = Duration::from_secs(u64::MAX);
+    let error = admin
+        .remoting_timeout_millis()
         .expect_err("duration larger than u64 milliseconds should be rejected");
 
     assert_invalid_argument(&error);

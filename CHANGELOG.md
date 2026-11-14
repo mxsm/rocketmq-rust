@@ -150,6 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(client):** Remove the unused crate-private delayed client action helper; tracked rebalance scheduling is unchanged ([#12079](https://github.com/mxsm/rocketmq-rust/issues/12079)).
 - **refactor(client):** Remove the unused background-task wrapper left after delayed-action cleanup; task ownership and shutdown behavior are unchanged ([#12456](https://github.com/mxsm/rocketmq-rust/issues/12456)).
 - **refactor(client):** Remove four unused crate-private KV API aliases while preserving public Admin methods and request behavior ([#12078](https://github.com/mxsm/rocketmq-rust/issues/12078)).
+- **refactor(client):** Remove the obsolete Admin timeout conversion helper and exercise boundary validation through the active Admin implementation ([#12568](https://github.com/mxsm/rocketmq-rust/issues/12568)).
 - **refactor(broker):** Remove unused internal subscription statistics logging and its duplicate simulation tests; active metric collection is unchanged ([#12224](https://github.com/mxsm/rocketmq-rust/issues/12224)).
 - **refactor(broker):** Remove unused subscription forbidden-table listing and removal helpers; active updates and persistence remain intact ([#12274](https://github.com/mxsm/rocketmq-rust/issues/12274)).
 - **refactor(broker):** Remove the unused internal subscription forbidden-table batch query and its duplicate simulation test ([#12186](https://github.com/mxsm/rocketmq-rust/issues/12186)).
