@@ -322,6 +322,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ci:** Add `.config/nextest.toml` and a non-blocking Linux `Nextest Pilot` job that compares `cargo test` with `cargo nextest run` plus `cargo test --doc` on the same build, reconciles every round by tests run, ignored tests, doctests, and failed-test identities (`scripts/nextest_pilot_compare.py`), and publishes timings and JUnit output. Test groups keep the broker startup, multi-node cluster, and proxy ingress tests serialized under nextest, the broker transactional startup tests use a free HA port instead of the shared default, and `scripts/ci_scope.py` now selects Rust tests when the nextest configuration changes. Existing `cargo test` jobs are unchanged ([#10945](https://github.com/mxsm/rocketmq-rust/issues/10945)).
 - **test(remoting):** Add comprehensive test coverage for `QueryMessageResponseHeader` including integration with RemotingCommand, boundary checks, and error handling
 - **feat(tools):** Add `broker` command group with `GetBrokerConfigSubCommand` for querying broker configuration by broker address or cluster, with optional `--keyPattern` regex filtering
 - **feat(tools):** Add `CleanExpiredCQSubCommand` under broker commands with broker/cluster/topic target scan, dry-run preview, and cleanup summary reporting
