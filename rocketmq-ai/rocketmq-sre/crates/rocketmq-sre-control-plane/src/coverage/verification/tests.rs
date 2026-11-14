@@ -444,3 +444,182 @@ async fn postgres_verification_records_enforce_proof_scope_identity_expiry_and_s
     // This test explicitly requires a disposable database: immutable attestation
     // fixtures are retained until its owner tears down the test database.
 }
+
+#[tokio::test]
+#[ignore = "requires an explicitly disposable ROCKETMQ_SRE_TEST_DATABASE_URL; append-only reports are retained"]
+async fn postgres_production_proof_ages_without_rewriting_history_or_borrowing_new_evidence() {
+    use crate::{
+        PostgresRepository,
+        api::capability_verification_test_state,
+        coverage::{self, CoverageQuery, quality},
+    };
+    use rocketmq_sre_contracts::{
+        CapabilityFactStatus, CorrelationId, DiagnosticEvidenceQuality, EvidenceContent, EvidenceExposure,
+        EvidenceQuery, EvidenceSnapshot, QueryId, current_evidence_schema,
+    };
+    use rocketmq_sre_core::diagnostics::full_registry;
+    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+
+    let url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("explicit disposable database");
+    let repository = PostgresRepository::connect(&url, 4).await.unwrap();
+    let tenant = TenantId::new();
+    let cluster = ClusterId::new();
+    sqlx::query("INSERT INTO clusters (id,tenant_id,external_cluster_key,environment,region,rocketmq_version,deployment_mode,owner_name,requested_access_profile,effective_access_profile,onboarding_state)
+        VALUES ($1,$2,$3,'test','local','5.3.2','test','capability-verification-age','read_only','read_only','ready_read_only')")
+        .bind(cluster.as_uuid()).bind(tenant.to_string()).bind(format!("verification-age-{cluster}"))
+        .execute(&repository.pool).await.unwrap();
+    let state = capability_verification_test_state(repository.clone()).unwrap();
+    let auth = AuthContext {
+        tenant_id: tenant,
+        subject: "dedicated-verifier-age-fixture".to_owned(),
+        clusters: BTreeSet::from([cluster]),
+        roles: BTreeSet::from(["capability_verifier_service".to_owned(), "rocketmq:read".to_owned()]),
+    };
+    let now = Utc::now();
+    let target = "consumer-lag/group/orders";
+    let make = |observed, freshness| {
+        let mut snapshot = EvidenceSnapshot::capture(
+            EvidenceQuery {
+                query_id: QueryId::new(),
+                correlation_id: CorrelationId::new(),
+                tenant_id: tenant,
+                cluster_id: cluster,
+                source: "rocketmq-mcp".to_owned(),
+                resource: target.to_owned(),
+                time_range: TimeRange::new(observed, observed).unwrap(),
+            },
+            current_evidence_schema(),
+            observed,
+            EvidenceContent::Inline(json!({
+                "total_lag":10,"lag_slope_per_min":1,"queue_skew_ratio":1,
+                "consume_rate_per_sec":5,"produce_rate_per_sec":6
+            })),
+        )
+        .unwrap();
+        snapshot.exposure = EvidenceExposure::McpTool;
+        snapshot.freshness_seconds = freshness;
+        snapshot
+    };
+    let stale = state
+        .evidence
+        .persist_cluster(&auth, make(now - Duration::seconds(250), 250))
+        .await
+        .unwrap();
+    let mut report = request();
+    report.tenant_id = tenant;
+    report.cluster_id = cluster;
+    report.observed_at = now;
+    report.valid_until = now + Duration::hours(1);
+    report.time_range = TimeRange::new(now - Duration::minutes(5), now).unwrap();
+    report.evidence_ids = vec![stale.evidence_id];
+    let rejected = record(&state, &auth, VerifierIdentity::Oidc, report.clone())
+        .await
+        .unwrap_err();
+    assert!(matches!(rejected, ControlPlaneRequestFailure::Rejected(reason)
+        if reason.code() == "verification_evidence_not_qualified"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM capability_verification_records WHERE tenant_id=$1")
+            .bind(tenant.as_uuid())
+            .fetch_one(&repository.pool)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let proof = state
+        .evidence
+        .persist_cluster(&auth, make(now - Duration::seconds(20), 250))
+        .await
+        .unwrap();
+    let (investigation, revision, _) =
+        crate::coverage::postgres_tests::seed_revision(&repository, &auth, cluster, &[proof.evidence_id]).await;
+    report.evidence_ids = vec![proof.evidence_id];
+    report.investigation_id = Some(investigation);
+    report.revision_id = Some(revision);
+    let saved = record(&state, &auth, VerifierIdentity::Oidc, report).await.unwrap();
+    let scoped = coverage::matrix(
+        &state,
+        &auth,
+        CoverageQuery {
+            cluster_id: Some(cluster.to_string()),
+            investigation_id: Some(investigation.to_string()),
+            revision_id: Some(revision.to_string()),
+            resource: Some(target.to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+    let current = scoped["quality"]["packs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pack| pack["pack_id"] == "consumer-lag.v2")
+        .unwrap();
+    assert_eq!(current["layers"]["production_verified"]["status"], "present");
+    assert_eq!(current["requirements"][0]["evidence_ids"], json!([proof.evidence_id]));
+
+    // Advance the assessment clock, not the append-only report or Evidence.
+    let registry = full_registry().unwrap();
+    let compiled = registry.resolve("consumer-lag.v2").unwrap();
+    let later = Utc::now() + Duration::seconds(40);
+    let project = |evidence: &[EvidenceSnapshot]| {
+        let mut projected = quality::project(
+            tenant,
+            Some(cluster),
+            later,
+            &[compiled],
+            &BTreeMap::new(),
+            evidence,
+            false,
+        );
+        projected.resource = Some(target.to_owned());
+        projected.investigation_id = Some(investigation);
+        projected.revision_id = Some(revision);
+        projected
+    };
+    let mut aged = project(std::slice::from_ref(&proof));
+    projection::apply(&state, &auth, &mut aged, std::slice::from_ref(&proof))
+        .await
+        .unwrap();
+    assert_eq!(aged.packs[0].requirements[0].quality, DiagnosticEvidenceQuality::Stale);
+    assert_eq!(
+        aged.packs[0].layers.production_verified.status,
+        CapabilityFactStatus::Unknown
+    );
+    assert_eq!(
+        aged.packs[0].layers.production_verified.reason_code,
+        "verification_evidence_no_longer_qualified"
+    );
+    assert_eq!(
+        aged.packs[0].layers.production_verified.verification.as_ref(),
+        Some(&saved)
+    );
+
+    // Even an otherwise qualified current sample of the same resource cannot
+    // replace the exact Evidence IDs bound to the historical report/revision.
+    let replacement = state.evidence.persist_cluster(&auth, make(now, 0)).await.unwrap();
+    let samples = [proof, replacement.clone()];
+    let mut borrowed = project(&samples);
+    projection::apply(&state, &auth, &mut borrowed, &samples).await.unwrap();
+    assert_eq!(
+        borrowed.packs[0].requirements[0].quality,
+        DiagnosticEvidenceQuality::Available
+    );
+    assert_eq!(
+        borrowed.packs[0].requirements[0].evidence_ids,
+        vec![replacement.evidence_id]
+    );
+    assert_eq!(
+        borrowed.packs[0].layers.production_verified.status,
+        CapabilityFactStatus::Unknown
+    );
+    let historical =
+        sqlx::query_scalar::<_, Value>("SELECT record_snapshot FROM capability_verification_records WHERE id=$1")
+            .bind(saved.record_id.as_uuid())
+            .fetch_one(&repository.pool)
+            .await
+            .unwrap();
+    assert_eq!(historical, serde_json::to_value(&saved).unwrap());
+    assert_eq!(saved.assessment.outcome, Outcome::Passed);
+}
