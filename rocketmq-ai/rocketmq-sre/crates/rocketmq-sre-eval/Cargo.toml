@@ -69,3 +69,7 @@ path = "src/bin/phase01_model_mock.rs"
 [[bin]]
 name = "diagnostic-pack-qualification"
 path = "src/bin/diagnostic_pack_qualification.rs"
+
+[[bin]]
+name = "investigation-replay"
+path = "src/bin/investigation_replay.rs"

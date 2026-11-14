@@ -78,7 +78,7 @@ mod worker;
 
 enum CollectedForecastEvidence {
     Cancelled,
-    Ready(Option<EvidenceSnapshot>),
+    Ready(Option<Box<EvidenceSnapshot>>),
 }
 
 /// Only use for side-effect-free reads, never a durable write or blob upload.
@@ -538,7 +538,7 @@ impl ForecastService {
                         .evidence
                         .persist_cluster(auth, snapshot)
                         .await
-                        .map(|snapshot| CollectedForecastEvidence::Ready(Some(snapshot)));
+                        .map(|snapshot| CollectedForecastEvidence::Ready(Some(Box::new(snapshot))));
                 }
             }
             Err(error) => {
@@ -558,7 +558,7 @@ impl ForecastService {
         .await
         {
             None => Ok(CollectedForecastEvidence::Cancelled),
-            Some(result) => result.map(CollectedForecastEvidence::Ready),
+            Some(result) => result.map(|evidence| CollectedForecastEvidence::Ready(evidence.map(Box::new))),
         }
     }
 

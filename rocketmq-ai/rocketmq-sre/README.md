@@ -298,6 +298,16 @@ committed contract is checked independently with:
 python scripts/check_diagnostic_pack_qualification.py
 ```
 
+### Paired investigation replay
+
+The [paired investigation evaluator](docs/investigation-replay-evaluation.md)
+compares an explicit single-pack baseline and multi-pack run under the same fixed
+Evidence, exact versions, clock and budget. Both use the production planner,
+admission/settlement and conservative final aggregation. Reports keep observed
+fixture calls, known costs, charged admission and unknown reservations separate.
+Independent annotations are separate input; synthetic fixtures and unadjudicated
+results do not establish human adjudication or production qualification.
+
 ### Conversation security qualification
 
 The Conversation security suite combines an eight-case prompt-injection
