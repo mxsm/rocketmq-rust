@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use crate::config::broker_config::BrokerConfig;
 use rocketmq_filter::utils::bits_array::BitsArray;
+use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_store::CommitLogDispatcher;
 use rocketmq_store::DispatchRequest;
 use tracing::debug;
@@ -57,7 +58,7 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
             return;
         };
         let mut filter_bit_map = BitsArray::create(bloom_filter.m() as usize);
-        let context = MessageEvaluationContext::new(request.properties_map.as_ref());
+        let context = MessageEvaluationContext::new(request.properties_map.as_ref().map(MessageProperties::as_map));
 
         let start_time = Instant::now();
         for filter_data in filter_datas.iter() {
@@ -133,10 +134,10 @@ mod tests {
         let dispatcher = CommitLogDispatcherCalcBitMap::new(broker_config, manager.clone());
         let mut request = DispatchRequest {
             topic: CheetahString::from_slice("TopicTest"),
-            properties_map: Some(HashMap::from([(
+            properties_map: Some(MessageProperties::from_map(HashMap::from([(
                 CheetahString::from_slice("color"),
                 CheetahString::from_slice("blue"),
-            )])),
+            )]))),
             ..Default::default()
         };
 

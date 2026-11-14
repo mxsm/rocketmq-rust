@@ -829,18 +829,18 @@ fn notify_message_arrive_for_multi_dispatch(
     if dispatch_request.topic.as_str().starts_with(RETRY_GROUP_TOPIC_PREFIX) {
         return;
     }
-    let Some(multi_dispatch_queue) = properties.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
+    let Some(multi_dispatch_queue) = properties.get_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
         return;
     };
-    let Some(multi_queue_offset) = properties.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET) else {
+    let Some(multi_queue_offset) = properties.get_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET) else {
         return;
     };
     if multi_dispatch_queue.is_empty() || multi_queue_offset.is_empty() {
         return;
     }
 
-    let mut queue_iter = multi_dispatch_queue.split_str(MULTI_DISPATCH_QUEUE_SPLITTER);
-    let mut offset_iter = multi_queue_offset.split_str(MULTI_DISPATCH_QUEUE_SPLITTER);
+    let mut queue_iter = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER);
+    let mut offset_iter = multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER);
     loop {
         match (queue_iter.next(), offset_iter.next()) {
             (None, None) => break,
@@ -854,8 +854,8 @@ fn notify_message_arrive_for_multi_dispatch(
     }
 
     for (queue_name, queue_offset) in multi_dispatch_queue
-        .split_str(MULTI_DISPATCH_QUEUE_SPLITTER)
-        .zip(multi_queue_offset.split_str(MULTI_DISPATCH_QUEUE_SPLITTER))
+        .split(MULTI_DISPATCH_QUEUE_SPLITTER)
+        .zip(multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER))
     {
         let Ok(queue_offset) = queue_offset.parse::<i64>() else {
             return;

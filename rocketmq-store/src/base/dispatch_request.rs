@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
 use cheetah_string::CheetahString;
+use rocketmq_model::common::message::message_property::MessageProperties;
 
 #[derive(Debug, Clone)]
 pub struct DispatchRequest {
@@ -34,7 +34,9 @@ pub struct DispatchRequest {
     pub uniq_key: Option<CheetahString>,
     pub sys_flag: i32,
     pub prepared_transaction_offset: i64,
-    pub properties_map: Option<HashMap<CheetahString, CheetahString>>,
+    /// The message properties as stored. They keep the stored text and are looked up by key;
+    /// [`MessageProperties::as_map`] builds the whole map only for a reader that needs it.
+    pub properties_map: Option<MessageProperties>,
     pub bit_map: Option<Vec<u8>>,
     pub buffer_size: i32,
     pub msg_base_offset: i64,

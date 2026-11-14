@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::lite::get_parent_topic;
+use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::MessageArrivingListener;
 
@@ -73,7 +73,7 @@ where
         tags_code: Option<i64>,
         msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
-        properties: Option<&HashMap<CheetahString, CheetahString>>,
+        properties: Option<&MessageProperties>,
     ) {
         let pull_filter = filter_bit_map.clone();
         self.deferred_producer.route_pull_arrival(

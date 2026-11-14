@@ -51,8 +51,7 @@ impl RocksDbTimerDispatch for DispatchRequest {
     fn delay_time_ms(&self) -> Option<i64> {
         self.properties_map
             .as_ref()?
-            .get(MessageConst::PROPERTY_TIMER_OUT_MS)?
-            .as_str()
+            .get_str(MessageConst::PROPERTY_TIMER_OUT_MS)?
             .parse::<i64>()
             .ok()
     }
@@ -65,24 +64,22 @@ impl RocksDbTimerDispatch for DispatchRequest {
             .or_else(|| {
                 self.properties_map
                     .as_ref()?
-                    .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
+                    .get_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
                     .filter(|uniq_key| !uniq_key.is_empty())
-                    .map(|uniq_key| uniq_key.as_str())
             })
     }
 
     fn delete_uniq_key(&self) -> Option<&str> {
         self.properties_map
             .as_ref()?
-            .get(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY)
+            .get_str(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY)
             .filter(|key| !key.is_empty())
-            .map(|key| key.as_str())
     }
 
     fn is_roll_update(&self) -> bool {
         self.properties_map
             .as_ref()
-            .and_then(|properties| properties.get(PROPERTY_TIMER_ROLL_LABEL))
+            .and_then(|properties| properties.get_str(PROPERTY_TIMER_ROLL_LABEL))
             .is_some_and(|label| !label.is_empty())
     }
 }

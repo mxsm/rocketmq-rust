@@ -46,6 +46,7 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::MessageVersion;
@@ -1217,7 +1218,7 @@ impl MessageArrivingListener for RecordingArrivingListener {
         _tags_code: Option<i64>,
         _msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
-        _properties: Option<&HashMap<CheetahString, CheetahString>>,
+        _properties: Option<&MessageProperties>,
     ) {
         self.arrivals.lock().unwrap().push(RecordedArrival {
             topic: topic.clone(),
@@ -1304,7 +1305,7 @@ fn reput_message_arrival_capability_observes_replace_and_clear() {
     let mut dispatch_request = DispatchRequest {
         topic: CheetahString::from_static_str("message-arrival-capability-topic"),
         queue_id: 1,
-        properties_map: Some(properties),
+        properties_map: Some(MessageProperties::from_map(properties)),
         ..DispatchRequest::default()
     };
 
@@ -5370,7 +5371,7 @@ fn multi_dispatch_arrival_uses_multi_queue_offsets_without_allocating_vectors() 
         tags_code: 11,
         store_timestamp: 99,
         bit_map: Some(vec![1, 2]),
-        properties_map: Some(properties),
+        properties_map: Some(MessageProperties::from_map(properties)),
         ..DispatchRequest::default()
     };
 
@@ -5407,7 +5408,7 @@ fn multi_dispatch_arrival_ignores_invalid_offsets_without_panicking() {
     let mut dispatch_request = DispatchRequest {
         topic: CheetahString::from_static_str("multi-arrival-invalid-offset-topic"),
         queue_id: 3,
-        properties_map: Some(properties),
+        properties_map: Some(MessageProperties::from_map(properties)),
         ..DispatchRequest::default()
     };
 

@@ -482,14 +482,14 @@ impl IndexServiceAdapter {
         let tags = dispatch_request
             .properties_map
             .as_ref()
-            .and_then(|properties| properties.get(MessageConst::PROPERTY_TAGS))
+            .and_then(|properties| properties.get_str(MessageConst::PROPERTY_TAGS))
             .filter(|tags| !tags.is_empty());
         let preflight = plan_index_build(
             tran_type == MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
             has_indexable_keys(
                 dispatch_request.uniq_key.as_ref().map(CheetahString::as_str),
                 keys,
-                tags.map(CheetahString::as_str),
+                tags,
                 MessageConst::KEY_SEPARATOR,
             ),
             dispatch_request.commit_log_offset,
@@ -519,7 +519,7 @@ impl IndexServiceAdapter {
                     topic,
                     dispatch_request.uniq_key.as_ref().map(CheetahString::as_str),
                     keys,
-                    tags.map(CheetahString::as_str),
+                    tags,
                     MessageConst::KEY_SEPARATOR,
                     MessageConst::INDEX_UNIQUE_TYPE,
                     MessageConst::INDEX_TAG_TYPE,
@@ -527,7 +527,7 @@ impl IndexServiceAdapter {
                 let key_outcome = drive_index_build_keys(
                     dispatch_request.uniq_key.as_ref().map(CheetahString::as_str),
                     keys,
-                    tags.map(CheetahString::as_str),
+                    tags,
                     MessageConst::KEY_SEPARATOR,
                     MessageConst::INDEX_UNIQUE_TYPE,
                     MessageConst::INDEX_TAG_TYPE,
@@ -769,6 +769,8 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use rocketmq_model::common::message::message_property::MessageProperties;
+
     use super::*;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::store::running_flags::RunningFlags;
@@ -892,7 +894,7 @@ mod tests {
             uniq_key: Some(CheetahString::from_slice("uniq123")),
             sys_flag: 0,
             prepared_transaction_offset: 0,
-            properties_map: Some(properties),
+            properties_map: Some(MessageProperties::from_map(properties)),
             bit_map: None,
             buffer_size: -1,
             msg_base_offset: -1,

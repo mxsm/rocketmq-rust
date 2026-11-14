@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
+use rocketmq_model::common::message::message_property::MessageProperties;
 
 pub trait MessageArrivingListener {
     /// This method is called when a new message arrives.
@@ -27,8 +26,8 @@ pub trait MessageArrivingListener {
     /// * `tags_code` - An i64 that represents the tags associated with the message.
     /// * `msg_store_time` - An i64 that represents the time when the message was stored.
     /// * `filter_bit_map` - A `Vec<u8>` that represents the filter bit map for the message.
-    /// * `properties` - An `Option` containing a reference to a `HashMap<String, String>` that holds
-    ///   the properties of the message.
+    /// * `properties` - The properties of the message, looked up by key; a listener that needs the
+    ///   whole map calls [`MessageProperties::as_map`].
     fn arriving(
         &self,
         topic: &CheetahString,
@@ -37,6 +36,6 @@ pub trait MessageArrivingListener {
         tags_code: Option<i64>,
         msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
-        properties: Option<&HashMap<CheetahString, CheetahString>>,
+        properties: Option<&MessageProperties>,
     );
 }

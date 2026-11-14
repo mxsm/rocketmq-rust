@@ -63,8 +63,7 @@ impl RocksDbIndexDispatch for DispatchRequest {
     fn tags(&self) -> Option<&str> {
         self.properties_map
             .as_ref()
-            .and_then(|properties| properties.get(MessageConst::PROPERTY_TAGS))
-            .map(|tag| tag.as_str())
+            .and_then(|properties| properties.get_str(MessageConst::PROPERTY_TAGS))
     }
 }
 

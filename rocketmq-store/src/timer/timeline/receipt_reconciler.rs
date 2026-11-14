@@ -560,11 +560,7 @@ impl FinalTimerFact {
 
     fn from_dispatch(request: &DispatchRequest) -> Result<Option<Self>, TimelineCompletionError> {
         Self::from_parts(request.topic.as_str(), |key| {
-            request
-                .properties_map
-                .as_ref()?
-                .get(&CheetahString::from_static_str(key))
-                .map(|value| value.to_string())
+            request.properties_map.as_ref()?.get_str(key).map(str::to_owned)
         })
     }
 
@@ -665,6 +661,7 @@ mod tests {
     use dashmap::DashMap;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::message_property::MessageProperties;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::common::message::MessageTrait;
     use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
@@ -707,12 +704,12 @@ mod tests {
             topic: CheetahString::from_static_str(REAL_TOPIC),
             commit_log_offset: offset,
             msg_size: size,
-            properties_map: Some(
+            properties_map: Some(MessageProperties::from_map(
                 properties
                     .into_iter()
                     .map(|(key, value)| (CheetahString::from_static_str(key), CheetahString::from_string(value)))
                     .collect::<HashMap<_, _>>(),
-            ),
+            )),
             ..DispatchRequest::default()
         }
     }

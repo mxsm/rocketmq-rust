@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
+use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
@@ -277,7 +278,7 @@ where
         _tags_code: Option<i64>,
         _message_store_time: i64,
         _filter_bitmap: Option<&[u8]>,
-        _properties: Option<&HashMap<CheetahString, CheetahString>>,
+        _properties: Option<&MessageProperties>,
     ) {
         let Ok(route) = self.handoff.acquire_pull_candidate(topic.clone(), queue_id) else {
             return;
@@ -330,7 +331,7 @@ where
         _tags_code: Option<i64>,
         _message_store_time: i64,
         _filter_bitmap: Option<&[u8]>,
-        _properties: Option<&HashMap<CheetahString, CheetahString>>,
+        _properties: Option<&MessageProperties>,
     ) {
         match self.pop.latch_offset(topic, queue_id, logic_offset) {
             Ok(PendingArrivalAdmissionStatus::Accepted) => self.produce_pending_pop_offsets(),
@@ -380,7 +381,7 @@ where
         _tags_code: Option<i64>,
         _message_store_time: i64,
         _filter_bitmap: Option<&[u8]>,
-        _properties: Option<&HashMap<CheetahString, CheetahString>>,
+        _properties: Option<&MessageProperties>,
     ) {
         match self.notification.latch_offset(topic, queue_id, logic_offset) {
             Ok(PendingArrivalAdmissionStatus::Accepted) => self.produce_pending_notification_offsets(),

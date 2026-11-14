@@ -20,6 +20,7 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_model::common::message::message_single::tags_string2tags_code;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::topic::TopicValidator;
@@ -68,6 +69,7 @@ impl From<&DispatchRequest> for DispatchRequestProjection {
     fn from(request: &DispatchRequest) -> Self {
         let properties_map = request.properties_map.as_ref().map(|properties| {
             properties
+                .as_map()
                 .iter()
                 .map(|(name, value)| (name.to_string(), value.to_string()))
                 .collect()
@@ -466,7 +468,7 @@ fn valid_v1_dispatch_request_whole_value_golden_preserves_policy_fields() {
         uniq_key: Some(CheetahString::from("uniq-v1")),
         sys_flag: (1 << 4) | (1 << 5),
         prepared_transaction_offset: 29,
-        properties_map: Some(property_map(&entries)),
+        properties_map: Some(MessageProperties::from_map(property_map(&entries))),
         msg_base_offset: 101,
         batch_size: 4,
         ..DispatchRequest::default()
@@ -517,7 +519,7 @@ fn valid_v2_dispatch_request_whole_value_goldens_preserve_delay_table_and_fallba
         success: true,
         sys_flag: 0,
         prepared_transaction_offset: 29,
-        properties_map: Some(property_map(&entries)),
+        properties_map: Some(MessageProperties::from_map(property_map(&entries))),
         ..DispatchRequest::default()
     };
     assert_eq!(
@@ -558,7 +560,7 @@ fn valid_v2_dispatch_request_whole_value_goldens_preserve_delay_table_and_fallba
         success: true,
         sys_flag: 0,
         prepared_transaction_offset: 29,
-        properties_map: Some(property_map(&fallback_entries)),
+        properties_map: Some(MessageProperties::from_map(property_map(&fallback_entries))),
         ..DispatchRequest::default()
     };
     assert_eq!(

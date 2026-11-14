@@ -184,7 +184,7 @@ impl NativeDeliveryFeed {
         let Some(token) = request
             .properties_map
             .as_ref()
-            .and_then(|properties| properties.get(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN))
+            .and_then(|properties| properties.get_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN))
         else {
             return;
         };
@@ -210,7 +210,7 @@ impl NativeDeliveryFeed {
             return;
         }
         tokens.insert(
-            token.clone(),
+            CheetahString::from_slice(token),
             KeptToken {
                 lowest_offset: offset,
                 highest_offset: offset,
@@ -269,16 +269,18 @@ impl CommitLogDispatcher for NativeDeliveryFeed {
 mod tests {
     use std::collections::HashMap;
 
+    use rocketmq_model::common::message::message_property::MessageProperties;
+
     use super::*;
 
     fn dispatched(topic: &str, token: &str) -> DispatchRequest {
         DispatchRequest {
             topic: CheetahString::from_slice(topic),
             success: true,
-            properties_map: Some(HashMap::from([(
+            properties_map: Some(MessageProperties::from_map(HashMap::from([(
                 CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN),
                 CheetahString::from_slice(token),
-            )])),
+            )]))),
             ..DispatchRequest::default()
         }
     }
