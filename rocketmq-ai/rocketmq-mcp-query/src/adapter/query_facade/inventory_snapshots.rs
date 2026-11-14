@@ -23,8 +23,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::query_result_from_snapshot;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use super::ResolvedCluster;
 use super::WorkflowFuture;

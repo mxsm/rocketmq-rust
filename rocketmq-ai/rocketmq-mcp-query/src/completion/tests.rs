@@ -24,8 +24,8 @@ use rmcp::model::CompletionContext;
 use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
 
 use super::*;
-use crate::adapter::admin_session::AdminSession;
 use crate::adapter::admin_session::AdminSessionFactory;
+use crate::adapter::admin_session::QueryAdminSession;
 use crate::adapter::admin_session::ResolvedCluster;
 use crate::adapter::admin_session::SessionConsumerLag;
 use crate::adapter::admin_session::SessionTopicRoute;
@@ -85,7 +85,7 @@ struct Session {
     topics: Arc<Vec<String>>,
 }
 
-impl AdminSession for Session {
+impl QueryAdminSession for Session {
     async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
         self.counters.broker_rows.fetch_add(1, Ordering::SeqCst);
         let row = |broker_name: &str, broker_id: u64| BrokerSummary {

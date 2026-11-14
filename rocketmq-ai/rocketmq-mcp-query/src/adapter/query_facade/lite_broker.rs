@@ -17,8 +17,8 @@
 use std::time::Duration;
 
 use super::normalized_logical_identifier;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::infrastructure::snapshot::RetainedSize;
 use crate::model::contract::QueryPayload;

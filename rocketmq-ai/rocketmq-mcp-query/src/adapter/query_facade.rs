@@ -25,8 +25,8 @@ use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapter::admin_session::AdminCoreSessionFactory;
-use crate::adapter::admin_session::AdminSession;
 use crate::adapter::admin_session::AdminSessionFactory;
+use crate::adapter::admin_session::QueryAdminSession;
 use crate::adapter::admin_session::ResolvedCluster;
 use crate::adapter::admin_session::SessionConnections;
 use crate::adapter::admin_session::SessionConsumerLag;
@@ -1779,7 +1779,7 @@ async fn describe_broker_in_session<S>(
     broker_name: String,
 ) -> Result<QueryPayload<DescribeBrokerOutput>, ToolFailure>
 where
-    S: AdminSession,
+    S: QueryAdminSession,
 {
     let broker_payload = session.broker_rows().await?;
     let completeness = broker_payload.completeness();
@@ -2295,7 +2295,7 @@ mod tests {
         }
     }
 
-    impl AdminSession for FakeSession {
+    impl QueryAdminSession for FakeSession {
         async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             self.counters.broker_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {

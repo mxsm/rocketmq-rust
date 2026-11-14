@@ -20,8 +20,8 @@ use std::time::Duration;
 use super::diagnosis_support::note;
 use super::diagnosis_support::wrap_report;
 use super::diagnosis_support::SupportingBudget;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::adapter::admin_session::ResolvedCluster;
 use crate::model::contract::observed_at;
@@ -81,7 +81,7 @@ async fn check_in_session<S>(
     mut budget: SupportingBudget,
 ) -> Result<QueryPayload<DiagnosisReport>, ToolFailure>
 where
-    S: AdminSession,
+    S: QueryAdminSession,
 {
     let mut completeness = QueryCompleteness::default();
 

@@ -17,8 +17,8 @@
 use super::normalized_identifier;
 use super::normalized_logical_identifier;
 use super::query_result_from_snapshot;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::adapter::admin_session::SessionTopicConsumers;
 use crate::infrastructure::snapshot::SnapshotKind;
