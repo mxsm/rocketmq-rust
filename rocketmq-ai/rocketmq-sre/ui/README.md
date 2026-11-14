@@ -105,12 +105,46 @@ npm run check:api
 工作流请求类型。诊断 API 保持只读；审批与执行页面仅使用既有版本化的
 Control Plane 受监督接口，不提供任意目标请求、配置补丁或 shell。
 
-D13 的独立 InvestigationRun、Step、Command、Assessment 与 D14 持久事件类型
-同样从 Rust JSON Schema 生成。`generate:api` 单独运行调查合同扩展器，避免既有会话
-合同扩展早退跳过新类型。D14 已注册运行创建、快照、命令和持久事件补读 HTTP paths；
-当前 UI 和固定只读 SDK 不添加 mutation client 方法或控制按钮。新运行保持 queued，
-自动诊断派发属于 D15，UI 控制属于 D16。
-现有工作台仍展示人工只读调查。详见[调查运行合同](../docs/investigation-run-contract.md)。
+D13 的独立 InvestigationRun、Step、Command、Assessment、D14 持久事件和 D16 发现/
+控制投影同样从 Rust JSON Schema 生成。`generate:api` 单独运行调查合同扩展器，避免
+既有会话合同扩展早退跳过新类型。D15 的托管 dispatcher 执行固定只读采集与规则评估；
+D16 工作台通过认证的 Control Plane 接口创建和控制有界调查。固定只读 SDK 保持原边界。
+详见[调查运行合同](../docs/investigation-run-contract.md)。
+
+### 有界调查工作台
+
+旧 `/investigations/:id`、会话诊断修订和 Evidence 深链接继续显示手动调查记录。
+运行发现栏默认由服务端按当前绝对时间窗和资源精确过滤，再以每页 20 条返回摘要；
+“全部历史”显式列出该调查实际保存的范围，不在首批结果上假装全量筛选。
+分页游标只属于当前身份和过滤条件，切范围后清空。
+
+`run_id` 保存所选运行，`run_revision_id` 保存该运行实际关联的规则修订，刷新和浏览器
+前进/后退均可恢复。历史运行显示自己的资源和完整时间窗，纳秒精度不会经 JavaScript
+Date 截断。范围冲突时先显式对齐，才可发送命令；修改全局范围会清理运行、修订和
+Evidence 选择，并取消旧请求。SavedR 必须与当前运行的真实包结果及 Evidence 引用匹配，
+其证据仍通过共享 EvidenceDrawer 先校验元数据、再按需读取脱敏内容。
+
+创建表单只使用服务端给出的父对象资源、精确诊断包版本和预算上限。父对象为集群范围、
+全局却选了更窄资源时，需先显式对齐，避免默默扩大调查范围。控制按钮来自服务端同一
+版本的可用命令投影，不由前端角色或状态推断。暂停/继续/取消需填写原因；收窄表单保持
+资源身份，只能缩短当前窗口、减少包、显式保留已有证据，不能重置预算或延后截止时间。
+服务端再次认证和验证实际 payload，仍可能返回状态冲突。
+
+状态版本与控制代次使用无损十进制字符串比较。创建重放的原 queued 快照、命令的旧
+幂等回执均不能替换较新的状态；提交后重新读取 controls。未确认请求只有服务端当前
+`receipt_replay_allowed` 允许时才可核对原结果；保留原 command ID、幂等 key、版本、原因
+和完整 body，不要求当前状态仍允许同类新命令，也不会生成新请求冒充重试。身份或范围
+变化或服务端明确撤回重试权限会清理原请求，后续重新授权不会恢复旧意图；临时连接失败
+保留原请求，明确拒绝后不继续重试。409 则刷新并要求复核。读取断流时关闭可用控制，
+恢复连接后重新读取权威状态。controls 与持久事件采用串行、有界补读，单次最多 50 事件，
+页面保留最近 128 条；事件缺口/旧游标按服务端明确快照回补。身份或授权声明变化立即
+隐藏旧状态，相同身份 token 续期沿用现有认证 relay。
+
+预算表展示服务端的已计费/保留预约及剩余量；准入尝试上限包含重试。步骤实际报告与
+预约分开，未知或中断消耗显示未知而非零，superseded 结果保留消耗语义。暂停和取消
+协调在途工作，并不承诺远端读取已撤回。完成/证据不足/预算不足/截止/无进展等原因均
+沿服务端 typed 状态，规则结论仅供参考，不授予目标执行资格。已接受后台任务按有界委托
+运行到其截止或取消；公开控制每次 fresh auth，工作台不声称后台实时查询了 IdP 撤权。
 
 ## 认证配置
 
@@ -167,12 +201,18 @@ fixture 只控制 HTTP 响应，应用仍通过真实 HTTP client 发送认证�
 向应用实际 UserManager 发标准合成事件；它不验证真实 IdP 刷新、签名或生产环境。
 不更改原有 mock 安全测试。HTTP 浏览器产物默认写系统临时目录，也可设置
 `ROCKETMQ_SRE_UI_HTTP_ARTIFACTS`；在 Docker 中执行时将该目录挂载到工作树外。
+同一配置的 `investigation-runs.spec.ts` 使用真实 HTTP client 覆盖运行发现、创建、
+旧幂等回执、刷新/历史导航、迟到运行响应和身份替换，还使用 Chromium 离线网络栈验证
+读失败/恢复，以及服务端已接受后断开响应时同请求核对与较新快照保护；fixture 不代表
+真实目标验证。
+本轮所有生成、测试、lint 和 build 在任务 Docker 环境中执行。
 
 本次工作区改动的聚焦回归可运行：
 
 ```bash
 npm run test -- --run src/context src/hooks src/data/SreDataContext.test.tsx src/data/SreDataContext.demo.test.tsx src/data/mockApi.test.ts src/features/investigations src/features/scope src/pages/InvestigationWorkspacePage.test.tsx src/pages/SupervisedExecutionPages.test.tsx src/pages/WorkflowPages.test.tsx src/router.test.tsx
 npm run test -- --run src/features/fleet src/pages/OverviewPage.test.tsx src/pages/InvestigationsPage.test.tsx src/api/client.test.ts
+npm run test -- --run src/features/investigation-runs src/pages/InvestigationWorkspacePage.test.tsx src/context/workspaceScope.test.ts
 ```
 
 覆盖范围投影、裸旧链接、浏览器历史、对象冲突、身份撤销、token 续期、

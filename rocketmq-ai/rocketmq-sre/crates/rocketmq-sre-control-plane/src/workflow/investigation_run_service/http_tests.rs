@@ -162,6 +162,10 @@ async fn postgres_http_expired_creation_replay_reads_its_original_receipt_withou
         .bind(fixture.auth.tenant_id.as_uuid()).bind(request.run_id.as_uuid()).bind(json!(event)).bind(original_time)
         .execute(&mut *transaction).await.unwrap();
     transaction.commit().await.unwrap();
+    let controls_path = format!("/v1/investigation-runs/{}/controls", request.run_id);
+    let (status, controls) = call(fixture.router(), "GET", &controls_path, Some(&fixture.auth), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(controls["receipt_replay_allowed"], true);
     let path = format!("/v1/investigations/{}/runs", request.scope.investigation_id);
     let (status, replay) = call(
         fixture.router(),

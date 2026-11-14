@@ -1,4 +1,5 @@
 import { ApiError, type SreApi } from "@/api/client";
+
 import type {
   ActionItem,
   ActionItemPatchRequest,
@@ -94,6 +95,10 @@ function wait(signal?: AbortSignal) {
       { once: true },
     );
   });
+}
+
+async function manualRunServiceUnavailable(): Promise<never> {
+  throw new ApiError(503, "run_service_unavailable", "Run service unavailable");
 }
 
 function clone<T>(value: T): T {
@@ -741,6 +746,14 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         (item) => item.investigation.cluster_id,
       );
     },
+    // Demo records remain manual; they cannot grant real run controls or receipts.
+    listInvestigationRuns: manualRunServiceUnavailable,
+    getInvestigationRun: manualRunServiceUnavailable,
+    getInvestigationRunControls: manualRunServiceUnavailable,
+    createInvestigationRun: manualRunServiceUnavailable,
+    commandInvestigationRun: manualRunServiceUnavailable,
+    getInvestigationRunEvents: manualRunServiceUnavailable,
+    getInvestigationRunRevision: manualRunServiceUnavailable,
     getInvestigation: async (id, signal) => {
       await wait(signal);
       const result =

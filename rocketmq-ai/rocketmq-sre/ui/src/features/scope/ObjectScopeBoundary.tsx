@@ -23,9 +23,12 @@ interface ScopedObject {
 export function ObjectScopeBoundary({
   object,
   children,
+  resourcePolicy = "exact",
 }: {
   object?: ScopedObject;
   children: ReactNode;
+  /** Run children must verify the fetched Run's parent and effective scope before exposing controls. */
+  resourcePolicy?: "exact" | "defer_to_run";
 }) {
   const auth = useAuth();
   const { clusters } = useSreData();
@@ -47,7 +50,14 @@ export function ObjectScopeBoundary({
   const objectCluster = object?.cluster_id;
   const objectScope =
     scope && objectCluster
-      ? scopeForObject(objectCluster, objectResource, scope.window)
+      ? resourcePolicy === "defer_to_run"
+        ? {
+            clusterId: objectCluster,
+            resourceKind: scope.resourceKind,
+            resourceKey: scope.resourceKey,
+            window: scope.window,
+          }
+        : scopeForObject(objectCluster, objectResource, scope.window)
       : undefined;
   const alignSearch = objectScope
     ? projectWorkspaceSearch(location.search, objectScope)
@@ -114,6 +124,7 @@ export function ObjectScopeBoundary({
 
   const requestedResource = scope ? resourcePath(scope) : undefined;
   const resourceMismatch =
+    resourcePolicy === "exact" &&
     scope?.resourceKind !== "cluster" &&
     requestedResource !== undefined &&
     requestedResource !== object.resource;

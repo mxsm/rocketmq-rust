@@ -45,7 +45,7 @@ export function evidenceFreshness(
     evidence.freshness_seconds < 0
   )
     return "unknown";
-  return Math.max(elapsed, evidence.freshness_seconds) > policy.maxAgeSeconds
+  return elapsed + evidence.freshness_seconds > policy.maxAgeSeconds
     ? "stale"
     : "current";
 }

@@ -1,0 +1,267 @@
+.run-workspace,
+.run-detail,
+.run-primary,
+.run-secondary {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.run-workspace {
+  font-size: 14px;
+}
+.run-workspace p,
+.run-dialog p {
+  overflow-wrap: anywhere;
+}
+.run-discovery {
+  padding: 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.run-discovery-heading,
+.run-step-heading,
+.run-dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.run-discovery-inputs {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 12px;
+}
+.run-workspace label,
+.run-dialog label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+.run-discovery label:first-child {
+  flex: 1;
+  min-width: min(280px, 100%);
+}
+.run-workspace input:not([type="checkbox"]),
+.run-workspace select,
+.run-dialog input:not([type="checkbox"]),
+.run-dialog select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--foreground);
+  background: var(--background);
+  font: inherit;
+}
+.run-workspace .run-checkbox,
+.run-dialog .run-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+.run-checkbox input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+.run-workspace .muted,
+.run-dialog .muted {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.run-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  align-items: start;
+  gap: 16px;
+}
+.run-window,
+.run-id {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+}
+.run-audit {
+  padding: 8px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.run-audit summary {
+  cursor: pointer;
+  color: var(--foreground);
+}
+.run-command-panel {
+  display: grid;
+  gap: 10px;
+}
+.run-command-panel .inline-actions,
+.run-evidence-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.run-events,
+.run-steps,
+.run-requirements {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.run-events {
+  max-height: 480px;
+  overflow-y: auto;
+}
+.run-events li {
+  display: grid;
+  gap: 4px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.run-events time,
+.run-events small {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.run-step-heading span {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.run-steps > li,
+.run-requirements > li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.run-attempt {
+  border-left: 2px solid var(--border);
+  margin-top: 10px;
+  padding: 8px 0 0 12px;
+}
+.run-attempt p {
+  font-size: 12px;
+  margin: 6px 0;
+}
+.run-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.run-budget-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+  text-align: left;
+}
+.run-budget-table th,
+.run-budget-table td {
+  padding: 9px 6px;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.run-budget-table thead th {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.run-revision {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.run-revision h3,
+.run-revision h4 {
+  margin: 4px 0;
+}
+.run-finding {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+.run-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 60%);
+}
+.run-dialog {
+  width: min(680px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  color: var(--foreground);
+  background: var(--card);
+  font-size: 14px;
+}
+.run-dialog h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.run-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+.run-form fieldset {
+  min-width: 0;
+  padding: 12px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.run-form fieldset > label + label {
+  margin-top: 10px;
+}
+.run-budget-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.run-budget-fields label {
+  margin: 0 !important;
+}
+.run-scope-caption {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.run-workspace :focus-visible,
+.run-dialog :focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+@media (max-width: 1050px) {
+  .run-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .run-secondary {
+    grid-row: auto;
+  }
+}
+@media (max-width: 520px) {
+  .run-discovery {
+    padding: 10px;
+  }
+  .run-dialog {
+    padding: 14px;
+  }
+  .run-budget-fields {
+    grid-template-columns: 1fr;
+  }
+  .run-budget-table {
+    font-size: 12px;
+  }
+  .run-discovery-heading > .inline-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}

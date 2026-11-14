@@ -1,4 +1,5 @@
 import type { Page, Request, Route } from "@playwright/test";
+import { runList } from "./investigationRunData";
 
 import {
   CLUSTER_A,
@@ -41,10 +42,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-interface ResponseFixture {
+export interface ResponseFixture {
   status?: number;
   contentType?: string;
   body: unknown;
+  networkError?: "connectionreset";
 }
 
 /** Routes shape HTTP responses; the application still uses its real fetch client. */
@@ -65,54 +67,67 @@ export class EvidenceHttpFixture {
   constructor(
     private readonly page: Page,
     private readonly baseURL: string,
+    private readonly extension?: (
+      call: HttpCall,
+      body: string | null,
+    ) => ResponseFixture | undefined,
   ) {}
 
   async install() {
     const authority = new URL("/oidc", this.baseURL).href;
-    await this.page.addInitScript(({ authority, initialUser }) => {
-      sessionStorage.setItem(
-        `oidc.user:${authority}:sre-http-regression`,
-        JSON.stringify(initialUser),
-      );
-      localStorage.setItem(
-        "rocketmq-sre-operator-preferences.v1",
-        JSON.stringify({ locale: "en-US", timeZone: "UTC", theme: "dark" }),
-      );
-      const target = window as unknown as FixtureWindow;
-      target.__sreHttpSignals = [];
-      const original = window.fetch.bind(window);
-      window.fetch = (input, init) => {
-        const url = new URL(
-          input instanceof Request ? input.url : String(input),
-          location.href,
+    await this.page.addInitScript(
+      ({ authority, initialUser }) => {
+        sessionStorage.setItem(
+          `oidc.user:${authority}:sre-http-regression`,
+          JSON.stringify(initialUser),
         );
-        const signal =
-          init?.signal ?? (input instanceof Request ? input.signal : undefined);
-        if (url.pathname.startsWith("/v1/")) {
-          const observation = {
-            url: `${url.pathname}${url.search}`,
-            aborted: signal?.aborted ?? false,
-          };
-          target.__sreHttpSignals.push(observation);
-          signal?.addEventListener(
-            "abort",
-            () => { observation.aborted = true; },
-            { once: true },
+        localStorage.setItem(
+          "rocketmq-sre-operator-preferences.v1",
+          JSON.stringify({ locale: "en-US", timeZone: "UTC", theme: "dark" }),
+        );
+        const target = window as unknown as FixtureWindow;
+        target.__sreHttpSignals = [];
+        const original = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = new URL(
+            input instanceof Request ? input.url : String(input),
+            location.href,
           );
-        }
-        return original(input, init);
-      };
-    }, { authority, initialUser: oidcUser() });
+          const signal =
+            init?.signal ??
+            (input instanceof Request ? input.signal : undefined);
+          if (url.pathname.startsWith("/v1/")) {
+            const observation = {
+              url: `${url.pathname}${url.search}`,
+              aborted: signal?.aborted ?? false,
+            };
+            target.__sreHttpSignals.push(observation);
+            signal?.addEventListener(
+              "abort",
+              () => {
+                observation.aborted = true;
+              },
+              { once: true },
+            );
+          }
+          return original(input, init);
+        };
+      },
+      { authority, initialUser: oidcUser() },
+    );
 
     // Only this E2E project wraps the application's actual manager instance.
     // These are synthetic standard lifecycle events, not IdP/signature validation.
-    await this.page.route("**/node_modules/.vite/deps/oidc-client-ts.js*", async (route) => {
-      const original = new URL(route.request().url());
-      if (original.searchParams.has("sre_fixture_original")) return route.continue();
-      original.searchParams.set("sre_fixture_original", "1");
-      await route.fulfill({
-        contentType: "text/javascript",
-        body: `
+    await this.page.route(
+      "**/node_modules/.vite/deps/oidc-client-ts.js*",
+      async (route) => {
+        const original = new URL(route.request().url());
+        if (original.searchParams.has("sre_fixture_original"))
+          return route.continue();
+        original.searchParams.set("sre_fixture_original", "1");
+        await route.fulfill({
+          contentType: "text/javascript",
+          body: `
           export * from ${JSON.stringify(original.href)};
           import { UserManager as Base, User } from ${JSON.stringify(original.href)};
           export class UserManager extends Base {
@@ -134,8 +149,9 @@ export class EvidenceHttpFixture {
             }
           }
         `,
-      });
-    });
+        });
+      },
+    );
     this.page.on("requestfailed", (request) => this.failed.add(request));
     await this.page.route(
       (url) =>
@@ -167,21 +183,24 @@ export class EvidenceHttpFixture {
   async publish(user: SyntheticUser) {
     this.sessions.set(user.access_token, user);
     await this.page.evaluate(
-      (next) => (window as unknown as FixtureWindow).__sreOidcFixture.loaded(next),
+      (next) =>
+        (window as unknown as FixtureWindow).__sreOidcFixture.loaded(next),
       user,
     );
   }
 
   async unload() {
-    await this.page.evaluate(
-      () => (window as unknown as FixtureWindow).__sreOidcFixture.unloaded(),
+    await this.page.evaluate(() =>
+      (window as unknown as FixtureWindow).__sreOidcFixture.unloaded(),
     );
   }
 
   async aborted(fragment: string) {
     return this.page.evaluate(
-      (value) => (window as unknown as FixtureWindow).__sreHttpSignals
-        .filter((item) => item.url.includes(value)).at(-1)?.aborted ?? false,
+      (value) =>
+        (window as unknown as FixtureWindow).__sreHttpSignals
+          .filter((item) => item.url.includes(value))
+          .at(-1)?.aborted ?? false,
       fragment,
     );
   }
@@ -189,7 +208,13 @@ export class EvidenceHttpFixture {
   async dispose() {
     for (const gate of this.gates) gate.release.resolve();
     this.streamRelease.resolve();
-    await this.page.unrouteAll({ behavior: "wait" });
+    if (!this.page.isClosed()) {
+      try {
+        await this.page.unrouteAll({ behavior: "wait" });
+      } catch (error) {
+        if (!this.page.isClosed()) throw error;
+      }
+    }
   }
 
   private async respond(route: Route) {
@@ -200,7 +225,7 @@ export class EvidenceHttpFixture {
       headers: request.headers(),
     };
     this.calls.push(call);
-    const response = this.response(call);
+    const response = this.response(call, request.postData());
     if (call.url.pathname === "/v1/events/stream") {
       await this.streamRelease.promise;
     }
@@ -211,13 +236,17 @@ export class EvidenceHttpFixture {
       await gate.release.promise;
     }
     try {
-      await route.fulfill({
-        status: response.status ?? 200,
-        contentType: response.contentType ?? "application/json",
-        body: response.contentType
-          ? String(response.body)
-          : JSON.stringify(response.body),
-      });
+      if (response.networkError) {
+        await route.abort(response.networkError);
+      } else {
+        await route.fulfill({
+          status: response.status ?? 200,
+          contentType: response.contentType ?? "application/json",
+          body: response.contentType
+            ? String(response.body)
+            : JSON.stringify(response.body),
+        });
+      }
     } catch (error) {
       if (!this.page.isClosed() && !this.failed.has(request)) throw error;
     } finally {
@@ -225,13 +254,9 @@ export class EvidenceHttpFixture {
     }
   }
 
-  private response(call: HttpCall): ResponseFixture {
+  private response(call: HttpCall, body: string | null): ResponseFixture {
     const { pathname, searchParams } = call.url;
     const subject = call.headers["x-rocketmq-subject"] ?? "missing-identity";
-    if (call.method !== "GET") {
-      this.unexpected.push(`${call.method} ${pathname}`);
-      return { status: 405, body: { code: "read_only_fixture" } };
-    }
     if (pathname === "/oidc/.well-known/openid-configuration") {
       return {
         body: {
@@ -243,12 +268,24 @@ export class EvidenceHttpFixture {
     }
     if (pathname === "/healthz") return { body: { status: "healthy" } };
     if (pathname === "/readyz") return { body: { status: "ready" } };
-    const session = this.sessions.get(call.headers.authorization?.replace(/^Bearer /, ""));
-    if (!session || call.headers["x-rocketmq-tenant"] !== session.profile.rocketmq_tenant ||
+    const session = this.sessions.get(
+      call.headers.authorization?.replace(/^Bearer /, ""),
+    );
+    if (
+      !session ||
+      call.headers["x-rocketmq-tenant"] !== session.profile.rocketmq_tenant ||
       call.headers["x-rocketmq-subject"] !== session.profile.sub ||
-      call.headers["x-rocketmq-clusters"] !== session.profile.rocketmq_clusters.join(",")) {
+      call.headers["x-rocketmq-clusters"] !==
+        session.profile.rocketmq_clusters.join(",")
+    ) {
       this.unexpected.push(`Mismatched synthetic HTTP identity: ${pathname}`);
       return { status: 401, body: { code: "invalid_fixture_identity" } };
+    }
+    const extended = this.extension?.(call, body);
+    if (extended) return extended;
+    if (call.method !== "GET") {
+      this.unexpected.push(`${call.method} ${pathname}`);
+      return { status: 405, body: { code: "read_only_fixture" } };
     }
     if (pathname === "/v1/clusters") return { body: clusters() };
     if (pathname === "/v1/assets") {
@@ -264,12 +301,16 @@ export class EvidenceHttpFixture {
     if (pathname === `/v1/investigations/${INVESTIGATION}`) {
       return { body: investigation(subject) };
     }
+    if (pathname === `/v1/investigations/${INVESTIGATION}/runs`)
+      return { body: runList() };
     if (pathname === "/v1/capabilities/coverage") {
       const clusterId = searchParams.get("cluster_id");
       if (
-        !clusterId || !session.profile.rocketmq_clusters.includes(clusterId) ||
+        !clusterId ||
+        !session.profile.rocketmq_clusters.includes(clusterId) ||
         (searchParams.has("revision_id") &&
-          (searchParams.get("investigation_id") !== INVESTIGATION || clusterId !== CLUSTER_A))
+          (searchParams.get("investigation_id") !== INVESTIGATION ||
+            clusterId !== CLUSTER_A))
       ) {
         this.unexpected.push(`Unbound coverage ${call.url.search}`);
         return { status: 400, body: { code: "invalid_fixture_scope" } };
@@ -289,7 +330,8 @@ export class EvidenceHttpFixture {
       };
     }
     for (const id of [EVIDENCE_ONE, EVIDENCE_TWO]) {
-      if (pathname === `/v1/evidence/${id}`) return { body: evidence(id, subject) };
+      if (pathname === `/v1/evidence/${id}`)
+        return { body: evidence(id, subject) };
       if (pathname === `/v1/evidence/${id}/content`) {
         return {
           body: {

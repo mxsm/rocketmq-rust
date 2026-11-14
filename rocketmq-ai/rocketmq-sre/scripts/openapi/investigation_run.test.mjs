@@ -225,3 +225,26 @@ test("run-owned revisions preserve legacy payload shape and keep worker operatio
     assert.doesNotMatch(path, /\/(?:claim|admit|settle|dispatch|collect|shell)(?:\/|$)/);
   }
 });
+
+test("discovery and caller controls use separate Rust-derived views", () => {
+  const document = existing();
+  extendInvestigationRunContracts({ schemas: document.components.schemas, readSchema });
+  extendInvestigationRunTransport({ document });
+  const list = document.paths["/v1/investigations/{id}/runs"].get;
+  assert.equal(list.responses[200].content["application/json"].schema.$ref,
+    "#/components/schemas/InvestigationRunListPage");
+  assert.equal(list.parameters.find((parameter) => parameter.name === "limit").schema.maximum, 50);
+  for (const name of ["start", "end", "resource_kind", "resource_key", "cursor"]) {
+    assert.ok(list.parameters.some((parameter) => parameter.name === name));
+  }
+  const controls = document.components.schemas.InvestigationRunControls;
+  assert.ok(controls.required.includes("run"));
+  assert.ok(controls.required.includes("commands"));
+  assert.ok(controls.required.includes("budget_usage"));
+  assert.equal(controls.properties.receipt_replay_allowed.type, "boolean");
+  assert.equal(controls.properties.receipt_replay_allowed.default, false);
+  for (const name of ["commands", "creation", "permissions"]) {
+    assert.equal(Object.hasOwn(document.components.schemas.InvestigationRun.properties, name), false);
+  }
+  assert.deepEqual(Object.keys(document.paths["/v1/investigation-runs/{id}/controls"]), ["get"]);
+});

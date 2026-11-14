@@ -3,6 +3,8 @@
 
 /** Rust schema-export is the only source of investigation-run fields. */
 export const INVESTIGATION_RUN_SCHEMA_FILES = Object.freeze({
+  InvestigationRunListPage: "investigation-run-list-page.schema.json",
+  InvestigationRunControls: "investigation-run-controls.schema.json",
   SavedInvestigationRunRevision: "saved-investigation-run-revision.schema.json",
   InvestigationPackResult: "investigation-pack-result.schema.json",
   InvestigationRun: "investigation-run.schema.json",
@@ -87,6 +89,27 @@ export function extendInvestigationRunTransport({ document }) {
       200: response("CreateInvestigationRunResponse", "Exact authorized creation replay; original snapshot"),
       ...errors,
     },
+  });
+  register("/v1/investigations/{id}/runs", "get", {
+    operationId: "listInvestigationRuns",
+    summary: "Discover bounded saved runs and current caller creation options",
+    description: "Current tenant, cluster and saved parent authorization is rechecked. Optional start/end and resource_kind/resource_key must be supplied as pairs; they filter the exact effective scope before pagination. An opaque cursor is bound to this tenant, cluster, investigation and filter. Omitting filters lists this investigation's actual historical runs, with their original scopes. Creation options are advisory current-caller data and are never stored in Run.",
+    parameters: [id,
+      { name: "cursor", in: "query", schema: { type: "string", maxLength: 2048 } },
+      { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 20 } },
+      { name: "start", in: "query", schema: { type: "string", format: "date-time" } },
+      { name: "end", in: "query", schema: { type: "string", format: "date-time" } },
+      { name: "resource_kind", in: "query", schema: { $ref: "#/components/schemas/InvestigationRunListPage__ResourceKind" } },
+      { name: "resource_key", in: "query", schema: { type: "string", minLength: 1, maxLength: 512 } },
+    ],
+    responses: { 200: response("InvestigationRunListPage", "Scoped summaries, filter-bound cursor and current creation policy"), ...errors },
+  });
+  register("/v1/investigation-runs/{id}/controls", "get", {
+    operationId: "getInvestigationRunControls",
+    summary: "Read a snapshot with fresh caller command availability and budget accounting",
+    description: "Current authentication and saved-parent scope are rechecked. Commands and settled/reserved usage are derived for the returned Run revision. receipt_replay_allowed separately describes current control authority to retry an unchanged original request even when a new command of that kind is unavailable. Availability grants no authority: submissions independently authenticate and enforce actor/body/idempotency binding, provenance and new-command CAS. Receipts and events require a refresh and cannot overwrite a newer snapshot. No worker or target mutation operation is exposed.",
+    parameters: [id],
+    responses: { 200: response("InvestigationRunControls", "Same-revision snapshot and ephemeral caller affordances"), ...errors },
   });
   register("/v1/investigation-runs/{id}", "get", {
     operationId: "getInvestigationRun",

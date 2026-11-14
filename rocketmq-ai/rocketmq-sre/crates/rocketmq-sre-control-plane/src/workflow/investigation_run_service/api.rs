@@ -20,8 +20,9 @@ use axum::{
 };
 use rocketmq_sre_contracts::{
     CreateInvestigationRunRequest, CreateInvestigationRunResponse, InvestigationCommandReceipt,
-    InvestigationCommandRequest, InvestigationId, InvestigationRun, InvestigationRunEventPage, InvestigationRunId,
-    InvestigationRunStatus,
+    InvestigationCommandRequest, InvestigationId, InvestigationResource, InvestigationRun, InvestigationRunControls,
+    InvestigationRunEventPage, InvestigationRunId, InvestigationRunListPage, InvestigationRunStatus, ResourceKind,
+    TimeRange,
 };
 use serde::Deserialize;
 
@@ -29,12 +30,74 @@ use crate::{ControlPlaneRequestFailure, api::AppState};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/v1/investigations/{id}/runs", post(create))
+        .route("/v1/investigations/{id}/runs", post(create).get(list))
         .route("/v1/investigation-runs/{id}", get(snapshot))
         .route("/v1/investigation-runs/{id}/commands", post(command))
         .route("/v1/investigation-runs/{id}/events", get(events))
+        .route("/v1/investigation-runs/{id}/controls", get(controls))
         .route("/v1/investigation-runs/{id}/revisions/{revision_id}", get(revision))
         .layer(DefaultBodyLimit::max(32 * 1024))
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
+    start: Option<chrono::DateTime<chrono::Utc>>,
+    end: Option<chrono::DateTime<chrono::Utc>>,
+    resource_kind: Option<ResourceKind>,
+    resource_key: Option<String>,
+}
+
+async fn list(
+    State(state): State<AppState>,
+    path: Result<Path<String>, axum::extract::rejection::PathRejection>,
+    headers: HeaderMap,
+    query: Result<Query<ListQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Json<InvestigationRunListPage>, ControlPlaneRequestFailure> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    let Path(id) = path.map_err(|_| invalid_input())?;
+    let Query(query) = query.map_err(|_| invalid_input())?;
+    let window = match (query.start, query.end) {
+        (Some(start), Some(end)) => Some(TimeRange::new(start, end).map_err(|_| invalid_input())?),
+        (None, None) => None,
+        _ => return Err(invalid_input()),
+    };
+    let resource = match (query.resource_kind, query.resource_key) {
+        (Some(kind), Some(key)) => Some(InvestigationResource { kind, key }),
+        (None, None) => None,
+        _ => return Err(invalid_input()),
+    };
+    let mut filter = super::super::investigation_run_repository::RunListFilter {
+        window,
+        resource,
+        cursor: query.cursor,
+        limit: query.limit.unwrap_or(20),
+    };
+    state
+        .investigation_runs
+        .list(
+            &auth,
+            id.parse::<InvestigationId>().map_err(|_| invalid_input())?,
+            &mut filter,
+        )
+        .await
+        .map(Json)
+}
+
+async fn controls(
+    State(state): State<AppState>,
+    path: Result<Path<String>, axum::extract::rejection::PathRejection>,
+    headers: HeaderMap,
+) -> Result<Json<InvestigationRunControls>, ControlPlaneRequestFailure> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    let Path(id) = path.map_err(|_| invalid_input())?;
+    state
+        .investigation_runs
+        .controls(&auth, parse_run_id(&id)?)
+        .await
+        .map(Json)
 }
 
 async fn revision(

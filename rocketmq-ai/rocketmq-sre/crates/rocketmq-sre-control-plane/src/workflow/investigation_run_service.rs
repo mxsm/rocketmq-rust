@@ -28,12 +28,17 @@ use crate::{ControlPlaneRequestFailure, PostgresRepository, auth::AuthContext};
 
 mod api;
 pub(super) mod bindings;
+#[cfg(test)]
+mod control_http_tests;
+mod controls;
 mod dispatcher;
 mod failure;
 #[cfg(test)]
 mod http_tests;
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod receipt_replay_tests;
 mod recovery;
 pub(super) mod scope;
 #[cfg(test)]

@@ -6,7 +6,7 @@ const baseURL = process.env.ROCKETMQ_SRE_UI_HTTP_BASE_URL ?? "http://127.0.0.1:3
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "evidence-isolation.spec.ts",
+  testMatch: ["evidence-isolation.spec.ts", "investigation-runs.spec.ts"],
   fullyParallel: false,
   retries: 0,
   workers: 1,

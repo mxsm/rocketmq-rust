@@ -50,6 +50,7 @@ mod investigation_event;
 mod investigation_progress;
 mod investigation_run;
 mod investigation_run_error;
+mod investigation_run_view;
 mod investigation_step;
 mod notification;
 mod operations;
@@ -410,6 +411,11 @@ pub use investigation_run::{
     InvestigationRunContext, InvestigationRunPermission, InvestigationRunScope, InvestigationRunStatus,
 };
 pub use investigation_run_error::InvestigationRunFailure;
+pub use investigation_run_view::{
+    InvestigationRunBudgetUsage, InvestigationRunCommandAvailability, InvestigationRunCommandKind,
+    InvestigationRunControlBlockReason, InvestigationRunControls, InvestigationRunCreationOptions,
+    InvestigationRunListPage, InvestigationRunSummary,
+};
 pub use investigation_step::{
     InvestigationInterruptAttemptRequest, InvestigationInterruptionAcceptance, InvestigationInterruptionReason,
     InvestigationResultAcceptance, InvestigationResultDisposition, InvestigationStep, InvestigationStepAdmission,
