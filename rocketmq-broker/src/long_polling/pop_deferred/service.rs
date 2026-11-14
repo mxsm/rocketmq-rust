@@ -78,7 +78,6 @@ use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
 use super::deadline::LongPollingDeadline;
 use super::deadline::LongPollingDeadlineError;
 use super::deadline::PopWaitDecision;
-use super::index::PopArrival;
 use super::index::PopArrivalView;
 use super::index::PopCandidateReservation;
 use super::index::PopCriteriaIndex;
@@ -686,24 +685,6 @@ impl PopDeferredService {
         self.claim_candidate(candidate, DeferredWakeReason::ForcedRefresh).await
     }
 
-    pub(crate) async fn claim_message(
-        &self,
-        arrival: &PopArrival,
-        order: PopSelectionOrder,
-    ) -> Result<Option<ClaimedDeferred<ResumePop>>, TransportError> {
-        self.claim_matching(arrival, order, DeferredWakeReason::MessageArrived)
-            .await
-    }
-
-    pub(crate) async fn claim_forced(
-        &self,
-        arrival: PopArrival,
-        order: PopSelectionOrder,
-    ) -> Result<Option<ClaimedDeferred<ResumePop>>, TransportError> {
-        self.claim_matching(&arrival.forced(), order, DeferredWakeReason::ForcedRefresh)
-            .await
-    }
-
     /// Removes business-index visibility, then delegates execution and writing
     /// to the canonical affine transport resume path.
     pub(crate) async fn resume_claimed<F, Fut>(
@@ -793,47 +774,6 @@ impl PopDeferredService {
             observer.complete_resume_result(result);
             drop(observation);
         })
-    }
-
-    async fn claim_matching(
-        &self,
-        arrival: &PopArrival,
-        order: PopSelectionOrder,
-        reason: DeferredWakeReason,
-    ) -> Result<Option<ClaimedDeferred<ResumePop>>, TransportError> {
-        let mut remaining = self.sweep_limit.get();
-        while remaining > 0 {
-            let Some(remaining_limit) = NonZeroUsize::new(remaining) else {
-                break;
-            };
-            let selection = self.index.reserve_next_matching(arrival, order, remaining_limit);
-            let inspected = selection.inspected();
-            if inspected == 0 {
-                break;
-            }
-            remaining -= inspected;
-            let Some(candidate) = selection.into_candidate() else {
-                break;
-            };
-            let id = candidate.id();
-            match self.claim(id, reason).await {
-                Ok(DeferredClaimResult::Claimed(claimed)) => {
-                    drop(candidate);
-                    return Ok(Some(claimed));
-                }
-                Ok(outcome) if is_skippable_candidate_outcome(&outcome) => {
-                    drop(candidate);
-                }
-                Ok(_) => {
-                    drop(candidate);
-                }
-                Err(error) => {
-                    drop(candidate);
-                    return Err(error);
-                }
-            }
-        }
-        Ok(None)
     }
 
     pub(crate) fn sweep_expired(&self) -> PopDeferredSweepBatch {
@@ -1473,20 +1413,6 @@ fn pop_wakeup_outcome_from_claim_result(
     }
 }
 
-const fn is_skippable_candidate_outcome<R>(outcome: &DeferredClaimResult<R>) -> bool
-where
-    R: Send + 'static,
-{
-    matches!(
-        outcome,
-        DeferredClaimResult::NotFound
-            | DeferredClaimResult::AlreadyClaimed
-            | DeferredClaimResult::AlreadyCompleted
-            | DeferredClaimResult::SessionClosed
-            | DeferredClaimResult::DeadlineExpired
-    )
-}
-
 fn pop_wakeup_outcome_from_resume_result(
     result: &Result<DeferredResumeResult, TransportError>,
 ) -> PopWakeupCompletionStatus {
@@ -1495,25 +1421,5 @@ fn pop_wakeup_outcome_from_resume_result(
         Ok(DeferredResumeResult::SessionClosed) => PopWakeupCompletionStatus::InactiveChannel,
         Ok(DeferredResumeResult::Cancelled) => PopWakeupCompletionStatus::ServiceCancelled,
         Ok(DeferredResumeResult::AdmissionRejected) | Err(_) => PopWakeupCompletionStatus::ProcessingFailed,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retired_candidate_outcomes_are_local_but_parent_cancellation_is_not() {
-        for outcome in [
-            DeferredClaimResult::<ResumePop>::NotFound,
-            DeferredClaimResult::AlreadyClaimed,
-            DeferredClaimResult::AlreadyCompleted,
-            DeferredClaimResult::SessionClosed,
-            DeferredClaimResult::DeadlineExpired,
-        ] {
-            assert!(is_skippable_candidate_outcome(&outcome));
-        }
-        let outcome = DeferredClaimResult::<ResumePop>::ParentCancelled;
-        assert!(!is_skippable_candidate_outcome(&outcome));
     }
 }

@@ -223,7 +223,7 @@ impl PopArrival {
         self
     }
 
-    pub(super) fn view(&self) -> PopArrivalView<'_> {
+    pub(in crate::long_polling::pop_deferred) fn view(&self) -> PopArrivalView<'_> {
         PopArrivalView {
             topic: &self.topic,
             consumer_group: &self.consumer_group,
