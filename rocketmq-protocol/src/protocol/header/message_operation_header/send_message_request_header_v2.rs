@@ -482,6 +482,35 @@ impl SendMessageRequestHeaderV2 {
         }
     }
 
+    /// Converts into the V1 header like [`Self::create_send_message_request_header_v1`], moving the
+    /// strings instead of cloning them.
+    pub fn into_send_message_request_header_v1(self) -> SendMessageRequestHeader {
+        let topic_request_header = self.n.map(|broker_name| TopicRequestHeader {
+            rpc_request_header: Some(RpcRequestHeader {
+                broker_name: Some(broker_name),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        SendMessageRequestHeader {
+            producer_group: self.a,
+            topic: self.b,
+            default_topic: self.c,
+            default_topic_queue_nums: self.d,
+            queue_id: self.e,
+            sys_flag: self.f,
+            born_timestamp: self.g,
+            flag: self.h,
+            properties: self.i,
+            reconsume_times: self.j,
+            unit_mode: self.k,
+            batch: self.m,
+            max_reconsume_times: self.l,
+            topic_request_header,
+        }
+    }
+
     pub fn create_send_message_request_header_v2(v1: &SendMessageRequestHeader) -> SendMessageRequestHeaderV2 {
         SendMessageRequestHeaderV2 {
             a: v1.producer_group.clone(),
@@ -855,6 +884,22 @@ mod tests {
             converted.broker_name().map(CheetahString::as_str),
             Some("broker-from-v2")
         );
+    }
+
+    #[test]
+    fn moving_conversion_to_v1_matches_the_cloning_one() {
+        let mut header = minimal_header_v2();
+        header.i = Some(CheetahString::from_static_str("KEYS\u{1}k\u{2}"));
+        header.j = Some(2);
+        header.k = Some(true);
+        header.l = Some(5);
+        header.m = Some(false);
+        header.n = Some(CheetahString::from_static_str("broker-a"));
+
+        let cloned = SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header);
+        let moved = header.into_send_message_request_header_v1();
+
+        assert_eq!(format!("{moved:?}"), format!("{cloned:?}"));
     }
 
     #[test]

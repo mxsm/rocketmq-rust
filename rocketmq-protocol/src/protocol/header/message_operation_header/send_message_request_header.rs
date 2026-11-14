@@ -202,9 +202,7 @@ pub fn parse_request_header(
     }
     // Match on the result of the V2 header decoding
     match request_header_v2 {
-        Some(header) => Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(
-            &header,
-        )),
+        Some(header) => Ok(header.into_send_message_request_header_v1()),
         None => request.decode_command_custom_header_fast::<SendMessageRequestHeader>(),
     }
 }
