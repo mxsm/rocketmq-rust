@@ -3243,9 +3243,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-rt-tokio"
-version = "0.10.0-alpha.37"
+version = "0.10.0-alpha.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc4f79eaaf4c90b816235b72376b48b96f72167d15f0aaadaee50f965e8ba909"
+checksum = "b8298c6d826ae33bf3eabb65cc42b8e6c6aad8d8405b8a593e6480895c5cd761"
 dependencies = [
  "futures-util",
  "openraft-rt",

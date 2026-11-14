@@ -52,7 +52,7 @@ openraft = { version = "=0.10.0-alpha.37", default-features = false, features = 
 # and macros aligned with the core ABI.
 openraft-macros   = "=0.10.0"
 openraft-rt       = "=0.10.0-alpha.38"
-openraft-rt-tokio = "=0.10.0-alpha.37"
+openraft-rt-tokio = "=0.10.0-alpha.38"
 
 # gRPC networking
 tonic       = { version = "0.14.6", features = ["transport", "codegen"] }
