@@ -121,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(client):** Remove the unused producer send kernel wrapper superseded by the runtime-snapshot send path ([#12323](https://github.com/mxsm/rocketmq-rust/issues/12323)).
 - **refactor(broker):** Remove the unconfigured internal shutdown hook and its injection-only test; active shutdown ownership and deadlines are unchanged ([#12324](https://github.com/mxsm/rocketmq-rust/issues/12324)).
 - **refactor(broker):** Remove the unused reply correlation-ID fallback helper and its dedicated tests ([#12315](https://github.com/mxsm/rocketmq-rust/issues/12315)).
+- **refactor(broker):** Remove the unused SendMessage property-parsing wrapper and exercise the active parsed-property enrichment helper ([#12595](https://github.com/mxsm/rocketmq-rust/issues/12595)).
 - **refactor(broker):** Remove orphaned Pull and Query wire fixtures left by the V1 remoting cutover; active response builders and tests are unchanged ([#12455](https://github.com/mxsm/rocketmq-rust/issues/12455)).
 - **refactor(store):** Remove unused internal send-message-back hook storage, backend forwarding, and dedicated tests ([#12322](https://github.com/mxsm/rocketmq-rust/issues/12322)).
 - **refactor(store):** Remove unused extended timer payload and timeline path helpers; active configuration and Store timer paths are unchanged ([#12320](https://github.com/mxsm/rocketmq-rust/issues/12320)).
