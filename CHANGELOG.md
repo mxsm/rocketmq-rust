@@ -173,6 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(store):** Remove the empty internal IndexService startup hook and its Store lifecycle call ([#12177](https://github.com/mxsm/rocketmq-rust/issues/12177)).
 - **refactor(client):** Remove two unused consume-service submission stubs and an unused weak-reference getter ([#11883](https://github.com/mxsm/rocketmq-rust/issues/11883)).
 - **refactor(broker):** Remove 17 unused mutable accessors from the internal `BrokerRuntimeState` ([#11882](https://github.com/mxsm/rocketmq-rust/issues/11882)).
+- **refactor(broker):** Remove unused transactional service trait entry points; preparation, deadline-based shutdown, and metrics ownership retain their active implementations ([#12594](https://github.com/mxsm/rocketmq-rust/issues/12594)).
 - **refactor(broker):** Remove 17 unused internal runtime component and state setters while preserving initialization and lifecycle wiring ([#12275](https://github.com/mxsm/rocketmq-rust/issues/12275)).
 - **refactor(store):** Remove the unused internal `TopicQueueLock`; CommitLog append sequencing and configuration fields are unchanged ([#11850](https://github.com/mxsm/rocketmq-rust/issues/11850)).
 - **refactor(store):** Remove the unused internal `ByteBuffer` and commented message-buffer list scaffolding ([#11856](https://github.com/mxsm/rocketmq-rust/issues/11856)).
