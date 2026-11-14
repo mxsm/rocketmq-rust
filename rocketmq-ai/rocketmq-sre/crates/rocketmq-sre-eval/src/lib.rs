@@ -16,6 +16,7 @@
 
 pub mod assertions;
 pub mod diagnostic_qualification;
+pub mod investigation_replay;
 pub mod phase1_shadow;
 pub mod phase2;
 pub mod replay;

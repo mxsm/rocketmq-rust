@@ -26,9 +26,10 @@ pub use confidence::calculate_confidence;
 pub use engine::DiagnosticContext;
 pub use engine::DiagnosticEngine;
 pub use investigation::{
-    InvestigationExplanationPolicy, InvestigationPlanDecision, InvestigationPlannedCollection,
-    InvestigationPlannedEvaluation, InvestigationPlannedExplanation, InvestigationPlanningInput,
-    InvestigationReadBinding, InvestigationReservationPolicy, investigation_findings, investigation_requirements,
+    InvestigationAggregateDecision, InvestigationExplanationPolicy, InvestigationPlanDecision,
+    InvestigationPlannedCollection, InvestigationPlannedEvaluation, InvestigationPlannedExplanation,
+    InvestigationPlanningInput, InvestigationReadBinding, InvestigationReservationPolicy, aggregate_investigation,
+    investigation_conclusion_evidence_available, investigation_findings, investigation_requirements,
     plan_investigation,
 };
 pub use packs::full_pack_ids;

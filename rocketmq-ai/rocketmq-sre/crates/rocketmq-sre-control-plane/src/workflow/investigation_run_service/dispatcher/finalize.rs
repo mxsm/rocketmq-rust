@@ -34,23 +34,8 @@ impl RunDispatcher {
         };
         let input = self.planning_input(run, bindings, evidence);
         let mut saved = Vec::new();
-        let mut qualified = stop_reason.is_none();
-        let mut missing = Vec::new();
         for pack in &run.effective_packs {
-            let current = investigation_requirements(&service.catalog, pack, &input).map_err(contract_failure)?;
-            missing.extend(
-                current
-                    .iter()
-                    .filter(|requirement| {
-                        requirement.required && requirement.quality != DiagnosticEvidenceQuality::Available
-                    })
-                    .map(|requirement| InvestigationRequirementRef {
-                        pack: pack.clone(),
-                        requirement_id: requirement.id.clone(),
-                    }),
-            );
             let Some(result) = run.current_pack_result(pack) else {
-                qualified = false;
                 continue;
             };
             let revision = service
@@ -60,84 +45,27 @@ impl RunDispatcher {
             if revision.pack_result().map_err(contract_failure)? != *result {
                 return Err(contract_failure(InvestigationRunFailure::ResultConflict));
             }
-            qualified &= conclusion_evidence_available(&revision, &current);
-            for requirement in current.iter().filter(|requirement| {
-                requirement.quality != DiagnosticEvidenceQuality::Available
-                    && requirement.evidence_ids.iter().any(|id| {
-                        revision.findings.iter().any(|finding| {
-                            finding.supporting_evidence_ids.contains(id) || finding.counter_evidence_ids.contains(id)
-                        })
-                    })
-            }) {
-                let reference = InvestigationRequirementRef {
-                    pack: pack.clone(),
-                    requirement_id: requirement.id.clone(),
-                };
-                if !missing.contains(&reference) {
-                    missing.push(reference);
-                }
-            }
             saved.push(revision);
         }
-        let reason = stop_reason.unwrap_or(InvestigationStopReason::EvidenceInsufficient);
-        if saved.is_empty() {
-            service
-                .repository
-                .investigation_run_stop_planned(&worker, run.id, run.revision, reason)
-                .await?;
-            return Ok(());
-        }
-        let faults = saved
-            .iter()
-            .filter(|revision| revision.status == InvestigationDiagnosisStatus::Fault)
-            .collect::<Vec<_>>();
-        let basis = if faults.len() == 1 { faults[0] } else { &saved[0] };
-        let mut considered = saved
-            .iter()
-            .flat_map(|revision| revision.evidence_ids.iter())
-            .filter(|id| run.evidence_ids.contains(id))
-            .copied()
-            .collect::<Vec<_>>();
-        considered.sort();
-        considered.dedup();
-        let mut conclusion = HypothesisAssessmentConclusion::Inconclusive {
-            reason,
-            considered_evidence_ids: considered.clone(),
-            missing_requirements: missing.clone(),
-        };
-        if qualified && saved.len() == run.effective_packs.len() {
-            if faults.len() == 1 {
-                let findings = basis
-                    .findings
-                    .iter()
-                    .filter(|finding| finding.outcome == InvestigationDiagnosisStatus::Fault)
-                    .collect::<Vec<_>>();
-                if findings.len() == 1 && !findings[0].supporting_evidence_ids.is_empty() {
-                    conclusion = HypothesisAssessmentConclusion::RootCause {
-                        statement: findings[0].root_cause.clone(),
-                        supporting_evidence_ids: findings[0].supporting_evidence_ids.clone(),
-                        counter_evidence_ids: findings[0].counter_evidence_ids.clone(),
-                    };
+        let (basis_revision_id, conclusion, inconclusive) =
+            match aggregate_investigation(&service.catalog, &input, &saved, stop_reason).map_err(contract_failure)? {
+                InvestigationAggregateDecision::Stop { reason } => {
+                    service
+                        .repository
+                        .investigation_run_stop_planned(&worker, run.id, run.revision, reason)
+                        .await?;
+                    return Ok(());
                 }
-            } else if faults.is_empty()
-                && saved
-                    .iter()
-                    .all(|revision| revision.status == InvestigationDiagnosisStatus::Healthy)
-            {
-                let mut supporting = basis
-                    .findings
-                    .iter()
-                    .flat_map(|finding| finding.supporting_evidence_ids.iter().copied())
-                    .collect::<Vec<_>>();
-                supporting.sort();
-                supporting.dedup();
-                if !supporting.is_empty() {
-                    conclusion = HypothesisAssessmentConclusion::Healthy {
-                        supporting_evidence_ids: supporting,
-                    };
-                }
-            }
-        }
+                InvestigationAggregateDecision::Assess {
+                    basis_revision_id,
+                    conclusion,
+                    inconclusive,
+                } => (basis_revision_id, conclusion, inconclusive),
+            };
+        let basis = saved
+            .iter()
+            .find(|revision| revision.id == basis_revision_id)
+            .ok_or_else(|| contract_failure(InvestigationRunFailure::ResultConflict))?;
         let mut assessment = HypothesisAssessment {
             schema_version: INVESTIGATION_RUN_SCHEMA_VERSION.to_owned(),
             id: HypothesisAssessmentId::new(),
@@ -153,11 +81,7 @@ impl RunDispatcher {
             created_at: Utc::now(),
         };
         if run.validate_planned_conclusion(&assessment, basis).is_err() {
-            assessment.conclusion = HypothesisAssessmentConclusion::Inconclusive {
-                reason,
-                considered_evidence_ids: considered,
-                missing_requirements: missing,
-            };
+            assessment.conclusion = inconclusive;
         }
         service
             .repository
@@ -167,42 +91,10 @@ impl RunDispatcher {
     }
 }
 
-fn conclusion_evidence_available(
-    revision: &SavedInvestigationRunRevision,
-    current: &[DiagnosticRequirementQuality],
-) -> bool {
-    let required = current
-        .iter()
-        .filter(|requirement| requirement.required)
-        .collect::<Vec<_>>();
-    let available = current
-        .iter()
-        .filter(|requirement| requirement.quality == DiagnosticEvidenceQuality::Available)
-        .flat_map(|requirement| requirement.evidence_ids.iter())
-        .collect::<std::collections::BTreeSet<_>>();
-    !required.is_empty()
-        && required.iter().all(|requirement| {
-            requirement.quality == DiagnosticEvidenceQuality::Available
-                && requirement
-                    .evidence_ids
-                    .iter()
-                    .all(|id| revision.evidence_ids.contains(id))
-        })
-        && revision
-            .findings
-            .iter()
-            .flat_map(|finding| {
-                finding
-                    .supporting_evidence_ids
-                    .iter()
-                    .chain(&finding.counter_evidence_ids)
-            })
-            .all(|id| available.contains(id))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_sre_core::diagnostics::investigation_conclusion_evidence_available as conclusion_evidence_available;
 
     #[test]
     fn an_expired_optional_rule_support_cannot_survive_the_final_freshness_check() {
