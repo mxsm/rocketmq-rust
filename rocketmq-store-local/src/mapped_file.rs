@@ -44,6 +44,8 @@
 pub mod allocation_policy;
 #[doc(hidden)]
 pub mod allocation_request;
+mod committed_read;
+mod committed_read_model;
 mod contract;
 mod default_mapped_file;
 mod direct_io;
@@ -162,6 +164,12 @@ pub use read_range::MappedReadRange;
 pub use select_result::SelectMappedBufferCacheState;
 pub use select_result::SelectMappedBufferResult;
 pub use select_result::SelectMappedBufferSourceKind;
+
+#[cfg(test)]
+mod committed_read_miri_tests;
+
+#[cfg(test)]
+mod committed_read_scenarios;
 
 #[cfg(test)]
 mod kernel_scenarios;

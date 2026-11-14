@@ -22,6 +22,7 @@ use thiserror::Error;
 use crate::transfer::segment::FileRangeFailure;
 use crate::transfer::segment::FileRangeViolation;
 
+use super::committed_read::CommittedReadsBusy;
 use super::MappedFileOperation;
 
 /// Errors that can occur during mapped file operations.
@@ -85,6 +86,12 @@ pub(crate) enum MappedFileFailure {
     /// No buffers available in the transient store pool for write operations.
     #[error("Transient store pool exhausted")]
     TransientStoreExhausted,
+
+    /// A rewrite of committed bytes gave up because readers still held committed ranges.
+    ///
+    /// Nothing was changed; the caller may retry once the readers have answered their requests.
+    #[error("committed bytes are still borrowed: {0}")]
+    CommittedReadsBusy(#[source] CommittedReadsBusy),
 }
 
 /// Deterministic mapped-file contract rejection retained inside store-local.
@@ -217,6 +224,9 @@ impl MappedFileFailure {
                     .in_component(StoreComponent::MappedFile)
                     .with_source(error)
             }
+            error @ Self::CommittedReadsBusy(_) => StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, operation)
+                .in_component(StoreComponent::MappedFile)
+                .with_source(error),
             Self::Violation(_) | Self::FileRange(FileRangeFailure::Violation(_)) => {
                 unreachable!("mapped-file violations do not cross the public contract projection")
             }
@@ -291,6 +301,7 @@ impl MappedFileFailure {
                 | Self::Violation(MappedFileViolation::InvalidWritePosition { .. })
                 | Self::Violation(MappedFileViolation::InvalidWriteCommit { .. })
                 | Self::TransientStoreExhausted
+                | Self::CommittedReadsBusy(_)
         )
     }
 

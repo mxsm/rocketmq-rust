@@ -17,7 +17,7 @@ use std::io;
 use std::ops::Range;
 
 use memmap2::Mmap;
-use memmap2::MmapMut;
+use memmap2::MmapRaw;
 
 /// Failure to construct a safe view over a mapped range.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -41,6 +41,11 @@ pub(crate) enum MmapRangeViolation {
 /// Implementors must keep returned slices backed by the same live mapping, keep the mapped address
 /// stable for the complete value lifetime, serialize mutable access so it cannot race with safe
 /// reads, and keep the mapping valid independently of compatible file-handle rename operations.
+///
+/// [`Self::as_mut_ptr`] must also return that stable address with provenance over the whole mapping,
+/// valid for reads and writes for the value's lifetime, and obtaining it must not create a reference
+/// to the mapped bytes. Committed readers rely on this: they build slices of the committed prefix
+/// from the pointer, without the writer lock, while the writer writes the tail through it.
 pub unsafe trait MappedMemory: Send + Sync + Sized + 'static {
     /// Read-only mapping created when the writable generation is sealed.
     type ReadOnly: ReadOnlyMappedMemory;
@@ -59,7 +64,8 @@ pub unsafe trait MappedMemory: Send + Sync + Sized + 'static {
 
     /// Returns a writable pointer to the first mapped byte.
     ///
-    /// Dereferencing the pointer remains unsafe; the caller must serialize all mutable access.
+    /// Dereferencing the pointer remains unsafe; the caller must serialize all mutable access and
+    /// must not write bytes that a committed reader may hold.
     fn as_mut_ptr(&self) -> *mut u8;
 
     /// Copies one disjoint source slice into a checked mapped range.
@@ -122,29 +128,36 @@ pub unsafe trait ReadOnlyMappedMemory: Send + Sync + Sized + 'static {
 }
 
 /// Native writable mmap backend used by the default Local mapped-file owner.
+///
+/// It holds a raw mapping, the same shared read-write `mmap` as `MmapMut`, so the mapped address
+/// comes straight from the system call: neither readers nor the writer derive their pointers from a
+/// reference to the mapped bytes.
 pub struct NativeMappedMemory {
-    mmap: MmapMut,
+    mmap: MmapRaw,
 }
 
 // SAFETY: construction maps an already-sized segment and the enclosing mapping generation keeps
 // this value alive. Mutable access follows the mapped-file contract requiring callers to serialize
 // writes through the CommitLog/mapped-file ownership boundary; this type is not cloneable.
+// `as_mut_ptr` returns the raw mapping address, which stays fixed until the value is dropped.
 unsafe impl MappedMemory for NativeMappedMemory {
     type ReadOnly = NativeReadOnlyMappedMemory;
 
     unsafe fn map_mut(file: &File) -> io::Result<Self> {
-        // SAFETY: callers size the segment before mapping and do not resize it while the mapping is
-        // live. NativeMappedMemory keeps the mapping alive independently of the file handle.
-        let mmap = unsafe { MmapMut::map_mut(file)? };
+        // Callers size the segment before mapping and do not resize it while the mapping is live.
+        // NativeMappedMemory keeps the mapping alive independently of the file handle.
+        let mmap = MmapRaw::map_raw(file)?;
         Ok(Self { mmap })
     }
 
     fn as_slice(&self) -> &[u8] {
-        &self.mmap
+        // SAFETY: the mapping is live and `len` bytes long for `self`'s lifetime. Callers of this
+        // whole-mapping view hold the file's writer lock, so no write races with it.
+        unsafe { std::slice::from_raw_parts(self.mmap.as_ptr(), self.mmap.len()) }
     }
 
     fn as_mut_ptr(&self) -> *mut u8 {
-        self.mmap.as_ptr().cast_mut()
+        self.mmap.as_mut_ptr()
     }
 
     fn flush(&self) -> io::Result<()> {

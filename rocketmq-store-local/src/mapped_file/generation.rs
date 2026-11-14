@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::ops::Deref;
 use std::ops::Range;
+use std::ptr::NonNull;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -25,6 +26,7 @@ use std::time::Instant;
 use arc_swap::ArcSwapOption;
 use parking_lot::Mutex;
 
+use super::committed_read::CommittedReadGuard;
 use super::file::FileOwner;
 use super::lifecycle::MappedFileLease;
 use super::mapping::LazyMmapStats;
@@ -164,6 +166,78 @@ impl<W: MappedMemory> WritableMappingGeneration<W> {
     ) -> Result<GenerationRegion<W, WritableAccess>, MmapRangeViolation> {
         GenerationRegion::try_new_writable(Arc::clone(self), offset, len)
     }
+
+    /// Borrows the committed prefix `0..readable_end` of this mapping for reads without the writer
+    /// lock.
+    ///
+    /// # Safety
+    ///
+    /// `guard` must belong to the gate of the file that owns this mapping, and it must have entered
+    /// that gate before `readable_end` was loaded from the file's read position. Every byte below
+    /// `readable_end` is then committed: appends write only at or above the read position, and a
+    /// rewrite of lower bytes waits until `guard` is dropped.
+    pub(crate) unsafe fn committed_prefix(
+        self: Arc<Self>,
+        readable_end: usize,
+        guard: CommittedReadGuard,
+    ) -> Result<CommittedPrefix, MmapRangeViolation> {
+        checked_mmap_range(self.mapped_bytes, 0, readable_end)?;
+        let base = NonNull::new(self.mapping.as_mut_ptr()).ok_or(MmapRangeViolation::OutOfBounds {
+            offset: 0,
+            len: readable_end,
+            mapping_len: 0,
+        })?;
+        Ok(CommittedPrefix {
+            base,
+            readable_end,
+            generation: self,
+            _guard: guard,
+        })
+    }
+}
+
+/// Type-erased writable generation, so read ranges stay generic over the read-only memory type
+/// alone.
+trait CommittedMapping: Send + Sync {
+    fn id(&self) -> MappingGenerationId;
+
+    fn file_owner(&self) -> &Arc<FileOwner>;
+}
+
+impl<W: MappedMemory> CommittedMapping for WritableMappingGeneration<W> {
+    fn id(&self) -> MappingGenerationId {
+        self.id
+    }
+
+    fn file_owner(&self) -> &Arc<FileOwner> {
+        &self.file_owner
+    }
+}
+
+/// Committed bytes of a writable mapping held open by the file's committed-read gate.
+pub(crate) struct CommittedPrefix {
+    base: NonNull<u8>,
+    readable_end: usize,
+    generation: Arc<dyn CommittedMapping>,
+    _guard: CommittedReadGuard,
+}
+
+// SAFETY: `base` points into the mapping that `generation` keeps alive. The only access through it
+// is shared reads of bytes below `readable_end`, which `_guard` keeps unchanged, so sending or
+// sharing this value across threads is equivalent to sharing a `&[u8]` of those bytes.
+unsafe impl Send for CommittedPrefix {}
+// SAFETY: see the `Send` implementation; no method mutates through `base`.
+unsafe impl Sync for CommittedPrefix {}
+
+impl CommittedPrefix {
+    #[inline]
+    fn bytes(&self, range: Range<usize>) -> &[u8] {
+        debug_assert!(range.start <= range.end && range.end <= self.readable_end);
+        // SAFETY: lease construction and splitting keep `range` within `0..readable_end`. Those
+        // bytes are inside the live mapping and stay unchanged while `_guard` is held, and `self`
+        // owns both for at least the returned borrow.
+        unsafe { std::slice::from_raw_parts(self.base.as_ptr().add(range.start), range.len()) }
+    }
 }
 
 impl<R: ReadOnlyMappedMemory> ReadOnlyMappingGeneration<R> {
@@ -266,25 +340,65 @@ impl<R: ReadOnlyMappedMemory> AsRef<[u8]> for GenerationRegion<R, ReadOnlyAccess
 
 /// Immutable mapped range that inseparably owns one admitted read operation.
 ///
-/// Clones and split ranges share one inner owner and therefore one admission count. The final alias
-/// drops the read-only generation before releasing its operation lease, so physical unmap cannot
-/// race ahead of the last safe slice user.
+/// The bytes come from a sealed read-only generation, or from the committed prefix of a writable
+/// generation held open by the file's committed-read gate. Clones and split ranges share one inner
+/// owner and therefore one admission count. The final alias drops the generation before releasing
+/// its operation lease, so physical unmap cannot race ahead of the last safe slice user.
 pub struct MappedReadLease<R: ReadOnlyMappedMemory> {
     inner: Arc<MappedReadLeaseInner<R>>,
     range: Range<usize>,
 }
 
 struct MappedReadLeaseInner<R: ReadOnlyMappedMemory> {
-    generation: Option<Arc<ReadOnlyMappingGeneration<R>>>,
+    backing: Option<LeaseBacking<R>>,
     operation: Option<MappedFileLease>,
+}
+
+enum LeaseBacking<R: ReadOnlyMappedMemory> {
+    ReadOnly(Arc<ReadOnlyMappingGeneration<R>>),
+    Committed(CommittedPrefix),
+}
+
+impl<R: ReadOnlyMappedMemory> LeaseBacking<R> {
+    #[inline]
+    fn readable_len(&self) -> usize {
+        match self {
+            Self::ReadOnly(generation) => generation.mapped_bytes(),
+            Self::Committed(prefix) => prefix.readable_end,
+        }
+    }
+
+    #[inline]
+    fn id(&self) -> MappingGenerationId {
+        match self {
+            Self::ReadOnly(generation) => generation.id(),
+            Self::Committed(prefix) => prefix.generation.id(),
+        }
+    }
+
+    #[inline]
+    fn file_owner(&self) -> &Arc<FileOwner> {
+        match self {
+            Self::ReadOnly(generation) => generation.file_owner(),
+            Self::Committed(prefix) => prefix.generation.file_owner(),
+        }
+    }
+
+    #[inline]
+    fn bytes(&self, range: Range<usize>) -> &[u8] {
+        match self {
+            Self::ReadOnly(generation) => &generation.mapping.as_slice()[range],
+            Self::Committed(prefix) => prefix.bytes(range),
+        }
+    }
 }
 
 impl<R: ReadOnlyMappedMemory> MappedReadLeaseInner<R> {
     /// The fields are present for every observable inner value and are taken only by final `Drop`,
     /// after the last `Arc` alias has gone away.
     #[inline]
-    fn generation(&self) -> &Arc<ReadOnlyMappingGeneration<R>> {
-        self.generation
+    fn backing(&self) -> &LeaseBacking<R> {
+        self.backing
             .as_ref()
             .expect("mapped read generation exists until final inner drop")
     }
@@ -292,7 +406,7 @@ impl<R: ReadOnlyMappedMemory> MappedReadLeaseInner<R> {
 
 impl<R: ReadOnlyMappedMemory> Drop for MappedReadLeaseInner<R> {
     fn drop(&mut self) {
-        drop(self.generation.take());
+        drop(self.backing.take());
         drop(self.operation.take());
     }
 }
@@ -309,17 +423,39 @@ impl<R: ReadOnlyMappedMemory> MappedReadLease<R> {
         offset: usize,
         len: usize,
     ) -> Result<Self, MmapRangeViolation> {
-        let range = match checked_mmap_range(generation.mapped_bytes(), offset, len) {
+        Self::try_with_backing(LeaseBacking::ReadOnly(generation), operation, offset, len)
+    }
+
+    /// Constructs a read range over committed bytes of a writable generation.
+    ///
+    /// The range must lie within the prefix; it keeps the prefix, and with it the committed-read
+    /// gate, held until its final alias is dropped.
+    pub(crate) fn try_new_committed(
+        prefix: CommittedPrefix,
+        operation: MappedFileLease,
+        offset: usize,
+        len: usize,
+    ) -> Result<Self, MmapRangeViolation> {
+        Self::try_with_backing(LeaseBacking::Committed(prefix), operation, offset, len)
+    }
+
+    fn try_with_backing(
+        backing: LeaseBacking<R>,
+        operation: MappedFileLease,
+        offset: usize,
+        len: usize,
+    ) -> Result<Self, MmapRangeViolation> {
+        let range = match checked_mmap_range(backing.readable_len(), offset, len) {
             Ok(range) => range,
             Err(error) => {
-                drop(generation);
+                drop(backing);
                 drop(operation);
                 return Err(error);
             }
         };
         Ok(Self {
             inner: Arc::new(MappedReadLeaseInner {
-                generation: Some(generation),
+                backing: Some(backing),
                 operation: Some(operation),
             }),
             range,
@@ -329,12 +465,18 @@ impl<R: ReadOnlyMappedMemory> MappedReadLease<R> {
     /// Returns the identity of the generation backing this range.
     #[inline]
     pub fn generation_id(&self) -> MappingGenerationId {
-        self.inner.generation().id()
+        self.inner.backing().id()
+    }
+
+    /// Returns whether this range borrows committed bytes of a writable generation.
+    #[inline]
+    pub fn is_committed_prefix(&self) -> bool {
+        matches!(self.inner.backing(), LeaseBacking::Committed(_))
     }
 
     #[inline]
     pub(crate) fn file_owner(&self) -> Arc<FileOwner> {
-        Arc::clone(self.inner.generation().file_owner())
+        Arc::clone(self.inner.backing().file_owner())
     }
 
     /// Returns the mapped range length.
@@ -384,7 +526,7 @@ impl<R: ReadOnlyMappedMemory> Deref for MappedReadLease<R> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.inner.generation().mapping.as_slice()[self.range.clone()]
+        self.inner.backing().bytes(self.range.clone())
     }
 }
 

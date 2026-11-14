@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -56,6 +57,10 @@ use crate::base::memory_lock_manager::OwnedMemoryRegion;
 use crate::base::transient_store_pool::PoolLease;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::FlushDiskType;
+use crate::mapped_file::committed_read::CommittedReadAdmission;
+use crate::mapped_file::committed_read::CommittedReadGate;
+use crate::mapped_file::committed_read::CommittedReadGuard;
+use crate::mapped_file::committed_read::COMMITTED_READ_DRAIN_TIMEOUT;
 use crate::mapped_file::file::FileOwner;
 use crate::mapped_file::file::FilePreallocationResult;
 use crate::mapped_file::file::MappedFileStorage;
@@ -189,6 +194,10 @@ pub struct DefaultMappedFile<M: MappedMemory = NativeMappedMemory> {
     file_name: CheetahString,
     raw_core: MappedFileRawCore,
     write_state: Mutex<MappedWriteState>,
+    /// Lets readers borrow bytes below the read position without `write_state`; a rewrite of those
+    /// bytes closes it and waits for the borrowers to leave before changing them.
+    committed_reads: Arc<CommittedReadGate>,
+    committed_read_drain_timeout: Duration,
     first_create_in_queue: bool,
     swap_state: Mutex<SwapLifecycleState<M::ReadOnly>>,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
@@ -920,6 +929,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                 staging: Vec::new(),
                 transient_buffer,
             }),
+            committed_reads: Arc::new(CommittedReadGate::new()),
+            committed_read_drain_timeout: COMMITTED_READ_DRAIN_TIMEOUT,
             first_create_in_queue: false,
             swap_state: Mutex::new(SwapLifecycleState {
                 time_ms: current_millis(),
@@ -997,17 +1008,18 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         end: usize,
         data: &[u8],
     ) -> Result<(), MappedFileFailure> {
+        // The bounds check uses the generation's recorded length rather than a slice of the whole
+        // mapping, which would cover bytes that committed readers hold.
+        let mapped_bytes = generation.mapped_bytes();
         generation.with_mapping(|mapped_memory| {
-            if end > mapped_memory.as_slice().len() {
-                return Err(MappedFileFailure::out_of_bounds(
-                    start,
-                    data.len(),
-                    mapped_memory.as_slice().len() as u64,
-                ));
+            if end > mapped_bytes {
+                return Err(MappedFileFailure::out_of_bounds(start, data.len(), mapped_bytes as u64));
             }
 
             // SAFETY: the caller holds `write_state`, which is the only mapped-file mutation
-            // sequencer. The staging allocation cannot overlap the mapped allocation.
+            // sequencer. The staging allocation cannot overlap the mapped allocation. Callers write
+            // at or above the read position, or inside a rewrite window that drained committed
+            // readers, so no committed range overlaps the destination.
             unsafe {
                 mapped_memory.copy_from_slice(start, data)?;
             }
@@ -1124,17 +1136,19 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             MappedFileAdmissionResult::Acquired(admission) => admission,
             MappedFileAdmissionResult::Rejected(_) => return Ok(false),
         };
-        let mut state = self.write_state.lock();
         if self.transient_store_pool.is_some() {
+            // The transient buffer is copied into the mapping only from the committed position up,
+            // so a write below it never reaches committed bytes of the mapping.
+            let mut state = self.write_state.lock();
             let end = start
                 .checked_add(data.len())
                 .filter(|end| *end <= self.raw_core.file_size() as usize)
                 .ok_or_else(|| MappedFileFailure::out_of_bounds(start, data.len(), self.raw_core.file_size()))?;
             self.ensure_transient_buffer(&mut state)?[start..end].copy_from_slice(data);
-            Ok(true)
-        } else {
-            self.copy_to_mapping(&admission, start, data)
+            return Ok(true);
         }
+        let position = i64::try_from(start).unwrap_or(i64::MAX);
+        self.rewrite_from(position, |_writer| self.copy_to_mapping(&admission, start, data))
     }
 
     #[inline]
@@ -1555,55 +1569,211 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                 MappedFileAdmissionResult::Acquired(admission) => admission,
                 MappedFileAdmissionResult::Rejected(_) => return Ok(None),
             };
-            let read_position = self.get_read_position();
-            if self.raw_core.is_readable_range(pos, size, read_position) {
-                self.mapped_byte_buffer_access_count_since_last_swap
-                    .fetch_add(1, Ordering::AcqRel);
-
-                let is_in_cache = self.cache_residency_admitted(&admission, pos as i64, size as usize, residency);
-                if let Some(generation) = self.physical_owners.mapping.load_read_only() {
-                    let file_offset = pos as u64;
-                    let start_offset = self
-                        .physical_owners
-                        .storage
-                        .lock()
-                        .file_from_offset()
-                        .checked_add(file_offset)
-                        .ok_or_else(|| {
-                            MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                        })?;
-                    let range =
-                        MappedReadLease::try_new(generation, admission, pos as usize, size as usize).map_err(|_| {
-                            MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                        })?;
-                    let range = MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone())
-                        .ok_or_else(|| {
-                            MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
-                        })?;
-                    return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
-                }
-                Ok(self
-                    .copy_range_admitted(&admission, pos as usize, size as usize, None)?
-                    .and_then(|bytes| {
-                        SelectMappedBufferResult::from_bytes_with_metadata(
-                            self.physical_owners.storage.lock().file_from_offset() + pos as u64,
-                            pos as u64,
-                            bytes,
-                            is_in_cache,
-                            SelectMappedBufferCacheState::from_residency(is_in_cache),
-                        )
-                    }))
-            } else {
-                warn!(
-                    "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
-                    pos,
-                    size,
-                    self.physical_owners.storage.lock().file_from_offset()
-                );
-                Ok(None)
-            }
+            self.select_admitted(admission, pos, size, residency)
         })();
         MappedFileFailure::into_public_option(result, StoreOperation::Read)
+    }
+
+    /// Selects `size` committed bytes at `pos` as a range that borrows the mapping instead of
+    /// copying it.
+    ///
+    /// While the file is writable, the range borrows bytes below the read position without the
+    /// writer lock: appends never write below the read position, and a rewrite of those bytes
+    /// (truncation, reset, a positioned write, warm-up) waits until every such range is dropped.
+    /// While a rewrite waits, selections return copies made under the writer lock instead.
+    ///
+    /// Use it for append-only files whose readers hold ranges briefly, such as CommitLog segments.
+    /// A range held for longer than the drain timeout makes a rewrite of the same file fail without
+    /// changing it; so does holding one while waiting for a lock the rewriting caller holds, such
+    /// as the CommitLog put lock. A sealed file returns its read-only range, and a file without a
+    /// published writable mapping returns what [`Self::try_select_mapped_buffer_with`] returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns the mapping or bounds failure that `select_mapped_buffer` would report.
+    pub fn try_select_committed_range(
+        &self,
+        pos: i32,
+        size: i32,
+        residency: ResidencyCheck,
+    ) -> Result<Option<SelectMappedBufferResult<M>>, StoreError> {
+        let result = (|| -> Result<Option<SelectMappedBufferResult<M>>, MappedFileFailure> {
+            let admission = match self.acquire_owned(MappedFileOperation::Read) {
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(None),
+            };
+            let out_of_bounds = || {
+                MappedFileFailure::out_of_bounds(pos.max(0) as usize, size.max(0) as usize, self.raw_core.file_size())
+            };
+            if pos < 0 || size < 0 || !self.raw_core.is_readable_range(pos, size, self.get_read_position()) {
+                return self.select_admitted(admission, pos, size, residency);
+            }
+            let is_in_cache = self.cache_residency_admitted(&admission, pos as i64, size as usize, residency);
+            let file_offset = pos as u64;
+            let start_offset = self
+                .physical_owners
+                .storage
+                .lock()
+                .file_from_offset()
+                .checked_add(file_offset)
+                .ok_or_else(out_of_bounds)?;
+            let Some(guard) = self.enter_committed_reads() else {
+                return self.select_admitted(admission, pos, size, residency);
+            };
+            let Some(generation) = self.physical_owners.mapping.load_writable() else {
+                drop(guard);
+                return self.select_admitted(admission, pos, size, residency);
+            };
+            // Loaded after entering the gate: a rewrite that finished earlier has published its
+            // lowered positions, and none can start until `guard` is dropped.
+            let read_position = self.get_read_position();
+            if !self.raw_core.is_readable_range(pos, size, read_position) {
+                return Ok(None);
+            }
+            let readable_end = usize::try_from(read_position).map_err(|_| out_of_bounds())?;
+            self.mapped_byte_buffer_access_count_since_last_swap
+                .fetch_add(1, Ordering::AcqRel);
+            // SAFETY: `guard` entered this file's gate before `read_position` was loaded from this
+            // file, and `generation` is this file's writable mapping.
+            let prefix = unsafe { generation.committed_prefix(readable_end, guard) }.map_err(|_| out_of_bounds())?;
+            let lease = MappedReadLease::try_new_committed(prefix, admission, pos as usize, size as usize)
+                .map_err(|_| out_of_bounds())?;
+            let range = MappedReadRange::try_new(lease, start_offset, file_offset, self.metrics.clone())
+                .ok_or_else(out_of_bounds)?;
+            Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache))
+        })();
+        MappedFileFailure::into_public_option(result, StoreOperation::Read)
+    }
+
+    /// Enters the committed-read gate, enabling it on first use.
+    ///
+    /// Returns `None` while a rewrite has the gate closed.
+    fn enter_committed_reads(&self) -> Option<CommittedReadGuard> {
+        match self.committed_reads.try_enter() {
+            CommittedReadAdmission::Entered(guard) => Some(guard),
+            CommittedReadAdmission::Busy => None,
+            CommittedReadAdmission::Disabled => {
+                {
+                    // Enabled under the writer lock: a rewrite that finds the gate disabled while
+                    // holding that lock knows no reader can enter until it releases the lock.
+                    let _writer = self.write_state.lock();
+                    self.committed_reads.enable();
+                }
+                match self.committed_reads.try_enter() {
+                    CommittedReadAdmission::Entered(guard) => Some(guard),
+                    CommittedReadAdmission::Disabled | CommittedReadAdmission::Busy => None,
+                }
+            }
+        }
+    }
+
+    /// Runs `change` under `write_state`, first draining committed readers when the gate is
+    /// enabled and the change reaches bytes below the read position.
+    ///
+    /// The drain runs without `write_state`, so a reader that holds ranges and falls back to the
+    /// locked copy path can finish and drop them; see `committed_read`. The caller must not hold
+    /// `write_state`.
+    fn rewrite_from<T>(
+        &self,
+        position: i64,
+        change: impl FnOnce(&mut MutexGuard<'_, MappedWriteState>) -> Result<T, MappedFileFailure>,
+    ) -> Result<T, MappedFileFailure> {
+        let mut writer = self.write_state.lock();
+        // Both checks are stable under `write_state`: the gate is enabled under it and never
+        // disabled, and every move of the read position holds it.
+        if !self.committed_reads.is_enabled() || position >= i64::from(self.get_read_position()) {
+            return change(&mut writer);
+        }
+        drop(writer);
+        let window = self
+            .committed_reads
+            .begin_rewrite(self.committed_read_drain_timeout)
+            .map_err(MappedFileFailure::CommittedReadsBusy)?;
+        let mut writer = self.write_state.lock();
+        let changed = change(&mut writer);
+        drop(writer);
+        drop(window);
+        changed
+    }
+
+    /// Moves the wrote, committed, and flushed positions to `position` in one step.
+    ///
+    /// Bytes at or above `position` are rewritten by later appends, so the call first waits for
+    /// committed ranges selected through [`Self::try_select_committed_range`] to be dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage-unavailable error, with every position unchanged, when committed ranges
+    /// are still held after the drain timeout.
+    pub fn try_truncate_positions(&self, position: i32) -> Result<(), StoreError> {
+        self.rewrite_from(i64::from(position), |_writer| {
+            self.raw_core.set_wrote_position(position);
+            self.raw_core.set_committed_position(position);
+            self.raw_core.set_flushed_position(position);
+            Ok(())
+        })
+        .map_err(|error| error.into_store_error(StoreOperation::Append))
+    }
+
+    /// Sets how long rewrites wait for committed readers.
+    #[cfg(test)]
+    pub(crate) fn with_committed_read_drain_timeout(mut self, timeout: Duration) -> Self {
+        self.committed_read_drain_timeout = timeout;
+        self
+    }
+
+    fn select_admitted(
+        &self,
+        admission: MappedFileLease,
+        pos: i32,
+        size: i32,
+        residency: ResidencyCheck,
+    ) -> Result<Option<SelectMappedBufferResult<M>>, MappedFileFailure> {
+        let read_position = self.get_read_position();
+        if !self.raw_core.is_readable_range(pos, size, read_position) {
+            warn!(
+                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
+                pos,
+                size,
+                self.physical_owners.storage.lock().file_from_offset()
+            );
+            return Ok(None);
+        }
+        self.mapped_byte_buffer_access_count_since_last_swap
+            .fetch_add(1, Ordering::AcqRel);
+
+        let is_in_cache = self.cache_residency_admitted(&admission, pos as i64, size as usize, residency);
+        if let Some(generation) = self.physical_owners.mapping.load_read_only() {
+            let file_offset = pos as u64;
+            let start_offset = self
+                .physical_owners
+                .storage
+                .lock()
+                .file_from_offset()
+                .checked_add(file_offset)
+                .ok_or_else(|| {
+                    MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                })?;
+            let range = MappedReadLease::try_new(generation, admission, pos as usize, size as usize).map_err(|_| {
+                MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+            })?;
+            let range =
+                MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone()).ok_or_else(|| {
+                    MappedFileFailure::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                })?;
+            return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
+        }
+        Ok(self
+            .copy_range_admitted(&admission, pos as usize, size as usize, None)?
+            .and_then(|bytes| {
+                SelectMappedBufferResult::from_bytes_with_metadata(
+                    self.physical_owners.storage.lock().file_from_offset() + pos as u64,
+                    pos as u64,
+                    bytes,
+                    is_in_cache,
+                    SelectMappedBufferCacheState::from_residency(is_in_cache),
+                )
+            }))
     }
 
     #[inline]
@@ -1995,8 +2165,14 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn set_wrote_position(&self, wrote_position: i32) {
-        let _writer = self.write_state.lock();
-        self.raw_core.set_wrote_position(wrote_position)
+        // Lowering it lets later appends rewrite bytes that committed readers may hold.
+        let moved = self.rewrite_from(i64::from(wrote_position), |_writer| {
+            self.raw_core.set_wrote_position(wrote_position);
+            Ok(())
+        });
+        if let Err(error) = moved {
+            error!(file_name = %self.file_name, wrote_position, error = %error, "wrote position left unchanged");
+        }
     }
 
     /// Return The max position which have valid data
@@ -2015,7 +2191,20 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn set_committed_position(&self, committed_position: i32) {
-        self.raw_core.set_committed_position(committed_position)
+        if self.transient_store_pool.is_none() {
+            // Without a transient pool the read position is the wrote position.
+            self.raw_core.set_committed_position(committed_position);
+            return;
+        }
+        // With a transient pool the committed position is the read position; lowering it lets the
+        // next commit rewrite bytes that committed readers may hold.
+        let moved = self.rewrite_from(i64::from(committed_position), |_writer| {
+            self.raw_core.set_committed_position(committed_position);
+            Ok(())
+        });
+        if let Err(error) = moved {
+            error!(file_name = %self.file_name, committed_position, error = %error, "committed position left unchanged");
+        }
     }
 
     #[inline]
@@ -2423,89 +2612,90 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         A: FnMut(&[u8], MemoryAdvice) -> io::Result<()>,
         R: FnMut(LinuxStorageDegradationEvent),
     {
-        let _writer = self.write_state.lock();
         let file_size = self.raw_core.file_size() as usize;
         if file_size == 0 {
             return Ok(true);
         }
-
-        let warmup_started = Instant::now();
-        let Some(generation) = self.try_get_writable_generation(admission, MappedFileOperation::Write)? else {
-            return Ok(false);
-        };
-        generation.with_mapping(|mapped_file| {
-            let mapped_ptr = mapped_file.as_mut_ptr();
-            visit_mapped_file_warmup_schedule(
-                file_size,
-                get_page_size(),
-                pages,
-                flush_disk_type == FlushDiskType::SyncFlush,
-                |operation| match operation {
-                    MappedFileWarmupOperation::Touch { offset } => {
-                        if let Err(error) = touch_page(mapped_ptr, offset) {
-                            record_degradation(LinuxStorageDegradationEvent::new(
-                                LINUX_STORAGE_OP_PAGE_TOUCH,
-                                LINUX_STORAGE_REASON_FAILED,
-                                errno_from_io_error(&error),
-                            ));
-                            warn!(
-                                "Failed to touch warmed mapped file page at offset {} for {}: {:?}",
-                                offset, self.file_name, error
-                            );
-                        }
-                    }
-                    MappedFileWarmupOperation::Flush {
-                        offset,
-                        len,
-                        final_flush,
-                    } => {
-                        let end = offset + len;
-                        if let Err(error) = flush_range(mapped_file, offset, len) {
-                            record_degradation(LinuxStorageDegradationEvent::new(
-                                LINUX_STORAGE_OP_PAGE_TOUCH,
-                                LINUX_STORAGE_REASON_FLUSH_FAILED,
-                                errno_from_io_error(&error),
-                            ));
-                            if final_flush {
+        // Touching a page writes it back, so committed readers must leave before warm-up runs.
+        self.rewrite_from(0, |_writer| {
+            let warmup_started = Instant::now();
+            let Some(generation) = self.try_get_writable_generation(admission, MappedFileOperation::Write)? else {
+                return Ok(false);
+            };
+            generation.with_mapping(|mapped_file| {
+                let mapped_ptr = mapped_file.as_mut_ptr();
+                visit_mapped_file_warmup_schedule(
+                    file_size,
+                    get_page_size(),
+                    pages,
+                    flush_disk_type == FlushDiskType::SyncFlush,
+                    |operation| match operation {
+                        MappedFileWarmupOperation::Touch { offset } => {
+                            if let Err(error) = touch_page(mapped_ptr, offset) {
+                                record_degradation(LinuxStorageDegradationEvent::new(
+                                    LINUX_STORAGE_OP_PAGE_TOUCH,
+                                    LINUX_STORAGE_REASON_FAILED,
+                                    errno_from_io_error(&error),
+                                ));
                                 warn!(
-                                    "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
-                                    offset, end, self.file_name, error
-                                );
-                            } else {
-                                warn!(
-                                    "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
-                                    offset, end, self.file_name, error
+                                    "Failed to touch warmed mapped file page at offset {} for {}: {:?}",
+                                    offset, self.file_name, error
                                 );
                             }
-                        } else {
-                            self.raw_core.record_flush_time();
                         }
-                    }
-                },
-            );
-
-            if let Err(error) = advise(mapped_file.as_slice(), MemoryAdvice::WillNeed) {
-                record_degradation(LinuxStorageDegradationEvent::new(
-                    LINUX_STORAGE_OP_MADVISE,
-                    LINUX_STORAGE_REASON_FAILED,
-                    errno_from_io_error(&error),
-                ));
-                warn!(
-                    "madvise(MADV_WILLNEED) failed while warming mapped file {}",
-                    self.file_name
+                        MappedFileWarmupOperation::Flush {
+                            offset,
+                            len,
+                            final_flush,
+                        } => {
+                            let end = offset + len;
+                            if let Err(error) = flush_range(mapped_file, offset, len) {
+                                record_degradation(LinuxStorageDegradationEvent::new(
+                                    LINUX_STORAGE_OP_PAGE_TOUCH,
+                                    LINUX_STORAGE_REASON_FLUSH_FAILED,
+                                    errno_from_io_error(&error),
+                                ));
+                                if final_flush {
+                                    warn!(
+                                        "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
+                                        offset, end, self.file_name, error
+                                    );
+                                } else {
+                                    warn!(
+                                        "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
+                                        offset, end, self.file_name, error
+                                    );
+                                }
+                            } else {
+                                self.raw_core.record_flush_time();
+                            }
+                        }
+                    },
                 );
+
+                if let Err(error) = advise(mapped_file.as_slice(), MemoryAdvice::WillNeed) {
+                    record_degradation(LinuxStorageDegradationEvent::new(
+                        LINUX_STORAGE_OP_MADVISE,
+                        LINUX_STORAGE_REASON_FAILED,
+                        errno_from_io_error(&error),
+                    ));
+                    warn!(
+                        "madvise(MADV_WILLNEED) failed while warming mapped file {}",
+                        self.file_name
+                    );
+                }
+            });
+            let warmup_duration = warmup_started.elapsed();
+            let warmup_millis = u64::try_from(warmup_duration.as_millis()).unwrap_or(u64::MAX);
+            #[cfg(feature = "observability")]
+            self.store_metrics.record_linux_page_cache_warmup_millis(warmup_millis);
+            #[cfg(not(feature = "observability"))]
+            let _ = warmup_millis;
+            if let Some(metrics) = &self.metrics {
+                metrics.record_warm_with_latency(file_size, warmup_duration);
             }
-        });
-        let warmup_duration = warmup_started.elapsed();
-        let warmup_millis = u64::try_from(warmup_duration.as_millis()).unwrap_or(u64::MAX);
-        #[cfg(feature = "observability")]
-        self.store_metrics.record_linux_page_cache_warmup_millis(warmup_millis);
-        #[cfg(not(feature = "observability"))]
-        let _ = warmup_millis;
-        if let Some(metrics) = &self.metrics {
-            metrics.record_warm_with_latency(file_size, warmup_duration);
-        }
-        Ok(true)
+            Ok(true)
+        })
     }
 
     pub fn lock_region(

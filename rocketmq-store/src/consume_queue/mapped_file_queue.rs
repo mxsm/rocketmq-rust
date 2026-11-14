@@ -347,6 +347,29 @@ impl MappedFileQueueReadHandle {
         result
     }
 
+    /// [`Self::get_data_bounded`] for append-only queues: the selection borrows committed bytes of
+    /// the active file instead of copying them under its writer lock.
+    pub(crate) fn get_committed_data_bounded(&self, offset: i64, max_bytes: usize) -> Option<SelectMappedBufferResult> {
+        if max_bytes == 0 {
+            return None;
+        }
+        let mapped_file = self.find_mapped_file_by_offset(offset, offset == 0)?;
+        let position = (offset % self.mapped_file_size as i64) as i32;
+        let readable = mapped_file.get_read_position().checked_sub(position)?;
+        if readable <= 0 {
+            return None;
+        }
+        let size = usize::try_from(readable).ok()?.min(max_bytes).min(i32::MAX as usize) as i32;
+        let mut result = mapped_file
+            .try_select_committed_range(position, size, ResidencyCheck::AssumeResident)
+            .ok()
+            .flatten();
+        if let Some(result) = result.as_mut() {
+            result.try_attach_mapped_file(mapped_file);
+        }
+        result
+    }
+
     pub(crate) fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
         let mapped_file = self.find_mapped_file_by_offset(offset, offset == 0)?;
         let position = (offset % self.mapped_file_size as i64) as i32;
@@ -961,6 +984,23 @@ impl MappedFileQueueFlushHandle {
     }
 }
 
+/// Moves each file's positions back, stopping at the first file whose committed bytes are still
+/// borrowed by readers; that file and the ones after it keep their positions.
+fn truncate_positions(position_updates: &[(Arc<DefaultMappedFile>, i32)]) -> bool {
+    for (mapped_file, position) in position_updates {
+        if let Err(error) = mapped_file.try_truncate_positions(*position) {
+            warn!(
+                file_name = %mapped_file.get_file_name(),
+                position,
+                %error,
+                "mapped-file positions were not truncated"
+            );
+            return false;
+        }
+    }
+    true
+}
+
 /// Cuts `mapped_files` back to `offset`, and says whether all of it went. The caller holds the
 /// queue's commit lock.
 fn truncate_mapped_files(mapped_files: &MappedFileGeneration, mapped_file_size: u64, offset: i64) -> bool {
@@ -982,12 +1022,7 @@ fn truncate_mapped_files(mapped_files: &MappedFileGeneration, mapped_file_size: 
     }
 
     if is_managed && removal_candidates.is_empty() {
-        for (mapped_file, position) in position_updates {
-            mapped_file.set_wrote_position(position);
-            mapped_file.set_committed_position(position);
-            mapped_file.set_flushed_position(position);
-        }
-        return true;
+        return truncate_positions(&position_updates);
     }
     if let Some((runtime, generation)) = mapped_files.managed_runtime_generation() {
         let ordered_candidates: Vec<_> = removal_candidates.into_iter().rev().collect();
@@ -1005,20 +1040,13 @@ fn truncate_mapped_files(mapped_files: &MappedFileGeneration, mapped_file_size: 
             );
             return false;
         }
-        for (mapped_file, position) in position_updates {
-            mapped_file.set_wrote_position(position);
-            mapped_file.set_committed_position(position);
-            mapped_file.set_flushed_position(position);
-        }
-        return true;
+        return truncate_positions(&position_updates);
     }
     if is_managed {
         return false;
     }
-    for (mapped_file, position) in position_updates {
-        mapped_file.set_wrote_position(position);
-        mapped_file.set_committed_position(position);
-        mapped_file.set_flushed_position(position);
+    if !truncate_positions(&position_updates) {
+        return false;
     }
 
     // Tail deletion runs newest-to-oldest. If one attempt is deferred, any already removed
@@ -1597,10 +1625,7 @@ impl MappedFileQueue {
                 return false;
             }
             if let Some((index, position)) = plan.target() {
-                let mapped_file = &current_files[index];
-                mapped_file.set_flushed_position(position);
-                mapped_file.set_wrote_position(position);
-                mapped_file.set_committed_position(position);
+                return truncate_positions(&[(Arc::clone(&current_files[index]), position)]);
             }
             return true;
         }
@@ -1614,10 +1639,7 @@ impl MappedFileQueue {
         }
 
         if let Some((index, position)) = plan.target() {
-            let mapped_file = &current_files[index];
-            mapped_file.set_flushed_position(position);
-            mapped_file.set_wrote_position(position);
-            mapped_file.set_committed_position(position);
+            return truncate_positions(&[(Arc::clone(&current_files[index]), position)]);
         }
         true
     }

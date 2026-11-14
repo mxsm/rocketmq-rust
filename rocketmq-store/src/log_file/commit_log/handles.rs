@@ -119,7 +119,8 @@ impl CommitLogReadHandle {
     }
 
     pub(crate) fn get_data_bounded(&self, offset: i64, max_bytes: usize) -> Option<SelectMappedBufferResult> {
-        self.mapped_file_queue.get_data_bounded(offset, max_bytes)
+        // Reput and record walks parse the bytes in place, so they borrow the active segment.
+        self.mapped_file_queue.get_committed_data_bounded(offset, max_bytes)
     }
 
     pub(crate) fn get_max_offset(&self) -> i64 {
