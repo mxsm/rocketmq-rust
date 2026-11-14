@@ -220,12 +220,11 @@ impl AssignmentRegistry {
         for (_, entry) in &removed {
             entry.retire();
         }
-        let mut removed_queues = Vec::with_capacity(removed.len());
-        for (queue, entry) in removed {
-            entry.shutdown(ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT).await;
-            removed_queues.push(queue);
-        }
-        removed_queues
+        shutdown_together(removed, ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT)
+            .await
+            .into_iter()
+            .map(|(queue, _)| queue)
+            .collect()
     }
 
     pub(super) async fn reconcile_all(&self, assigned: &HashSet<MessageQueue>) -> Vec<MessageQueue> {
@@ -244,12 +243,11 @@ impl AssignmentRegistry {
         for (_, entry) in &removed {
             entry.retire();
         }
-        let mut removed_queues = Vec::with_capacity(removed.len());
-        for (queue, entry) in removed {
-            entry.shutdown(ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT).await;
-            removed_queues.push(queue);
-        }
-        removed_queues
+        shutdown_together(removed, ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT)
+            .await
+            .into_iter()
+            .map(|(queue, _)| queue)
+            .collect()
     }
 
     pub(super) async fn remove_topic(&self, topic: &str) {
@@ -262,15 +260,13 @@ impl AssignmentRegistry {
                 .collect::<Vec<_>>();
             queues
                 .into_iter()
-                .filter_map(|queue| entries.remove(&queue))
+                .filter_map(|queue| entries.remove(&queue).map(|entry| (queue, entry)))
                 .collect::<Vec<_>>()
         };
-        for entry in &removed {
+        for (_, entry) in &removed {
             entry.retire();
         }
-        for entry in removed {
-            entry.shutdown(ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT).await;
-        }
+        shutdown_together(removed, ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT).await;
     }
 
     pub(super) async fn close_and_shutdown(&self, timeout: Duration) -> Vec<(MessageQueue, bool)> {
@@ -282,11 +278,7 @@ impl AssignmentRegistry {
         for entry in removed.values() {
             entry.retire();
         }
-        let mut reports = Vec::with_capacity(removed.len());
-        for (queue, entry) in removed {
-            reports.push((queue, entry.shutdown(timeout).await));
-        }
-        reports
+        shutdown_together(removed, timeout).await
     }
 
     pub(super) async fn snapshot(&self) -> AssignmentRegistrySnapshot {
@@ -300,5 +292,62 @@ impl AssignmentRegistry {
             owned_tasks,
             closed: self.closed.load(Ordering::Acquire),
         }
+    }
+}
+
+/// Stops the tasks of retired entries under one shared deadline and reports whether each stopped
+/// in time. A pull task may be waiting for a Broker that holds the pull for its whole suspend
+/// time, so waiting queue by queue would stretch the wait to one timeout per queue.
+async fn shutdown_together(
+    entries: impl IntoIterator<Item = (MessageQueue, Arc<AssignmentEntry>)>,
+    timeout: Duration,
+) -> Vec<(MessageQueue, bool)> {
+    futures::future::join_all(
+        entries
+            .into_iter()
+            .map(|(queue, entry)| async move { (queue, entry.shutdown(timeout).await) }),
+    )
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::super::spawn_lite_pull_task;
+    use super::*;
+
+    #[tokio::test]
+    async fn closing_stops_every_queue_task_within_one_timeout() {
+        // Tasks that ignore cancellation, like pulls a Broker holds for its whole suspend time.
+        const TIMEOUT: Duration = Duration::from_millis(300);
+        let registry = AssignmentRegistry::new();
+        let context = crate::runtime::test_service_context("lite-pull-assignment-close-test");
+        for queue_id in 0..4 {
+            let queue = MessageQueue::from_parts("close-together-topic", "broker-a", queue_id);
+            let entry = registry
+                .ensure(queue.clone())
+                .await
+                .expect("an open registry admits queues");
+            let handle = spawn_lite_pull_task(
+                &context,
+                "rocketmq-client-lite-pull-test",
+                Arc::new(AtomicBool::new(false)),
+                std::future::pending::<()>(),
+            )
+            .expect("the pull task spawns");
+            let generation = entry.next_task_generation();
+            assert!(registry.install_task(&queue, &entry, generation, handle).await.is_ok());
+        }
+
+        let started = Instant::now();
+        let reports = registry.close_and_shutdown(TIMEOUT).await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(reports.len(), 4);
+        assert!(reports.iter().all(|(_, stopped)| !stopped), "every task timed out");
+        // One timeout to wait plus the abort; queue by queue would take four timeouts.
+        assert!(elapsed < TIMEOUT * 3, "closing took {elapsed:?}");
+        assert_eq!(registry.snapshot().await.entries, 0);
     }
 }

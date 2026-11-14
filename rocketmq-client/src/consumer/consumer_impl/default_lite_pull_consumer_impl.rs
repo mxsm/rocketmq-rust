@@ -247,6 +247,23 @@ async fn sleep_or_assignment_cancel(
     }
 }
 
+/// Runs `future` unless `cancellation` fires first, in which case the future is dropped.
+///
+/// A Broker can hold a long-polling pull for its whole suspend time, and a pull for a retired
+/// assignment discards its result, so the pull task stops waiting as soon as its assignment is
+/// retired. Dropping the request releases its pending entry, and the stored offset is unchanged,
+/// so the next owner of the queue pulls the same messages.
+async fn unless_cancelled<F: Future>(cancellation: Option<&CancellationToken>, future: F) -> Option<F::Output> {
+    match cancellation {
+        Some(cancellation) => tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => None,
+            output = future => Some(output),
+        },
+        None => Some(future.await),
+    }
+}
+
 /// Internal rebalance listener that mirrors Java LitePull's default MessageQueueListenerImpl.
 struct LitePullRebalanceListener {
     consumer_impl: Weak<DefaultLitePullConsumerImpl>,
@@ -1966,8 +1983,16 @@ impl DefaultLitePullConsumerImpl {
             CommunicationMode::Sync,
             NoopPullCallback,
         );
-        let mut pull_result = tokio::time::timeout_at(pull_deadline, pull_request)
-            .await
+        let cancellation = assignment.map(|assignment| assignment.entry.cancellation());
+        let Some(pull_result) = unless_cancelled(
+            cancellation.as_ref(),
+            tokio::time::timeout_at(pull_deadline, pull_request),
+        )
+        .await
+        else {
+            return Ok(0);
+        };
+        let mut pull_result = pull_result
             .map_err(|_| ClientError::timeout("lite pull request", pull_rpc_timeout_millis))??
             .ok_or_else(|| crate::mq_client_err!("Synchronous lite pull returned no result"))?;
         drop(pull_permit);
@@ -3707,6 +3732,25 @@ mod tests {
             .expect("injected lite pull task should complete");
         assert_eq!(thread_name, "rocketmq-client-unit-test");
         assert!(handle.abort_and_wait(ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT).await);
+    }
+
+    #[tokio::test]
+    async fn a_retired_assignment_stops_waiting_for_its_pull() {
+        assert_eq!(unless_cancelled(None, async { 3 }).await, Some(3));
+        let cancellation = CancellationToken::new();
+        assert_eq!(unless_cancelled(Some(&cancellation), async { 7 }).await, Some(7));
+
+        // A pull the Broker holds never completes on its own; retiring the assignment ends it.
+        let waiting = tokio::spawn({
+            let cancellation = cancellation.clone();
+            async move { unless_cancelled(Some(&cancellation), std::future::pending::<()>()).await }
+        });
+        cancellation.cancel();
+        let outcome = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("the held pull stops once the assignment is retired")
+            .expect("the waiting task does not panic");
+        assert_eq!(outcome, None);
     }
 
     #[tokio::test]
