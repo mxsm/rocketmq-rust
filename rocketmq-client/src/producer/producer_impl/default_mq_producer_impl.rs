@@ -104,7 +104,7 @@ use crate::implementation::mq_client_manager::ClientPool;
 use crate::implementation::mq_client_manager::ClientPoolToken;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::latency::resolver::Resolver;
-use crate::latency::service_detector::ServiceDetector;
+use crate::latency::service_detector::BrokerReachabilityProbe;
 use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM;

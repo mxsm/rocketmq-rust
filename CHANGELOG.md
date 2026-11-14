@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(client):** Rename the public `ServiceDetector` trait to `BrokerReachabilityProbe`; `ServiceDetector` stays as a crate-root alias, so existing implementations still compile, and `detect` keeps its timeout and reachability result ([#12622](https://github.com/mxsm/rocketmq-rust/issues/12622)).
 - **docs(proxy-core):** Clarify that ingress captures request metadata before dispatch, including Proxy-handled requests ([#12444](https://github.com/mxsm/rocketmq-rust/issues/12444)).
 - **refactor(store-local):** Rename the advisory compaction threshold evaluation to `evaluate_compaction_pressure` and its result to `CompactionPressure`; thresholds and compaction authority remain unchanged ([#12425](https://github.com/mxsm/rocketmq-rust/issues/12425)).
 - **refactor(namesrv):** Extract embedded Controller configuration into a private module, preserving defaults, overrides, and removed-key rejection ([#12380](https://github.com/mxsm/rocketmq-rust/issues/12380)).

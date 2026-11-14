@@ -43,6 +43,7 @@ use rocketmq_client_rust::AsyncTraceDispatcher;
 use rocketmq_client_rust::AuthAdmin;
 #[cfg(feature = "admin-full")]
 use rocketmq_client_rust::BrokerAdmin;
+use rocketmq_client_rust::BrokerReachabilityProbe;
 use rocketmq_client_rust::ClientError;
 use rocketmq_client_rust::ClientInstanceHandle;
 use rocketmq_client_rust::ClientRpcHook;
@@ -98,6 +99,7 @@ use rocketmq_client_rust::RouteClient;
 use rocketmq_client_rust::SelectMessageQueueByHash;
 use rocketmq_client_rust::SelectMessageQueueByMachineRoom;
 use rocketmq_client_rust::SelectMessageQueueByRandom;
+use rocketmq_client_rust::ServiceDetector;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SubscriptionControl;
 #[cfg(feature = "admin-full")]
@@ -195,6 +197,14 @@ impl ConsumeMessageHook for RootConsumeHook {
     }
 }
 
+struct RootServiceDetector;
+
+impl ServiceDetector for RootServiceDetector {
+    async fn detect(&self, endpoint: &str, timeout_millis: u64) -> bool {
+        endpoint == "broker-a:10911" && timeout_millis > 0
+    }
+}
+
 #[track_caller]
 fn assert_not_initialized(error: &ClientError, component: &str) {
     assert!(error.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
@@ -215,6 +225,16 @@ fn crate_root_exports_client_capability_views() {
     ];
 
     assert!(capability_sizes.iter().all(|size| *size > 0));
+}
+
+#[tokio::test]
+async fn crate_root_service_detector_alias_implements_broker_reachability_probe() {
+    async fn probe<P: BrokerReachabilityProbe>(probe: &P, endpoint: &str) -> bool {
+        probe.detect(endpoint, 3_000).await
+    }
+
+    assert!(probe(&RootServiceDetector, "broker-a:10911").await);
+    assert!(!probe(&RootServiceDetector, "broker-b:10911").await);
 }
 
 #[test]
