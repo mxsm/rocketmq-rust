@@ -22,8 +22,8 @@ use super::diagnosis_support::note;
 use super::diagnosis_support::wrap_report;
 use super::diagnosis_support::SupportingBudget;
 use super::normalized_logical_identifier;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::adapter::admin_session::ResolvedCluster;
 use crate::model::contract::QueryCompleteness;
@@ -86,7 +86,7 @@ async fn diagnose_in_session<S>(
     mut budget: SupportingBudget,
 ) -> Result<QueryPayload<DiagnosisReport>, ToolFailure>
 where
-    S: AdminSession,
+    S: QueryAdminSession,
 {
     let mut completeness = QueryCompleteness::default();
     let broker_name = args.broker_name.as_str();

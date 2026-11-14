@@ -18,8 +18,8 @@ use std::time::Duration;
 use super::normalized_identifier;
 use super::normalized_logical_identifier;
 use super::query_result_from_snapshot;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::adapter::admin_session::SessionTopicStats;
 use crate::infrastructure::snapshot::SnapshotKind;
@@ -120,7 +120,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::adapter::admin_session::AdminSession;
+    use crate::adapter::admin_session::QueryAdminSession;
     use crate::adapter::admin_session::ResolvedCluster;
     use crate::adapter::admin_session::SessionConsumerLag;
     use crate::adapter::admin_session::SessionTopicRoute;
@@ -178,7 +178,7 @@ mod tests {
         hang_config: bool,
     }
 
-    impl AdminSession for Session {
+    impl QueryAdminSession for Session {
         async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }

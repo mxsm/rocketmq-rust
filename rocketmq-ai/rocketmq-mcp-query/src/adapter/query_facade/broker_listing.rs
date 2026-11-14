@@ -16,8 +16,8 @@
 
 use std::time::Duration;
 
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::model::contract::observed_at;
 use crate::model::contract::QueryResult;
@@ -163,7 +163,7 @@ mod tests {
         }
     }
 
-    impl AdminSession for Session {
+    impl QueryAdminSession for Session {
         async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             self.counters.broker_rows.fetch_add(1, Ordering::SeqCst);
             let rows = vec![broker("broker-a", 0), broker("broker-a", 1)];
