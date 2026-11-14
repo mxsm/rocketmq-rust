@@ -2121,14 +2121,14 @@ fn build_send_message_request(
             lo: None,
         }),
     };
-    let body = entry.message.body().ok_or_else(|| {
+    // The gRPC request already owns the body as `Bytes`; the embedded Broker shares it.
+    let body = entry.message.body_bytes().cloned().ok_or_else(|| {
         canonical::request_body_invalid(
             "sendMessage",
             format!("message body is missing for topic '{}'", entry.topic),
         )
     })?;
-    let mut command = RemotingCommand::create_request_command(RequestCode::SendMessage, header)
-        .set_body(bytes::Bytes::copy_from_slice(body));
+    let mut command = RemotingCommand::create_request_command(RequestCode::SendMessage, header).set_body(body);
     command.make_custom_header_to_net();
     Ok(command)
 }
@@ -3195,6 +3195,11 @@ mod tests {
         assert_eq!(header.producer_group.as_str(), "producer-a");
         assert_eq!(header.queue_id, 2);
         assert_eq!(command.body().map(|body| body.as_ref()), Some(&[1, 2, 3][..]));
+        assert_eq!(
+            command.body().map(|body| body.as_ptr()),
+            entry.message.body_bytes().map(|body| body.as_ptr()),
+            "the request shares the message body instead of copying it"
+        );
     }
 
     #[test]
