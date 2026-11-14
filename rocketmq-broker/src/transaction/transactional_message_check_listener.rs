@@ -16,7 +16,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 
 /// Trait defining the listener for transactional message checks.
 #[trait_variant::make(Send)]
-pub trait TransactionalMessageCheckListener: std::any::Any {
+pub trait TransactionalMessageCheckListener: 'static {
     /// Sends a check message to verify the state of a transactional message.
     ///
     /// # Arguments
@@ -53,8 +53,4 @@ pub trait TransactionalMessageCheckListener: std::any::Any {
     /// - The message cannot be resolved
     /// - The broker encounters an issue during processing
     async fn resolve_half_msg(&self, msg_ext: MessageExt) -> crate::broker_error::BrokerResult<()>;
-
-    fn as_any(&self) -> &dyn std::any::Any;
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -126,13 +125,5 @@ impl TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListe
             )
             .map_err(|error| crate::broker_error::broker_task_failed("transaction_check_message", error))?;
         Ok(())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
