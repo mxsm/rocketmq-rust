@@ -118,46 +118,26 @@ impl<'a> JsonHeaderParser<'a> {
         }
     }
 
+    /// Checks one JSON string without escapes, validating it as UTF-8 if it is not ASCII.
+    ///
+    /// Callers check first that no backslash follows, so an escape is not expected; one ends the
+    /// fast parse.
     #[inline]
-    fn parse_canonical_json_string(&mut self) -> Option<bool> {
+    fn parse_unescaped_json_string(&mut self) -> Option<()> {
         if self.src.get(self.cursor).copied()? != b'"' {
             return None;
         }
         self.cursor += 1;
         let start = self.cursor;
-        let mut escaped = false;
-        let mut string_bytes = 0u8;
-        loop {
-            match self.src.get(self.cursor).copied()? {
-                b'"' => {
-                    if string_bytes & 0x80 != 0 {
-                        std::str::from_utf8(&self.src[start..self.cursor]).ok()?;
-                    }
-                    self.cursor += 1;
-                    return Some(escaped);
-                }
-                b'\\' => {
-                    escaped = true;
-                    self.cursor += 1;
-                    match self.src.get(self.cursor).copied()? {
-                        b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => self.cursor += 1,
-                        b'u' => {
-                            let digits = self.src.get(self.cursor + 1..self.cursor + 5)?;
-                            if !digits.iter().all(u8::is_ascii_hexdigit) {
-                                return None;
-                            }
-                            self.cursor += 5;
-                        }
-                        _ => return None,
-                    }
-                }
-                0..=0x1f => return None,
-                byte => {
-                    string_bytes |= byte;
-                    self.cursor += 1;
-                }
-            }
+        let (non_ascii, stop) = text_run(self.src, self.cursor)?;
+        if self.src[stop] != b'"' {
+            return None;
         }
+        if non_ascii {
+            std::str::from_utf8(&self.src[start..stop]).ok()?;
+        }
+        self.cursor = stop + 1;
+        Some(())
     }
 
     #[inline]
@@ -244,18 +224,21 @@ impl<'a> JsonHeaderParser<'a> {
                 canonical: true,
             });
         }
+        // Escaped text has to be decoded into an owned payload. One scan of the rest of the
+        // header decides that up front, so no entry is parsed twice. A backslash after the
+        // object only costs the borrowed form.
+        if memchr::memchr(b'\\', &self.src[self.cursor..]).is_some() {
+            return self.parse_length_prefixed_extension_fields();
+        }
 
         loop {
-            let key_escaped = self.parse_canonical_json_string()?;
+            self.parse_unescaped_json_string()?;
             if self.src.get(self.cursor).copied()? != b':' {
                 return None;
             }
             self.cursor += 1;
-            let value_escaped = self.parse_canonical_json_string()?;
+            self.parse_unescaped_json_string()?;
             entry_count = entry_count.checked_add(1)?;
-            if key_escaped || value_escaped {
-                return self.finish_length_prefixed_extension_fields(start, entry_count);
-            }
             match self.src.get(self.cursor).copied()? {
                 b',' => self.cursor += 1,
                 b'}' => {
@@ -272,24 +255,12 @@ impl<'a> JsonHeaderParser<'a> {
         }
     }
 
-    #[cold]
-    #[inline(never)]
-    fn finish_length_prefixed_extension_fields(
-        &mut self,
-        start: usize,
-        mut entry_count: usize,
-    ) -> Option<ParsedExtensionFields> {
-        let capacity = self.src.len().checked_sub(start)?;
-        let mut payload = decode_length_prefixed_fields(&self.src[start..self.cursor], entry_count, capacity)?;
+    /// Decodes the entries of a canonical object that has escapes, starting at its first key.
+    fn parse_length_prefixed_extension_fields(&mut self) -> Option<ParsedExtensionFields> {
+        let capacity = self.src.len().checked_sub(self.cursor)?;
+        let mut payload = Vec::with_capacity(capacity);
+        let mut entry_count = 0usize;
         loop {
-            match self.src.get(self.cursor).copied()? {
-                b'}' => {
-                    self.cursor += 1;
-                    return Some(ParsedExtensionFields::LengthPrefixed { payload, entry_count });
-                }
-                b',' => self.cursor += 1,
-                _ => return None,
-            }
             append_json_string(self.src, &mut self.cursor, &mut payload)?;
             if self.src.get(self.cursor).copied()? != b':' {
                 return None;
@@ -297,6 +268,14 @@ impl<'a> JsonHeaderParser<'a> {
             self.cursor += 1;
             append_json_string(self.src, &mut self.cursor, &mut payload)?;
             entry_count = entry_count.checked_add(1)?;
+            match self.src.get(self.cursor).copied()? {
+                b',' => self.cursor += 1,
+                b'}' => {
+                    self.cursor += 1;
+                    return Some(ParsedExtensionFields::LengthPrefixed { payload, entry_count });
+                }
+                _ => return None,
+            }
         }
     }
 }
@@ -316,6 +295,26 @@ fn decode_hex_u16(src: &[u8]) -> Option<u16> {
     })
 }
 
+/// Scans unescaped JSON string text from `from` up to the next `"` or `\`, returning whether it
+/// has a byte above ASCII and where it stops. Rejects control characters, which a JSON string
+/// must escape, and text that does not end.
+///
+/// Header strings are mostly a few bytes long, so a plain loop beats a vectorized search here.
+#[inline]
+fn text_run(src: &[u8], from: usize) -> Option<(bool, usize)> {
+    let mut high = 0u8;
+    for (offset, &byte) in src.get(from..)?.iter().enumerate() {
+        if byte == b'"' || byte == b'\\' {
+            return Some((high & 0x80 != 0, from + offset));
+        }
+        if byte < 0x20 {
+            return None;
+        }
+        high |= byte;
+    }
+    None
+}
+
 fn append_json_string(src: &[u8], cursor: &mut usize, out: &mut Vec<u8>) -> Option<()> {
     if src.get(*cursor).copied()? != b'"' {
         return None;
@@ -326,15 +325,22 @@ fn append_json_string(src: &[u8], cursor: &mut usize, out: &mut Vec<u8>) -> Opti
     let value_offset = out.len();
 
     loop {
-        match src.get(*cursor).copied()? {
+        let (non_ascii, stop) = text_run(src, *cursor)?;
+        let text = &src[*cursor..stop];
+        // Escapes decode to whole characters, so the value is UTF-8 exactly when every raw run is.
+        if non_ascii {
+            std::str::from_utf8(text).ok()?;
+        }
+        out.extend_from_slice(text);
+        *cursor = stop;
+        match src[stop] {
             b'"' => {
                 *cursor += 1;
-                std::str::from_utf8(&out[value_offset..]).ok()?;
                 let length = u32::try_from(out.len().checked_sub(value_offset)?).ok()?;
                 out[length_offset..value_offset].copy_from_slice(&length.to_be_bytes());
                 return Some(());
             }
-            b'\\' => {
+            _ => {
                 *cursor += 1;
                 match src.get(*cursor).copied()? {
                     b'"' | b'\\' | b'/' => {
@@ -364,6 +370,14 @@ fn append_json_string(src: &[u8], cursor: &mut usize, out: &mut Vec<u8>) -> Opti
                     b'u' => {
                         let high = decode_hex_u16(src.get(*cursor + 1..*cursor + 5)?)?;
                         *cursor += 5;
+                        // RocketMQ property separators arrive as `\u0001` and `\u0002`; an ASCII
+                        // scalar is its own UTF-8 encoding.
+                        if let Ok(ascii) = u8::try_from(high) {
+                            if ascii.is_ascii() {
+                                out.push(ascii);
+                                continue;
+                            }
+                        }
                         let scalar = if (0xd800..=0xdbff).contains(&high) {
                             if src.get(*cursor..*cursor + 2)? != b"\\u" {
                                 return None;
@@ -386,33 +400,8 @@ fn append_json_string(src: &[u8], cursor: &mut usize, out: &mut Vec<u8>) -> Opti
                     _ => return None,
                 }
             }
-            0..=0x1f => return None,
-            byte => {
-                out.push(byte);
-                *cursor += 1;
-            }
         }
     }
-}
-
-fn decode_length_prefixed_fields(src: &[u8], entry_count: usize, capacity: usize) -> Option<Vec<u8>> {
-    let mut cursor = 0usize;
-    let mut payload = Vec::with_capacity(capacity);
-    for index in 0..entry_count {
-        if index != 0 {
-            if src.get(cursor).copied()? != b',' {
-                return None;
-            }
-            cursor += 1;
-        }
-        append_json_string(src, &mut cursor, &mut payload)?;
-        if src.get(cursor).copied()? != b':' {
-            return None;
-        }
-        cursor += 1;
-        append_json_string(src, &mut cursor, &mut payload)?;
-    }
-    (cursor == src.len()).then_some(payload)
 }
 
 #[inline]
@@ -499,7 +488,9 @@ impl ParsedJsonHeader {
                         entry_count,
                         canonical: true,
                     } => {
-                        std::str::from_utf8(src.get(range.clone())?).ok()?;
+                        // The canonical parse validated every string that is not ASCII, and the
+                        // rest of the object is ASCII punctuation.
+                        src.get(range.clone())?;
                         JsonHeaderFields::from_canonical_unescaped_object(src.slice(range), entry_count)
                     }
                     ParsedExtensionFields::Borrowed {
@@ -785,6 +776,8 @@ mod tests {
     use bytes::BytesMut;
     use cheetah_string::CheetahString;
 
+    use std::collections::HashMap;
+
     use super::*;
     use crate::protocol::LanguageCode;
 
@@ -820,6 +813,94 @@ mod tests {
                 Some("id")
             );
         }
+    }
+
+    /// Random extension-field objects, valid and invalid, decode like `serde_json` decodes them:
+    /// the same map when it accepts the object, and no fast decode when it rejects it.
+    #[test]
+    fn extension_fields_decode_like_serde_json() {
+        const PIECES: [&[u8]; 22] = [
+            b"a",
+            b"KEYS",
+            b"0",
+            b" ",
+            "中".as_bytes(),
+            "🚀".as_bytes(),
+            br"\u0001",
+            br"\u0002",
+            br"\u007f",
+            // Escapes of U+00E9, U+4E2D and the surrogate pair of U+1F680; 92 is a backslash.
+            &[92, b'u', b'0', b'0', b'e', b'9'],
+            &[92, b'u', b'4', b'e', b'2', b'd'],
+            &[92, b'u', b'd', b'8', b'3', b'd', 92, b'u', b'd', b'e', b'8', b'0'],
+            br#"\""#,
+            br"\\",
+            br"\/",
+            br"\b\f\n\r\t",
+            br"\ud83d",
+            br"\x",
+            br"\u12",
+            b"\x01",
+            b"\xff",
+            b"\xe4\xb8",
+        ];
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut accepted = 0;
+        for _ in 0..20_000 {
+            let mut object = vec![b'{'];
+            for entry in 0..(next() % 5) {
+                if entry > 0 {
+                    object.push(b',');
+                }
+                for _ in 0..2 {
+                    object.push(b'"');
+                    for _ in 0..(next() % 4) {
+                        // Mostly well-formed pieces; the last five are invalid on their own.
+                        let limit = if next() % 8 == 0 {
+                            PIECES.len()
+                        } else {
+                            PIECES.len() - 5
+                        };
+                        object.extend_from_slice(PIECES[(next() % limit as u64) as usize]);
+                    }
+                    object.push(b'"');
+                    object.push(b':');
+                }
+                object.pop();
+            }
+            object.push(b'}');
+
+            let mut header =
+                br#"{"code":310,"language":"RUST","version":474,"opaque":7,"flag":0,"remark":null,"extFields":"#
+                    .to_vec();
+            header.extend_from_slice(&object);
+            header.extend_from_slice(br#","serializeTypeCurrentRPC":"JSON"}"#);
+
+            let expected = serde_json::from_slice::<HashMap<String, String>>(&object).ok();
+            let decoded =
+                try_parse_json_header(&header).and_then(|parsed| parsed.into_command(Bytes::from(header.clone())));
+            match (expected, decoded) {
+                (Some(expected), Some(command)) => {
+                    accepted += 1;
+                    let fields = command.ext_fields().expect("decoded extension fields");
+                    let fields: HashMap<String, String> = fields
+                        .iter()
+                        .map(|(key, value)| (key.to_string(), value.to_string()))
+                        .collect();
+                    assert_eq!(fields, expected, "{}", String::from_utf8_lossy(&object));
+                }
+                (Some(_), None) => panic!("the fast path rejected {}", String::from_utf8_lossy(&object)),
+                (None, Some(_)) => panic!("the fast path accepted {}", String::from_utf8_lossy(&object)),
+                (None, None) => {}
+            }
+        }
+        assert!(accepted > 5_000, "too few valid objects: {accepted}");
     }
 
     #[test]
