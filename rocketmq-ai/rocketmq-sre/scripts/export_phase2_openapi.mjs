@@ -15,6 +15,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extendInspectionTemplates } from "./openapi/inspection_templates.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const workspace = resolve(scriptDirectory, "..");
@@ -120,19 +121,7 @@ const dateTime = {
   type: "string",
   format: "date-time",
 };
-const inspectionTemplates = [
-  "cluster_health",
-  "consumer",
-  "broker",
-  "telemetry",
-  "full_cluster",
-  "producer_consumer",
-  "store_ha",
-  "routing_proxy",
-  "security",
-  "upgrade",
-  "disaster_recovery",
-];
+const inspectionTemplate = { $ref: "#/components/schemas/InspectionTemplate" };
 const eventEntryCommonProperties = {
   schema_version: {
     type: "string",
@@ -176,10 +165,8 @@ const workflowSymptomFamily = {
   maxLength: 128,
 };
 
-document.components.schemas.CreateInspectionRequest.properties.template.enum =
-  inspectionTemplates;
-document.components.schemas.InspectionRun.properties.template.enum =
-  inspectionTemplates;
+document.components.schemas.CreateInspectionRequest.properties.template = inspectionTemplate;
+document.components.schemas.InspectionRun.properties.template = inspectionTemplate;
 
 Object.assign(document.components.schemas, {
   AlertmanagerAlertRequest: {
@@ -448,10 +435,7 @@ Object.assign(document.components.schemas, {
         type: "string",
         const: "scheduled_inspection",
       },
-      template: {
-        type: "string",
-        enum: inspectionTemplates,
-      },
+      template: inspectionTemplate,
       schedule: {
         oneOf: [
           {
@@ -1767,6 +1751,8 @@ document.paths["/v1/operations/reports"] = {
   },
 };
 
+extendInspectionTemplates({ document,
+  schema: JSON.parse(await readFile(join(schemasDirectory, "inspection-template.schema.json"), "utf8")) });
 await writeFile(outputPath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
 console.log(
   `PHASE2_OPENAPI_EXPORTED paths=${Object.keys(document.paths).length} schemas=${Object.keys(document.components.schemas).length}`,

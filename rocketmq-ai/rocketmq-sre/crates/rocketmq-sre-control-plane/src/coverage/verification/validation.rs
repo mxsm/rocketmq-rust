@@ -252,3 +252,6 @@ pub(super) fn qualified(
 fn invalid(code: &'static str) -> ControlPlaneRequestFailure {
     ControlPlaneRequestFailure::validation(code, "capability verification input is invalid")
 }
+
+#[cfg(test)]
+mod store_pressure_tests;

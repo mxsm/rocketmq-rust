@@ -593,18 +593,7 @@ export interface IncidentView {
   diagnosis_revisions: DiagnosisRevision[];
 }
 
-export type InspectionTemplate =
-  | "cluster_health"
-  | "consumer"
-  | "broker"
-  | "telemetry"
-  | "full_cluster"
-  | "producer_consumer"
-  | "store_ha"
-  | "routing_proxy"
-  | "security"
-  | "upgrade"
-  | "disaster_recovery";
+export type InspectionTemplate = ApiSchemas["InspectionTemplate"];
 
 export type InspectionStatus =
   | "scheduled"

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Rules-only live qualification for the complete diagnostic-pack catalog.
+//! Rules-only qualification of the explicitly pinned legacy fixture baseline.
+//! New active pack versions require their own evidence and are not covered by
+//! an older version's synthetic scenarios.
 
 mod fixture;
 mod live;
@@ -26,7 +28,7 @@ pub use model::QualificationScenario;
 
 use std::path::Path;
 
-/// Builds the diagnostic qualification manifest from the compiled registry.
+/// Builds the pinned qualification-baseline manifest from the compiled registry.
 ///
 /// # Errors
 ///

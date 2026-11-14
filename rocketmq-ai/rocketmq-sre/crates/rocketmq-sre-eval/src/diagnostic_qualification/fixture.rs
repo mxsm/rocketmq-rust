@@ -29,8 +29,8 @@ use rocketmq_sre_contracts::QueryId;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_contracts::TimeRange;
 use rocketmq_sre_contracts::current_evidence_schema;
-use rocketmq_sre_core::diagnostics::full_pack_ids;
 use rocketmq_sre_core::diagnostics::full_registry;
+use rocketmq_sre_core::diagnostics::qualification_baseline_pack_ids;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -179,8 +179,8 @@ pub(super) struct MaterializedPackScenario {
     pub(super) evidence: Vec<EvidenceSnapshot>,
 }
 
-/// Builds the canonical manifest directly from the compiled registry and the
-/// checked-in fixture assets.
+/// Builds the pinned legacy manifest from exact compiled versions and their
+/// checked-in fixture assets. Later active versions are a separate scope.
 pub(super) fn generated_manifest() -> Result<DiagnosticQualificationManifest, DiagnosticQualificationFailure> {
     let fixtures = raw_fixtures()?;
     let expected = expected_by_pack(&fixtures)?;
@@ -188,7 +188,7 @@ pub(super) fn generated_manifest() -> Result<DiagnosticQualificationManifest, Di
         DiagnosticQualificationFailure::InvalidManifest("built-in diagnostic registry is invalid".to_owned())
     })?;
     let mut packs = Vec::new();
-    for id in full_pack_ids() {
+    for id in qualification_baseline_pack_ids() {
         let pack = registry.resolve(&id).ok_or_else(|| {
             DiagnosticQualificationFailure::InvalidManifest(format!("registered pack `{id}` cannot be resolved"))
         })?;
@@ -225,6 +225,7 @@ pub(super) fn generated_manifest() -> Result<DiagnosticQualificationManifest, Di
             "broker".to_owned(),
             "telemetry".to_owned(),
             "producer_consumer".to_owned(),
+            "store_pressure_legacy_v1".to_owned(),
         ],
         fixture_assets: WAVE_A_FIXTURES
             .iter()
@@ -315,6 +316,7 @@ pub(super) fn materialize_pack_scenario(
 
 fn inspection_template_for(pack_id: &str) -> Result<&'static str, DiagnosticQualificationFailure> {
     match pack_id {
+        "store-pressure.v1" => Ok("store_pressure_legacy_v1"),
         "cluster-topology.v1"
         | "deployment-drift.v1"
         | "namesrv-route.v1"
@@ -332,7 +334,6 @@ fn inspection_template_for(pack_id: &str) -> Result<&'static str, DiagnosticQual
         | "queue-hotspot.v1"
         | "topic-subscription-config.v1" => Ok("consumer"),
         "broker-health.v1"
-        | "store-pressure.v1"
         | "store-integrity.v1"
         | "rocksdb-health.v1"
         | "tiered-store.v1"
@@ -380,7 +381,7 @@ fn raw_fixtures() -> Result<Vec<RawFixture>, DiagnosticQualificationFailure> {
 fn expected_by_pack(
     fixtures: &[RawFixture],
 ) -> Result<BTreeMap<String, Vec<QualificationExpectation>>, DiagnosticQualificationFailure> {
-    let known = full_pack_ids().into_iter().collect::<BTreeSet<_>>();
+    let known = qualification_baseline_pack_ids().into_iter().collect::<BTreeSet<_>>();
     let mut result = BTreeMap::<String, Vec<QualificationExpectation>>::new();
     for fixture in fixtures {
         if !known.contains(&fixture.pack) {
@@ -444,7 +445,7 @@ fn validate_manifest(manifest: &DiagnosticQualificationManifest) -> Result<(), D
             "qualification cardinality must be 32 packs by 3 scenarios".to_owned(),
         ));
     }
-    let known = full_pack_ids().into_iter().collect::<BTreeSet<_>>();
+    let known = qualification_baseline_pack_ids().into_iter().collect::<BTreeSet<_>>();
     let actual = manifest
         .packs
         .iter()
@@ -553,12 +554,15 @@ mod tests {
     }
 
     #[test]
-    fn generated_manifest_covers_all_pack_scenarios() {
+    fn generated_manifest_preserves_its_exact_baseline_without_qualifying_new_active_versions() {
         let manifest = generated_manifest().expect("qualification manifest");
 
         assert_eq!(manifest.pack_count, 32);
         assert_eq!(manifest.pack_scenario_count, 96);
         assert_eq!(manifest.packs.len(), 32);
+        assert!(manifest.packs.iter().any(|pack| pack.id == "store-pressure.v1"));
+        assert!(!manifest.packs.iter().any(|pack| pack.id == "store-pressure.v2"));
+        assert!(full_registry().unwrap().resolve("store-pressure.v2").is_some());
         assert!(
             manifest
                 .packs

@@ -129,27 +129,32 @@ impl State {
         &mut self,
         case: &InvestigationReplayCase,
         plan: InvestigationPlannedEvaluation,
+        bindings: &[InvestigationReadBinding],
     ) -> Result<(), InvestigationReplayRejection> {
         let admission = self.admit(case, plan.spec, plan.reservation, None)?;
         let InvestigationStepKind::EvaluateRules { evidence_ids } = &admission.spec.work else {
             return Err(InvestigationReplayRejection::ContractRejected);
         };
-        let inputs = self
+        let selected = self
             .evidence
             .iter()
-            .filter(|snapshot| {
-                evidence_ids.contains(&snapshot.evidence_id)
-                    && plan.requirements.iter().any(|quality| {
-                        quality.quality == DiagnosticEvidenceQuality::Available
-                            && quality.evidence_ids.contains(&snapshot.evidence_id)
-                    })
-            })
+            .filter(|snapshot| evidence_ids.contains(&snapshot.evidence_id))
             .cloned()
             .collect::<Vec<_>>();
         let registry = full_registry().map_err(|_| InvestigationReplayRejection::UnknownPack)?;
         let pack = exact_pack(&registry, &admission.spec.pack)?;
         let engine = DiagnosticEngine::new(full_registry().map_err(|_| InvestigationReplayRejection::UnknownPack)?);
-        let report = match engine.evaluate_version(pack.id(), pack.version(), &inputs) {
+        let input = InvestigationPlanningInput {
+            evidence: &selected,
+            ..input(case, self, bindings)
+        };
+        let report = match investigation_rule_inputs(&registry, &admission.spec.pack, &input)
+            .map_err(|_| ())
+            .and_then(|inputs| {
+                engine
+                    .evaluate_version(pack.id(), pack.version(), &inputs)
+                    .map_err(|_| ())
+            }) {
             Ok(report) => report,
             Err(_) => {
                 self.settle_known(

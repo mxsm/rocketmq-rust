@@ -28,6 +28,13 @@ use crate::core::query::AdminQueryResult;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
 
+mod store_pressure;
+pub use store_pressure::{
+    StoreDiskUsageDiagnostics, StorePressureDiagnostics, StorePressureGenerationStatus, StorePressureObservationSource,
+    StorePressurePolicyDiagnostics, StorePressureRuntimeDiagnostics, StoreUsageRatio,
+    STORE_PRESSURE_DIAGNOSTICS_SCHEMA_VERSION,
+};
+
 /// Stable schema version emitted by the read-only broker diagnostics query.
 pub const BROKER_DIAGNOSTICS_SCHEMA_VERSION: &str = "rocketmq.admin-broker-diagnostics.v1";
 /// Stable schema version emitted by the bounded Broker log-filter query.
@@ -317,6 +324,8 @@ pub struct BrokerDiagnostics {
     pub readiness: Option<BrokerReadinessDiagnostics>,
     pub config: Option<BrokerConfigSummary>,
     pub store_health: Option<StoreHealthDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_pressure: Option<StorePressureDiagnostics>,
     #[serde(default)]
     pub ha: HaDiagnostics,
     pub recovery: Option<RecoveryDiagnostics>,
@@ -1162,6 +1171,7 @@ pub(crate) fn project_broker_diagnostics(broker_name: String, broker_id: u64, ru
         readiness,
         config,
         store_health,
+        store_pressure: store_pressure::parse(runtime),
         ha: parse_ha(runtime),
         recovery: parse_recovery(runtime),
         background_index_rebuild,
@@ -1204,6 +1214,7 @@ fn unsupported_diagnostics(broker_name: String, broker_id: u64) -> BrokerDiagnos
         readiness: None,
         config: None,
         store_health: None,
+        store_pressure: None,
         ha: HaDiagnostics::default(),
         recovery: None,
         background_index_rebuild: None,

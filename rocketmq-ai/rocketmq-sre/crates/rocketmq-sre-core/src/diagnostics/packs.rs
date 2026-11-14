@@ -29,6 +29,7 @@ mod producer_connectivity_v1;
 mod routing_proxy;
 mod security_runtime;
 mod storage;
+mod store_pressure_v2;
 mod telemetry_pipeline_v1;
 
 pub use broker_health_v1::BrokerHealthV1;
@@ -38,6 +39,9 @@ pub use consumer_runtime_v1::ConsumerRuntimeV1;
 pub use deployment_drift_v1::DeploymentDriftV1;
 pub use message_path_v1::MessagePathV1;
 pub use producer_connectivity_v1::ProducerConnectivityV1;
+pub use store_pressure_v2::{
+    StorePressureSignal, StorePressureSignalState, StorePressureV2, assess_store_pressure_observation,
+};
 pub use telemetry_pipeline_v1::TelemetryPipelineV1;
 
 use super::DiagnosticPackRegistry;
@@ -75,6 +79,7 @@ pub fn wave_a_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRej
 pub fn wave_b_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejection> {
     let mut registry = DiagnosticPackRegistry::default();
     register_specs(&mut registry, wave_b_specs())?;
+    registry.register(StorePressureV2)?;
     Ok(registry)
 }
 
@@ -100,13 +105,24 @@ pub fn full_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejec
     let mut registry = DiagnosticPackRegistry::default();
     register_wave_a(&mut registry)?;
     register_specs(&mut registry, wave_b_specs())?;
+    registry.register(StorePressureV2)?;
     register_specs(&mut registry, prevention::specs())?;
     Ok(registry)
 }
 
-/// Stable major-qualified IDs of all built-in packs.
+/// All compiled major-qualified IDs, including retained compatibility versions.
 #[must_use]
 pub fn full_pack_ids() -> Vec<String> {
+    qualification_baseline_pack_ids()
+        .into_iter()
+        .chain(std::iter::once("store-pressure.v2".to_owned()))
+        .collect()
+}
+
+/// Exact versions covered by the frozen 32-pack qualification fixture dataset.
+/// This baseline is not a claim that later pack versions have been qualified.
+#[must_use]
+pub fn qualification_baseline_pack_ids() -> Vec<String> {
     WAVE_A_IDS
         .iter()
         .map(|id| (*id).to_owned())
@@ -116,6 +132,21 @@ pub fn full_pack_ids() -> Vec<String> {
                 .chain(prevention::specs())
                 .map(|spec| format!("{}.v1", spec.id)),
         )
+        .collect()
+}
+
+/// Current major-qualified IDs, without rewriting older qualification fixtures.
+#[must_use]
+pub fn active_pack_ids() -> Vec<String> {
+    qualification_baseline_pack_ids()
+        .into_iter()
+        .map(|id| {
+            if id == "store-pressure.v1" {
+                "store-pressure.v2".to_owned()
+            } else {
+                id
+            }
+        })
         .collect()
 }
 
@@ -190,14 +221,21 @@ mod tests {
     }
 
     #[test]
-    fn full_registry_contains_all_32_unique_packs() {
+    fn full_registry_retains_compatibility_versions_and_exposes_current_active_packs() {
         let registry = full_registry().expect("built-in descriptors should be valid");
         let ids = full_pack_ids();
 
         assert_eq!(registry.len(), 32);
-        assert_eq!(ids.len(), 32);
+        assert_eq!(ids.len(), 33);
         for id in ids {
             assert!(registry.resolve(&id).is_some(), "{id} should be registered");
         }
+        let active = registry
+            .active_packs()
+            .map(|pack| pack.qualified_id())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(active, active_pack_ids().into_iter().collect());
+        assert!(active.contains("store-pressure.v2"));
+        assert!(!active.contains("store-pressure.v1"));
     }
 }

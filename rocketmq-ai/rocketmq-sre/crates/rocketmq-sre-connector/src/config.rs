@@ -193,6 +193,7 @@ impl fmt::Debug for AdminCredentialsConfig {
 pub(crate) struct AdminSourceConfig {
     pub namesrv_addr: String,
     pub use_tls: bool,
+    /// Per-RPC budget; the enclosing canonical query keeps its own deadline.
     pub request_timeout: Duration,
     pub shutdown_timeout: Duration,
     pub credentials: Option<AdminCredentialsConfig>,
@@ -776,6 +777,14 @@ fn load_admin_source(
             "read-only Admin NameServer address is invalid",
         ));
     }
+    let rpc_timeout = optional_non_empty("ROCKETMQ_SRE_ADMIN_RPC_TIMEOUT_MS")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| ConnectorError::configuration("read-only Admin RPC timeout must use whole milliseconds"))
+        })
+        .transpose()?;
+    let rpc_timeout = admin_rpc_budget(request_timeout, rpc_timeout)?;
     let access_key_env = optional_non_empty("ROCKETMQ_SRE_ADMIN_ACCESS_KEY_ENV");
     let secret_key_env = optional_non_empty("ROCKETMQ_SRE_ADMIN_SECRET_KEY_ENV");
     let credentials = match (access_key_env, secret_key_env) {
@@ -799,10 +808,21 @@ fn load_admin_source(
     Ok(Some(AdminSourceConfig {
         namesrv_addr,
         use_tls: parse_env("ROCKETMQ_SRE_ADMIN_USE_TLS", false)?,
-        request_timeout,
+        request_timeout: rpc_timeout,
         shutdown_timeout,
         credentials,
     }))
+}
+
+fn admin_rpc_budget(global: Duration, requested_millis: Option<u64>) -> Result<Duration, ConnectorError> {
+    let default = (global.as_millis() / 2).min(5_000) as u64;
+    let millis = requested_millis.unwrap_or(default);
+    if millis == 0 || u128::from(millis) >= global.as_millis() {
+        return Err(ConnectorError::configuration(
+            "read-only Admin RPC timeout must be positive and smaller than the query timeout",
+        ));
+    }
+    Ok(Duration::from_millis(millis))
 }
 
 fn load_kubernetes_source(
@@ -1059,6 +1079,30 @@ pub(crate) fn test_source_limits(max_concurrency: usize, max_bytes: usize) -> So
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_rpc_budget_preserves_parent_headroom_and_rejects_disabled_or_excessive_values() {
+        assert_eq!(
+            admin_rpc_budget(Duration::from_secs(20), None).unwrap(),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            admin_rpc_budget(Duration::from_secs(4), None).unwrap(),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            admin_rpc_budget(Duration::from_secs(20), Some(3_000)).unwrap(),
+            Duration::from_secs(3)
+        );
+        for millis in [0, 20_000, 20_001, u64::MAX] {
+            assert!(admin_rpc_budget(Duration::from_secs(20), Some(millis)).is_err());
+        }
+        assert!(admin_rpc_budget(Duration::from_millis(1), None).is_err());
+        assert_eq!(
+            admin_rpc_budget(Duration::from_millis(2), None).unwrap(),
+            Duration::from_millis(1)
+        );
+    }
 
     #[test]
     fn debug_output_redacts_all_secret_values() {

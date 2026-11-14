@@ -111,6 +111,13 @@ Optional evidence sources are enabled with:
   access to those resources. Every query includes the mandatory
   `rocketmqrust.com/cluster=<cluster>` selector.
 
+For an enabled Admin source, `ROCKETMQ_SRE_ADMIN_RPC_TIMEOUT_MS` sets the
+per-RPC timeout in milliseconds. The default is the smaller of 5000 ms and
+half of `ROCKETMQ_SRE_REQUEST_TIMEOUT_SECONDS`. An override must be positive
+and strictly shorter than the overall request timeout. This reserves time
+to return partial observations from healthy instances when another instance
+times out; it does not extend the original query deadline.
+
 The Kubernetes token path must be an absolute path inside its dedicated
 read-only projected-volume mount. The Connector retains that configured path
 and performs a bounded metadata-I/O read for every request, so kubelet's

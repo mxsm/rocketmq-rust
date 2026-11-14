@@ -94,6 +94,7 @@ use rocketmq_sre_contracts::Incident;
 use rocketmq_sre_contracts::IncidentOperationRequest;
 use rocketmq_sre_contracts::IncidentOperationResult;
 use rocketmq_sre_contracts::IncidentOperationsState;
+use rocketmq_sre_contracts::InspectionTemplate;
 use rocketmq_sre_contracts::IntegrationDelivery;
 use rocketmq_sre_contracts::IntegrationTarget;
 use rocketmq_sre_contracts::IssueFenceGrantRequest;
@@ -956,6 +957,10 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
             "operations-report.schema.json",
             serde_json::to_value(schema_for!(OperationsReport))?,
         ),
+        (
+            "inspection-template.schema.json",
+            serde_json::to_value(schema_for!(InspectionTemplate))?,
+        ),
     ])
 }
 
@@ -1413,6 +1418,10 @@ signals:
             (
                 "operations-report.schema.json",
                 include_str!("../../../schemas/operations-report.schema.json"),
+            ),
+            (
+                "inspection-template.schema.json",
+                include_str!("../../../schemas/inspection-template.schema.json"),
             ),
         ];
         let generated = generated_schemas().expect("schemas should encode");

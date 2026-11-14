@@ -277,8 +277,10 @@ under `foo/`. Legacy `foo/mod.rs` entry points are rejected.
 
 ### Diagnostic qualification
 
-The versioned qualification manifest covers every built-in Diagnostic Pack with
-isolated normal, fault, and missing-Evidence scenarios. The live harness starts
+The versioned qualification manifest preserves the legacy 32-pack catalog with
+isolated normal, fault, and missing-Evidence scenarios. It pins
+`store-pressure.v1`; it does not qualify the new v2 observation semantics.
+The live harness starts
 a disposable PostgreSQL 17 container, exercises the running Control Plane, and
 verifies persisted results, Evidence citations, schema rejection, and tenant and
 cluster boundaries. It remains rules-only: model network calls, target mutation,
@@ -447,6 +449,7 @@ design is intentionally outside the current scope.
 - [Connector transport](docs/connector-control-plane-transport-adr.md)
 - [Connector ReadGateway](docs/read-gateway-contract.md)
 - [Diagnostic Pack catalog](docs/phase02-diagnostic-packs.md)
+- [Store pressure fields, units and source limits](docs/store-pressure-observations.md)
 - [Execution contracts](docs/phase03-execution-contracts.md)
 - [Plan, policy, approval, and audit](docs/phase03-plan-policy-approval.md)
 - [Operations guide](docs/phase05-operations-guide.md)

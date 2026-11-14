@@ -293,7 +293,12 @@ impl DiagnosticEngine {
         validate_evidence_set(evidence)?;
         pack.validate_evidence(evidence)?;
         let context = DiagnosticContext::new(pack, evidence);
-        let missing_required = context.missing_required();
+        let mut missing_required = context.missing_required();
+        for requirement in pack.required_evidence() {
+            if let Some(snapshot) = context.evidence(requirement.key) {
+                missing_required.extend(pack.missing_evidence_facts(requirement.key, snapshot));
+            }
+        }
         let missing_optional = context.missing_optional();
         let unsupported_required = context.unsupported_required();
 

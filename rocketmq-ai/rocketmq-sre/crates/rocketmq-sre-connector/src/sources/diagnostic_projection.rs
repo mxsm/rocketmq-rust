@@ -28,7 +28,16 @@ use crate::ConnectorFailure;
 
 const DIAGNOSTIC_SCHEMA: &str = "rocketmq.sre-diagnostic-source.v1";
 
+mod store_pressure;
+
+pub(super) fn validate_store_pressure_target(content: &Value, resource: &str) -> Result<(), ConnectorError> {
+    store_pressure::validate_target(content, resource)
+}
+
 pub(super) fn apply(mut output: SourceOutput, projection: CanonicalProjection) -> Result<SourceOutput, ConnectorError> {
+    if projection == CanonicalProjection::BrokerDiagnostics(BrokerDiagnosticProfile::StorePressure) {
+        return store_pressure::project(output);
+    }
     let projected = match projection {
         CanonicalProjection::BrokerDiagnostics(profile) => broker_diagnostics(&output.content, profile)?,
         CanonicalProjection::MetricDiagnostics(profile) => metric_diagnostics(&output.content, profile)?,

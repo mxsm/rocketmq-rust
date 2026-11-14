@@ -133,7 +133,7 @@ pub(super) fn project(
         })
         .collect::<Vec<_>>();
     let scenarios = [
-        ("backlog_store", ["consumer-lag.v2", "store-pressure.v1"]),
+        ("backlog_store", ["consumer-lag.v2", "store-pressure.v2"]),
         ("send_latency_ha", ["send-latency.v1", "broker-ha.v1"]),
         ("routing_disconnect", ["namesrv-route.v1", "producer-connectivity.v1"]),
     ]
@@ -166,6 +166,29 @@ pub(super) fn project(
         packs,
         scenarios,
     }
+}
+
+// Only the authorized saved primary pack pins the historical Store contract.
+// The public query cannot request a pack override or reinterpret old evidence.
+pub(super) fn bind_primary_revision(projection: &mut CapabilityQualityProjection, primary_pack: &str) {
+    if primary_pack != "store-pressure.v1" {
+        return;
+    }
+    let Some(scenario) = projection.scenarios.iter_mut().find(|item| item.id == "backlog_store") else {
+        return;
+    };
+    scenario.pack_ids = vec!["consumer-lag.v2".to_owned(), "store-pressure.v1".to_owned()];
+    scenario.required_signal_ids = projection
+        .packs
+        .iter()
+        .filter(|pack| scenario.pack_ids.contains(&pack.pack_id))
+        .flat_map(|pack| {
+            pack.requirements
+                .iter()
+                .filter(|requirement| requirement.required)
+                .map(|requirement| format!("{}:{}", pack.pack_id, requirement.id))
+        })
+        .collect();
 }
 
 fn configured_fact(
@@ -252,7 +275,7 @@ fn requirement_quality(
                 && snapshot.resource.starts_with(requirement.resource_prefix)
         })
         .max_by_key(|snapshot| (snapshot.observed_at, snapshot.evidence_id));
-    let (quality, reason, missing_fields) = if let Some(snapshot) = snapshot {
+    let (mut quality, mut reason, mut missing_fields) = if let Some(snapshot) = snapshot {
         qualify(snapshot, &fields, pack.max_evidence_freshness_seconds(), now)
     } else if partial {
         (
@@ -267,6 +290,18 @@ fn requirement_quality(
             fields.iter().map(|field| field.path.clone()).collect(),
         )
     };
+    if matches!(
+        quality,
+        DiagnosticEvidenceQuality::Available | DiagnosticEvidenceQuality::Partial
+    ) && let Some(snapshot) = snapshot
+    {
+        let missing_facts = pack.missing_evidence_facts(requirement.key, snapshot);
+        if !missing_facts.is_empty() {
+            missing_fields.extend(missing_facts);
+            quality = DiagnosticEvidenceQuality::Partial;
+            reason = "compiled_evidence_facts_incomplete";
+        }
+    }
     DiagnosticRequirementQuality {
         id: requirement.key.to_owned(),
         source: capability_source(requirement.source).to_owned(),
@@ -404,6 +439,108 @@ mod tests {
     }
     fn complete() -> Value {
         json!({"total_lag":10,"lag_slope_per_min":1,"queue_skew_ratio":1,"consume_rate_per_sec":5,"produce_rate_per_sec":6})
+    }
+
+    #[test]
+    fn backlog_scenario_uses_numeric_store_by_default_and_only_exact_saved_primary_pins_legacy() {
+        let registry = full_registry().unwrap();
+        let packs =
+            ["consumer-lag.v2", "store-pressure.v1", "store-pressure.v2"].map(|id| registry.resolve(id).unwrap());
+        let projection = project(
+            TenantId::new(),
+            Some(ClusterId::new()),
+            at(),
+            &packs,
+            &BTreeMap::new(),
+            &[],
+            false,
+        );
+        let scenario = &projection.scenarios[0];
+        assert_eq!(scenario.pack_ids, ["consumer-lag.v2", "store-pressure.v2"]);
+        assert!(
+            scenario
+                .required_signal_ids
+                .iter()
+                .any(|id| id.starts_with("store-pressure.v2:"))
+        );
+        assert!(
+            !scenario
+                .required_signal_ids
+                .iter()
+                .any(|id| id.starts_with("store-pressure.v1:"))
+        );
+        for primary in ["consumer-lag.v2", "store-pressure", "store-pressure.v2"] {
+            let mut current = projection.clone();
+            bind_primary_revision(&mut current, primary);
+            assert_eq!(current.scenarios, projection.scenarios);
+        }
+        let mut legacy = projection.clone();
+        bind_primary_revision(&mut legacy, "store-pressure.v1");
+        assert_eq!(legacy.scenarios[0].pack_ids, ["consumer-lag.v2", "store-pressure.v1"]);
+        assert!(
+            legacy.scenarios[0]
+                .required_signal_ids
+                .iter()
+                .any(|id| id.starts_with("store-pressure.v1:"))
+        );
+        assert!(
+            !legacy.scenarios[0]
+                .required_signal_ids
+                .iter()
+                .any(|id| id.starts_with("store-pressure.v2:"))
+        );
+        assert_eq!(&legacy.scenarios[1..], &projection.scenarios[1..]);
+        assert_eq!(legacy.packs, projection.packs);
+    }
+
+    #[test]
+    fn store_pressure_v2_cannot_qualify_complete_claims_without_real_progress_proof() {
+        let registry = full_registry().unwrap();
+        let pack = registry.resolve("store-pressure.v2").unwrap();
+        let mut observation: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/diagnostics/store-pressure-observation.v1.json"
+        ))
+        .unwrap();
+        observation["observed_at_millis"] = json!(at().timestamp_millis());
+        let tenant = TenantId::new();
+        let cluster = ClusterId::new();
+        let mut sample = snapshot(
+            tenant,
+            cluster,
+            at(),
+            json!({"schema_version":"rocketmq.sre-diagnostic-source.v1",
+            "profile":"store_pressure","observed_brokers":1,"brokers":[{"broker_name":"broker-a","broker_id":0,"store_pressure":observation}]}),
+        );
+        sample.source = "admin-query".to_owned();
+        sample.resource = "store-pressure/broker-a".to_owned();
+        sample.exposure = EvidenceExposure::AdminRpc;
+        sample.content_hash = sample.compute_content_hash().unwrap();
+        let projection = project(
+            tenant,
+            Some(cluster),
+            at(),
+            &[pack],
+            &BTreeMap::new(),
+            std::slice::from_ref(&sample),
+            false,
+        );
+        let requirement = &projection.packs[0].requirements[0];
+        assert_eq!(requirement.quality, DiagnosticEvidenceQuality::Partial);
+        assert_eq!(requirement.evidence_ids, vec![sample.evidence_id]);
+        assert!(
+            requirement
+                .missing_fields
+                .iter()
+                .any(|fact| fact.contains("monotonic_progress"))
+        );
+        assert_ne!(
+            projection.packs[0].layers.target_observed.status,
+            CapabilityFactStatus::Present
+        );
+        assert_eq!(
+            projection.packs[0].layers.production_verified.status,
+            CapabilityFactStatus::Unknown
+        );
     }
     fn source(cluster: ClusterId) -> SourceState {
         SourceState {

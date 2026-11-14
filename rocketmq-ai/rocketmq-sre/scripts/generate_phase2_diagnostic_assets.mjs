@@ -52,7 +52,7 @@ const packs = [
     bool("disk_pressure", false, true),
     bool("flush_or_dispatch_stalled", false, true),
     bool("tiered_wal_pressure", false, true),
-  ], ["disk_used_percent: 85", "flush_latency_ms: 500", "dispatch_backlog: 1000"], "5m"),
+  ], ["signal_contract: legacy_explicit_booleans", "numeric_policy: not_implemented_by_v1"], "5m"),
   pack("B", "store-integrity", "admin-query", "store-integrity/", "STORE_OFFSET_INCONSISTENT", "STORE_INTEGRITY_HEALTHY", "STORE_INTEGRITY_EVIDENCE_INCOMPLETE", [
     bool("offset_inconsistent", false, true),
     bool("recovery_incomplete", false, true),

@@ -30,10 +30,12 @@ pub use investigation::{
     InvestigationPlannedCollection, InvestigationPlannedEvaluation, InvestigationPlannedExplanation,
     InvestigationPlanningInput, InvestigationReadBinding, InvestigationReservationPolicy, aggregate_investigation,
     investigation_conclusion_evidence_available, investigation_findings, investigation_requirements,
-    plan_investigation,
+    investigation_rule_inputs, plan_investigation,
 };
+pub use packs::active_pack_ids;
 pub use packs::full_pack_ids;
 pub use packs::full_registry;
+pub use packs::qualification_baseline_pack_ids;
 pub use packs::wave_a_registry;
 pub use packs::wave_b_registry;
 pub use packs::wave_c_registry;

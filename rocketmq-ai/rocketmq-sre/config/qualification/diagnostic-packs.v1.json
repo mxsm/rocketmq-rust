@@ -12,7 +12,8 @@
     "consumer",
     "broker",
     "telemetry",
-    "producer_consumer"
+    "producer_consumer",
+    "store_pressure_legacy_v1"
   ],
   "fixture_assets": [
     "tests/fixtures/diagnostics/cluster-topology.v1/normal.json",
@@ -381,7 +382,7 @@
     },
     {
       "id": "store-pressure.v1",
-      "inspection_template": "broker",
+      "inspection_template": "store_pressure_legacy_v1",
       "required_evidence": [
         {
           "key": "store-pressure",

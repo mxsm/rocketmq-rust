@@ -84,7 +84,7 @@ pub(super) fn run(
                 }
             }
             InvestigationPlanDecision::Evaluate(plan) => {
-                state.evaluate(case, plan)?;
+                state.evaluate(case, plan, &bindings)?;
                 if case.refinement == ReplayRefinement::ReassessSameFactsOnce
                     && !state.refined
                     && state.run.status == InvestigationRunStatus::Running

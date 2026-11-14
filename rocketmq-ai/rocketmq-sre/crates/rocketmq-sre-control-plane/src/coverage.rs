@@ -44,7 +44,7 @@ pub(crate) fn verification_routes() -> axum::Router<AppState> {
     verification::routes()
 }
 
-const PACK_ORDER: [&str; 32] = [
+const PACK_ORDER: [&str; 33] = [
     "cluster-topology.v1",
     "consumer-lag.v2",
     "consumer-runtime.v1",
@@ -54,6 +54,7 @@ const PACK_ORDER: [&str; 32] = [
     "telemetry-pipeline.v1",
     "deployment-drift.v1",
     "store-pressure.v1",
+    "store-pressure.v2",
     "store-integrity.v1",
     "rocksdb-health.v1",
     "tiered-store.v1",
@@ -273,6 +274,7 @@ pub(crate) async fn matrix(
     if let Some(bound) = &bound {
         quality.investigation_id = Some(bound.investigation_id);
         quality.revision_id = Some(bound.revision_id);
+        quality::bind_primary_revision(&mut quality, &bound.pack_id);
     }
     quality.resource.clone_from(&query.resource);
     verification::apply(state, auth, &mut quality, &evidence).await?;
@@ -568,7 +570,11 @@ mod tests {
             .iter()
             .map(|id| registry.resolve(id).expect("registered pack"))
             .collect::<Vec<_>>();
-        assert_eq!(packs.len(), 32);
+        assert_eq!(packs.len(), 33);
+        assert_eq!(
+            packs.iter().map(|pack| pack.qualified_id()).collect::<BTreeSet<_>>(),
+            rocketmq_sre_core::diagnostics::full_pack_ids().into_iter().collect()
+        );
         let declared_sources = packs
             .iter()
             .flat_map(|pack| {

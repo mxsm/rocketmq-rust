@@ -15,6 +15,192 @@
 use super::*;
 
 #[test]
+fn store_pressure_capture_refresh_is_not_progress_but_effective_policy_change_is() {
+    let registry = full_registry().unwrap();
+    let pack = registry.resolve("store-pressure.v2").unwrap();
+    let reference = InvestigationPackRef {
+        pack_id: pack.qualified_id(),
+        pack_version: pack.version().to_string(),
+    };
+    let (_, mut ctx, mut run) = fixture();
+    run.initial_packs = vec![reference.clone()];
+    run.effective_packs = run.initial_packs.clone();
+    ctx.allowed_packs = run.initial_packs.clone();
+    ctx.allowed_requirements = vec![InvestigationRequirementRef {
+        pack: reference.clone(),
+        requirement_id: "store-pressure".to_owned(),
+    }];
+    let mut observation: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/diagnostics/store-pressure-observation.v1.json"
+    ))
+    .unwrap();
+    observation["observed_at_millis"] = json!((run.updated_at - Duration::seconds(2)).timestamp_millis());
+    let mut first = snapshot(&run, true);
+    first.observed_at -= Duration::seconds(1);
+    first.source = "admin-query".to_owned();
+    first.resource = "store-pressure/broker-a".to_owned();
+    first.coverage = CoverageStatus::Partial;
+    first.content = EvidenceContent::Inline(json!({"schema_version":"rocketmq.sre-diagnostic-source.v1",
+        "profile":"store_pressure","collected_at":first.observed_at.to_rfc3339(),"observed_brokers":1,
+        "brokers":[{"broker_name":"broker-a","broker_id":0,"store_pressure":observation}]}));
+    first.content_hash = first.compute_content_hash().unwrap();
+    let bound = [InvestigationReadBinding {
+        requirement: ctx.allowed_requirements[0].clone(),
+        source: first.source.clone(),
+        resource: first.resource.clone(),
+        scope: run.effective_scope.clone(),
+    }];
+    let InvestigationPlanDecision::Collect(read) = plan_investigation(&registry, input(&run, &bound, &[])).unwrap()
+    else {
+        panic!("the shared read precedes its evaluation");
+    };
+    collect(&mut ctx, &mut run, read, &first);
+    let InvestigationPlanDecision::Evaluate(planned) =
+        plan_investigation(&registry, input(&run, &bound, std::slice::from_ref(&first))).unwrap()
+    else {
+        panic!("initial real observations need a saved evaluation");
+    };
+    evaluate(&ctx, &mut run, planned);
+    let mut refreshed = first.clone();
+    refreshed.evidence_id = EvidenceId::new();
+    refreshed.observed_at += Duration::milliseconds(1);
+    if let EvidenceContent::Inline(content) = &mut refreshed.content {
+        content["collected_at"] = json!(refreshed.observed_at.to_rfc3339());
+        content["brokers"][0]["store_pressure"]["observed_at_millis"] =
+            json!((refreshed.observed_at - Duration::seconds(1)).timestamp_millis());
+        content["brokers"][0]["observation_status"] = json!("instantaneous");
+        content["brokers"][0]["signals"] = json!([]);
+    }
+    refreshed.content_hash = refreshed.compute_content_hash().unwrap();
+    assert_ne!(first.content_hash, refreshed.content_hash);
+    proof(&mut ctx, &run, &refreshed);
+    let packs = run.effective_packs.clone();
+    steer(&ctx, &mut run, packs, vec![refreshed.evidence_id]);
+    assert_eq!(
+        plan_investigation(&registry, input(&run, &bound, std::slice::from_ref(&refreshed))).unwrap(),
+        InvestigationPlanDecision::Stop {
+            reason: InvestigationStopReason::NoProgress,
+        }
+    );
+    for (native_age_seconds, expected_inputs) in [(299, 1), (301, 0)] {
+        let observations = [refreshed.clone()];
+        let mut aged = input(&run, &bound, &observations);
+        aged.as_of_unix_ms =
+            (refreshed.observed_at - Duration::seconds(1) + Duration::seconds(native_age_seconds)).timestamp_millis();
+        assert_eq!(
+            investigation_rule_inputs(&registry, &reference, &aged).unwrap().len(),
+            expected_inputs
+        );
+        assert_eq!(
+            plan_investigation(&registry, aged).unwrap(),
+            InvestigationPlanDecision::Stop {
+                reason: InvestigationStopReason::NoProgress,
+            }
+        );
+    }
+    for (section, field, value) in [
+        ("policy", "disk_max_used_ratio", json!(0.10)),
+        ("runtime", "sync_flush_timeout_total", json!(38)),
+        ("runtime", "dispatch_behind_bytes", serde_json::Value::Null),
+    ] {
+        let mut changed = refreshed.clone();
+        if let EvidenceContent::Inline(content) = &mut changed.content {
+            content["brokers"][0]["store_pressure"][section][field] = value;
+        }
+        changed.content_hash = changed.compute_content_hash().unwrap();
+        assert!(matches!(
+            plan_investigation(&registry, input(&run, &bound, &[changed])).unwrap(),
+            InvestigationPlanDecision::Evaluate(_)
+        ));
+    }
+}
+
+#[test]
+fn store_pressure_saved_complete_flag_does_not_supply_missing_progress_proof() {
+    let registry = full_registry().unwrap();
+    let pack = registry.resolve("store-pressure.v2").unwrap();
+    let reference = InvestigationPackRef {
+        pack_id: pack.qualified_id(),
+        pack_version: pack.version().to_string(),
+    };
+    let (_, mut ctx, mut run) = fixture();
+    run.initial_packs = vec![reference.clone()];
+    run.effective_packs = run.initial_packs.clone();
+    ctx.allowed_packs = run.initial_packs.clone();
+    ctx.allowed_requirements = vec![InvestigationRequirementRef {
+        pack: reference.clone(),
+        requirement_id: "store-pressure".to_owned(),
+    }];
+    let mut observation: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/diagnostics/store-pressure-observation.v1.json"
+    ))
+    .unwrap();
+    observation["observed_at_millis"] = json!(run.updated_at.timestamp_millis());
+    let mut sample = snapshot(&run, false);
+    sample.source = "admin-query".to_owned();
+    sample.resource = "store-pressure/broker-a".to_owned();
+    sample.content = EvidenceContent::Inline(json!({"schema_version":"rocketmq.sre-diagnostic-source.v1",
+        "profile":"store_pressure","observed_brokers":1,
+        "brokers":[{"broker_name":"broker-a","broker_id":0,"store_pressure":observation}]}));
+    sample.content_hash = sample.compute_content_hash().unwrap();
+    proof(&mut ctx, &run, &sample);
+    steer(&ctx, &mut run, vec![reference.clone()], vec![sample.evidence_id]);
+    let bound = [InvestigationReadBinding {
+        requirement: ctx.allowed_requirements[0].clone(),
+        source: sample.source.clone(),
+        resource: sample.resource.clone(),
+        scope: run.effective_scope.clone(),
+    }];
+    let evidence = [sample];
+    let qualities = investigation_requirements(&registry, &reference, &input(&run, &bound, &evidence)).unwrap();
+    assert_eq!(qualities[0].quality, DiagnosticEvidenceQuality::Partial);
+    assert_eq!(qualities[0].evidence_ids, vec![evidence[0].evidence_id]);
+    assert!(
+        qualities[0]
+            .missing_fields
+            .iter()
+            .any(|fact| fact.contains("monotonic_progress"))
+    );
+    let selected = investigation_rule_inputs(&registry, &reference, &input(&run, &bound, &evidence)).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].evidence_id, evidence[0].evidence_id);
+    let mut stale = evidence[0].clone();
+    stale.freshness_seconds = 301;
+    assert!(
+        investigation_rule_inputs(&registry, &reference, &input(&run, &bound, &[stale]))
+            .unwrap()
+            .is_empty()
+    );
+    let mut malformed = evidence[0].clone();
+    if let EvidenceContent::Inline(content) = &mut malformed.content {
+        content["brokers"][0]["store_pressure"]["disk"]["commit_log_max_used_ratio"] = json!(-1);
+    }
+    malformed.content_hash = malformed.compute_content_hash().unwrap();
+    assert!(
+        investigation_rule_inputs(&registry, &reference, &input(&run, &bound, &[malformed]))
+            .unwrap()
+            .is_empty()
+    );
+    let mut bad_hash = evidence[0].clone();
+    bad_hash.content_hash = "invalid".to_owned();
+    assert!(
+        investigation_rule_inputs(&registry, &reference, &input(&run, &bound, &[bad_hash]))
+            .unwrap()
+            .is_empty()
+    );
+    let report = DiagnosticEngine::new(registry)
+        .evaluate("store-pressure.v2", &evidence)
+        .unwrap();
+    assert_eq!(report.status, DiagnosticStatus::Inconclusive);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.reason_code == "STORE_DISK_WARNING_RATIO_EXCEEDED")
+    );
+}
+
+#[test]
 fn compiled_readable_packs_expose_their_actual_rule_field_types() {
     let registry = full_registry().unwrap();
     let cases = [

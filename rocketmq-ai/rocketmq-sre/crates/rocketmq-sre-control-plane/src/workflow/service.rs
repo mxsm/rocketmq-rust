@@ -342,6 +342,7 @@ impl WorkflowService {
         request: &InspectionCreateRequest,
         correlation_id: CorrelationId,
     ) -> Result<InspectionView, ControlPlaneRequestFailure> {
+        authorize_operator(auth)?;
         request.validate()?;
         authorize_cluster(auth, request.cluster_id)?;
         let view = self.repository.create_inspection(auth, request, correlation_id).await?;

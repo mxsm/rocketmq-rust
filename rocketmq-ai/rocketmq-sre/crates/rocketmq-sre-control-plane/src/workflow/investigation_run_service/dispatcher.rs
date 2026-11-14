@@ -241,7 +241,9 @@ impl RunDispatcher {
             let input = self.planning_input(&run, &bindings, &evidence);
             match plan_investigation(&service.catalog, input).map_err(contract_failure)? {
                 InvestigationPlanDecision::Collect(plan) => self.collect(&execution, &run, plan).await?,
-                InvestigationPlanDecision::Evaluate(plan) => self.evaluate(&execution, &run, plan, &evidence).await?,
+                InvestigationPlanDecision::Evaluate(plan) => {
+                    self.evaluate(&execution, &run, plan, &bindings, &evidence).await?
+                }
                 InvestigationPlanDecision::Explain(plan) => self.explain(&execution, &run, plan, &evidence).await?,
                 InvestigationPlanDecision::Finalize { stop_reason } => {
                     self.finalize(service, lease, &run, stop_reason, &bindings, &evidence)

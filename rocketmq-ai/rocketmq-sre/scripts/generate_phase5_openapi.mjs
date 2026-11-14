@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { extendBoundedAutonomySettings } from "./openapi/bounded_autonomy_settings.mjs";
 import { extendModelCapabilities } from "./openapi/model_capabilities.mjs";
+import { extendInspectionTemplates } from "./openapi/inspection_templates.mjs";
 import { extendCapabilityQuality } from "./openapi/capability_quality.mjs";
 import { extendInvestigationRunContracts, extendInvestigationRunTransport } from "./openapi/investigation_run.mjs";
 import { extendOperationsAnalytics } from "./openapi/operations_analytics.mjs";
@@ -269,5 +270,7 @@ function validateDocument() {
   }
 }
 
+extendInspectionTemplates({ document,
+  schema: JSON.parse(readFileSync(join(root, "schemas", "inspection-template.schema.json"), "utf8")) });
 validateDocument();
 writeFileSync(output, `${JSON.stringify(document, null, 2)}\n`);

@@ -16,6 +16,84 @@ use super::*;
 use rocketmq_sre_core::diagnostics::*;
 
 #[test]
+fn store_pressure_context_is_saved_with_real_findings_without_becoming_a_strong_assessment() {
+    let mut case = case();
+    let reference = InvestigationPackRef {
+        pack_id: "store-pressure.v2".to_owned(),
+        pack_version: "2.0.0".to_owned(),
+    };
+    case.packs = vec![reference.clone()];
+    case.baseline_pack = reference.clone();
+    case.bindings
+        .retain(|binding| binding.requirement.requirement_id == "store-pressure");
+    case.bindings[0].requirement.pack = reference;
+    let mut observation: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../tests/fixtures/diagnostics/store-pressure-observation.v1.json"
+    ))
+    .unwrap();
+    observation["observed_at_millis"] = json!(case.as_of.timestamp_millis());
+    let content = json!({"schema_version":"rocketmq.sre-diagnostic-source.v1","profile":"store_pressure","observed_brokers":1,
+        "brokers":[{"broker_name":"broker-a","broker_id":0,"store_pressure":observation}]});
+    let mut evidence = snapshot(
+        &case.scope,
+        "admin-query",
+        "store-pressure/broker-a",
+        case.as_of,
+        content,
+    );
+    evidence.partial = true;
+    evidence.coverage = CoverageStatus::Partial;
+    let id = evidence.evidence_id;
+    case.reads = vec![ReplayRead {
+        source: "admin-query".to_owned(),
+        resource: "store-pressure/broker-a".to_owned(),
+        outcomes: vec![ReplayReadOutcome::SavedEvidence { snapshot: evidence }],
+    }];
+    let pair = replay_pair(&case).unwrap();
+    for arm in [&pair.baseline, &pair.multi_pack] {
+        assert_eq!(arm.observation.status, InvestigationRunStatus::Inconclusive);
+        assert!(matches!(
+            &arm.observation.conclusion,
+            Some(HypothesisAssessmentConclusion::Inconclusive { .. })
+        ));
+        let revision = &arm.revisions[0];
+        assert!(revision.partial);
+        assert_eq!(revision.status, InvestigationDiagnosisStatus::Inconclusive);
+        assert_eq!(revision.requirements[0].quality, DiagnosticEvidenceQuality::Partial);
+        assert!(
+            revision
+                .findings
+                .iter()
+                .any(|finding| finding.reason_code == "STORE_DISK_WARNING_RATIO_EXCEEDED"
+                    && finding.supporting_evidence_ids == vec![id])
+        );
+        assert!(
+            revision.requirements[0]
+                .missing_fields
+                .iter()
+                .any(|fact| fact.contains("monotonic_progress"))
+        );
+    }
+    let mut old_partial = super::fixtures::case();
+    for read in &mut old_partial.reads {
+        for outcome in &mut read.outcomes {
+            if let ReplayReadOutcome::SavedEvidence { snapshot } = outcome {
+                snapshot.partial = true;
+                snapshot.coverage = CoverageStatus::Partial;
+            }
+        }
+    }
+    let old = replay_pair(&old_partial).unwrap();
+    assert!(
+        old.baseline
+            .revisions
+            .iter()
+            .flat_map(|revision| &revision.findings)
+            .all(|finding| finding.reason_code != "STORE_DISK_PRESSURE")
+    );
+}
+
+#[test]
 fn final_aggregation_rechecks_used_optional_support_at_a_fixed_later_clock() {
     let mut case = fixtures::broker_case();
     let runtime = case

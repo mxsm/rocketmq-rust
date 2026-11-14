@@ -109,6 +109,7 @@ fn project_broker(broker: BrokerDiagnostics) -> Value {
         "readiness": broker.readiness,
         "config": broker.config,
         "store_health": broker.store_health,
+        "store_pressure": broker.store_pressure,
         "ha": ha,
         "recovery": broker.recovery,
         "background_index_rebuild": broker.background_index_rebuild,
@@ -150,6 +151,7 @@ mod tests {
                 readiness: None,
                 config: None,
                 store_health: None,
+                store_pressure: None,
                 ha: HaDiagnostics::default(),
                 recovery: None,
                 background_index_rebuild: None,
@@ -215,6 +217,7 @@ mod tests {
                 readiness: None,
                 config: None,
                 store_health: None,
+                store_pressure: None,
                 ha: HaDiagnostics {
                     supported: true,
                     role: Some("master".to_owned()),

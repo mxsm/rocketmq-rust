@@ -85,7 +85,7 @@ fn qualification_jobs() -> Result<Vec<QualificationJob>, DiagnosticQualification
     Ok(jobs)
 }
 
-/// Exercises all built-in packs through the running Control Plane and verifies
+/// Exercises the pinned qualification baseline through the Control Plane and verifies
 /// their persisted PostgreSQL results without enabling a model provider.
 pub(super) async fn run_live_qualification(
     config: &LiveQualificationConfig,
