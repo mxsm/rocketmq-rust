@@ -237,18 +237,6 @@ impl AutoSwitchHAService {
         Some(proposal)
     }
 
-    pub fn update_confirm_offset_when_slave_ack(&self, slave_broker_id: i64) {
-        if !self.get_local_sync_state_set().contains(&slave_broker_id) {
-            return;
-        }
-
-        let replica_store = self.delegate.replica_store();
-        let max_phy_offset = replica_store.get_max_phy_offset();
-        let current_confirm_offset = replica_store.get_confirm_offset_directly();
-        let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
-        replica_store.publish_confirm_offset(confirm_offset);
-    }
-
     fn tracked_sync_state_set_size(&self) -> Option<usize> {
         self.replication.tracked_sync_state_set_size()
     }
