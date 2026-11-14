@@ -24,6 +24,8 @@ mod diagnostic_projection;
 mod inventory;
 mod kubernetes;
 mod kubernetes_events;
+#[cfg(test)]
+mod live_store_pressure;
 mod loki;
 mod mcp;
 mod projection;
@@ -397,9 +399,13 @@ where
         session: &ReadSession<'_, '_>,
     ) -> Result<SourceOutput, ConnectorError> {
         if let Some(route) = canonical::resolve(source, &query.resource) {
-            return self.query_canonical(source, route, query, session).await;
+            // Both dispatchers contain large, distinct adapter futures. Keep
+            // their state out of this common poll frame, including the branch
+            // not selected for the current read. Ownership and drop-based
+            // cancellation remain with this same awaited source query.
+            return Box::pin(self.query_canonical(source, route, query, session)).await;
         }
-        self.query_legacy_uncached(source, query, operation, session).await
+        Box::pin(self.query_legacy_uncached(source, query, operation, session)).await
     }
 
     #[allow(
@@ -468,6 +474,11 @@ where
             );
         })?;
         let source_was_partial = output.partial;
+        if projection
+            == canonical::CanonicalProjection::BrokerDiagnostics(canonical::BrokerDiagnosticProfile::StorePressure)
+        {
+            diagnostic_projection::validate_store_pressure_target(&output.content, &query.resource)?;
+        }
         let mut projected = projection::apply(output, projection).inspect_err(|error| {
             tracing::warn!(
                 source,

@@ -174,7 +174,7 @@ pub(super) fn plan(
             .collect();
         evidence_ids.sort();
         evidence_ids.dedup();
-        let fingerprint = input_fingerprint(pack, qualities, &input)?;
+        let fingerprint = input_fingerprint(registry, pack, qualities, &input)?;
         if run.current_pack_result(pack).is_some_and(|result| {
             let mut saved = result.evidence_ids.clone();
             saved.sort();

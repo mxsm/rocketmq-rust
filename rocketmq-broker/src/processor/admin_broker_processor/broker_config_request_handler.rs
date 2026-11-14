@@ -43,6 +43,8 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::CommitLogReadMode;
+
+mod store_pressure;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::RemotingErrorTarget;
 use sysinfo::Disks;
@@ -683,6 +685,15 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         let mut runtime_info = message_store.get_runtime_info();
         let generation = self.broker_runtime_inner.runtime_config_snapshot();
         let store_health = message_store.health_snapshot();
+        store_pressure::append_runtime_info(
+            &mut runtime_info,
+            store_pressure::PressurePolicyContext {
+                generation: generation.id().value(),
+                broker: generation.broker(),
+                configured_store: generation.store(),
+                active_store: message_store.get_message_store_config(),
+            },
+        );
         let broker_shutdown = self.broker_runtime_inner.is_shutdown();
         let broker_active = self.is_special_service_running();
         runtime_info.insert(

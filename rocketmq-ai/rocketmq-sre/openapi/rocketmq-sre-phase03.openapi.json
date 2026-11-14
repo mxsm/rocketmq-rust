@@ -6976,20 +6976,7 @@
             "format": "uuid"
           },
           "template": {
-            "type": "string",
-            "enum": [
-              "cluster_health",
-              "consumer",
-              "broker",
-              "telemetry",
-              "full_cluster",
-              "producer_consumer",
-              "store_ha",
-              "routing_proxy",
-              "security",
-              "upgrade",
-              "disaster_recovery"
-            ]
+            "$ref": "#/components/schemas/InspectionTemplate"
           },
           "schedule": {
             "type": "string",
@@ -7287,20 +7274,7 @@
             "format": "uuid"
           },
           "template": {
-            "type": "string",
-            "enum": [
-              "cluster_health",
-              "consumer",
-              "broker",
-              "telemetry",
-              "full_cluster",
-              "producer_consumer",
-              "store_ha",
-              "routing_proxy",
-              "security",
-              "upgrade",
-              "disaster_recovery"
-            ]
+            "$ref": "#/components/schemas/InspectionTemplate"
           },
           "status": {
             "type": "string",
@@ -17331,20 +17305,7 @@
             "const": "scheduled_inspection"
           },
           "template": {
-            "type": "string",
-            "enum": [
-              "cluster_health",
-              "consumer",
-              "broker",
-              "telemetry",
-              "full_cluster",
-              "producer_consumer",
-              "store_ha",
-              "routing_proxy",
-              "security",
-              "upgrade",
-              "disaster_recovery"
-            ]
+            "$ref": "#/components/schemas/InspectionTemplate"
           },
           "schedule": {
             "oneOf": [
@@ -17755,6 +17716,25 @@
             "pattern": "^sha256:[0-9A-Fa-f]{64}$"
           }
         }
+      },
+      "InspectionTemplate": {
+        "description": "Supported read-only inspection templates.\n\nThe original Phase 1 variants remain wire-compatible. Phase 2 adds\ndomain-complete templates used by preventive operations.\n`StorePressureLegacyV1` explicitly pins the original Boolean Store pack;\nordinary Store inspections select the active numeric observation version.",
+        "enum": [
+          "cluster_health",
+          "consumer",
+          "broker",
+          "telemetry",
+          "full_cluster",
+          "producer_consumer",
+          "store_ha",
+          "routing_proxy",
+          "security",
+          "upgrade",
+          "disaster_recovery",
+          "store_pressure_legacy_v1"
+        ],
+        "title": "InspectionTemplate",
+        "type": "string"
       }
     }
   },
@@ -17783,7 +17763,8 @@
     "IncidentOperationResult",
     "IncidentOperationsState",
     "ShiftHandoffSummary",
-    "OperationsReport"
+    "OperationsReport",
+    "InspectionTemplate"
   ],
   "x-rocketmq-release-management-schema": "rocketmq-sre.release-management.v1",
   "x-rocketmq-unattended-mutation-supported": false,

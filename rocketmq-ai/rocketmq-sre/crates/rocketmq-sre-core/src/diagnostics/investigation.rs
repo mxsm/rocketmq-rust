@@ -25,9 +25,11 @@ use super::{DiagnosticPackRegistry, DiagnosticReport, FindingOutcome};
 mod aggregation;
 mod planning;
 mod quality;
+mod rule_inputs;
 pub use aggregation::{
     InvestigationAggregateDecision, aggregate_investigation, investigation_conclusion_evidence_available,
 };
+pub use rule_inputs::investigation_rule_inputs;
 
 /// Trusted service resolution of a fixed compiled requirement. No URL, query
 /// expression, credentials or free-form tool name is accepted by the planner.

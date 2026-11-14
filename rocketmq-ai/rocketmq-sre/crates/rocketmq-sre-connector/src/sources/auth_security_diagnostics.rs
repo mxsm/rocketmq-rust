@@ -138,6 +138,7 @@ mod tests {
                 readiness: None,
                 config: None,
                 store_health: None,
+                store_pressure: None,
                 ha: HaDiagnostics::default(),
                 recovery: None,
                 background_index_rebuild: None,

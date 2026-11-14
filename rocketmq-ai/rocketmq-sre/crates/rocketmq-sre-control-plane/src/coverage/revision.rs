@@ -23,6 +23,7 @@ pub(super) struct RevisionEvidence {
     pub(super) investigation_id: InvestigationId,
     pub(super) revision_id: DiagnosisRevisionId,
     pub(super) cluster_id: ClusterId,
+    pub(super) pack_id: String,
     ids: Vec<EvidenceId>,
 }
 
@@ -72,6 +73,7 @@ pub(super) async fn load(
         investigation_id,
         revision_id,
         cluster_id: view.investigation.cluster_id,
+        pack_id: revision.pack_id.clone(),
         ids: revision.evidence_ids.clone(),
     }))
 }

@@ -1,0 +1,38 @@
+{
+  "schema_version": "rocketmq.store-pressure-observation.v1",
+  "source": "broker_runtime_info",
+  "observed_at_millis": 1794657600000,
+  "configuration_generation": 7,
+  "generation_status": "matched_runtime_configuration",
+  "runtime": {
+    "writeable": true,
+    "last_flush_error": false,
+    "os_page_cache_busy": false,
+    "transient_store_pool_deficient": false,
+    "dispatch_behind_bytes": 8192,
+    "shutdown": false,
+    "sync_flush_queue_depth": 3,
+    "sync_flush_timeout_total": 37,
+    "sync_flush_oldest_wait_millis": 1234
+  },
+  "disk": {
+    "commit_log_max_used_ratio": 0.92,
+    "commit_log_legacy_min_used_ratio": 0.2,
+    "commit_log_expected_paths": 2,
+    "commit_log_observed_paths": 2,
+    "commit_log_unknown_paths": 0,
+    "commit_log_samples_complete": true,
+    "consume_queue_used_ratio": 0.3
+  },
+  "policy": {
+    "disk_warning_used_ratio": 0.9,
+    "disk_clean_forcibly_used_ratio": 0.85,
+    "disk_max_used_ratio": 0.75,
+    "clean_file_forcibly_enabled": true,
+    "sync_flush_backlog_reject_depth": 32,
+    "sync_flush_backlog_reject_wait_millis": 1500,
+    "dispatch_backlog_reject_bytes": 16384,
+    "page_cache_busy_timeout_millis": 1000
+  },
+  "tiered_configured": null
+}

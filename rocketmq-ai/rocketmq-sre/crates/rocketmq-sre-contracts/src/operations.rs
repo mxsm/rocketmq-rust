@@ -261,6 +261,8 @@ pub struct InvestigationDiagnosisRevision {
 ///
 /// The original Phase 1 variants remain wire-compatible. Phase 2 adds
 /// domain-complete templates used by preventive operations.
+/// `StorePressureLegacyV1` explicitly pins the original Boolean Store pack;
+/// ordinary Store inspections select the active numeric observation version.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectionTemplate {
@@ -275,6 +277,7 @@ pub enum InspectionTemplate {
     Security,
     Upgrade,
     DisasterRecovery,
+    StorePressureLegacyV1,
 }
 
 /// Inspection lifecycle.
@@ -492,6 +495,20 @@ pub struct ModelInvocationRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_pressure_compatibility_template_is_explicit_without_changing_old_wire_values() {
+        assert_eq!(serde_json::to_value(InspectionTemplate::Broker).unwrap(), "broker");
+        assert_eq!(
+            serde_json::to_value(InspectionTemplate::StorePressureLegacyV1).unwrap(),
+            "store_pressure_legacy_v1"
+        );
+        assert_eq!(
+            serde_json::from_value::<InspectionTemplate>(serde_json::json!("store_pressure_legacy_v1")).unwrap(),
+            InspectionTemplate::StorePressureLegacyV1
+        );
+        assert!(serde_json::from_value::<InspectionTemplate>(serde_json::json!("arbitrary_pack")).is_err());
+    }
 
     #[test]
     fn rules_only_revision_has_no_primary_model() {

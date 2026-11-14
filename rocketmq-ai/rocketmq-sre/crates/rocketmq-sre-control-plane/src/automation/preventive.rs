@@ -538,6 +538,7 @@ const fn preventive_risk(template: InspectionTemplate) -> Option<PreventiveRiskF
         | InspectionTemplate::Telemetry
         | InspectionTemplate::ProducerConsumer
         | InspectionTemplate::DisasterRecovery => None,
+        InspectionTemplate::StorePressureLegacyV1 => None,
     }
 }
 

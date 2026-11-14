@@ -99,6 +99,11 @@ pub(super) fn map_broker_diagnostics(
                 oldest_wait_millis: value.sync_flush.oldest_wait_millis,
             },
         }),
+        store_pressure: row
+            .store_pressure
+            .as_ref()
+            .filter(|value| value.schema_version == admin::STORE_PRESSURE_DIAGNOSTICS_SCHEMA_VERSION)
+            .map(Into::into),
         ha: output::HaDiagnostics {
             supported: row.ha.supported,
             role: ha_role,
@@ -309,6 +314,7 @@ mod tests {
                 tiered_store_configured: false,
             }),
             store_health: None,
+            store_pressure: None,
             ha: admin::HaDiagnostics {
                 supported: true,
                 role: Some("private-role".to_string()),
@@ -355,6 +361,12 @@ mod tests {
         };
 
         let projected = map_broker_diagnostics(&row);
+        let old_wire = serde_json::to_value(&projected).expect("wire projection");
+        assert!(old_wire.get("store_pressure").is_none());
+        assert!(serde_json::from_value::<output::BrokerDiagnosticsRow>(old_wire)
+            .expect("old wire compatibility")
+            .store_pressure
+            .is_none());
         let config = projected
             .config
             .as_ref()

@@ -3042,8 +3042,7 @@ export interface components {
         CreateInspectionRequest: {
             /** Format: uuid */
             cluster_id: string;
-            /** @enum {string} */
-            template: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery";
+            template: components["schemas"]["InspectionTemplate"];
             schedule?: string;
         };
         RecommendationDispositionRequest: {
@@ -3126,8 +3125,7 @@ export interface components {
             tenant_id: string;
             /** Format: uuid */
             cluster_id: string;
-            /** @enum {string} */
-            template: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery";
+            template: components["schemas"]["InspectionTemplate"];
             /** @enum {string} */
             status: "scheduled" | "running" | "needs_evidence" | "completed" | "failed" | "cancelled";
             schedule?: string | null;
@@ -7431,8 +7429,7 @@ export interface components {
              * @enum {string}
              */
             source_kind: "scheduled_inspection";
-            /** @enum {string} */
-            template: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery";
+            template: components["schemas"]["InspectionTemplate"];
             schedule?: string | null;
         };
         ChangeEventEntryRequest: {
@@ -8216,6 +8213,17 @@ export interface components {
             /** Format: date-time */
             start: string;
         };
+        /**
+         * InspectionTemplate
+         * @description Supported read-only inspection templates.
+         *
+         *     The original Phase 1 variants remain wire-compatible. Phase 2 adds
+         *     domain-complete templates used by preventive operations.
+         *     `StorePressureLegacyV1` explicitly pins the original Boolean Store pack;
+         *     ordinary Store inspections select the active numeric observation version.
+         * @enum {string}
+         */
+        InspectionTemplate: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery" | "store_pressure_legacy_v1";
         /** InvestigationRunListPage */
         InvestigationRunListPage: {
             cluster_id: components["schemas"]["InvestigationRunListPage__ClusterId"];

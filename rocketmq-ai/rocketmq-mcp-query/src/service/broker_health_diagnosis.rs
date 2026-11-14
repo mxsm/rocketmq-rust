@@ -810,6 +810,7 @@ pub(crate) mod fixtures {
                 registration_configured: true,
             }),
             config: None,
+            store_pressure: None,
             store_health: Some(StoreHealthDiagnostics {
                 writeable: true,
                 last_flush_error: false,

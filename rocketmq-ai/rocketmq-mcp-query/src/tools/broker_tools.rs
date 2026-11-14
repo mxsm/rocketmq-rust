@@ -19,10 +19,12 @@ use serde::Serialize;
 use crate::tools::cluster_tools::BrokerSummary;
 
 mod lite;
+mod store_pressure;
 
 pub use lite::GetLiteBrokerInfoArgs;
 pub use lite::GetLiteBrokerInfoOutput;
 pub use lite::LiteTopicSummary;
+pub use store_pressure::StorePressureDiagnostics;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -258,6 +260,8 @@ pub struct BrokerDiagnosticsRow {
     pub readiness: Option<BrokerReadinessDiagnostics>,
     pub config: Option<BrokerRuntimeConfigSummary>,
     pub store_health: Option<StoreHealthDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_pressure: Option<StorePressureDiagnostics>,
     pub ha: HaDiagnostics,
     pub recovery: Option<RecoveryDiagnostics>,
     pub background_index_rebuild: Option<BackgroundIndexRebuildDiagnostics>,

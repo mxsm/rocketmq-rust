@@ -105,16 +105,29 @@ pub(super) fn requirements(
                 return quality;
             };
             assess(&mut quality, snapshot, input.as_of_unix_ms);
+            if matches!(
+                quality.quality,
+                DiagnosticEvidenceQuality::Available | DiagnosticEvidenceQuality::Partial
+            ) {
+                let missing_facts = pack.missing_evidence_facts(requirement.key, snapshot);
+                if !missing_facts.is_empty() {
+                    quality.missing_fields.extend(missing_facts);
+                    quality.quality = DiagnosticEvidenceQuality::Partial;
+                    quality.reason_code = "compiled_evidence_facts_incomplete".to_owned();
+                }
+            }
             quality
         })
         .collect()
 }
 
 pub(super) fn input_fingerprint(
+    registry: &DiagnosticPackRegistry,
     reference: &InvestigationPackRef,
     qualities: &[DiagnosticRequirementQuality],
     input: &InvestigationPlanningInput<'_>,
 ) -> Result<String, InvestigationRunFailure> {
+    let pack = exact_pack(registry, reference)?;
     let mut facts = vec![];
     for quality in qualities {
         let mut contents = vec![];
@@ -124,23 +137,30 @@ pub(super) fn input_fingerprint(
                 .iter()
                 .find(|snapshot| snapshot.evidence_id == *id)
                 .ok_or(InvestigationRunFailure::ScopeMismatch)?;
-            let hash = match &snapshot.content {
-                EvidenceContent::Inline(content) => rocketmq_sre_contracts::canonical_sha256(&(
-                    &snapshot.source,
-                    &snapshot.resource,
-                    content,
-                    snapshot.coverage,
-                    snapshot.partial,
-                )),
-                EvidenceContent::Reference(reference) => rocketmq_sre_contracts::canonical_sha256(&(
-                    &snapshot.source,
-                    &snapshot.resource,
-                    &reference.digest,
-                    snapshot.coverage,
-                    snapshot.partial,
-                )),
-            }
-            .map_err(|_| InvestigationRunFailure::InvalidInput)?;
+            let semantic = pack
+                .semantic_evidence_fingerprint(snapshot)
+                .map_err(|_| InvestigationRunFailure::InvalidInput)?;
+            let hash = if let Some(semantic) = semantic {
+                semantic
+            } else {
+                match &snapshot.content {
+                    EvidenceContent::Inline(content) => rocketmq_sre_contracts::canonical_sha256(&(
+                        &snapshot.source,
+                        &snapshot.resource,
+                        content,
+                        snapshot.coverage,
+                        snapshot.partial,
+                    )),
+                    EvidenceContent::Reference(reference) => rocketmq_sre_contracts::canonical_sha256(&(
+                        &snapshot.source,
+                        &snapshot.resource,
+                        &reference.digest,
+                        snapshot.coverage,
+                        snapshot.partial,
+                    )),
+                }
+                .map_err(|_| InvestigationRunFailure::InvalidInput)?
+            };
             contents.push(hash);
         }
         contents.sort();

@@ -243,6 +243,7 @@ const fn diagnostic_pack_is_partial(
 
 fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
     match template {
+        InspectionTemplate::StorePressureLegacyV1 => &["store-pressure.v1"],
         InspectionTemplate::ClusterHealth => &[
             "cluster-topology.v1",
             "deployment-drift.v1",
@@ -265,7 +266,7 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
         ],
         InspectionTemplate::Broker => &[
             "broker-health.v1",
-            "store-pressure.v1",
+            "store-pressure.v2",
             "store-integrity.v1",
             "rocksdb-health.v1",
             "tiered-store.v1",
@@ -286,7 +287,7 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
             "broker-health.v1",
             "consumer-lag.v2",
             "consumer-runtime.v1",
-            "store-pressure.v1",
+            "store-pressure.v2",
             "store-integrity.v1",
             "broker-ha.v1",
             "controller-ha.v1",
@@ -314,7 +315,7 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
         ],
         InspectionTemplate::StoreHa => &[
             "broker-health.v1",
-            "store-pressure.v1",
+            "store-pressure.v2",
             "store-integrity.v1",
             "rocksdb-health.v1",
             "tiered-store.v1",
@@ -535,13 +536,14 @@ mod tests {
             InspectionTemplate::Security,
             InspectionTemplate::Upgrade,
             InspectionTemplate::DisasterRecovery,
+            InspectionTemplate::StorePressureLegacyV1,
         ] {
             assert!(!template_packs(template).is_empty());
         }
     }
 
     #[test]
-    fn operational_templates_cover_the_complete_diagnostic_catalog() {
+    fn operational_templates_cover_current_active_versions_without_rewriting_saved_results() {
         let covered = [
             InspectionTemplate::ClusterHealth,
             InspectionTemplate::Consumer,
@@ -553,7 +555,7 @@ mod tests {
         .flat_map(template_packs)
         .copied()
         .collect::<BTreeSet<_>>();
-        let expected = rocketmq_sre_core::diagnostics::full_pack_ids()
+        let expected = rocketmq_sre_core::diagnostics::active_pack_ids()
             .into_iter()
             .collect::<BTreeSet<_>>();
 
@@ -562,6 +564,22 @@ mod tests {
             expected.iter().map(String::as_str).collect(),
             "the bounded operational inspection surface must reach every built-in pack"
         );
+    }
+
+    #[test]
+    fn explicit_legacy_store_template_is_pinned_and_not_used_by_current_defaults() {
+        assert_eq!(
+            template_packs(InspectionTemplate::StorePressureLegacyV1),
+            &["store-pressure.v1"]
+        );
+        for template in [
+            InspectionTemplate::Broker,
+            InspectionTemplate::FullCluster,
+            InspectionTemplate::StoreHa,
+        ] {
+            assert!(template_packs(template).contains(&"store-pressure.v2"));
+            assert!(!template_packs(template).contains(&"store-pressure.v1"));
+        }
     }
 
     #[test]

@@ -20,6 +20,7 @@ impl RunDispatcher {
         execution: &RunExecution<'_>,
         run: &InvestigationRun,
         plan: InvestigationPlannedEvaluation,
+        bindings: &[InvestigationReadBinding],
         evidence: &[EvidenceSnapshot],
     ) -> Result<(), ControlPlaneRequestFailure> {
         let RunExecution {
@@ -61,23 +62,21 @@ impl RunDispatcher {
             .filter(|snapshot| evidence_ids.contains(&snapshot.evidence_id))
             .cloned()
             .collect::<Vec<_>>();
-        // Core receives only exact, current, qualified inputs. Missing/null
-        // source fields are retained in requirements; they never become zero.
-        let engine_inputs = selected
-            .iter()
-            .filter(|snapshot| {
-                plan.requirements.iter().any(|requirement| {
-                    requirement.evidence_ids.contains(&snapshot.evidence_id)
-                        && requirement.quality == DiagnosticEvidenceQuality::Available
-                })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
         let engine = DiagnosticEngine::new(
             full_registry().map_err(|_| ControlPlaneRequestFailure::configuration("diagnostic registry rejected"))?,
         );
         let exact = super::super::bindings::exact_pack(&service.catalog, &admission.spec.pack)?;
-        let report = match engine.evaluate_version(exact.id(), exact.version(), &engine_inputs) {
+        // Version-owned contextual observations retain exact findings without
+        // supplying missing proof. Other packs remain Available-only. Recheck
+        // current quality after admission, using the actual admitted EIDs.
+        let input = self.planning_input(&admitted, bindings, &selected);
+        let report = match investigation_rule_inputs(&service.catalog, &admission.spec.pack, &input)
+            .map_err(|_| ())
+            .and_then(|inputs| {
+                engine
+                    .evaluate_version(exact.id(), exact.version(), &inputs)
+                    .map_err(|_| ())
+            }) {
             Ok(report) => report,
             Err(_) => {
                 self.fail_local_evaluation(

@@ -88,6 +88,7 @@ const templateLabels: Record<InspectionTemplate, string> = {
   security: "Security",
   upgrade: "Upgrade",
   disaster_recovery: "DR",
+  store_pressure_legacy_v1: "Store v1（历史布尔契约）",
 };
 
 export function AskSrePage() {

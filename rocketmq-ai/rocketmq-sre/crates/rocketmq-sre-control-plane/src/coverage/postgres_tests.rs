@@ -412,11 +412,126 @@ async fn coverage_quality_preserves_tenant_cluster_observation_order_and_legacy_
     }
 }
 
+#[tokio::test]
+#[ignore = "requires disposable ROCKETMQ_SRE_TEST_DATABASE_URL and ROCKETMQ_SRE_OBJECT_STORE_LOCAL_PATH"]
+async fn postgres_store_pressure_scenario_pins_only_an_authorized_exact_primary_revision() {
+    let url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("explicit disposable test database");
+    let repository = PostgresRepository::connect(&url, 4).await.unwrap();
+    let tenant = TenantId::new();
+    let cluster = ClusterId::new();
+    sqlx::query("INSERT INTO clusters (id,tenant_id,external_cluster_key,environment,region,rocketmq_version,deployment_mode,owner_name,requested_access_profile,effective_access_profile,onboarding_state)
+        VALUES ($1,$2,$3,'test','local','test','test','synthetic-scenario-compatibility','read_only','read_only','ready_read_only')")
+        .bind(cluster.as_uuid()).bind(tenant.to_string()).bind(format!("c02-{cluster}"))
+        .execute(&repository.pool).await.unwrap();
+    let auth = AuthContext {
+        tenant_id: tenant,
+        subject: "c02-synthetic-scenario-compatibility".to_owned(),
+        clusters: BTreeSet::from([cluster]),
+        roles: BTreeSet::from(["rocketmq:read".to_owned()]),
+    };
+    let (legacy_i, legacy_r, _) =
+        seed_revision_with_pack(&repository, &auth, cluster, &[], ("store-pressure.v1", "1.0.0")).await;
+    let (current_i, current_r, _) =
+        seed_revision_with_pack(&repository, &auth, cluster, &[], ("store-pressure.v2", "2.0.0")).await;
+    let router = build_router(
+        repository.clone(),
+        CapabilityDocuments::embedded().unwrap(),
+        "c02-synthetic-scenario-token-with-signing-entropy",
+    )
+    .unwrap();
+    for (binding, expected) in [
+        (String::new(), "store-pressure.v2"),
+        (
+            format!("&investigation_id={legacy_i}&revision_id={legacy_r}"),
+            "store-pressure.v1",
+        ),
+        (
+            format!("&investigation_id={current_i}&revision_id={current_r}"),
+            "store-pressure.v2",
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/capabilities/coverage?cluster_id={cluster}{binding}"))
+                    .header(
+                        "authorization",
+                        "Bearer c02-synthetic-scenario-token-with-signing-entropy",
+                    )
+                    .header("x-rocketmq-tenant", tenant.to_string())
+                    .header("x-rocketmq-clusters", cluster.to_string())
+                    .header("x-rocketmq-subject", &auth.subject)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 2 * 1024 * 1024).await.unwrap()).unwrap();
+        let scenario = value["quality"]["scenarios"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "backlog_store")
+            .unwrap();
+        assert_eq!(scenario["pack_ids"], json!(["consumer-lag.v2", expected]));
+        assert!(
+            scenario["required_signal_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|id| id.as_str().unwrap().starts_with(&format!("{expected}:")))
+        );
+        assert_eq!(value["quality"]["execution_eligible"], false);
+    }
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/capabilities/coverage?cluster_id={cluster}&investigation_id={legacy_i}&revision_id={legacy_r}"
+                ))
+                .header(
+                    "authorization",
+                    "Bearer c02-synthetic-scenario-token-with-signing-entropy",
+                )
+                .header("x-rocketmq-tenant", tenant.to_string())
+                .header("x-rocketmq-clusters", ClusterId::new().to_string())
+                .header("x-rocketmq-subject", &auth.subject)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let retained: String = sqlx::query_scalar("SELECT pack_id FROM investigation_diagnosis_revisions WHERE id=$1")
+        .bind(legacy_r.as_uuid())
+        .fetch_one(&repository.pool)
+        .await
+        .unwrap();
+    assert_eq!(retained, "store-pressure.v1");
+}
+
 pub(super) async fn seed_revision(
     repository: &PostgresRepository,
     auth: &AuthContext,
     cluster: ClusterId,
     ids: &[rocketmq_sre_contracts::EvidenceId],
+) -> (
+    rocketmq_sre_contracts::InvestigationId,
+    rocketmq_sre_contracts::DiagnosisRevisionId,
+    rocketmq_sre_contracts::ConversationId,
+) {
+    seed_revision_with_pack(repository, auth, cluster, ids, ("consumer-lag.v2", "2.0.0")).await
+}
+
+async fn seed_revision_with_pack(
+    repository: &PostgresRepository,
+    auth: &AuthContext,
+    cluster: ClusterId,
+    ids: &[rocketmq_sre_contracts::EvidenceId],
+    pack: (&str, &str),
 ) -> (
     rocketmq_sre_contracts::InvestigationId,
     rocketmq_sre_contracts::DiagnosisRevisionId,
@@ -450,8 +565,9 @@ pub(super) async fn seed_revision(
     sqlx::query("INSERT INTO conversation_answer_revisions (id,conversation_id,turn_id,revision,answer,mode,evidence_ids,partial,created_at) VALUES ($1,$2,$3,1,'Bounded saved result','rules_only',$4,true,NOW())")
         .bind(answer.as_uuid()).bind(view.conversation.id.as_uuid()).bind(turn.as_uuid()).bind(&evidence).execute(&repository.pool).await.unwrap();
     sqlx::query("INSERT INTO investigation_diagnosis_revisions (id,tenant_id,cluster_id,investigation_id,conversation_id,turn_id,answer_revision_id,revision,pack_id,pack_version,status,rule_result,hypotheses,evidence_ids,execution_eligible,partial,correlation_id,created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,1,'consumer-lag.v2','2.0.0','inconclusive','{}'::jsonb,'[]'::jsonb,$8,false,true,$9,NOW())")
+        VALUES ($1,$2,$3,$4,$5,$6,$7,1,$10,$11,'inconclusive','{}'::jsonb,'[]'::jsonb,$8,false,true,$9,NOW())")
         .bind(revision.as_uuid()).bind(auth.tenant_id.as_uuid()).bind(cluster.as_uuid()).bind(investigation.as_uuid())
-        .bind(view.conversation.id.as_uuid()).bind(turn.as_uuid()).bind(answer.as_uuid()).bind(&evidence).bind(correlation.as_uuid()).execute(&repository.pool).await.unwrap();
+        .bind(view.conversation.id.as_uuid()).bind(turn.as_uuid()).bind(answer.as_uuid()).bind(&evidence).bind(correlation.as_uuid())
+        .bind(pack.0).bind(pack.1).execute(&repository.pool).await.unwrap();
     (investigation, revision, view.conversation.id)
 }

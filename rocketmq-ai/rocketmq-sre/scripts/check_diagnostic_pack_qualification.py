@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Validate the complete rules-only diagnostic-pack qualification contract."""
+"""Validate the version-pinned, rules-only diagnostic qualification baseline."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ DEFAULT_MANIFEST = SRE_ROOT / "config" / "qualification" / "diagnostic-packs.v1.
 EXPECTED_SCHEMA = "rocketmq-sre.diagnostic-pack-qualification.v1"
 EXPECTED_REPORT_SCHEMA = "rocketmq-sre.diagnostic-pack-qualification-report.v1"
 EXPECTED_SCENARIOS = {"normal", "fault", "missing"}
-EXPECTED_TEMPLATES = {"cluster_health", "consumer", "broker", "telemetry", "producer_consumer"}
+EXPECTED_TEMPLATES = {"cluster_health", "consumer", "broker", "telemetry", "producer_consumer", "store_pressure_legacy_v1"}
 PACK_COUNT = 32
 PACK_SCENARIO_COUNT = 96
 MAX_CITED_EVIDENCE = 200
@@ -73,7 +73,7 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
     if manifest.get("pack_scenario_count") != PACK_SCENARIO_COUNT:
         findings.append("pack_scenario_count must be 96")
     if set(manifest.get("inspection_templates", [])) != EXPECTED_TEMPLATES:
-        findings.append("inspection templates must expose the complete operational catalog")
+        findings.append("inspection templates must match the declared version-pinned baseline")
 
     packs = manifest.get("packs")
     if not isinstance(packs, list) or len(packs) != PACK_COUNT:

@@ -251,6 +251,41 @@ pub trait DiagnosticPack: fmt::Debug + Send + Sync {
         Vec::new()
     }
 
+    /// Missing semantic facts that primitive field shapes cannot establish.
+    ///
+    /// The engine and quality projections apply these constraints even when a
+    /// saved snapshot claims complete coverage. Returning a fact prevents a
+    /// partial observation from becoming a conclusive or verified whole-pack
+    /// result. The default preserves existing pack contracts.
+    fn missing_evidence_facts(&self, _requirement_key: &str, _snapshot: &EvidenceSnapshot) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether this exact compiled version can interpret a bounded partial
+    /// snapshot as context. The planner also requires real missing facts, valid
+    /// scope/hash and current quality, so context never grants completeness.
+    /// Existing packs keep their qualified-input-only behavior.
+    fn accepts_partial_context(
+        &self,
+        _requirement_key: &str,
+        _snapshot: &EvidenceSnapshot,
+        _as_of_unix_ms: i64,
+    ) -> bool {
+        false
+    }
+
+    /// Optional version-owned semantic digest for no-progress detection.
+    /// Capture metadata may be excluded only while actual measurements and
+    /// policy remain represented. Clock-derived eligibility is checked separately
+    /// at rule-input admission and finalization; expiry is not new progress.
+    /// The evidence content hash and immutable replay identities remain unchanged.
+    ///
+    /// # Errors
+    /// Returns a contract error if the semantic material cannot be canonicalized.
+    fn semantic_evidence_fingerprint(&self, _snapshot: &EvidenceSnapshot) -> Result<Option<String>, SreContractError> {
+        Ok(None)
+    }
+
     /// Stable reason codes emitted by this pack.
     fn rule_codes(&self) -> &'static [&'static str];
 

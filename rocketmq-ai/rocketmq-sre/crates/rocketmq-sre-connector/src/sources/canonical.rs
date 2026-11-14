@@ -609,7 +609,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use rocketmq_sre_core::diagnostics::EvidenceRequirement;
-    use rocketmq_sre_core::diagnostics::full_pack_ids;
+    use rocketmq_sre_core::diagnostics::active_pack_ids;
     use rocketmq_sre_core::diagnostics::full_registry;
 
     use super::super::normalize_source;
@@ -673,16 +673,16 @@ mod tests {
             }
         }
 
-        assert_eq!(pack_ids, full_pack_ids().into_iter().collect());
-        assert_eq!(requirement_count, 69);
+        assert_eq!(pack_ids, active_pack_ids().into_iter().collect());
+        assert_eq!(requirement_count, 68);
         assert_eq!(required_count, 32);
-        assert_eq!(optional_count, 37);
+        assert_eq!(optional_count, 36);
         assert_eq!(query_count, 48);
-        assert_eq!(unsupported_count, 21);
+        assert_eq!(unsupported_count, 20);
         assert_eq!(required_query_count, 32);
         assert_eq!(required_unsupported_count, 0);
         assert_eq!(optional_query_count, 16);
-        assert_eq!(optional_unsupported_count, 21);
+        assert_eq!(optional_unsupported_count, 20);
     }
 
     #[test]

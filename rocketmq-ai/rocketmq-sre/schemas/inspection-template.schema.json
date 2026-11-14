@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Supported read-only inspection templates.\n\nThe original Phase 1 variants remain wire-compatible. Phase 2 adds\ndomain-complete templates used by preventive operations.\n`StorePressureLegacyV1` explicitly pins the original Boolean Store pack;\nordinary Store inspections select the active numeric observation version.",
+  "enum": [
+    "cluster_health",
+    "consumer",
+    "broker",
+    "telemetry",
+    "full_cluster",
+    "producer_consumer",
+    "store_ha",
+    "routing_proxy",
+    "security",
+    "upgrade",
+    "disaster_recovery",
+    "store_pressure_legacy_v1"
+  ],
+  "title": "InspectionTemplate",
+  "type": "string"
+}

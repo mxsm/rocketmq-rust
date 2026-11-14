@@ -10,9 +10,8 @@ packs:
     required_evidence: admin-query:store-pressure/
     max_window: 5m
     thresholds:
-      - disk_used_percent: 85
-      - flush_latency_ms: 500
-      - dispatch_backlog: 1000
+      - signal_contract: legacy_explicit_booleans
+      - numeric_policy: not_implemented_by_v1
     fixture_scenarios: [normal, fault, missing]
     fault_reason_code: STORE_DISK_PRESSURE
     healthy_reason_code: STORE_PRESSURE_HEALTHY
