@@ -83,8 +83,6 @@ const MAX_RETRY_COUNT_WHEN_HALF_NULL: i32 = 1;
 const OP_MSG_PULL_NUMS: i32 = 32;
 const SLEEP_WHILE_NO_OP: i32 = 1000;
 const MAX_CONCURRENT_OP_WRITES: usize = 32;
-/// Budget for [`TransactionalMessageService::close`], which has no caller deadline.
-const TRANSACTION_CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 type TransactionMessageReadResult = DecodedReadResult<MessageExt>;
 
@@ -1281,10 +1279,6 @@ where
         result
     }
 
-    async fn async_prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        self.prepare_message(message_inner).await
-    }
-
     async fn delete_prepare_message(&self, message_ext: &MessageExt) -> bool {
         let queue_id = message_ext.queue_id;
         let data = format!(
@@ -1367,21 +1361,8 @@ where
         }
     }
 
-    fn open(&self) -> bool {
-        true
-    }
-
-    async fn close(&self) {
-        self.shutdown_until(rocketmq_runtime::ShutdownDeadline::after(TRANSACTION_CLOSE_TIMEOUT))
-            .await
-    }
-
     fn get_transaction_metrics(&self) -> &TransactionMetrics {
         &self.transaction_metrics
-    }
-
-    fn set_transaction_metrics(&mut self, transaction_metrics: TransactionMetrics) {
-        self.transaction_metrics = transaction_metrics;
     }
 }
 

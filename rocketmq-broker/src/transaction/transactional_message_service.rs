@@ -37,17 +37,6 @@ pub(crate) trait TransactionalMessageService: Sync + 'static {
     /// A `PutMessageResult` indicating the result of the message preparation.
     async fn prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult;
 
-    /// Asynchronously prepares a transactional message.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_inner` - The inner message to be prepared.
-    ///
-    /// # Returns
-    ///
-    /// A `PutMessageResult` indicating the result of the message preparation.
-    async fn async_prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult;
-
     /// Deletes a prepared transactional message.
     ///
     /// # Arguments
@@ -94,27 +83,10 @@ pub(crate) trait TransactionalMessageService: Sync + 'static {
         listener: Listener,
     );
 
-    /// Opens the transactional message service.
-    ///
-    /// # Returns
-    ///
-    /// A boolean indicating whether the service was successfully opened.
-    fn open(&self) -> bool;
-
-    /// Closes the transactional message service.
-    async fn close(&self);
-
     /// Gets the transaction metrics.
     ///
     /// # Returns
     ///
     /// A reference to the `TransactionMetrics`.
     fn get_transaction_metrics(&self) -> &TransactionMetrics;
-
-    /// Sets the transaction metrics.
-    ///
-    /// # Arguments
-    ///
-    /// * `transaction_metrics` - The transaction metrics to be set.
-    fn set_transaction_metrics(&mut self, transaction_metrics: TransactionMetrics);
 }
