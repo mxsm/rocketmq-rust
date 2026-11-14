@@ -6996,6 +6996,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::config::SessionIoModel",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::config::SessionIoModel",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "public ServerConfig option for selecting session socket I/O scheduling",
+          "removal_condition": "retain while ServerConfig exposes the session I/O model"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::config::SocketOptions",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::config::SocketOptions",
           "owner": "transport",
@@ -8327,7 +8336,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 194
+      "maximum_exports": 195
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",
