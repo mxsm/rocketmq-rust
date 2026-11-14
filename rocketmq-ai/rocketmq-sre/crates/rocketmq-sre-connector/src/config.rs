@@ -29,6 +29,9 @@ use url::Url;
 use crate::ConnectorError;
 use crate::ConnectorFailure;
 
+mod send_latency;
+pub(crate) use send_latency::SendLatencyPolicy;
+
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8091";
 const DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 15;
 const DEFAULT_HANDSHAKE_INTERVAL_SECONDS: u64 = 15;
@@ -326,6 +329,7 @@ pub struct ConnectorConfig {
     pub max_response_bytes: usize,
     pub expected_tool_surface_digest: Option<String>,
     pub prometheus_url: Option<Url>,
+    pub(crate) send_latency_policies: Vec<SendLatencyPolicy>,
     pub alertmanager_url: Option<Url>,
     pub loki_url: Option<Url>,
     pub tempo_url: Option<Url>,
@@ -357,6 +361,7 @@ impl fmt::Debug for ConnectorConfig {
             .field("max_response_bytes", &self.max_response_bytes)
             .field("expected_tool_surface_digest", &self.expected_tool_surface_digest)
             .field("prometheus_url", &self.prometheus_url.as_ref().map(|_| "[CONFIGURED]"))
+            .field("send_latency_policy_count", &self.send_latency_policies.len())
             .field(
                 "alertmanager_url",
                 &self.alertmanager_url.as_ref().map(|_| "[CONFIGURED]"),
@@ -454,6 +459,7 @@ impl ConnectorConfig {
             validate_digest(digest)?;
         }
         let prometheus_url = optional_http_url("ROCKETMQ_SRE_PROMETHEUS_URL")?;
+        let send_latency_policies = send_latency::load(&cluster_ids)?;
         let alertmanager_url = optional_http_url("ROCKETMQ_SRE_ALERTMANAGER_URL")?;
         let loki_url = optional_http_url("ROCKETMQ_SRE_LOKI_URL")?;
         let tempo_url = optional_http_url("ROCKETMQ_SRE_TEMPO_URL")?;
@@ -482,6 +488,7 @@ impl ConnectorConfig {
             max_response_bytes,
             expected_tool_surface_digest,
             prometheus_url,
+            send_latency_policies,
             alertmanager_url,
             loki_url,
             tempo_url,
@@ -1129,6 +1136,7 @@ mod tests {
             max_response_bytes: 1024,
             expected_tool_surface_digest: None,
             prometheus_url: None,
+            send_latency_policies: Vec::new(),
             alertmanager_url: None,
             loki_url: None,
             tempo_url: None,

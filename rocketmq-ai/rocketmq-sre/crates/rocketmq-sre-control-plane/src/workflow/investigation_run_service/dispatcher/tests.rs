@@ -215,4 +215,5 @@ mod models;
 mod persistence;
 mod quality;
 mod runtime;
+mod send_latency;
 mod store_pressure;

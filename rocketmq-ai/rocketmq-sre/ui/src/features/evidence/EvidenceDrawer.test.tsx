@@ -14,6 +14,7 @@ import {
 import { OperatorPreferencesProvider } from "@/preferences/OperatorPreferences";
 import { EvidenceDrawer } from "./EvidenceDrawer";
 import type { EvidenceAccess } from "./evidencePresentation";
+import { sendLatencyFixture } from "./test-fixtures/sendLatency";
 
 const state = vi.hoisted(() => ({ api: undefined as unknown as SreApi }));
 vi.mock("@/data/SreDataContext", () => ({
@@ -182,6 +183,8 @@ describe("shared evidence drawer", () => {
 
   it("cancels pending content when the referenced revision changes and ignores its late result", async () => {
     const user = userEvent.setup();
+    const { payload, evidence } = sendLatencyFixture();
+    vi.mocked(state.api.getEvidence).mockResolvedValue(evidence);
     let resolve!: (value: unknown) => void;
     let signal: AbortSignal | undefined;
     vi.mocked(state.api.getEvidenceContent).mockImplementation(
@@ -208,9 +211,10 @@ describe("shared evidence drawer", () => {
     rerender(<Fixture access={{ ...access, revisionId: "second" }} />);
     expect(signal?.aborted).toBe(true);
     await act(async () =>
-      resolve({ stale_revision_marker: "must stay hidden" }),
+      resolve({ ...payload, stale_revision_marker: "must stay hidden" }),
     );
     expect(screen.queryByText(/stale_revision_marker/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "发送延迟分段" })).not.toBeInTheDocument();
     expect(state.api.getEvidenceContent).toHaveBeenCalledTimes(1);
   });
 
@@ -227,5 +231,40 @@ describe("shared evidence drawer", () => {
     expect(
       screen.queryByRole("button", { name: "读取脱敏内容" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders latency only after the authorized content click, independently of bounded audit JSON", async () => {
+    const user = userEvent.setup();
+    const { payload, evidence } = sendLatencyFixture();
+    vi.mocked(state.api.getEvidence).mockResolvedValue(evidence);
+    vi.mocked(state.api.getEvidenceContent).mockResolvedValue({
+      raw_histograms: Array.from({ length: 100 }, () => Array.from({ length: 100 }, () => 1)),
+      ...payload,
+      accessToken: "private-marker",
+    });
+    render(<Fixture />);
+    await user.click(screen.getByRole("button", { name: "open evidence" }));
+    const read = await screen.findByRole("button", { name: "读取脱敏内容" });
+    expect(screen.queryByRole("heading", { name: "发送延迟分段" })).not.toBeInTheDocument();
+    expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
+    await user.click(read);
+    expect(await screen.findByText("保存的 P99 估计: 248.5 ms")).toBeVisible();
+    expect(screen.getByText(/采集完成时间在当前时间窗外/)).toBeVisible();
+    expect(screen.getAllByText("缺少精确 Topic 范围")).toHaveLength(4);
+    expect(screen.queryByText(/private-marker/)).not.toBeInTheDocument();
+    expect(state.api.getEvidenceContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not display foreign latency content under authorized metadata", async () => {
+    const user = userEvent.setup();
+    const { payload, evidence } = sendLatencyFixture();
+    payload.scope.cluster_id = "foreign-scope-marker";
+    vi.mocked(state.api.getEvidence).mockResolvedValue(evidence);
+    vi.mocked(state.api.getEvidenceContent).mockResolvedValue(payload);
+    render(<Fixture />);
+    await user.click(screen.getByRole("button", { name: "open evidence" }));
+    await user.click(await screen.findByRole("button", { name: "读取脱敏内容" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("范围不一致");
+    expect(screen.queryByText(/foreign-scope-marker|248.5/)).not.toBeInTheDocument();
   });
 });

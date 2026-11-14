@@ -41,6 +41,7 @@ use crate::ConnectorFailure;
 use crate::config::ControlPlaneConfig;
 use crate::mcp::McpGateway;
 use crate::sources::CancelSignal;
+use crate::sources::bounded_future;
 use crate::sources::bounded_response;
 
 const CHANNEL_SCHEMA_FAMILY: &str = "rocketmq-sre.connector-channel";
@@ -204,8 +205,16 @@ where
                 "control plane rejected connector registration",
             ));
         }
+        let cancel = CancelSignal::for_owner(context.task_group());
+        self.try_inventory_upload(true, &cancel).await;
+        // Registration/HTTP readiness alone does not establish a live command
+        // channel. Require a real authenticated heartbeat after initial work.
+        self.heartbeat(&cancel).await?;
+        if cancel.is_cancelled() {
+            self.cancel_all().await;
+            return Ok(());
+        }
         self.connector.set_channel_ready(true);
-        self.try_inventory_upload(true).await;
         self.flush_pending().await?;
         let mut after_sequence = acknowledgement.resume_after_sequence;
         let mut heartbeat = tokio::time::interval(self.config.heartbeat_interval);
@@ -220,7 +229,8 @@ where
                     return Ok(());
                 }
                 _ = heartbeat.tick() => {
-                    self.heartbeat().await?;
+                    self.heartbeat(&cancel).await?;
+                    self.try_inventory_upload(false, &cancel).await;
                 }
                 poll = self.poll(after_sequence) => {
                     let commands = poll?;
@@ -243,7 +253,7 @@ where
         }
     }
 
-    async fn heartbeat(&self) -> Result<(), ConnectorError> {
+    async fn heartbeat(&self, cancel: &CancelSignal) -> Result<(), ConnectorError> {
         let heartbeat = ConnectorHeartbeat {
             schema: channel_schema(),
             session_id: self.session_id,
@@ -252,10 +262,12 @@ where
             capability: self.connector.sources_capability().await,
             observed_at: Utc::now(),
         };
-        self.post_empty("/internal/v1/connectors/v1/heartbeat", &heartbeat)
-            .await?;
-        self.try_inventory_upload(false).await;
-        Ok(())
+        bounded_future(
+            self.inventory_deadline(),
+            cancel,
+            self.post_empty("/internal/v1/connectors/v1/heartbeat", &heartbeat),
+        )
+        .await
     }
 
     async fn poll(&self, after_sequence: u64) -> Result<Vec<ChannelCommand>, ConnectorError> {
@@ -293,7 +305,7 @@ where
     ) -> Result<(), ConnectorError> {
         match command {
             ChannelCommand::Query { envelope } => {
-                let cancel = CancelSignal::default();
+                let cancel = CancelSignal::for_owner(context.task_group());
                 {
                     let mut active = self.active.lock().await;
                     if active.contains_key(&envelope.correlation_id) {
@@ -402,8 +414,8 @@ where
         }
     }
 
-    async fn try_inventory_upload(&self, force: bool) {
-        match self.upload_inventory(force).await {
+    async fn try_inventory_upload(&self, force: bool, cancel: &CancelSignal) {
+        match self.upload_inventory(force, cancel).await {
             Ok(ConnectorAdmissionOutcome::Accepted(())) => {}
             Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => {
                 tracing::warn!(
@@ -422,7 +434,20 @@ where
         }
     }
 
-    async fn upload_inventory(&self, force: bool) -> Result<ConnectorAdmissionOutcome<()>, ConnectorError> {
+    fn inventory_deadline(&self) -> chrono::DateTime<Utc> {
+        Utc::now()
+            + chrono::Duration::from_std(self.connector_config.request_timeout)
+                .unwrap_or_else(|_| chrono::Duration::seconds(15))
+    }
+
+    async fn upload_inventory(
+        &self,
+        force: bool,
+        cancel: &CancelSignal,
+    ) -> Result<ConnectorAdmissionOutcome<()>, ConnectorError> {
+        // One absolute budget covers readiness, source reads, projection and
+        // HTTP upload. No stage renews time already consumed by an earlier one.
+        let deadline = self.inventory_deadline();
         if !force
             && self
                 .last_inventory_upload
@@ -434,7 +459,7 @@ where
         }
         let inventory = match self
             .connector
-            .inventory(self.config.cluster_id, &self.config.connector_subject)
+            .inventory(self.config.cluster_id, &self.config.connector_subject, deadline, cancel)
             .await?
         {
             ConnectorAdmissionOutcome::Accepted(inventory) => inventory,
@@ -443,12 +468,9 @@ where
             }
         };
         let path = format!("/internal/v1/connectors/v1/{}/inventory", self.session_id);
-        let response = self.send(&path, &inventory).await?;
-        let cancel = CancelSignal::default();
-        let deadline = Utc::now()
-            + chrono::Duration::from_std(self.connector_config.request_timeout)
-                .unwrap_or_else(|_| chrono::Duration::seconds(15));
-        bounded_response(response, MAX_CHANNEL_RESPONSE_BYTES, deadline, &cancel).await?;
+        let response = bounded_future(deadline, cancel, self.send(&path, &inventory)).await?;
+        bounded_response(response, MAX_CHANNEL_RESPONSE_BYTES, deadline, cancel).await?;
+        bounded_future(deadline, cancel, async { Ok(()) }).await?;
         *self.last_inventory_upload.lock().await = Some(Instant::now());
         Ok(ConnectorAdmissionOutcome::Accepted(()))
     }

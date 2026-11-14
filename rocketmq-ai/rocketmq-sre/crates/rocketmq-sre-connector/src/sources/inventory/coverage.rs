@@ -51,6 +51,39 @@ pub(super) struct InventoryCoverage {
     inventory_reasons: BTreeSet<&'static str>,
 }
 
+/// Remember observed associations/participants lost from the bounded wire
+/// representation. A remaining complete subgraph cannot erase that gap.
+#[derive(Clone, Copy, Default)]
+pub(super) struct PathLoss {
+    topic_storage: bool,
+    client_connection: bool,
+}
+
+impl PathLoss {
+    pub(super) fn asset(&mut self, asset: &AssetObservation) {
+        self.topic_storage |= matches!(
+            asset.kind,
+            "topic" | "queue" | "broker" | "store" | "pod" | "persistent_volume_claim"
+        );
+        self.client_connection |= matches!(asset.kind, "producer" | "consumer" | "connection" | "broker");
+    }
+
+    pub(super) fn edge(&mut self, edge: &TopologyObservation) {
+        self.topic_storage |= matches!(
+            (edge.from.kind, edge.relation, edge.to.kind),
+            ("topic", "contains", "queue")
+                | ("queue", "routes_to", "broker")
+                | ("broker", "stores_on", "store")
+                | ("store", "runs_on", "pod")
+                | ("store", "stores_on", "persistent_volume_claim")
+        );
+        self.client_connection |= matches!(
+            (edge.from.kind, edge.relation, edge.to.kind),
+            ("producer" | "consumer", "connected_to", "connection") | ("connection", "connected_to", "broker")
+        );
+    }
+}
+
 impl InventoryCoverage {
     pub(super) fn new() -> Self {
         Self {
@@ -88,6 +121,7 @@ impl InventoryCoverage {
         assets: &[AssetObservation],
         edges: &[TopologyObservation],
         bounded: bool,
+        loss: PathLoss,
     ) -> (Value, bool) {
         let counts = assets.iter().fold(BTreeMap::<&str, usize>::new(), |mut counts, asset| {
             *counts.entry(asset.kind).or_default() += 1;
@@ -119,8 +153,17 @@ impl InventoryCoverage {
             );
         }
 
-        let topic_path = topic_storage_path_status(assets, edges);
-        let client_path = client_connection_path_status(assets, edges);
+        let graph = RetainedGraph::new(assets, edges);
+        let topic_path = if loss.topic_storage {
+            "partial"
+        } else {
+            topic_storage_path_status(&graph)
+        };
+        let client_path = if loss.client_connection {
+            "partial"
+        } else {
+            client_connection_path_status(&graph)
+        };
         let client_path_reason = (client_path == "not_production_verified").then(|| {
             self.observations
                 .get("connection")
@@ -151,120 +194,143 @@ impl InventoryCoverage {
     }
 }
 
-fn topic_storage_path_status(assets: &[AssetObservation], edges: &[TopologyObservation]) -> &'static str {
-    let topics = keys_of_kind(assets, "topic");
-    let queues = keys_of_kind(assets, "queue");
-    if topics.is_empty() || queues.is_empty() {
-        return "not_production_verified";
-    }
-    let brokers = keys_of_kind(assets, "broker");
-    let stores = keys_of_kind(assets, "store");
-    let pods = keys_of_kind(assets, "pod");
-    let nodes = keys_of_kind(assets, "node");
-    let claims = keys_of_kind(assets, "persistent_volume_claim");
-    let mut complete = true;
-    let mut any_kubernetes_tail = false;
-    for topic in &topics {
-        if !edges.iter().any(|edge| {
-            edge.relation == "contains" && canonical(&edge.from) == *topic && queues.contains(&canonical(&edge.to))
-        }) {
-            complete = false;
-        }
-    }
-    for queue in &queues {
-        let has_topic = edges.iter().any(|edge| {
-            edge.relation == "contains" && topics.contains(&canonical(&edge.from)) && canonical(&edge.to) == *queue
-        });
-        let routed_brokers = edges
+type Node<'a> = (&'a str, &'a str);
+type Adjacency<'a> = BTreeMap<(Node<'a>, &'a str), BTreeSet<Node<'a>>>;
+
+/// Only retained endpoints participate in a path. Borrowed typed keys preserve
+/// direction and identity without allocating a canonical String per comparison.
+struct RetainedGraph<'a> {
+    nodes: BTreeSet<Node<'a>>,
+    outgoing: Adjacency<'a>,
+    incoming: Adjacency<'a>,
+    dangling_outgoing: BTreeSet<(Node<'a>, &'a str)>,
+    dangling_incoming: BTreeSet<(Node<'a>, &'a str)>,
+}
+
+impl<'a> RetainedGraph<'a> {
+    fn new(assets: &'a [AssetObservation], edges: &'a [TopologyObservation]) -> Self {
+        let nodes = assets
             .iter()
-            .filter(|edge| {
-                edge.relation == "routes_to"
-                    && canonical(&edge.from) == *queue
-                    && brokers.contains(&canonical(&edge.to))
-            })
-            .map(|edge| canonical(&edge.to))
-            .collect::<Vec<_>>();
-        if !has_topic || routed_brokers.is_empty() {
-            complete = false;
-            continue;
+            .map(|asset| (asset.kind, asset.external_key.as_str()))
+            .collect::<BTreeSet<_>>();
+        let mut outgoing = Adjacency::new();
+        let mut incoming = Adjacency::new();
+        let mut dangling_outgoing = BTreeSet::new();
+        let mut dangling_incoming = BTreeSet::new();
+        for edge in edges {
+            let from = (edge.from.kind, edge.from.external_key.as_str());
+            let to = (edge.to.kind, edge.to.external_key.as_str());
+            if nodes.contains(&from) && nodes.contains(&to) {
+                outgoing.entry((from, edge.relation)).or_default().insert(to);
+                incoming.entry((to, edge.relation)).or_default().insert(from);
+            } else {
+                if nodes.contains(&from) {
+                    dangling_outgoing.insert((from, edge.relation));
+                }
+                if nodes.contains(&to) {
+                    dangling_incoming.insert((to, edge.relation));
+                }
+            }
         }
-        for broker in routed_brokers {
-            let broker_stores = edges
-                .iter()
-                .filter(|edge| {
-                    edge.relation == "stores_on"
-                        && canonical(&edge.from) == broker
-                        && stores.contains(&canonical(&edge.to))
-                })
-                .map(|edge| canonical(&edge.to))
-                .collect::<Vec<_>>();
-            if broker_stores.is_empty() {
-                complete = false;
-                continue;
-            }
-            for store in broker_stores {
-                let has_tail = edges.iter().any(|edge| {
-                    canonical(&edge.from) == store
-                        && ((edge.relation == "runs_on" && pods.contains(&canonical(&edge.to)))
-                            || (edge.relation == "stores_on" && claims.contains(&canonical(&edge.to))))
-                }) || edges.iter().any(|store_pod| {
-                    canonical(&store_pod.from) == store
-                        && store_pod.relation == "runs_on"
-                        && pods.contains(&canonical(&store_pod.to))
-                        && edges.iter().any(|pod_node| {
-                            pod_node.relation == "runs_on"
-                                && pod_node.from == store_pod.to
-                                && nodes.contains(&canonical(&pod_node.to))
-                        })
-                });
-                any_kubernetes_tail |= has_tail;
-                complete &= has_tail;
-            }
+        Self {
+            nodes,
+            outgoing,
+            incoming,
+            dangling_outgoing,
+            dangling_incoming,
         }
     }
-    if complete && any_kubernetes_tail {
-        "available"
-    } else {
-        "partial"
+
+    fn of_kind(&self, kind: &str) -> BTreeSet<Node<'a>> {
+        self.nodes.iter().copied().filter(|node| node.0 == kind).collect()
+    }
+
+    fn outgoing(&self, node: Node<'a>, relation: &'a str) -> impl Iterator<Item = Node<'a>> + '_ {
+        self.outgoing.get(&(node, relation)).into_iter().flatten().copied()
+    }
+
+    fn incoming(&self, node: Node<'a>, relation: &'a str) -> impl Iterator<Item = Node<'a>> + '_ {
+        self.incoming.get(&(node, relation)).into_iter().flatten().copied()
     }
 }
 
-fn client_connection_path_status(assets: &[AssetObservation], edges: &[TopologyObservation]) -> &'static str {
-    let clients = assets
-        .iter()
-        .filter(|asset| matches!(asset.kind, "producer" | "consumer"))
-        .map(|asset| format!("{}:{}", asset.kind, asset.external_key))
-        .collect::<BTreeSet<_>>();
-    let connections = keys_of_kind(assets, "connection");
-    let brokers = keys_of_kind(assets, "broker");
-    if clients.is_empty() || connections.is_empty() {
+fn topic_storage_path_status(graph: &RetainedGraph<'_>) -> &'static str {
+    let topics = graph.of_kind("topic");
+    let queues = graph.of_kind("queue");
+    if topics.is_empty() || queues.is_empty() {
         return "not_production_verified";
     }
-    let complete = clients.iter().all(|client| {
-        edges
-            .iter()
-            .filter(|edge| edge.relation == "connected_to" && canonical(&edge.from) == *client)
-            .any(|client_edge| {
-                let connection = canonical(&client_edge.to);
-                connections.contains(&connection)
-                    && edges.iter().any(|broker_edge| {
-                        broker_edge.relation == "connected_to"
-                            && broker_edge.from == client_edge.to
-                            && brokers.contains(&canonical(&broker_edge.to))
-                    })
-            })
+    // Preserve the existing Pod-or-PVC tail: a Node is additional context, not
+    // evidence required to replace either observed tail. Every Store belonging
+    // to every routed Broker must have its own tail; other Brokers cannot fill it.
+    let stores_with_tail = graph
+        .of_kind("store")
+        .into_iter()
+        .filter(|store| {
+            !graph.dangling_outgoing.contains(&(*store, "runs_on"))
+                && !graph.dangling_outgoing.contains(&(*store, "stores_on"))
+                && (graph.outgoing(*store, "runs_on").any(|node| node.0 == "pod")
+                    || graph
+                        .outgoing(*store, "stores_on")
+                        .any(|node| node.0 == "persistent_volume_claim"))
+        })
+        .collect::<BTreeSet<_>>();
+    let complete_brokers = graph
+        .of_kind("broker")
+        .into_iter()
+        .filter(|broker| {
+            let mut stores = graph
+                .outgoing(*broker, "stores_on")
+                .filter(|node| node.0 == "store")
+                .peekable();
+            !graph.dangling_outgoing.contains(&(*broker, "stores_on"))
+                && stores.peek().is_some()
+                && stores.all(|store| stores_with_tail.contains(&store))
+        })
+        .collect::<BTreeSet<_>>();
+    let complete = topics.iter().all(|topic| {
+        !graph.dangling_outgoing.contains(&(*topic, "contains"))
+            && graph.outgoing(*topic, "contains").any(|node| queues.contains(&node))
+    }) && queues.iter().all(|queue| {
+        let has_topic = graph.incoming(*queue, "contains").any(|node| topics.contains(&node));
+        let mut brokers = graph
+            .outgoing(*queue, "routes_to")
+            .filter(|node| node.0 == "broker")
+            .peekable();
+        !graph.dangling_incoming.contains(&(*queue, "contains"))
+            && !graph.dangling_outgoing.contains(&(*queue, "routes_to"))
+            && has_topic
+            && brokers.peek().is_some()
+            && brokers.all(|broker| complete_brokers.contains(&broker))
     });
     if complete { "available" } else { "partial" }
 }
 
-fn keys_of_kind(assets: &[AssetObservation], kind: &str) -> BTreeSet<String> {
-    assets
+fn client_connection_path_status(graph: &RetainedGraph<'_>) -> &'static str {
+    let clients = graph
+        .nodes
         .iter()
-        .filter(|asset| asset.kind == kind)
-        .map(|asset| format!("{}:{}", asset.kind, asset.external_key))
-        .collect()
-}
-
-fn canonical(key: &super::AssetKey) -> String {
-    format!("{}:{}", key.kind, key.external_key)
+        .copied()
+        .filter(|node| matches!(node.0, "producer" | "consumer"))
+        .collect::<BTreeSet<_>>();
+    let connections = graph.of_kind("connection");
+    if clients.is_empty() || connections.is_empty() {
+        return "not_production_verified";
+    }
+    let connected = connections
+        .into_iter()
+        .filter(|connection| {
+            !graph.dangling_outgoing.contains(&(*connection, "connected_to"))
+                && graph
+                    .outgoing(*connection, "connected_to")
+                    .any(|node| node.0 == "broker")
+        })
+        .collect::<BTreeSet<_>>();
+    let complete = clients.iter().all(|client| {
+        !graph.dangling_outgoing.contains(&(*client, "connected_to"))
+            && graph
+                .outgoing(*client, "connected_to")
+                .any(|node| connected.contains(&node))
+    });
+    if complete { "available" } else { "partial" }
 }

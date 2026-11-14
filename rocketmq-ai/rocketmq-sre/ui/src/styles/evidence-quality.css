@@ -98,6 +98,53 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.send-latency-summary {
+  margin-top: 16px;
+  min-width: 0;
+}
+.send-latency-summary h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.send-latency-summary .phase1-definition-grid {
+  padding: 12px 0;
+}
+.latency-segments-list {
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+.latency-segments-list > li {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.latency-segment-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.latency-segments-list p,
+.latency-policy p {
+  margin: 6px 0;
+}
+.latency-observation {
+  display: grid;
+  gap: 5px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.latency-observation small,
+.latency-observation .latency-tail-note {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.latency-policy {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
 .evidence-list-table td,
 .evidence-list-table th {
   font-size: 14px;

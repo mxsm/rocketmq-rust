@@ -13,7 +13,8 @@
     "broker",
     "telemetry",
     "producer_consumer",
-    "store_pressure_legacy_v1"
+    "store_pressure_legacy_v1",
+    "send_latency_legacy_v1"
   ],
   "fixture_assets": [
     "tests/fixtures/diagnostics/cluster-topology.v1/normal.json",
@@ -648,7 +649,7 @@
     },
     {
       "id": "send-latency.v1",
-      "inspection_template": "telemetry",
+      "inspection_template": "send_latency_legacy_v1",
       "required_evidence": [
         {
           "key": "send-latency",

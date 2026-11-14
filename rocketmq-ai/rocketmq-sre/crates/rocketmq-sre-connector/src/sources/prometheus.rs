@@ -35,6 +35,9 @@ use super::common::validate_identifier;
 use crate::ConnectorError;
 use crate::ConnectorFailure;
 
+mod send_latency;
+pub(super) use send_latency::SendLatencyRequest;
+
 const PROMETHEUS_EVIDENCE_SCHEMA: &str = "rocketmq.prometheus-evidence.v1";
 const TELEMETRY_CLUSTER_LABEL: &str = "rocketmq_cluster";
 const ROCKETMQ_SERVICE_NAMESPACE_PREFIX: &str = "rocketmq_";

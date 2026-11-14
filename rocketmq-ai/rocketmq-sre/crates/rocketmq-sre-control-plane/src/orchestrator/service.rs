@@ -491,7 +491,7 @@ fn select_pack(incident: &IncidentView) -> &'static str {
     } else if symptom.contains("consumer-runtime") || symptom.contains("rebalance") {
         "consumer-runtime.v1"
     } else if symptom.contains("send-latency") || symptom.contains("latency") {
-        "send-latency.v1"
+        "send-latency.v2"
     } else if symptom.contains("producer") || symptom.contains("send") {
         "producer-connectivity.v1"
     } else if symptom.contains("rocksdb") {

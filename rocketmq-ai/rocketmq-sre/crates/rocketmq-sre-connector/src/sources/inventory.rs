@@ -28,6 +28,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use self::coverage::InventoryCoverage;
+use self::coverage::PathLoss;
 use super::kubernetes::KubernetesSource;
 use crate::ConnectorError;
 use crate::ConnectorFailure;
@@ -274,25 +275,50 @@ impl InventoryUpload {
         let asset_limit = max_rows.max(1);
         let edge_limit = max_rows.saturating_mul(MAX_EDGE_MULTIPLIER).max(1);
         let mut bounded = false;
+        let mut loss = PathLoss::default();
+        let edge_count = self.edges.len();
+        self.retain_observed_edges(&mut loss);
+        if self.edges.len() != edge_count {
+            // Removing an unresolved association must not make the remaining
+            // complete subgraph look like a complete observed inventory.
+            self.partial = true;
+            bounded = true;
+        }
         if self.assets.len() > asset_limit {
+            for asset in &self.assets[asset_limit..] {
+                loss.asset(asset);
+            }
             self.assets.truncate(asset_limit);
             self.partial = true;
             bounded = true;
-            self.retain_observed_edges();
+            self.retain_observed_edges(&mut loss);
         }
         if self.edges.len() > edge_limit {
+            for edge in &self.edges[edge_limit..] {
+                loss.edge(edge);
+            }
             self.edges.truncate(edge_limit);
             self.partial = true;
             bounded = true;
         }
-        self.update_coverage(coverage, bounded);
+        self.update_coverage(coverage, bounded, loss);
 
+        // Coverage strings/count widths can change when a path is removed, so
+        // encoded size is not assumed monotone. Strictly shrink a prefix in
+        // bounded batches and measure every candidate, preserving the existing
+        // edge-before-asset retention order without a render per removed edge.
         while serde_json::to_vec(self).map_err(schema_mismatch_source)?.len() > max_bytes {
             if !self.edges.is_empty() {
-                self.edges.pop();
+                for edge in &self.edges[self.edges.len() / 2..] {
+                    loss.edge(edge);
+                }
+                self.edges.truncate(self.edges.len() / 2);
             } else if self.assets.len() > 1 {
-                self.assets.pop();
-                self.retain_observed_edges();
+                for asset in &self.assets[(self.assets.len() / 2).max(1)..] {
+                    loss.asset(asset);
+                }
+                self.assets.truncate((self.assets.len() / 2).max(1));
+                self.retain_observed_edges(&mut loss);
             } else {
                 return Err(ConnectorError::new(
                     ConnectorFailure::OutputTooLarge,
@@ -302,25 +328,29 @@ impl InventoryUpload {
             }
             self.partial = true;
             bounded = true;
-            self.update_coverage(coverage, bounded);
+            self.update_coverage(coverage, bounded, loss);
         }
         Ok(())
     }
 
-    fn retain_observed_edges(&mut self) {
+    fn retain_observed_edges(&mut self, loss: &mut PathLoss) {
         let retained = self
             .assets
             .iter()
-            .map(|asset| (asset.kind, asset.external_key.clone()))
+            .map(|asset| (asset.kind, asset.external_key.as_str()))
             .collect::<BTreeSet<_>>();
         self.edges.retain(|edge| {
-            retained.contains(&(edge.from.kind, edge.from.external_key.clone()))
-                && retained.contains(&(edge.to.kind, edge.to.external_key.clone()))
+            let keep = retained.contains(&(edge.from.kind, edge.from.external_key.as_str()))
+                && retained.contains(&(edge.to.kind, edge.to.external_key.as_str()));
+            if !keep {
+                loss.edge(edge);
+            }
+            keep
         });
     }
 
-    fn update_coverage(&mut self, coverage: &InventoryCoverage, bounded: bool) {
-        let (coverage_value, has_gap) = coverage.render(&self.assets, &self.edges, bounded);
+    fn update_coverage(&mut self, coverage: &InventoryCoverage, bounded: bool, loss: PathLoss) {
+        let (coverage_value, has_gap) = coverage.render(&self.assets, &self.edges, bounded, loss);
         self.partial |= has_gap;
         if let Some(cluster) = self.assets.first_mut()
             && let Some(attributes) = cluster.attributes.as_object_mut()

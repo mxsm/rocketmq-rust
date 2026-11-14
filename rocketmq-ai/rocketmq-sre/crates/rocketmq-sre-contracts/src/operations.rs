@@ -263,6 +263,8 @@ pub struct InvestigationDiagnosisRevision {
 /// domain-complete templates used by preventive operations.
 /// `StorePressureLegacyV1` explicitly pins the original Boolean Store pack;
 /// ordinary Store inspections select the active numeric observation version.
+/// `SendLatencyLegacyV1` likewise preserves saved Boolean latency fixtures;
+/// ordinary latency inspections use the active window-distribution version.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectionTemplate {
@@ -278,6 +280,7 @@ pub enum InspectionTemplate {
     Upgrade,
     DisasterRecovery,
     StorePressureLegacyV1,
+    SendLatencyLegacyV1,
 }
 
 /// Inspection lifecycle.
@@ -506,6 +509,14 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<InspectionTemplate>(serde_json::json!("store_pressure_legacy_v1")).unwrap(),
             InspectionTemplate::StorePressureLegacyV1
+        );
+        assert_eq!(
+            serde_json::to_value(InspectionTemplate::SendLatencyLegacyV1).unwrap(),
+            "send_latency_legacy_v1"
+        );
+        assert_eq!(
+            serde_json::from_value::<InspectionTemplate>(serde_json::json!("send_latency_legacy_v1")).unwrap(),
+            InspectionTemplate::SendLatencyLegacyV1
         );
         assert!(serde_json::from_value::<InspectionTemplate>(serde_json::json!("arbitrary_pack")).is_err());
     }
