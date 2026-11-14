@@ -336,6 +336,11 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         self.bytes.get().is_some()
     }
 
+    /// Returns the selection as mutable bytes, materializing them first if needed.
+    ///
+    /// A range over a sealed mapping is copied and released. A committed range of a writable
+    /// mapping is wrapped without copying: the returned bytes keep the range, and so the file's
+    /// committed-read gate, held until they and their clones are dropped.
     #[inline]
     pub fn bytes_mut(&mut self) -> Option<&mut Bytes> {
         if self.mapped_source.take().is_some() {
@@ -344,7 +349,13 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         let range_fallback = if self.bytes.get().is_none() {
             self.mapped_range
                 .as_ref()
-                .map(MappedReadRange::to_bytes)
+                .map(|range| {
+                    if range.is_committed_prefix() {
+                        range.clone().into_owner_bytes()
+                    } else {
+                        range.to_bytes()
+                    }
+                })
                 .or_else(|| self.file_range.as_ref().and_then(|range| range.to_bytes().ok()))
         } else {
             None

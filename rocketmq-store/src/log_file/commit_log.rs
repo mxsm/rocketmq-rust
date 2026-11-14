@@ -1052,8 +1052,10 @@ impl CommitLog {
             None => None,
             Some(mmap_file) => {
                 let pos = offset % mapped_file_size as i64;
+                // CommitLog segments are append-only, so reads borrow committed bytes of the active
+                // segment instead of copying them under its writer lock.
                 let mut select_mapped_buffer_result = mmap_file
-                    .try_select_mapped_buffer_with(pos as i32, size, residency)
+                    .try_select_committed_range(pos as i32, size, residency)
                     .ok()
                     .flatten();
                 if let Some(ref mut result) = select_mapped_buffer_result {

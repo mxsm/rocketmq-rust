@@ -39,7 +39,7 @@ jobs:
             --test resource_budget_loom \
             --test task_group_shutdown_loom \
             2>&1 | tee target/architecture-evidence/loom/test-output.txt
-          cargo test -p rocketmq-store-local --test mapped_write_lease_loom \
+          cargo test -p rocketmq-store-local --test mapped_write_lease_loom --test committed_read_loom \
             2>&1 | tee -a target/architecture-evidence/loom/test-output.txt
 
       - name: Upload Loom evidence
@@ -98,7 +98,7 @@ jobs:
           --profile minimal
           --component miri
 
-      - name: Execute mapped-write ownership tests under Miri
+      - name: Execute mapped-write and committed-read tests under Miri
         env:
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check"
         run: |
@@ -108,7 +108,8 @@ jobs:
           cargo +nightly-2026-07-05 miri setup
           cargo +nightly-2026-07-05 miri test \
             -p rocketmq-store-local \
-            --lib mapped_file::write_lease_miri_tests \
+            --lib -- mapped_file::write_lease_miri_tests mapped_file::committed_read_miri_tests \
+            mapped_file::committed_read::tests mapped_file::committed_read_model::tests \
             2>&1 | tee target/architecture-evidence/miri/test-output.txt
 
       - name: Upload Miri evidence

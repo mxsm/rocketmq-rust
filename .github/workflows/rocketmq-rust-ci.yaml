@@ -517,7 +517,7 @@ jobs:
             --test arc_mut_replacement_loom \
             --test resource_budget_loom \
             --test task_group_shutdown_loom
-          cargo test -p rocketmq-store-local --test mapped_write_lease_loom
+          cargo test -p rocketmq-store-local --test mapped_write_lease_loom --test committed_read_loom
 
   # =========================
   # Coverage (Ubuntu only)

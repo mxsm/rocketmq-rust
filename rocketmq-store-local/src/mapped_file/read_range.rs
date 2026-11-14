@@ -155,9 +155,29 @@ impl<R: ReadOnlyMappedMemory> MappedReadRange<R> {
         self.lease.as_ref()
     }
 
+    /// Returns whether the bytes are the committed prefix of a writable mapping.
+    #[inline]
+    pub(crate) fn is_committed_prefix(&self) -> bool {
+        self.lease.is_committed_prefix()
+    }
+
+    /// Converts this range into bytes that keep the range, with its admission, alive.
+    #[inline]
+    pub(crate) fn into_owner_bytes(self) -> Bytes {
+        Bytes::from_owner(MappedReadRangeOwner(self))
+    }
+
     #[inline]
     pub(crate) fn file_owner(&self) -> Arc<FileOwner> {
         self.lease.file_owner()
+    }
+}
+
+struct MappedReadRangeOwner<R: ReadOnlyMappedMemory>(MappedReadRange<R>);
+
+impl<R: ReadOnlyMappedMemory> AsRef<[u8]> for MappedReadRangeOwner<R> {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
     }
 }
 
