@@ -121,6 +121,18 @@ let consumer = DefaultLitePullConsumer::builder(client.clone())
 
 Subscription or explicit assignment, start, poll, business processing, and offset handling still follow construction. `commit_all()` updates local offset state; remote submission and Broker persistence are separate steps. A per-queue persistence error can be logged even when the surrounding operation returns success. Use [LitePull consumption](../consumer/pull-consumer.md) for a complete completion model, and do not enable automatic commits around unfinished asynchronous business work.
 
+## Remoting header encoding
+
+Every remoting request and response carries a header, encoded either as `JSON` (the default, as in Java) or as the binary `ROCKETMQ` encoding that Java also supports. `ClientRuntime::try_new` reads the choice once from the process environment: `rocketmq.serialize.type` first, then `ROCKETMQ_SERIALIZE_TYPE`. Only the exact values `JSON` and `ROCKETMQ` are accepted; any other value makes runtime creation fail instead of falling back to JSON. Shells such as Bash cannot export a name containing dots, so use `ROCKETMQ_SERIALIZE_TYPE` there. An embedding application can pass explicit wire defaults with `ClientRuntime::try_new_with_remoting_command_factory`, which reads no environment.
+
+```bash
+ROCKETMQ_SERIALIZE_TYPE=ROCKETMQ ./my-producer
+```
+
+The setting is process-wide and covers the requests a process sends and the responses it creates. Every receiver decodes each frame with the encoding recorded in that frame, so processes with different settings interoperate; a response uses the responder's setting, not the request's. The Broker, NameServer, Proxy, Controller and admin tools read the same keys at startup.
+
+With both the Rust client and the Rust Broker on `ROCKETMQ` (1 KiB messages, compared with both on `JSON` on Linux), the Broker ran 4% to 5% fewer instructions and 2% to 4% fewer cycles per message, and each message used about 260 fewer bytes on the wire (requests and responses together, 14% of the total). These checks passed with the client on `ROCKETMQ` against a Java 5.5.0 NameServer and Broker: synchronous, asynchronous, one-way and batch sends, request-reply, transactions, recall, classic pull, LitePull, concurrent, orderly and retried Push consumption, admin offsets and topic creation. A Java 5.5.0 client on `ROCKETMQ` sent to and consumed from a Rust Broker, and `JSON` clients worked against a Rust Broker set to `ROCKETMQ`. ACL, TLS, POP, message trace and Proxy paths were not part of these checks. `JSON` remains the default; test the features your deployment uses before switching.
+
 ## TLS and application-owned settings
 
 See the [TLS and mTLS guide](../deployment/tls.md#clients) for certificate preparation, Secret mounts, server policies, and the Admin/CLI boundaries.
@@ -143,4 +155,4 @@ The certificate and key are for mTLS; omit both when only server authentication 
 
 Application configuration files and variables such as `ROCKETMQ_PRODUCER_GROUP` are application conventions unless the application reads them. The `ROCKETMQ_ENABLE_TLS_SMOKE` variables used by integration tests are test-harness inputs, not a general client configuration loader. Keep credentials out of example configuration dumps and diagnostics.
 
-Sources: [common defaults](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/base/client_config.rs), [common validation](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/base/client_config_validation.rs), [Producer defaults](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/default_mq_producer.rs), [Push defaults](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_mq_push_consumer.rs), and [LitePull builder](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_lite_pull_consumer_builder.rs).
+Sources: [common defaults](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/base/client_config.rs), [common validation](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/base/client_config_validation.rs), [Producer defaults](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/default_mq_producer.rs), [Push defaults](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_mq_push_consumer.rs), [LitePull builder](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_lite_pull_consumer_builder.rs), and [header encoding selection](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-protocol/src/protocol/remoting_command_compat.rs).

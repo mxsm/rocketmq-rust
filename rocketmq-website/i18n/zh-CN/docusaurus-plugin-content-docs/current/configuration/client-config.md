@@ -121,6 +121,18 @@ let consumer = DefaultLitePullConsumer::builder(client.clone())
 
 构造之后仍需执行订阅或显式分配、启动、poll、业务处理与偏移量管理。`commit_all()` 更新本地偏移量状态，远端提交与 Broker 持久化是后续独立步骤。即使外层操作返回成功，单队列持久化错误仍可能只记录到日志。完整的完成语义见 [LitePull 消费](../consumer/pull-consumer.md)，不要在尚未完成的异步业务处理周围启用自动提交。
 
+## Remoting 请求头编码
+
+每个 remoting 请求与响应都带有请求头，编码方式为 `JSON`（默认值，与 Java 相同）或 Java 同样支持的二进制 `ROCKETMQ` 编码。`ClientRuntime::try_new` 从进程环境读取一次该选择：先读 `rocketmq.serialize.type`，再读 `ROCKETMQ_SERIALIZE_TYPE`。只接受精确的 `JSON` 与 `ROCKETMQ` 两个值；其他值会使运行时创建失败，而不是回退到 JSON。Bash 等 shell 无法导出含点号的变量名，此时请使用 `ROCKETMQ_SERIALIZE_TYPE`。嵌入式应用可以通过 `ClientRuntime::try_new_with_remoting_command_factory` 显式传入编码默认值，该入口不读取环境变量。
+
+```bash
+ROCKETMQ_SERIALIZE_TYPE=ROCKETMQ ./my-producer
+```
+
+该设置作用于整个进程，覆盖进程发出的请求与它生成的响应。接收方按每帧记录的编码解码，因此设置不同的进程可以互通；响应使用响应方自己的设置，而不是跟随请求。Broker、NameServer、Proxy、Controller 与管理工具在启动时读取同样的键。
+
+Rust 客户端与 Rust Broker 都使用 `ROCKETMQ`（1 KiB 消息，在 Linux 上与两者都用 `JSON` 对比）时，Broker 每条消息的指令数减少 4% 至 5%、周期减少 2% 至 4%，每条消息在网络上少约 260 字节（请求与响应合计，占总量的 14%）。客户端使用 `ROCKETMQ` 连接 Java 5.5.0 NameServer 与 Broker 时，以下检查均通过：同步、异步、单向与批量发送，request-reply，事务，撤回，经典拉取，LitePull，并发、顺序与重试的 Push 消费，管理端偏移量与创建 Topic。使用 `ROCKETMQ` 的 Java 5.5.0 客户端可以向 Rust Broker 发送并消费消息，使用 `JSON` 的客户端也可以连接设置为 `ROCKETMQ` 的 Rust Broker。这些检查未覆盖 ACL、TLS、POP、消息轨迹与 Proxy 路径。默认值仍为 `JSON`；切换前请先测试部署实际使用的功能。
+
 ## TLS 与应用自定义设置
 
 证书准备、Secret 挂载、服务端策略和 Admin/CLI 边界参阅 [TLS 与 mTLS 指南](../deployment/tls.md#clients)。
@@ -143,4 +155,4 @@ let secure_common = ClientConfig::builder()
 
 应用配置文件及 `ROCKETMQ_PRODUCER_GROUP` 等变量，只有在应用自行读取时才有效。集成测试使用的 `ROCKETMQ_ENABLE_TLS_SMOKE` 等变量属于测试工具输入，并非通用客户端配置加载器。示例配置输出与诊断信息中不应包含凭据。
 
-来源：[公共默认值](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/base/client_config.rs)、[公共校验](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/base/client_config_validation.rs)、[Producer 默认值](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/default_mq_producer.rs)、[Push 默认值](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_mq_push_consumer.rs)和 [LitePull builder](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_lite_pull_consumer_builder.rs)。
+来源：[公共默认值](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/base/client_config.rs)、[公共校验](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/base/client_config_validation.rs)、[Producer 默认值](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/default_mq_producer.rs)、[Push 默认值](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_mq_push_consumer.rs)、[LitePull builder](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_lite_pull_consumer_builder.rs)和 [请求头编码选择](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-protocol/src/protocol/remoting_command_compat.rs)。
