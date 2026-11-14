@@ -24,6 +24,8 @@ use std::path::Path;
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+#[cfg(feature = "dev-single")]
+use std::task::Poll;
 use std::time::Duration;
 
 use openraft::ServerState;
@@ -588,14 +590,26 @@ async fn wait_for_applied_broker_id(node: &RaftNodeManager, broker_name: &str, e
 }
 
 #[cfg(feature = "dev-single")]
-async fn find_leader_node(nodes: &[ManagedNode]) -> Arc<RaftNodeManager> {
-    for node in nodes {
-        if node.node.is_leader().await.unwrap_or(false) {
-            return node.node.clone();
-        }
-    }
+async fn wait_for_quorum_leader(nodes: &[ManagedNode]) -> Arc<RaftNodeManager> {
+    // Restored leader metrics can precede contact with a live quorum. ReadIndex
+    // confirms current leadership and waits for the required local apply frontier.
+    tokio::time::timeout(Duration::from_secs(16), async {
+        loop {
+            for node in nodes {
+                let metrics = node.node.raft_metrics();
+                if metrics.state == ServerState::Leader
+                    && metrics.current_leader == Some(node.node_id)
+                    && node.node.ensure_linearizable_read().await.is_ok()
+                {
+                    return node.node.clone();
+                }
+            }
 
-    panic!("cluster should have a leader");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("cluster should elect a leader with a live quorum")
 }
 
 #[cfg(feature = "dev-single")]
@@ -1280,6 +1294,55 @@ async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
 
 #[cfg(feature = "dev-single")]
 #[tokio::test(flavor = "multi_thread")]
+async fn test_leader_selection_waits_for_live_quorum() {
+    let base_port = allocate_base_port(3);
+    let storage_root = tempfile::tempdir().expect("create quorum readiness storage root");
+    let all_peers = cluster_peers(3, base_port);
+    let mut nodes = bootstrap_persistent_cluster(3, base_port, storage_root.path()).await;
+    let leader_index = find_leader_index(&nodes).await;
+    let leader_id = nodes[leader_index].node_id;
+    let follower_id = nodes.iter().find(|node| node.node_id != leader_id).unwrap().node_id;
+
+    // Keep the recorded leader stable while removing its live quorum.
+    for node in &nodes {
+        node.node.set_runtime_tick_enabled(false);
+        node.node.set_runtime_elect_enabled(false);
+    }
+    for node in &mut nodes {
+        if node.node_id != leader_id {
+            node.shutdown().await;
+        }
+    }
+    let metrics = nodes[leader_index].node.raft_metrics();
+    assert_eq!(metrics.state, ServerState::Leader);
+    assert_eq!(metrics.current_leader, Some(leader_id));
+
+    let mut leader_selection = Box::pin(wait_for_quorum_leader(&nodes));
+    let first_poll = futures::poll!(leader_selection.as_mut());
+    let waited_for_quorum = first_poll.is_pending();
+
+    let mut returning_follower = start_managed_node(
+        persistent_config(follower_id, base_port, &all_peers, storage_root.path(), true),
+        false,
+    )
+    .await;
+    let selected = match first_poll {
+        Poll::Ready(node) => node,
+        Poll::Pending => leader_selection.as_mut().await,
+    };
+    drop(leader_selection);
+    assert!(Arc::ptr_eq(&selected, &nodes[leader_index].node));
+
+    returning_follower.shutdown().await;
+    nodes[leader_index].shutdown().await;
+    assert!(
+        waited_for_quorum,
+        "leader selection must wait for a live quorum despite the recorded leader metrics"
+    );
+}
+
+#[cfg(feature = "dev-single")]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_three_node_cluster_persistent_restart_recovers_controller_state() {
     let base_port = allocate_base_port(3);
 
@@ -1287,7 +1350,7 @@ async fn test_three_node_cluster_persistent_restart_recovers_controller_state() 
     let mut nodes = bootstrap_persistent_cluster(3, base_port, storage_root.path()).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let leader_node = find_leader_node(&nodes).await;
+    let leader_node = wait_for_quorum_leader(&nodes).await;
 
     seed_replica_group_state(
         &leader_node,
@@ -1326,7 +1389,7 @@ async fn test_three_node_cluster_persistent_restart_recovers_controller_state() 
         assert_replica_group_state(&node.node, "persistent-broker-set", "127.0.0.1:10931");
     }
 
-    let restarted_leader = find_leader_node(&restarted_nodes).await;
+    let restarted_leader = wait_for_quorum_leader(&restarted_nodes).await;
     let post_restart_write = restarted_leader
         .client_write(ControllerRequest::ApplyBrokerId {
             cluster_name: "test-cluster".to_string(),
