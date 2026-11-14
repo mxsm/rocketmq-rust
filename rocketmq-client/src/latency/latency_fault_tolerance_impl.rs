@@ -29,7 +29,7 @@ use serde::Serialize;
 
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::resolver::Resolver;
-use crate::latency::service_detector::ServiceDetector;
+use crate::latency::service_detector::BrokerReachabilityProbe;
 use crate::runtime::schedule_client_fixed_delay_task_with_context;
 use crate::runtime::ClientScheduledTaskHandle;
 
@@ -240,7 +240,7 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
 impl<R, S> LatencyFaultTolerance<CheetahString> for LatencyFaultToleranceImpl<R, S>
 where
     R: Resolver,
-    S: ServiceDetector,
+    S: BrokerReachabilityProbe,
 {
     async fn update_fault_item(
         &self,
@@ -432,7 +432,7 @@ fn spawn_detector_loop<R, S>(
 ) -> Option<FaultDetectorTaskHandle>
 where
     R: Resolver,
-    S: ServiceDetector,
+    S: BrokerReachabilityProbe,
 {
     match schedule_client_fixed_delay_task_with_context(
         service_context,
@@ -526,7 +526,7 @@ impl Resolver for ProbeResolver {
 
 struct ProbeServiceDetector;
 
-impl ServiceDetector for ProbeServiceDetector {
+impl BrokerReachabilityProbe for ProbeServiceDetector {
     async fn detect(&self, _endpoint: &str, _timeout_millis: u64) -> bool {
         true
     }
@@ -721,7 +721,7 @@ mod tests {
 
     struct NoopServiceDetector;
 
-    impl ServiceDetector for NoopServiceDetector {
+    impl BrokerReachabilityProbe for NoopServiceDetector {
         async fn detect(&self, _endpoint: &str, _timeout_millis: u64) -> bool {
             true
         }
@@ -752,7 +752,7 @@ mod tests {
         timeout_millis: Arc<AtomicU64>,
     }
 
-    impl ServiceDetector for RecordingServiceDetector {
+    impl BrokerReachabilityProbe for RecordingServiceDetector {
         async fn detect(&self, _endpoint: &str, timeout_millis: u64) -> bool {
             self.timeout_millis
                 .store(timeout_millis, std::sync::atomic::Ordering::Release);
