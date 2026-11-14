@@ -33,11 +33,11 @@ pinned_openraft_runtime = ["dep:openraft-macros", "dep:openraft-rt", "dep:openra
 [dependencies]
 bytes = { version = "1.12.1", optional = true }
 libfuzzer-sys = "0.4.12"
-# OpenRaft prereleases use compatible transitive ranges. Match the production controller pins
-# and lockfile; the macro and runtime crates do not necessarily share the same prerelease version.
-openraft-macros = { version = "=0.10.0-alpha.38", optional = true }
+# OpenRaft uses compatible transitive ranges. Match the production Controller's exact
+# macro and runtime pins; these crates do not necessarily share a release version.
+openraft-macros = { version = "=0.10.0", optional = true }
 openraft-rt = { version = "=0.10.0-alpha.38", optional = true }
-openraft-rt-tokio = { version = "=0.10.0-alpha.37", optional = true }
+openraft-rt-tokio = { version = "=0.10.0-alpha.38", optional = true }
 rocketmq-broker = { path = "../rocketmq-broker", optional = true }
 rocketmq-controller = { path = "../rocketmq-controller", default-features = false, features = ["storage-file"], optional = true }
 rocketmq-protocol = { path = "../rocketmq-protocol", optional = true }
