@@ -29,6 +29,7 @@ use super::repository::ensure_cluster_scope;
 use crate::{ControlPlaneRequestFailure, PostgresRepository, auth::AuthContext};
 
 mod delegation;
+mod discovery;
 mod dispatch;
 mod events;
 mod ownership;
@@ -37,6 +38,7 @@ mod tests;
 mod worker;
 
 pub(crate) use delegation::RunDelegation;
+pub(crate) use discovery::RunListFilter;
 pub(crate) use dispatch::{RunAdmissionProof, RunReadProof};
 
 #[derive(Clone, Debug, Serialize)]

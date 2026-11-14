@@ -103,12 +103,12 @@ export function parseAbsoluteWindow(
     !isAbsoluteDate(end) ||
     !Number.isFinite(Date.parse(start)) ||
     !Number.isFinite(Date.parse(end)) ||
-    Date.parse(start) >= Date.parse(end)
+    absoluteTimeKey(start)! >= absoluteTimeKey(end)!
   )
     return "invalid";
   return {
-    start: new Date(start).toISOString(),
-    end: new Date(end).toISOString(),
+    start: canonicalAbsoluteDate(start),
+    end: canonicalAbsoluteDate(end),
   };
 }
 
@@ -169,9 +169,26 @@ function encodeSearch(params: URLSearchParams) {
   return value ? `?${value}` : "";
 }
 
+function canonicalAbsoluteDate(value: string) {
+  const normalized = new Date(value).toISOString();
+  const fraction = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/u.exec(value)?.[1];
+  // Run filters and history alignment preserve the server's sub-millisecond window.
+  return fraction && fraction.length > 3
+    ? `${normalized.slice(0, 19)}.${fraction}Z`
+    : normalized;
+}
+
+/** A comparable UTC key without truncating a persisted run's nanosecond precision. */
+export function absoluteTimeKey(value: string) {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  const fraction = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/u.exec(value)?.[1] ?? "";
+  return `${new Date(parsed).toISOString().slice(0, 19)}.${fraction.padEnd(9, "0").slice(0, 9)}Z`;
+}
+
 function isAbsoluteDate(value: string) {
   const parts =
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/.exec(
       value,
     );
   if (!parts) return false;

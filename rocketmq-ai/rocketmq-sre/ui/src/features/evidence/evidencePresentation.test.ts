@@ -82,6 +82,12 @@ describe("evidence quality and display boundaries", () => {
     );
   });
 
+  it("adds source-reported age to elapsed storage time when showing live run evidence freshness", () => {
+    const sample = { ...evidence, observed_at: "2026-11-14T10:00:00Z", freshness_seconds: 50 };
+    expect(evidenceFreshness(sample, { maxAgeSeconds: 60, asOf: "2026-11-14T10:00:50Z", sourceRef: "saved-run/broker-health.v1" })).toBe("stale");
+    expect(evidenceFreshness(sample, { maxAgeSeconds: 60, asOf: "2026-11-14T10:00:05Z", sourceRef: "saved-run/broker-health.v1" })).toBe("current");
+  });
+
   it("removes inline content from metadata and bounds camel-case secrets, bodies and configuration", () => {
     expect(toEvidenceMetadata(evidence)).not.toHaveProperty("content");
     const content = safeEvidenceJson({

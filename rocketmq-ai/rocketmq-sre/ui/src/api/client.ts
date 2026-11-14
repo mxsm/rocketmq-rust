@@ -43,6 +43,15 @@ import type {
   InspectionReport,
   InspectionView,
   InvestigationView,
+  InvestigationRun,
+  InvestigationRunListPage,
+  InvestigationRunControls,
+  InvestigationRunEventPage,
+  SavedInvestigationRunRevision,
+  CreateInvestigationRunRequest,
+  CreateInvestigationRunResponse,
+  InvestigationCommandRequest,
+  InvestigationCommandReceipt,
   KnowledgeItem,
   MessageJourney,
   ModelCapabilitiesResponse,
@@ -86,6 +95,15 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+}
+
+export interface InvestigationRunListOptions {
+  cursor?: string;
+  limit?: number;
+  start?: string;
+  end?: string;
+  resourceKind?: string;
+  resourceKey?: string;
 }
 
 const CONVERSATION_STREAM_SCHEMA =
@@ -472,6 +490,39 @@ export interface SreApi {
     id: string,
     signal?: AbortSignal,
   ) => Promise<InvestigationView>;
+  listInvestigationRuns: (
+    id: string,
+    options?: InvestigationRunListOptions,
+    signal?: AbortSignal,
+  ) => Promise<InvestigationRunListPage>;
+  getInvestigationRun: (
+    id: string,
+    signal?: AbortSignal,
+  ) => Promise<InvestigationRun>;
+  getInvestigationRunControls: (
+    id: string,
+    signal?: AbortSignal,
+  ) => Promise<InvestigationRunControls>;
+  createInvestigationRun: (
+    investigationId: string,
+    input: CreateInvestigationRunRequest,
+    signal?: AbortSignal,
+  ) => Promise<CreateInvestigationRunResponse>;
+  commandInvestigationRun: (
+    id: string,
+    input: InvestigationCommandRequest,
+    signal?: AbortSignal,
+  ) => Promise<InvestigationCommandReceipt>;
+  getInvestigationRunEvents: (
+    id: string,
+    after: string,
+    signal?: AbortSignal,
+  ) => Promise<InvestigationRunEventPage>;
+  getInvestigationRunRevision: (
+    id: string,
+    revisionId: string,
+    signal?: AbortSignal,
+  ) => Promise<SavedInvestigationRunRevision>;
   promoteInvestigation: (
     id: string,
     input: PromoteInvestigationRequest,
@@ -788,6 +839,36 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     getInvestigation: (id, signal) =>
       get<InvestigationView>(
         `/v1/investigations/${encodeURIComponent(id)}`,
+        signal,
+      ),
+    listInvestigationRuns: (id, options, signal) =>
+      get<InvestigationRunListPage>(
+        apiQuery(`/v1/investigations/${encodeURIComponent(id)}/runs`, {
+          cursor: options?.cursor,
+          limit: options?.limit?.toString(),
+          start: options?.start,
+          end: options?.end,
+          resource_kind: options?.resourceKind,
+          resource_key: options?.resourceKey,
+        }),
+        signal,
+      ),
+    getInvestigationRun: (id, signal) =>
+      get<InvestigationRun>(`/v1/investigation-runs/${encodeURIComponent(id)}`, signal),
+    getInvestigationRunControls: (id, signal) =>
+      get<InvestigationRunControls>(`/v1/investigation-runs/${encodeURIComponent(id)}/controls`, signal),
+    createInvestigationRun: (id, input, signal) =>
+      post<CreateInvestigationRunResponse>(`/v1/investigations/${encodeURIComponent(id)}/runs`, input, signal),
+    commandInvestigationRun: (id, input, signal) =>
+      post<InvestigationCommandReceipt>(`/v1/investigation-runs/${encodeURIComponent(id)}/commands`, input, signal),
+    getInvestigationRunEvents: (id, after, signal) =>
+      get<InvestigationRunEventPage>(
+        apiQuery(`/v1/investigation-runs/${encodeURIComponent(id)}/events`, { after, limit: "50" }),
+        signal,
+      ),
+    getInvestigationRunRevision: (id, revisionId, signal) =>
+      get<SavedInvestigationRunRevision>(
+        `/v1/investigation-runs/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}`,
         signal,
       ),
     promoteInvestigation: (id, input, signal) =>

@@ -1,4 +1,4 @@
-# Investigation run contracts, persistence and planning (D13–D15)
+# Investigation run contracts, persistence, planning and controls (D13–D16)
 
 D13 defines serializable contracts and pure validation for bounded, read-only
 investigations. A run is independent of the existing `Investigation` and
@@ -9,8 +9,8 @@ creation, snapshot, command and durable-event HTTP operations, backed by
 PostgreSQL transactions and fenced worker ownership. Managed recovery accounts
 for interrupted work without dispatching it again. D15 adds managed dispatch
 over all explicitly selected compiled packs. New runs enter `queued` before
-bounded dispatch; the D16 UI controls are not delivered here.
-The existing workspace continues to display saved manual investigations.
+bounded dispatch. D16 adds a workspace for discovering and controlling these
+bounded read-only runs. Saved manual investigations remain independently readable.
 
 ## Published components
 
@@ -29,6 +29,8 @@ The existing workspace continues to display saved manual investigations.
 | `InvestigationRunFailure` | `investigation-run-failure.schema.json` | Closed, sanitized failures |
 | `InvestigationRunEvent` | `investigation-run-event.schema.json` | Scoped append-only event with an independent decimal sequence |
 | `InvestigationRunEventPage` | `investigation-run-event-page.schema.json` | Bounded contiguous replay or explicit snapshot recovery |
+| `InvestigationRunListPage` | `investigation-run-list-page.schema.json` | Bounded summaries and ephemeral current-caller creation options |
+| `InvestigationRunControls` | `investigation-run-controls.schema.json` | Same-revision snapshot, command availability and server budget accounting |
 
 `rocketmq-sre-contracts` owns all fields. JSON Schema describes serialization;
 cross-field, scope, budget and lifecycle rules also require the pure Rust
@@ -238,6 +240,65 @@ update to the generated D15 contract. Existing saved Investigation/Incident
 enums and old chat deep links are unchanged; the current UI/SDK has no older
 run-control consumer and gains no run buttons or mutation methods here.
 
+## D16 discovery and current-caller controls
+
+`GET /v1/investigations/{id}/runs` rechecks current tenant, cluster, onboarding
+and saved-parent authorization. It returns at most 50 summaries (20 by default),
+without repeating step bodies or Evidence payloads. `start`/`end` and
+`resource_kind`/`resource_key` are optional pairs; a lone member is rejected.
+The predicates select the exact effective scope before pagination, so a matching
+run cannot disappear behind the first page of other windows. Absolute windows
+retain their serialized precision rather than being rounded by a database cast.
+Omitting filters explicitly lists the investigation's actual historical runs.
+
+The opaque cursor carries the tenant, cluster, investigation, window, resource
+filter and last run identity. The service validates both that binding and the
+anchor row under current authority. A cursor is a pagination position, never an
+authorization credential; another scope/filter or an unavailable anchor rejects
+it. Ordering uses immutable creation time plus run ID. Refresh from the first
+page after a cursor refusal or scope change.
+
+Creation options describe the current caller's permission, typed parent subject,
+compiled pack/version choices, default and maximum budgets, deadline duration
+and maximum observation window. The workspace uses the declared parent scope;
+a conflicting global subject requires an explicit alignment. A descriptor
+choice grants neither collection success nor execution authority. Creation
+still authenticates and validates the complete submitted request.
+
+`GET /v1/investigation-runs/{id}/controls` returns the actual run and four typed
+command affordances for the same revision and control epoch. The service reuses
+the pure command checks for current permission, state, deadline and counters.
+Resume additionally requires enough remaining attempt and output quota for the
+managed dispatcher's evaluation. As before, `max_steps` counts all admissions,
+including retries. `budget_usage.settled` and `reserved` come from the pure
+server accounting; an unknown outcome does not become a zero-cost operation.
+Neither affordances nor caller roles are persisted into `InvestigationRun`.
+Viewers can inspect authorized runs but receive no available commands.
+
+Availability describes whether that command kind can presently be submitted;
+it does not authorize arbitrary Steer references or override the write path.
+Every submission authenticates again and checks payload provenance, expected
+revision and idempotency. Refresh controls after events, receipts, conflicts
+and identity changes. An immutable replay receipt never replaces a newer run
+snapshot. A run deep link displays its real resource and observation window;
+the workspace requires an explicit alignment before controlling a different
+global context. Old investigation/revision links with no run stay readable.
+
+`receipt_replay_allowed` separately reflects current control authority. A new
+Pause may be unavailable after an accepted Pause, while the original request
+still needs an exact receipt retry after a lost response. This flag remains
+independent of the run state, deadline and remaining budget; missing fields in
+older responses fail closed. It does not grant a new command. The workspace
+retains the complete original ID, idempotency key, expected revision, reason and
+body within the same run/identity/scope session. It never rebases that request
+onto a newer revision. Identity or scope replacement and definitive authorization
+refusals clear the pending request. An explicit current server replay denial
+also discards that intent; later reauthorization cannot resurrect it. A temporarily
+missing projection during network loss retains the unchanged request. The
+existing POST endpoint reauthenticates
+and decides exact replay versus new admission; neither an old receipt nor a
+network recovery replaces a newer current snapshot.
+
 ## Registered run transport
 
 The public Control Plane router registers these operations. They change only
@@ -249,7 +310,9 @@ control buttons.
 | Operation | Contract | Success mapping |
 | --- | --- | --- |
 | `POST /v1/investigations/{id}/runs` | `CreateInvestigationRunRequest` → `CreateInvestigationRunResponse` | `201` for a newly recorded queued run; `200` for exact authorized creation replay |
+| `GET /v1/investigations/{id}/runs` | `InvestigationRunListPage` | `200` for a scoped, bounded discovery page and current creation options |
 | `GET /v1/investigation-runs/{id}` | `InvestigationRun` | `200` for the authorized current snapshot |
+| `GET /v1/investigation-runs/{id}/controls` | `InvestigationRunControls` | `200` for a current-caller read-only affordance projection |
 | `GET /v1/investigation-runs/{id}/revisions/{revision_id}` | `SavedInvestigationRunRevision` | `200` for an actual immutable run-owned revision |
 | `POST /v1/investigation-runs/{id}/commands` | `InvestigationCommandRequest` → `InvestigationCommandReceipt` | `202` when a newly accepted pause/cancel must drain; `200` for immediate application or exact authorized receipt replay |
 | `GET /v1/investigation-runs/{id}/events?after=0&limit=50` | `InvestigationRunEventPage` | `200` for contiguous durable events or an explicit snapshot reset |

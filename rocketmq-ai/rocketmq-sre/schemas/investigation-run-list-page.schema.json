@@ -1,0 +1,440 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationBudget": {
+      "additionalProperties": false,
+      "description": "Hard limits: retries are admissions and cannot create a fresh budget.",
+      "properties": {
+        "limit": {
+          "$ref": "#/$defs/InvestigationBudgetCost"
+        },
+        "max_attempts_per_step": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_in_flight": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_query_retries": {
+          "format": "uint8",
+          "maximum": 2,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_steps": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "limit",
+        "max_steps",
+        "max_in_flight",
+        "max_attempts_per_step",
+        "max_query_retries"
+      ],
+      "type": "object"
+    },
+    "InvestigationBudgetCost": {
+      "additionalProperties": false,
+      "description": "Conservatively reserved or actually consumed resources, shared across all steps.",
+      "properties": {
+        "evidence_items": {
+          "format": "uint64",
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model_calls": {
+          "format": "uint64",
+          "maximum": 8,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_bytes": {
+          "format": "uint64",
+          "maximum": 4194304,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read_queries": {
+          "format": "uint64",
+          "maximum": 12,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "read_queries",
+        "model_calls",
+        "evidence_items",
+        "output_bytes"
+      ],
+      "type": "object"
+    },
+    "InvestigationControlEpoch": {
+      "description": "Control generation, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationId": {
+      "description": "Stable identifier for a multi-step investigation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationPackRef": {
+      "additionalProperties": false,
+      "description": "Exact compiled pack version; neither a catalog entry nor a directory grants authority.",
+      "properties": {
+        "pack_id": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack_id",
+        "pack_version"
+      ],
+      "type": "object"
+    },
+    "InvestigationResource": {
+      "additionalProperties": false,
+      "description": "An investigation subject, not a canonical Evidence source resource or URL.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "InvestigationRevision": {
+      "description": "Monotonic run revision, serialized as a lossless decimal string.",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "type": "string"
+    },
+    "InvestigationRunControlBlockReason": {
+      "description": "A sanitized reason for a current caller's read-only affordance projection.",
+      "enum": [
+        "control_permission_required",
+        "terminal",
+        "state_not_eligible",
+        "deadline_exceeded",
+        "budget_exhausted",
+        "counter_exhausted",
+        "pack_unavailable",
+        "scope_unavailable",
+        "unsupported_resource"
+      ],
+      "type": "string"
+    },
+    "InvestigationRunCreationOptions": {
+      "additionalProperties": false,
+      "description": "Current caller policy, never persisted into an investigation or run snapshot.\nAvailability is advisory; mutations authenticate and validate their body again.",
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationRunControlBlockReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compiled_packs": {
+          "items": {
+            "$ref": "#/$defs/InvestigationPackRef"
+          },
+          "type": "array"
+        },
+        "default_budget": {
+          "$ref": "#/$defs/InvestigationBudget"
+        },
+        "default_duration_seconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_duration_seconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_window_seconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximum_budget": {
+          "$ref": "#/$defs/InvestigationBudget"
+        },
+        "parent_resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "allowed",
+        "compiled_packs",
+        "default_budget",
+        "maximum_budget",
+        "default_duration_seconds",
+        "max_duration_seconds",
+        "max_window_seconds"
+      ],
+      "type": "object"
+    },
+    "InvestigationRunId": {
+      "description": "Stable identifier for one bounded investigation run.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "InvestigationRunScope": {
+      "additionalProperties": false,
+      "description": "Immutable authority boundary and requested absolute observation window.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "investigation_id": {
+          "$ref": "#/$defs/InvestigationId"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "time_range": {
+          "$ref": "#/$defs/TimeRange"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "cluster_id",
+        "investigation_id",
+        "time_range"
+      ],
+      "type": "object"
+    },
+    "InvestigationRunStatus": {
+      "description": "Run control is separate from the saved Investigation and Incident lifecycles.",
+      "enum": [
+        "queued",
+        "running",
+        "pausing",
+        "paused",
+        "needs_evidence",
+        "completed",
+        "inconclusive",
+        "cancelling",
+        "cancelled",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "InvestigationRunSummary": {
+      "additionalProperties": false,
+      "description": "Bounded discovery metadata; list pages do not repeat step or Evidence payloads.",
+      "properties": {
+        "control_epoch": {
+          "$ref": "#/$defs/InvestigationControlEpoch"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "deadline": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "effective_packs": {
+          "items": {
+            "$ref": "#/$defs/InvestigationPackRef"
+          },
+          "type": "array"
+        },
+        "effective_scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        },
+        "id": {
+          "$ref": "#/$defs/InvestigationRunId"
+        },
+        "initial_scope": {
+          "$ref": "#/$defs/InvestigationRunScope"
+        },
+        "revision": {
+          "$ref": "#/$defs/InvestigationRevision"
+        },
+        "status": {
+          "$ref": "#/$defs/InvestigationRunStatus"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationStopReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "initial_scope",
+        "effective_scope",
+        "effective_packs",
+        "status",
+        "revision",
+        "control_epoch",
+        "deadline",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "InvestigationStopReason": {
+      "description": "Explicit stop reasons do not imply a root cause was established.",
+      "enum": [
+        "evidence_insufficient",
+        "budget_exhausted",
+        "deadline_exceeded",
+        "no_progress",
+        "model_unavailable",
+        "source_unavailable"
+      ],
+      "type": "string"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TimeRange": {
+      "description": "Inclusive time range requested from an evidence source.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "creation": {
+      "$ref": "#/$defs/InvestigationRunCreationOptions"
+    },
+    "investigation_id": {
+      "$ref": "#/$defs/InvestigationId"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/InvestigationRunSummary"
+      },
+      "type": "array"
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "cluster_id",
+    "investigation_id",
+    "observed_at",
+    "items",
+    "creation"
+  ],
+  "title": "InvestigationRunListPage",
+  "type": "object"
+}

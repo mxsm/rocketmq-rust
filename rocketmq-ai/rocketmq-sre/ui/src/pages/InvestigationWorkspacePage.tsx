@@ -1,6 +1,6 @@
 import { ArrowLeft, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
 import type { InvestigationView } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
@@ -23,6 +23,11 @@ import { useCapabilityQuality } from "@/features/capabilities/useCapabilityQuali
 import { ScenarioEvidenceChain } from "@/features/investigations/ScenarioEvidenceChain";
 import { policyForEvidence } from "@/features/investigations/scenarioEvidence";
 import { InvestigationPromotion } from "@/features/investigations/InvestigationPromotion";
+import { InvestigationRunWorkspace } from "@/features/investigation-runs/InvestigationRunWorkspace";
+import {
+  runSelection,
+  RunScopeError,
+} from "@/features/investigation-runs/runPresentation";
 import {
   diagnosisHypotheses,
   investigationStatusLabels,
@@ -38,8 +43,13 @@ export function InvestigationWorkspacePage() {
   const { investigationId = "" } = useParams();
   const { api } = useSreData();
   const m = useWorkspaceMessages();
+  const selection = runSelection(useLocation().search);
   const load = useCallback(
-    (signal: AbortSignal) => api.getInvestigation(investigationId, signal),
+    async (signal: AbortSignal) => {
+      const view = await api.getInvestigation(investigationId, signal);
+      if (view.investigation.id !== investigationId) throw new RunScopeError();
+      return view;
+    },
     [api, investigationId],
   );
   const resource = useAsyncResource(load);
@@ -58,12 +68,21 @@ export function InvestigationWorkspacePage() {
         onRetry={resource.reload}
       />
       {resource.data && (
-        <ObjectScopeBoundary object={resource.data.investigation}>
-          <InvestigationWorkspace
-            view={resource.data}
-            reload={resource.reload}
-            refreshing={resource.loading}
-          />
+        <ObjectScopeBoundary
+          object={resource.data.investigation}
+          resourcePolicy={selection.kind === "run" ? "defer_to_run" : "exact"}
+        >
+          {/* Run controls validate the fetched Run's parent, typed subject and actual window.
+              Saved manual resources retain their existing canonical-path boundary. */}
+          <InvestigationRunWorkspace
+            investigation={resource.data.investigation}
+          >
+            <InvestigationWorkspace
+              view={resource.data}
+              reload={resource.reload}
+              refreshing={resource.loading}
+            />
+          </InvestigationRunWorkspace>
         </ObjectScopeBoundary>
       )}
     </div>

@@ -95,6 +95,8 @@ export function WorkspaceScopeProvider({ children }: PropsWithChildren) {
         "evidence_id",
         "investigation_id",
         "revision_id",
+        "run_id",
+        "run_revision_id",
         "resource",
       ]) {
         projected.delete(key);

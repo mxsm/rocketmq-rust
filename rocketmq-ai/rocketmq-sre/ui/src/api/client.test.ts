@@ -12,6 +12,25 @@ afterEach(() => {
 });
 
 describe("stateLabel", () => {
+  it("uses bounded run discovery filters and closed control endpoints with the caller's AbortSignal", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { headers: { "Content-Type": "application/json" } }));
+    const api = createHttpSreApi();
+    const controller = new AbortController();
+    await api.listInvestigationRuns("investigation/id", { cursor: "opaque+/cursor", limit: 20, start: "2026-11-14T09:00:00.123456789Z", end: "2026-11-14T10:00:00Z", resourceKind: "consumer_group", resourceKey: "workers/a" }, controller.signal);
+    const target = new URL(String(fetchMock.mock.calls[0][0]), "http://localhost");
+    expect(target.pathname).toBe("/v1/investigations/investigation%2Fid/runs");
+    expect(target.searchParams.get("cursor")).toBe("opaque+/cursor");
+    expect(target.searchParams.get("start")).toBe("2026-11-14T09:00:00.123456789Z");
+    expect(target.searchParams.get("resource_kind")).toBe("consumer_group");
+    expect(target.searchParams.get("resource_key")).toBe("workers/a");
+    await api.getInvestigationRunControls("run/id", controller.signal);
+    await api.getInvestigationRunEvents("run/id", "9007199254740993", controller.signal);
+    await api.getInvestigationRunRevision("run/id", "revision/id", controller.signal);
+    expect(String(fetchMock.mock.calls[1][0])).toBe("/v1/investigation-runs/run%2Fid/controls");
+    expect(String(fetchMock.mock.calls[2][0])).toContain("after=9007199254740993&limit=50");
+    expect(String(fetchMock.mock.calls[3][0])).toBe("/v1/investigation-runs/run%2Fid/revisions/revision%2Fid");
+    expect(fetchMock.mock.calls.every(([, init]) => init?.signal === controller.signal)).toBe(true);
+  });
   it("preserves investigation cursor metadata and the legacy signal argument", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       items: [], next_cursor: "next-id", partial: true, warnings: [], observed_at: "2026-11-12T10:00:00Z",
