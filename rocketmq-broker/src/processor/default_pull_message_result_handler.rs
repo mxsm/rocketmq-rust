@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -282,14 +281,6 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                 command_result(response)
             }
         }
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

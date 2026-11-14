@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
@@ -63,7 +62,7 @@ pub(crate) enum PullMessageResult {
 /// request in a RocketMQ broker. It provides a method for processing the result of a message
 /// retrieval operation, along with various parameters related to the request and the broker's
 /// state.
-pub(crate) trait PullMessageResultHandler: Sync + Send + Any + 'static {
+pub(crate) trait PullMessageResultHandler: Sync + Send + 'static {
     /// Handles the result of a pull message request.
     ///
     /// This method processes the result of a message retrieval operation (`get_message_result`),
@@ -99,14 +98,4 @@ pub(crate) trait PullMessageResultHandler: Sync + Send + Any + 'static {
         mapping_context: TopicQueueMappingContext,
         response_context: PullResponseContext<'_>,
     ) -> crate::broker_error::BrokerResult<PullMessageResult>;
-
-    /// Returns a mutable reference to `self` as a trait object of type `Any`.
-    ///
-    /// This method is useful for downcasting the trait object to its concrete type.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
-    /// Returns a reference to `self` as a trait object of type `Any`.
-    ///
-    /// This method is useful for downcasting the trait object to its concrete type.
-    fn as_any(&self) -> &dyn Any;
 }
