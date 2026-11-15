@@ -39,6 +39,8 @@ policy, approval, credential, lease, fencing, or verification boundaries.
 
 Execution is enabled by deployment configuration: every Execution Agent action switch defaults to false, and only fully configured drivers are registered. Control Plane planning, approval and execution coordination are implemented; MCP, Connector and Rust/TypeScript SDK query boundaries remain read-only. Individual crate READMEs describe the current implementation and enablement conditions.
 
+The [execution observation contract](docs/execution-observation.md) separates
+accepted intent, recorded effect, verification windows and business recovery.
 The [action-readiness projection](docs/action-readiness.md) explains nine
 server-owned stages and separates diagnosis confirmation, explicit readonly
 preparation, immutable drafts and human approval. New first execution admission

@@ -17,6 +17,10 @@ import type {
   DiagnosisExecutionConfirmation,
   ExecutionPreconditionEvidenceView,
   ExecutionSubmissionView,
+  ExecutionLookupRequest,
+  ExecutionLookupView,
+  ExecutionObservationView,
+  PlanExecutionPage,
   PrepareExecutionPreconditionRequest,
   QuarantinePage,
   ResourceQuarantine,
@@ -71,6 +75,9 @@ export interface SupervisedSreApi {
     id: string,
     signal?: AbortSignal,
   ) => Promise<ExecutionSubmissionView>;
+  getExecutionObservation: (id: string, signal?: AbortSignal) => Promise<ExecutionObservationView>;
+  lookupExecution: (input: ExecutionLookupRequest, signal?: AbortSignal) => Promise<ExecutionLookupView>;
+  listPlanExecutions: (planId: string, planHash: string, signal?: AbortSignal) => Promise<PlanExecutionPage>;
   getAudit: (
     correlationId: string,
     signal?: AbortSignal,
@@ -146,6 +153,12 @@ export function createSupervisedSreApi(
         `/v1/executions/${encodeURIComponent(id)}`,
         signal,
       ),
+    getExecutionObservation: (id, signal) =>
+      get<ExecutionObservationView>(`/v1/executions/${encodeURIComponent(id)}/observation`, signal),
+    lookupExecution: (input, signal) =>
+      post<ExecutionLookupView>("/v1/executions/lookup", input, signal),
+    listPlanExecutions: (planId, planHash, signal) =>
+      get<PlanExecutionPage>(`/v1/plans/${encodeURIComponent(planId)}/executions?${new URLSearchParams({ plan_hash: planHash }).toString()}`, signal),
     getAudit: (correlationId, signal) =>
       get<AuditPage>(
         `/v1/audit/${encodeURIComponent(correlationId)}`,

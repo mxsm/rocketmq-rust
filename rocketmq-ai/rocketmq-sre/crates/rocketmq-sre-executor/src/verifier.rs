@@ -19,23 +19,28 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::DateTime;
-use chrono::TimeDelta;
 use chrono::Utc;
+use rocketmq_runtime::task_group::TaskGroup;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
-use rocketmq_sre_contracts::CoverageStatus;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionStepId;
 use rocketmq_sre_contracts::PlanStepId;
 use rocketmq_sre_contracts::TenantId;
-use rocketmq_sre_contracts::VerificationOutcome;
+use rocketmq_sre_contracts::VerificationProofOrigin;
 use rocketmq_sre_contracts::VerificationResult;
 use rocketmq_sre_contracts::VerificationSpec;
 use serde_json::Value;
 
 use crate::ExecutorRequestFailure;
+
+mod clock;
+mod qualification;
+mod window;
+use clock::SystemVerificationClock;
+pub use clock::VerificationClock;
 
 const MAX_CONDITIONS: usize = 64;
 const DEFAULT_MAX_OBSERVATIONS: usize = 10_000;
@@ -65,6 +70,20 @@ pub struct VerificationCaptureRequest {
     pub phase: VerificationPhase,
     pub resource_conditions: Vec<String>,
     pub technical_slis: Vec<String>,
+    pub verification: VerificationSpec,
+}
+
+/// Actual data clocks and scope returned by the selected readonly boundary.
+/// A declared target version or a report evaluation time cannot populate a
+/// missing physical version/data observation.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationSourceFacts {
+    pub provenance: VerificationProofOrigin,
+    pub resource_observed_at: Option<DateTime<Utc>>,
+    pub technical_sli_observed_at: Option<DateTime<Utc>>,
+    pub technical_scope_bound: bool,
+    pub target_version_observed: Option<String>,
 }
 
 /// One immutable observation with resource and technical-SLI outcomes.
@@ -73,6 +92,7 @@ pub struct VerificationObservation {
     pub evidence: EvidenceSnapshot,
     pub resource_conditions: BTreeMap<String, bool>,
     pub technical_slis: BTreeMap<String, bool>,
+    pub source_facts: Option<VerificationSourceFacts>,
 }
 
 /// Completed verification plus every post-change snapshot captured while
@@ -97,6 +117,9 @@ pub struct ExecutionVerifier {
     source: Arc<dyn VerificationSource>,
     poll_interval: Duration,
     max_observations: usize,
+    profiles: crate::VerificationProfiles,
+    clock: Arc<dyn VerificationClock>,
+    owner: Option<TaskGroup>,
 }
 
 impl ExecutionVerifier {
@@ -106,7 +129,32 @@ impl ExecutionVerifier {
             source,
             poll_interval,
             max_observations: DEFAULT_MAX_OBSERVATIONS,
+            profiles: crate::VerificationProfiles::default(),
+            clock: Arc::new(SystemVerificationClock::new()),
+            owner: None,
         }
+    }
+
+    /// Installs bounded operator observation configuration, not dispatch authority.
+    #[must_use]
+    pub fn with_profiles(mut self, profiles: crate::VerificationProfiles) -> Self {
+        self.profiles = profiles;
+        self
+    }
+
+    /// Uses the existing process owner to cancel readonly observation waits.
+    #[must_use]
+    pub fn with_owner(mut self, owner: TaskGroup) -> Self {
+        self.owner = Some(owner);
+        self
+    }
+
+    /// Injects deterministic clocks for isolated callers/tests. Production
+    /// entrypoints retain the real default and expose no clock override.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn VerificationClock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     #[cfg(test)]
@@ -125,10 +173,7 @@ impl ExecutionVerifier {
         &self,
         request: &VerificationCaptureRequest,
     ) -> Result<VerificationObservation, ExecutorRequestFailure> {
-        validate_request(request)?;
-        let observation = self.source.observe(request).await?;
-        validate_observation(request, &observation)?;
-        Ok(observation)
+        self.capture_qualified(request).await
     }
 
     /// Polls post-change observations until every descriptor condition remains
@@ -146,93 +191,19 @@ impl ExecutionVerifier {
         pre_evidence_ids: Vec<rocketmq_sre_contracts::EvidenceId>,
         during_evidence_ids: Vec<rocketmq_sre_contracts::EvidenceId>,
     ) -> Result<VerificationRun, ExecutorRequestFailure> {
-        if !matches!(request.phase, VerificationPhase::Post | VerificationPhase::RollbackPost)
-            || spec.resource_conditions != request.resource_conditions
-            || spec.technical_slis != request.technical_slis
-            || spec.max_wait_seconds == 0
-            || spec.stable_window_seconds > spec.max_wait_seconds
-        {
-            return Err(ExecutorRequestFailure::InvalidRequest);
-        }
-        validate_request(request)?;
-        let max_wait = i64::try_from(spec.max_wait_seconds).map_err(|_| ExecutorRequestFailure::InvalidRequest)?;
-        let stable_window =
-            i64::try_from(spec.stable_window_seconds).map_err(|_| ExecutorRequestFailure::InvalidRequest)?;
-        let deadline = started_at
-            .checked_add_signed(TimeDelta::seconds(max_wait))
-            .ok_or(ExecutorRequestFailure::InvalidRequest)?;
-        let mut stable_since = None;
-        let mut post_evidence = Vec::new();
-        let mut satisfied_conditions = Vec::new();
-        let mut failed_conditions = Vec::new();
-        let mut inconclusive = false;
-        let mut completed_at = started_at;
-
-        for observation_index in 0..self.max_observations {
-            let observation = self.source.observe(request).await?;
-            validate_observation(request, &observation)?;
-            completed_at = observation.evidence.observed_at;
-            let evaluation = evaluate_conditions(request, &observation);
-            satisfied_conditions = evaluation.satisfied;
-            failed_conditions = evaluation.failed;
-            inconclusive = evaluation.inconclusive;
-            post_evidence.push(observation.evidence);
-
-            if failed_conditions.is_empty() && !inconclusive {
-                let since = stable_since.get_or_insert(completed_at);
-                if completed_at.signed_duration_since(*since) >= TimeDelta::seconds(stable_window) {
-                    return Ok(VerificationRun {
-                        result: VerificationResult {
-                            step_id: request.step_id,
-                            outcome: VerificationOutcome::Succeeded,
-                            started_at,
-                            completed_at,
-                            pre_evidence_ids,
-                            during_evidence_ids,
-                            post_evidence_ids: post_evidence.iter().map(|item| item.evidence_id).collect(),
-                            satisfied_conditions,
-                            failed_conditions: Vec::new(),
-                            stable_window_seconds: spec.stable_window_seconds,
-                        },
-                        post_evidence,
-                    });
-                }
-            } else {
-                stable_since = None;
-            }
-
-            if completed_at >= deadline || observation_index + 1 == self.max_observations {
-                break;
-            }
-            tokio::time::sleep(self.poll_interval).await;
-        }
-
-        Ok(VerificationRun {
-            result: VerificationResult {
-                step_id: request.step_id,
-                outcome: if inconclusive {
-                    VerificationOutcome::Inconclusive
-                } else {
-                    VerificationOutcome::Failed
-                },
-                started_at,
-                completed_at,
-                pre_evidence_ids,
-                during_evidence_ids,
-                post_evidence_ids: post_evidence.iter().map(|item| item.evidence_id).collect(),
-                satisfied_conditions,
-                failed_conditions,
-                stable_window_seconds: spec.stable_window_seconds,
-            },
-            post_evidence,
-        })
+        self.verify_window(request, spec, started_at, pre_evidence_ids, during_evidence_ids)
+            .await
     }
-}
 
-struct ConditionEvaluation {
-    satisfied: Vec<String>,
-    failed: Vec<String>,
-    inconclusive: bool,
+    pub(crate) fn now(&self) -> DateTime<Utc> {
+        self.clock.utc_now()
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| owner.cancellation_token().is_cancelled())
+    }
 }
 
 fn validate_request(request: &VerificationCaptureRequest) -> Result<(), ExecutorRequestFailure> {
@@ -245,6 +216,11 @@ fn validate_request(request: &VerificationCaptureRequest) -> Result<(), Executor
         || request.target.trim().is_empty()
         || request.resource_conditions.is_empty()
         || request.technical_slis.is_empty()
+        || request.verification.resource_conditions != request.resource_conditions
+        || request.verification.technical_slis != request.technical_slis
+        || request.verification.stable_window_seconds == 0
+        || request.verification.stable_window_seconds > request.verification.max_wait_seconds
+        || request.verification.max_wait_seconds > 86_400
         || request.resource_conditions.len() + request.technical_slis.len() > MAX_CONDITIONS
         || resource_conditions.len() != request.resource_conditions.len()
         || technical_slis.len() != request.technical_slis.len()
@@ -257,60 +233,6 @@ fn validate_request(request: &VerificationCaptureRequest) -> Result<(), Executor
         return Err(ExecutorRequestFailure::InvalidRequest);
     }
     Ok(())
-}
-
-fn validate_observation(
-    request: &VerificationCaptureRequest,
-    observation: &VerificationObservation,
-) -> Result<(), ExecutorRequestFailure> {
-    let evidence = &observation.evidence;
-    evidence
-        .verify_content_hash()
-        .map_err(|_| ExecutorRequestFailure::AgentRejected)?;
-    if evidence.tenant_id != request.tenant_id
-        || evidence.cluster_id != request.cluster_id
-        || evidence.correlation_id != request.correlation_id
-        || evidence.resource != request.target
-        || observation.resource_conditions.len() > MAX_CONDITIONS
-        || observation.technical_slis.len() > MAX_CONDITIONS
-    {
-        return Err(ExecutorRequestFailure::AgentRejected);
-    }
-    Ok(())
-}
-
-fn evaluate_conditions(
-    request: &VerificationCaptureRequest,
-    observation: &VerificationObservation,
-) -> ConditionEvaluation {
-    let mut satisfied = Vec::new();
-    let mut failed = Vec::new();
-    let mut inconclusive = observation.evidence.partial || observation.evidence.coverage != CoverageStatus::Available;
-    for (prefix, expected, actual) in [
-        (
-            "resource",
-            request.resource_conditions.as_slice(),
-            &observation.resource_conditions,
-        ),
-        ("sli", request.technical_slis.as_slice(), &observation.technical_slis),
-    ] {
-        for condition in expected {
-            let name = format!("{prefix}:{condition}");
-            match actual.get(condition) {
-                Some(true) => satisfied.push(name),
-                Some(false) => failed.push(name),
-                None => {
-                    failed.push(name);
-                    inconclusive = true;
-                }
-            }
-        }
-    }
-    ConditionEvaluation {
-        satisfied,
-        failed,
-        inconclusive,
-    }
 }
 
 #[cfg(test)]

@@ -92,10 +92,14 @@ pub struct ExecutorMetrics {
     precondition_rejections_total: AtomicU64,
     fence_rejections_total: AtomicU64,
     reconcile_blocks_total: AtomicU64,
+    shutdown_storage_failures: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ExecutorMetricsSnapshot {
+    /// Operational journal failures during owner cancellation; ordinary
+    /// rejected/Unknown domain outcomes do not increment this counter.
+    pub shutdown_storage_failures_total: u64,
     pub active_executions: usize,
     pub execution_total: u64,
     pub replay_total: u64,
@@ -108,6 +112,7 @@ impl ExecutorMetrics {
     #[must_use]
     pub fn snapshot(&self) -> ExecutorMetricsSnapshot {
         ExecutorMetricsSnapshot {
+            shutdown_storage_failures_total: self.shutdown_storage_failures.load(Ordering::Relaxed),
             active_executions: self.active_executions.load(Ordering::Relaxed),
             execution_total: self.execution_total.load(Ordering::Relaxed),
             replay_total: self.replay_total.load(Ordering::Relaxed),
@@ -132,6 +137,7 @@ pub struct ChangeExecutor {
     resource_lock_ttl: Duration,
     leases: Arc<Mutex<BTreeMap<ClusterId, ExecutorLease>>>,
     metrics: Arc<ExecutorMetrics>,
+    lifecycle: Option<lifecycle::ExecutionLifecycle>,
 }
 
 impl ChangeExecutor {
@@ -162,6 +168,7 @@ impl ChangeExecutor {
             resource_lock_ttl,
             leases: Arc::new(Mutex::new(BTreeMap::new())),
             metrics: Arc::new(ExecutorMetrics::default()),
+            lifecycle: None,
         }
     }
 
@@ -175,7 +182,10 @@ impl ChangeExecutor {
 
     /// Returns true when PostgreSQL and the typed Agent boundary are ready.
     pub async fn ready(&self) -> bool {
-        self.journal.ready().await.is_ok() && self.agent.capabilities().await.is_ok()
+        !self.observation_cancelled()
+            && self.settlement_healthy()
+            && self.journal.ready().await.is_ok()
+            && self.agent.capabilities().await.is_ok()
     }
 
     #[must_use]
@@ -195,7 +205,7 @@ impl ChangeExecutor {
         &self,
         request: &AgentReadRequest,
     ) -> Result<ExecutorOperationOutcome<AgentReadResult>, ExecutorError> {
-        let result = match self.agent.precheck(request).await {
+        let result = match self.read_owned(self.agent.precheck(request)).await {
             Ok(result) => result,
             Err(ExecutorRequestFailure::Rejected(rejection)) => {
                 return Ok(ExecutorOperationOutcome::rejected(rejection));
@@ -228,8 +238,9 @@ impl ChangeExecutor {
     ) -> Result<ExecutorOperationOutcome<ExecuteOutcome>, ExecutorError> {
         self.metrics.execution_total.fetch_add(1, Ordering::Relaxed);
         self.metrics.active_executions.fetch_add(1, Ordering::Relaxed);
+        let _active = ActiveExecution(Arc::clone(&self.metrics));
         let result = self.execute_inner(request).await;
-        self.metrics.active_executions.fetch_sub(1, Ordering::Relaxed);
+        self.record_shutdown_storage_failure(&result);
         executor_outcome(result)
     }
 
@@ -255,8 +266,9 @@ impl ChangeExecutor {
         self.metrics.execution_total.fetch_add(1, Ordering::Relaxed);
         self.metrics.replay_total.fetch_add(1, Ordering::Relaxed);
         self.metrics.active_executions.fetch_add(1, Ordering::Relaxed);
+        let _active = ActiveExecution(Arc::clone(&self.metrics));
         let result = self.recover_execution_inner(id).await;
-        self.metrics.active_executions.fetch_sub(1, Ordering::Relaxed);
+        self.record_shutdown_storage_failure(&result);
         executor_outcome(result)
     }
 
@@ -275,9 +287,14 @@ impl ChangeExecutor {
         &self,
         limit: u32,
     ) -> Result<RecoverySweepOutcome, ExecutorRequestFailure> {
-        let ids = self.journal.compensating_execution_ids(limit).await?;
+        let ids = self
+            .read_owned(async { self.journal.compensating_execution_ids(limit).await.map_err(Into::into) })
+            .await?;
         let mut summary = RecoverySweepOutcome::default();
         for id in ids {
+            if self.observation_cancelled() {
+                return Err(ExecutorRequestFailure::ObservationUnknown);
+            }
             summary.attempted = summary.attempted.saturating_add(1);
             match self.recover_execution(id).await {
                 Ok(ExecutorOperationOutcome::Accepted(outcome)) if outcome.state == ExecutionState::RolledBack => {
@@ -315,6 +332,9 @@ impl ChangeExecutor {
         }
 
         let mut leases = self.leases.lock().await;
+        if self.observation_cancelled() {
+            return Err(ExecutorRequestFailure::ObservationUnknown);
+        }
         leases.remove(&request.cluster_id);
         let takeover = self
             .authority
@@ -330,15 +350,17 @@ impl ChangeExecutor {
         let mut every_effect_absent = true;
         for intent in &forward_intents {
             let response = self
-                .agent
-                .reconcile(&ReconcileEffectRequest {
+                .read_owned(self.agent.reconcile(&ReconcileEffectRequest {
                     schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                     tenant_id: request.tenant_id,
                     reconcile_grant: takeover.reconcile_grant.clone(),
                     idempotency_key: intent.idempotency_key.clone(),
-                })
+                }))
                 .await?;
             every_effect_absent &= response.state == ReconcileEffectState::NotApplied;
+        }
+        if self.observation_cancelled() {
+            return Err(ExecutorRequestFailure::ObservationUnknown);
         }
         let response = self
             .agent
@@ -386,12 +408,11 @@ impl ChangeExecutor {
     }
 
     async fn execute_inner(&self, request: &ExecutionRequest) -> Result<ExecuteOutcome, ExecutorRequestFailure> {
-        self.authority
-            .verify_execution(&VerifyExecutionRequest {
-                schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
-                execution: request.clone(),
-            })
-            .await?;
+        self.read_owned(self.authority.verify_execution(&VerifyExecutionRequest {
+            schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+            execution: request.clone(),
+        }))
+        .await?;
         if request.plan.steps.is_empty() {
             return Err(ExecutorRequestFailure::InvalidRequest);
         }
@@ -431,7 +452,7 @@ impl ChangeExecutor {
             "execution_precheck_started",
         )
         .await?;
-        if let Err(error) = self.prechecker.check(request).await {
+        if let Err(error) = self.read_owned(self.prechecker.check(request)).await {
             if error.is_precondition_changed() {
                 self.metrics
                     .precondition_rejections_total
@@ -495,6 +516,9 @@ impl ChangeExecutor {
         force_takeover: bool,
     ) -> Result<ExecutorLease, ExecutorRequestFailure> {
         let mut leases = self.leases.lock().await;
+        if self.observation_cancelled() {
+            return Err(ExecutorRequestFailure::ObservationUnknown);
+        }
         if !force_takeover
             && let Some(lease) = leases.get(&request.cluster_id)
             && lease.state == LeaseState::Active
@@ -558,13 +582,12 @@ impl ChangeExecutor {
             };
             self.enter_reconciling(pending.execution_state, &recovery_scope).await?;
             let response = self
-                .agent
-                .reconcile(&ReconcileEffectRequest {
+                .read_owned(self.agent.reconcile(&ReconcileEffectRequest {
                     schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                     tenant_id: pending.tenant_id,
                     reconcile_grant: grant.clone(),
                     idempotency_key: pending.intent.idempotency_key.clone(),
-                })
+                }))
                 .await?;
             if response.state == ReconcileEffectState::Unknown {
                 return Err(ExecutorRequestFailure::ReconcileBlocked);
@@ -835,6 +858,14 @@ impl ChangeExecutor {
     }
 }
 
+struct ActiveExecution(Arc<ExecutorMetrics>);
+
+impl Drop for ActiveExecution {
+    fn drop(&mut self) {
+        self.0.active_executions.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 fn executor_outcome<T>(
     result: Result<T, ExecutorRequestFailure>,
 ) -> Result<ExecutorOperationOutcome<T>, ExecutorError> {
@@ -925,3 +956,5 @@ fn execution_projection(
 
 #[path = "execution_flow.rs"]
 mod execution_flow;
+#[path = "execution_lifecycle.rs"]
+mod lifecycle;

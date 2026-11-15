@@ -6676,6 +6676,283 @@
           }
         }
       }
+    },
+    "/v1/executions/{execution_id}/observation": {
+      "get": {
+        "operationId": "getExecutionObservation",
+        "summary": "Read exact accepted execution, recorded effects and verification provenance",
+        "description": "Recorded execution or policy-window success does not prove current business recovery. Missing retained or legacy proof remains explicit. This read does not reconcile or dispatch target work.",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded authorized read snapshot; no target operation is performed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionObservationView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/executions/lookup": {
+      "post": {
+        "operationId": "lookupExecution",
+        "summary": "Read the original authenticated actor's exact accepted intent selector",
+        "description": "A not_observed result is not proof that no request was accepted or no target effect occurred. This operation never submits, retries, changes a key, acquires a lease or calls an Executor.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutionLookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded authorized read snapshot; no target operation is performed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionLookupView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plans/{plan_id}/executions": {
+      "get": {
+        "operationId": "getPlanExecutions",
+        "summary": "Read bounded accepted receipt references for one authorized immutable Plan/hash",
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "plan_hash",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded authorized read snapshot; no target operation is performed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanExecutionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized read refusal or unavailable retained state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -18616,6 +18893,1155 @@
         "description": "Stable tenant boundary identifier.",
         "format": "uuid",
         "type": "string"
+      },
+      "ExecutionObservationView": {
+        "additionalProperties": false,
+        "description": "Safe current read projection; recorded history is distinct from recovery.",
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionReceiptReference"
+          },
+          "business_recovery": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationFact",
+            "description": "Typed server fact. Execution/verification success alone cannot set it."
+          },
+          "history": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationFact"
+          },
+          "manual_takeover": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationFact"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reconciliation": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationFact"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionObservationView__ExecutionStepObservation"
+            },
+            "type": "array"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationEvent"
+            },
+            "type": "array"
+          },
+          "timeline_partial": {
+            "type": "boolean"
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "binding",
+          "observed_at",
+          "valid_until",
+          "steps",
+          "timeline",
+          "timeline_partial",
+          "history",
+          "reconciliation",
+          "manual_takeover",
+          "business_recovery"
+        ],
+        "title": "ExecutionObservationView",
+        "type": "object"
+      },
+      "ExecutionObservationView__ActionPlanId": {
+        "description": "Stable identifier for an immutable action plan.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__CorrelationId": {
+        "description": "Identifier propagated across one logical SRE operation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__DiagnosisRevisionId": {
+        "description": "Stable identifier for an immutable diagnosis revision.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__EffectState": {
+        "description": "Durable Agent effect state.",
+        "enum": [
+          "prepared",
+          "dispatched",
+          "confirmed",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionAction": {
+        "description": "Closed set of Phase 3 actions that may enter supervised planning.\n\nExecution remains gated by the exact descriptor's `plan_only` and\n`execution_supported` flags. Permanently destructive R3 and unknown actions\nare intentionally not representable.",
+        "enum": [
+          "observability.logger_level_ttl.v1",
+          "proxy.scale_out_one.v1",
+          "proxy.restart_one.v1",
+          "broker.config.patch_allowlisted.v1",
+          "topic.config.patch_allowlisted.v1",
+          "subscription_group.patch_allowlisted.v1",
+          "consumer.request_mode.patch_allowlisted.v1",
+          "consumer.offset.reset_bounded.v1",
+          "topic.queue.expand_only.v1",
+          "namesrv.config.patch_allowlisted.v1",
+          "controller.config.patch_allowlisted.v1",
+          "proxy.rollout_image_canary.v1",
+          "broker.restart_one.v1",
+          "static_topic.patch_non_remap.v1",
+          "tiered.cold_data_flow.patch_allowlisted.v1",
+          "store.readahead.patch_allowlisted.v1",
+          "security.credential_rotate_overlap.v1",
+          "telemetry.collector.restart_one.v1",
+          "consumer.offset.clone_or_reset_broad.v1",
+          "message.direct_consume.v1",
+          "message.dlq.resend.v1",
+          "timer.switch.v1",
+          "controller.elect.v1",
+          "static_topic.remap.v1",
+          "broker.container.add_remove.v1"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionAttemptObservation": {
+        "additionalProperties": false,
+        "description": "Actual append-only attempt identity and bounded recorded effect result.",
+        "properties": {
+          "attempt": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "compensation": {
+            "type": "boolean"
+          },
+          "effect_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionObservationView__EffectState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fact": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationFact"
+          },
+          "intended_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "lease_epoch": {
+            "description": "Decimal strings retain u64 precision in browser clients.",
+            "type": "string"
+          },
+          "lease_id": {
+            "type": "string"
+          },
+          "result_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionStepId"
+          }
+        },
+        "required": [
+          "step_id",
+          "attempt",
+          "compensation",
+          "intended_at",
+          "fact",
+          "lease_id",
+          "lease_epoch"
+        ],
+        "type": "object"
+      },
+      "ExecutionObservationView__ExecutionId": {
+        "description": "Stable identifier for a supervised execution.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionObservationEvent": {
+        "additionalProperties": false,
+        "description": "Safe per-execution event in durable sequence order.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationEventKind"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationReason"
+          },
+          "sequence": {
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionObservationView__ExecutionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "step_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionObservationView__ExecutionStepId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "sequence",
+          "kind",
+          "occurred_at",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ExecutionObservationView__ExecutionObservationEventKind": {
+        "description": "A recorded event type. It is never expanded into guessed earlier phases.",
+        "enum": [
+          "accepted",
+          "state_changed",
+          "intent_persisted",
+          "result_recorded",
+          "verification_captured",
+          "verification_completed",
+          "manual_takeover_required",
+          "quarantine_created",
+          "quarantine_cleared",
+          "other"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionObservationFact": {
+        "additionalProperties": false,
+        "description": "One typed backend fact. Browser time alone cannot satisfy it.",
+        "properties": {
+          "reason_codes": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationReason"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationSource"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationState"
+          }
+        },
+        "required": [
+          "state",
+          "source",
+          "reason_codes"
+        ],
+        "type": "object"
+      },
+      "ExecutionObservationView__ExecutionObservationReason": {
+        "description": "Safe explanation codes; arbitrary stored/remote text is not a public reason.",
+        "enum": [
+          "accepted_receipt",
+          "receipt_not_observed",
+          "intent_recorded",
+          "result_recorded",
+          "effect_unknown",
+          "no_effect_result",
+          "reconciled_applied",
+          "reconciled_not_applied",
+          "reconciled_failed",
+          "reconciliation_required",
+          "verification_not_observed",
+          "legacy_window_proof_missing",
+          "window_proof_invalid",
+          "retained_proof_unavailable",
+          "policy_not_configured",
+          "target_version_not_observed",
+          "exact_sli_source_missing",
+          "source_missing",
+          "source_partial",
+          "source_stale",
+          "source_future",
+          "source_before_window",
+          "source_out_of_order",
+          "source_repeated",
+          "observation_gap",
+          "evidence_hash_invalid",
+          "evidence_scope_mismatch",
+          "read_deadline_exceeded",
+          "observation_budget_exhausted",
+          "observation_clock_invalid",
+          "observation_cancelled",
+          "known_condition_failed",
+          "stable_window_incomplete",
+          "policy_window_satisfied",
+          "compensation_not_observed",
+          "compensation_result_recorded",
+          "compensation_unknown",
+          "compensation_failed",
+          "manual_takeover_required",
+          "manual_takeover_not_recorded",
+          "independent_business_observation_missing",
+          "partial_history",
+          "recorded_state_change",
+          "recorded_verification",
+          "unrecognized_recorded_event"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionObservationSource": {
+        "description": "Source of a fact, independent of the fact's observed truth value.",
+        "enum": [
+          "accepted_request",
+          "step_journal",
+          "verification_journal",
+          "reconciliation_journal",
+          "quarantine_journal",
+          "independent_business_observation",
+          "not_observed"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionObservationState": {
+        "description": "Closed observation status; none of these values grants execution authority.",
+        "enum": [
+          "not_observed",
+          "unknown",
+          "observed",
+          "satisfied",
+          "not_satisfied"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionReceiptReference": {
+        "additionalProperties": false,
+        "description": "Safe immutable accepted identity, with a separately observed journal state.\n\nThis omits the signed request, Grants, nonce, parameters and Agent details.",
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ClusterId"
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__CorrelationId"
+          },
+          "diagnosis_revision_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__DiagnosisRevisionId"
+          },
+          "execution_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionId"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__IncidentId"
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ActionPlanId"
+          },
+          "precondition_hash": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionState"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__TenantId"
+          }
+        },
+        "required": [
+          "execution_id",
+          "tenant_id",
+          "cluster_id",
+          "plan_id",
+          "plan_hash",
+          "precondition_hash",
+          "incident_id",
+          "diagnosis_revision_id",
+          "correlation_id",
+          "requested_by",
+          "accepted_at",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ExecutionObservationView__ExecutionState": {
+        "description": "Recoverable supervised execution state.",
+        "enum": [
+          "pending",
+          "prechecking",
+          "intent_persisted",
+          "applying",
+          "unknown",
+          "reconciling",
+          "verifying",
+          "compensating",
+          "succeeded",
+          "rolled_back",
+          "escalated"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionStepId": {
+        "description": "Stable identifier for an execution step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__ExecutionStepObservation": {
+        "additionalProperties": false,
+        "description": "Exact immutable Plan step with observed attempts, not inferred completion.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionAction"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionObservationView__ExecutionAttemptObservation"
+            },
+            "type": "array"
+          },
+          "compensation": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationFact"
+          },
+          "declared_verification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionObservationView__VerificationSpec"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only for a recognized exact compiled declaration."
+          },
+          "descriptor_version": {
+            "type": "string"
+          },
+          "effect": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationFact"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "plan_step_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__PlanStepId"
+          },
+          "sequence": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "type": "string"
+          },
+          "verifications": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionObservationView__ExecutionVerificationObservation"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan_step_id",
+          "sequence",
+          "action",
+          "descriptor_version",
+          "target",
+          "attempts",
+          "verifications",
+          "effect",
+          "compensation",
+          "partial"
+        ],
+        "type": "object"
+      },
+      "ExecutionObservationView__ExecutionVerificationObservation": {
+        "additionalProperties": false,
+        "description": "Per-attempt verification metadata without raw source payloads.",
+        "properties": {
+          "attempt": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "collected_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "compensation": {
+            "type": "boolean"
+          },
+          "completed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "declared_target_version": {
+            "description": "A declaration is not a verified physical target version.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionObservationView__EvidenceId"
+            },
+            "type": "array"
+          },
+          "failed_conditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "max_sample_gap_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_source_age_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_wait_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "missing_conditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observed_stable_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "policy_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proof_state": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionWindowProofState"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ExecutionObservationView__VerificationProofOrigin"
+          },
+          "reason_codes": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionObservationView__ExecutionObservationReason"
+            },
+            "type": "array"
+          },
+          "recorded_outcome": {
+            "$ref": "#/components/schemas/ExecutionObservationView__VerificationOutcome"
+          },
+          "required_stable_window_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource_observed_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "satisfied_conditions": {
+            "description": "Codes are intersected with the recognized exact compiled declaration.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source_first_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_last_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/ExecutionObservationView__ExecutionStepId"
+          },
+          "target_version_verified": {
+            "type": "boolean"
+          },
+          "technical_sli_observed_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "step_id",
+          "attempt",
+          "compensation",
+          "recorded_outcome",
+          "proof_state",
+          "provenance",
+          "started_at",
+          "completed_at",
+          "required_stable_window_seconds",
+          "satisfied_conditions",
+          "failed_conditions",
+          "missing_conditions",
+          "target_version_verified",
+          "evidence_ids",
+          "reason_codes"
+        ],
+        "type": "object"
+      },
+      "ExecutionObservationView__ExecutionWindowProofState": {
+        "description": "Quality of a saved verification proof, separate from its recorded outcome.",
+        "enum": [
+          "not_observed",
+          "legacy_missing",
+          "invalid",
+          "unavailable",
+          "inconclusive",
+          "valid_historical"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__IncidentId": {
+        "description": "Stable identifier for an SRE incident.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__PlanStepId": {
+        "description": "Stable identifier for an immutable action plan step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionObservationView__VerificationOutcome": {
+        "description": "Deterministic verification outcome.",
+        "enum": [
+          "succeeded",
+          "failed",
+          "inconclusive"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__VerificationProofOrigin": {
+        "description": "Engineering fixtures must not be presented as physical production proof.",
+        "enum": [
+          "recorded_only",
+          "synthetic_fixture",
+          "production_read"
+        ],
+        "type": "string"
+      },
+      "ExecutionObservationView__VerificationSpec": {
+        "additionalProperties": false,
+        "description": "Verification policy frozen by an action descriptor.",
+        "properties": {
+          "max_wait_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource_conditions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stable_window_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "technical_slis": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stable_window_seconds",
+          "max_wait_seconds"
+        ],
+        "type": "object"
+      },
+      "ExecutionLookupRequest": {
+        "additionalProperties": false,
+        "description": "Original accepted intent selector. Reading it never retries execution.",
+        "properties": {
+          "idempotency_key": {
+            "type": "string"
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/ExecutionLookupRequest__ActionPlanId"
+          },
+          "precondition_hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "plan_hash",
+          "precondition_hash",
+          "idempotency_key"
+        ],
+        "title": "ExecutionLookupRequest",
+        "type": "object"
+      },
+      "ExecutionLookupRequest__ActionPlanId": {
+        "description": "Stable identifier for an immutable action plan.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionLookupView": {
+        "additionalProperties": false,
+        "description": "Readonly receipt lookup bound to the current authenticated requester.",
+        "properties": {
+          "actor_subject": {
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionLookupView__ExecutionReceiptReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request": {
+            "$ref": "#/components/schemas/ExecutionLookupView__ExecutionLookupRequest"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExecutionLookupView__ExecutionLookupStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__TenantId"
+          },
+          "valid_until": {
+            "description": "Snapshot expiry never changes the immutable accepted identity.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "tenant_id",
+          "actor_subject",
+          "request",
+          "status",
+          "observed_at",
+          "valid_until"
+        ],
+        "title": "ExecutionLookupView",
+        "type": "object"
+      },
+      "ExecutionLookupView__ActionPlanId": {
+        "description": "Stable identifier for an immutable action plan.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionLookupView__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionLookupView__CorrelationId": {
+        "description": "Identifier propagated across one logical SRE operation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionLookupView__DiagnosisRevisionId": {
+        "description": "Stable identifier for an immutable diagnosis revision.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionLookupView__ExecutionId": {
+        "description": "Stable identifier for a supervised execution.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionLookupView__ExecutionLookupRequest": {
+        "additionalProperties": false,
+        "description": "Original accepted intent selector. Reading it never retries execution.",
+        "properties": {
+          "idempotency_key": {
+            "type": "string"
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__ActionPlanId"
+          },
+          "precondition_hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "plan_hash",
+          "precondition_hash",
+          "idempotency_key"
+        ],
+        "type": "object"
+      },
+      "ExecutionLookupView__ExecutionLookupStatus": {
+        "description": "A missing receipt at this read snapshot does not prove no acceptance/effect.",
+        "enum": [
+          "accepted",
+          "not_observed"
+        ],
+        "type": "string"
+      },
+      "ExecutionLookupView__ExecutionReceiptReference": {
+        "additionalProperties": false,
+        "description": "Safe immutable accepted identity, with a separately observed journal state.\n\nThis omits the signed request, Grants, nonce, parameters and Agent details.",
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__ClusterId"
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__CorrelationId"
+          },
+          "diagnosis_revision_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__DiagnosisRevisionId"
+          },
+          "execution_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__ExecutionId"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__IncidentId"
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__ActionPlanId"
+          },
+          "precondition_hash": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ExecutionLookupView__ExecutionState"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ExecutionLookupView__TenantId"
+          }
+        },
+        "required": [
+          "execution_id",
+          "tenant_id",
+          "cluster_id",
+          "plan_id",
+          "plan_hash",
+          "precondition_hash",
+          "incident_id",
+          "diagnosis_revision_id",
+          "correlation_id",
+          "requested_by",
+          "accepted_at",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ExecutionLookupView__ExecutionState": {
+        "description": "Recoverable supervised execution state.",
+        "enum": [
+          "pending",
+          "prechecking",
+          "intent_persisted",
+          "applying",
+          "unknown",
+          "reconciling",
+          "verifying",
+          "compensating",
+          "succeeded",
+          "rolled_back",
+          "escalated"
+        ],
+        "type": "string"
+      },
+      "ExecutionLookupView__IncidentId": {
+        "description": "Stable identifier for an SRE incident.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExecutionLookupView__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PlanExecutionPage": {
+        "additionalProperties": false,
+        "description": "Bounded receipt discovery for one authorized immutable Plan/hash.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__ClusterId"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlanExecutionPage__ExecutionReceiptReference"
+            },
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__ActionPlanId"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__TenantId"
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "tenant_id",
+          "cluster_id",
+          "plan_id",
+          "plan_hash",
+          "items",
+          "partial",
+          "observed_at",
+          "valid_until"
+        ],
+        "title": "PlanExecutionPage",
+        "type": "object"
+      },
+      "PlanExecutionPage__ActionPlanId": {
+        "description": "Stable identifier for an immutable action plan.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PlanExecutionPage__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PlanExecutionPage__CorrelationId": {
+        "description": "Identifier propagated across one logical SRE operation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PlanExecutionPage__DiagnosisRevisionId": {
+        "description": "Stable identifier for an immutable diagnosis revision.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PlanExecutionPage__ExecutionId": {
+        "description": "Stable identifier for a supervised execution.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PlanExecutionPage__ExecutionReceiptReference": {
+        "additionalProperties": false,
+        "description": "Safe immutable accepted identity, with a separately observed journal state.\n\nThis omits the signed request, Grants, nonce, parameters and Agent details.",
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__ClusterId"
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__CorrelationId"
+          },
+          "diagnosis_revision_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__DiagnosisRevisionId"
+          },
+          "execution_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__ExecutionId"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__IncidentId"
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__ActionPlanId"
+          },
+          "precondition_hash": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PlanExecutionPage__ExecutionState"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/PlanExecutionPage__TenantId"
+          }
+        },
+        "required": [
+          "execution_id",
+          "tenant_id",
+          "cluster_id",
+          "plan_id",
+          "plan_hash",
+          "precondition_hash",
+          "incident_id",
+          "diagnosis_revision_id",
+          "correlation_id",
+          "requested_by",
+          "accepted_at",
+          "state"
+        ],
+        "type": "object"
+      },
+      "PlanExecutionPage__ExecutionState": {
+        "description": "Recoverable supervised execution state.",
+        "enum": [
+          "pending",
+          "prechecking",
+          "intent_persisted",
+          "applying",
+          "unknown",
+          "reconciling",
+          "verifying",
+          "compensating",
+          "succeeded",
+          "rolled_back",
+          "escalated"
+        ],
+        "type": "string"
+      },
+      "PlanExecutionPage__IncidentId": {
+        "description": "Stable identifier for an SRE incident.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PlanExecutionPage__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
       }
     }
   },
@@ -18676,6 +20102,10 @@
     "RunbookStepPlanBinding",
     "ActionReadinessRequest",
     "ActionReadinessView",
-    "ActionPreparationEvidence"
+    "ActionPreparationEvidence",
+    "ExecutionObservationView",
+    "ExecutionLookupRequest",
+    "ExecutionLookupView",
+    "PlanExecutionPage"
   ]
 }

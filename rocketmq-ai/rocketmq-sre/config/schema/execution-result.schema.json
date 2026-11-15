@@ -38,6 +38,11 @@
       ],
       "type": "object"
     },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
     "EffectState": {
       "description": "Durable Agent effect state.",
       "enum": [
@@ -53,9 +58,91 @@
       "format": "uuid",
       "type": "string"
     },
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised planning.\n\nExecution remains gated by the exact descriptor's `plan_only` and\n`execution_supported` flags. Permanently destructive R3 and unknown actions\nare intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1",
+        "subscription_group.patch_allowlisted.v1",
+        "consumer.request_mode.patch_allowlisted.v1",
+        "consumer.offset.reset_bounded.v1",
+        "topic.queue.expand_only.v1",
+        "namesrv.config.patch_allowlisted.v1",
+        "controller.config.patch_allowlisted.v1",
+        "proxy.rollout_image_canary.v1",
+        "broker.restart_one.v1",
+        "static_topic.patch_non_remap.v1",
+        "tiered.cold_data_flow.patch_allowlisted.v1",
+        "store.readahead.patch_allowlisted.v1",
+        "security.credential_rotate_overlap.v1",
+        "telemetry.collector.restart_one.v1",
+        "consumer.offset.clone_or_reset_broad.v1",
+        "message.direct_consume.v1",
+        "message.dlq.resend.v1",
+        "timer.switch.v1",
+        "controller.elect.v1",
+        "static_topic.remap.v1",
+        "broker.container.add_remove.v1"
+      ],
+      "type": "string"
+    },
     "ExecutionId": {
       "description": "Stable identifier for a supervised execution.",
       "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionObservationReason": {
+      "description": "Safe explanation codes; arbitrary stored/remote text is not a public reason.",
+      "enum": [
+        "accepted_receipt",
+        "receipt_not_observed",
+        "intent_recorded",
+        "result_recorded",
+        "effect_unknown",
+        "no_effect_result",
+        "reconciled_applied",
+        "reconciled_not_applied",
+        "reconciled_failed",
+        "reconciliation_required",
+        "verification_not_observed",
+        "legacy_window_proof_missing",
+        "window_proof_invalid",
+        "retained_proof_unavailable",
+        "policy_not_configured",
+        "target_version_not_observed",
+        "exact_sli_source_missing",
+        "source_missing",
+        "source_partial",
+        "source_stale",
+        "source_future",
+        "source_before_window",
+        "source_out_of_order",
+        "source_repeated",
+        "observation_gap",
+        "evidence_hash_invalid",
+        "evidence_scope_mismatch",
+        "read_deadline_exceeded",
+        "observation_budget_exhausted",
+        "observation_clock_invalid",
+        "observation_cancelled",
+        "known_condition_failed",
+        "stable_window_incomplete",
+        "policy_window_satisfied",
+        "compensation_not_observed",
+        "compensation_result_recorded",
+        "compensation_unknown",
+        "compensation_failed",
+        "manual_takeover_required",
+        "manual_takeover_not_recorded",
+        "independent_business_observation_missing",
+        "partial_history",
+        "recorded_state_change",
+        "recorded_verification",
+        "unrecognized_recorded_event"
+      ],
       "type": "string"
     },
     "ExecutionState": {
@@ -77,6 +164,11 @@
     },
     "ExecutionStepId": {
       "description": "Stable identifier for an execution step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
       "format": "uuid",
       "type": "string"
     },
@@ -126,12 +218,26 @@
       ],
       "type": "object"
     },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
     "VerificationOutcome": {
       "description": "Deterministic verification outcome.",
       "enum": [
         "succeeded",
         "failed",
         "inconclusive"
+      ],
+      "type": "string"
+    },
+    "VerificationProofOrigin": {
+      "description": "Engineering fixtures must not be presented as physical production proof.",
+      "enum": [
+        "recorded_only",
+        "synthetic_fixture",
+        "production_read"
       ],
       "type": "string"
     },
@@ -192,6 +298,17 @@
         },
         "step_id": {
           "$ref": "#/$defs/ExecutionStepId"
+        },
+        "window_proof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationWindowProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Old saved results omit this field unchanged. Present invalid data must\nbe reported invalid rather than treated as old unqualified history."
         }
       },
       "required": [
@@ -200,6 +317,222 @@
         "started_at",
         "completed_at",
         "stable_window_seconds"
+      ],
+      "type": "object"
+    },
+    "VerificationWindowPolicy": {
+      "additionalProperties": false,
+      "description": "Selected operator configuration; a declared version is not target attestation.",
+      "properties": {
+        "declared_target_version": {
+          "type": "string"
+        },
+        "max_sample_gap_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_source_age_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_wait_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "policy_digest": {
+          "type": "string"
+        },
+        "policy_revision": {
+          "type": "string"
+        },
+        "stable_window_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy_digest",
+        "policy_revision",
+        "declared_target_version",
+        "stable_window_seconds",
+        "max_wait_seconds",
+        "max_source_age_seconds",
+        "max_sample_gap_seconds"
+      ],
+      "type": "object"
+    },
+    "VerificationWindowProof": {
+      "additionalProperties": false,
+      "description": "New result proof, stored append-only beside the original outcome.\n\nIts digest detects inconsistent content; it is not a signature, target\nidentity proof or authorization token. Only the owned Executor writes the\nproduction verification journal. Absent old proof and present invalid proof\nare deliberately different states.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "descriptor_version": {
+          "type": "string"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "missing_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "observed_stable_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parameters_digest": {
+          "type": "string"
+        },
+        "plan_step_id": {
+          "$ref": "#/$defs/PlanStepId"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationWindowPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proof_hash": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/VerificationProofOrigin"
+        },
+        "reason_codes": {
+          "items": {
+            "$ref": "#/$defs/ExecutionObservationReason"
+          },
+          "type": "array"
+        },
+        "samples": {
+          "items": {
+            "$ref": "#/$defs/VerificationWindowSample"
+          },
+          "type": "array"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "step_id": {
+          "$ref": "#/$defs/ExecutionStepId"
+        },
+        "target": {
+          "type": "string"
+        },
+        "target_version_observed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        }
+      },
+      "required": [
+        "schema_version",
+        "tenant_id",
+        "cluster_id",
+        "execution_id",
+        "step_id",
+        "plan_step_id",
+        "action",
+        "descriptor_version",
+        "target",
+        "parameters_digest",
+        "provenance",
+        "started_at",
+        "completed_at",
+        "observed_stable_seconds",
+        "samples",
+        "missing_conditions",
+        "reason_codes",
+        "proof_hash"
+      ],
+      "type": "object"
+    },
+    "VerificationWindowSample": {
+      "additionalProperties": false,
+      "description": "One actual source/capture pair, independent of evaluation/collection clocks.",
+      "properties": {
+        "collected_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "elapsed_nanos": {
+          "description": "Elapsed monotonic run time, not a duration inferred from source timestamps.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "evidence_id": {
+          "$ref": "#/$defs/EvidenceId"
+        },
+        "resource_conditions_satisfied": {
+          "type": "boolean"
+        },
+        "resource_observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "source_age_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target_version_matched": {
+          "type": "boolean"
+        },
+        "technical_sli_observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "technical_slis_satisfied": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "content_hash",
+        "resource_observed_at",
+        "technical_sli_observed_at",
+        "collected_at",
+        "source_age_seconds",
+        "elapsed_nanos",
+        "complete",
+        "resource_conditions_satisfied",
+        "technical_slis_satisfied",
+        "target_version_matched"
       ],
       "type": "object"
     }

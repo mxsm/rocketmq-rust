@@ -23,8 +23,13 @@ use serde::Serialize;
 use crate::ClusterId;
 use crate::CorrelationId;
 use crate::EvidenceId;
+use crate::ExecutionAction;
+use crate::ExecutionId;
+use crate::ExecutionObservationReason;
 use crate::ExecutionStepId;
+use crate::PlanStepId;
 use crate::TenantId;
+use crate::VerificationWindowProof;
 
 pub const EXECUTION_VERIFICATION_SCHEMA_VERSION: &str = "rocketmq-sre.execution-verification.v1";
 
@@ -37,6 +42,31 @@ pub struct ExecutionSliQuery {
     pub cluster_id: ClusterId,
     pub correlation_id: CorrelationId,
     pub conditions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<ExecutionSliBinding>,
+}
+
+/// Exact execution selector; it does not create a metric source or authority.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionSliBinding {
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+    pub action: ExecutionAction,
+    pub descriptor_version: String,
+    pub target: String,
+    pub parameters_digest: String,
+}
+
+/// Actual source clock and scope, kept separate from report evaluation time.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionSliSourceFacts {
+    pub binding: Option<ExecutionSliBinding>,
+    pub source_observed_at: Option<DateTime<Utc>>,
+    pub collected_at: DateTime<Utc>,
+    pub exact_target_conditions: bool,
+    pub reason_codes: Vec<ExecutionObservationReason>,
 }
 
 /// Deterministic technical-SLI projection returned to the Executor.
@@ -52,6 +82,8 @@ pub struct ExecutionSliObservation {
     #[serde(default)]
     pub evidence_ids: Vec<EvidenceId>,
     pub observed_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_facts: Option<ExecutionSliSourceFacts>,
 }
 
 /// Deterministic verification outcome.
@@ -82,4 +114,8 @@ pub struct VerificationResult {
     #[serde(default)]
     pub failed_conditions: Vec<String>,
     pub stable_window_seconds: u64,
+    /// Old saved results omit this field unchanged. Present invalid data must
+    /// be reported invalid rather than treated as old unqualified history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_proof: Option<VerificationWindowProof>,
 }

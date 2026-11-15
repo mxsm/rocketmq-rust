@@ -105,8 +105,9 @@ impl ChangeExecutor {
                     "during_verification_unavailable",
                 )
                 .await?;
+                let last = applied.last().ok_or(ExecutorRequestFailure::ObservationUnknown)?;
                 return self
-                    .rollback_applied(request, locks, verifier, applied, "during_verification_unavailable")
+                    .manual_takeover(request, locks, last, "during_verification_unavailable")
                     .await;
             }
             ForwardDispatch::SafetyInvalidated(applied) => {
@@ -124,14 +125,32 @@ impl ChangeExecutor {
         };
 
         let mut failed_index = None;
+        let mut unknown_index = None;
         for (index, applied_step) in applied.iter_mut().enumerate() {
             match self.verify_forward_step(request, applied_step, verifier).await {
                 Ok(VerificationOutcome::Succeeded) => {}
-                Ok(VerificationOutcome::Failed | VerificationOutcome::Inconclusive) | Err(_) => {
+                Ok(VerificationOutcome::Failed) => {
                     failed_index = Some(index);
                     break;
                 }
+                Ok(VerificationOutcome::Inconclusive) | Err(_) => {
+                    unknown_index = Some(index);
+                    break;
+                }
             }
+        }
+        if let Some(index) = unknown_index {
+            self.transition(
+                request,
+                ExecutionState::Verifying,
+                ExecutionState::Compensating,
+                "verification_observation_unknown",
+            )
+            .await?;
+            // Missing qualification is not a known false rollback trigger.
+            return self
+                .manual_takeover(request, locks, &applied[index], "verification_observation_unknown")
+                .await;
         }
         if failed_index.is_none() {
             self.transition(
@@ -169,10 +188,21 @@ impl ChangeExecutor {
     ) -> Result<ForwardDispatch, ExecutorRequestFailure> {
         let mut applied = Vec::with_capacity(request.plan.steps.len());
         for (index, step) in request.plan.steps.iter().enumerate() {
+            if verifier.is_cancelled() {
+                if applied.is_empty() {
+                    return Err(ExecutorRequestFailure::ObservationUnknown);
+                }
+                return Ok(ForwardDispatch::VerificationUnavailable(applied));
+            }
             let step_id = ExecutionStepId::new();
-            let pre = self
+            let pre = match self
                 .capture_and_persist(request, step, step_id, VerificationPhase::Pre, verifier)
-                .await?;
+                .await
+            {
+                Ok(evidence) => evidence,
+                Err(error) if applied.is_empty() => return Err(error),
+                Err(_) => return Ok(ForwardDispatch::VerificationUnavailable(applied)),
+            };
             let dynamic_safety = match self.evaluate_step_safety(request, step, step_id).await {
                 Ok(decision) => decision,
                 Err(error) if applied.is_empty() => {
@@ -217,6 +247,11 @@ impl ChangeExecutor {
                         "agent_effect_unknown",
                     )
                     .await?;
+                    if verifier.is_cancelled() {
+                        // An accepted/sent intent remains durable and unknown;
+                        // owner shutdown does not start a fresh takeover/write.
+                        return Err(error);
+                    }
                     self.transition(
                         request,
                         ExecutionState::Unknown,
@@ -289,7 +324,7 @@ impl ChangeExecutor {
             .verify_post(
                 &capture,
                 &applied.step.verification,
-                Utc::now(),
+                verifier.now(),
                 applied.pre_evidence_ids.clone(),
                 applied.during_evidence_ids.clone(),
             )
@@ -355,7 +390,16 @@ impl ChangeExecutor {
                     true,
                     "compensation",
                 )
-                .await?;
+                .await;
+            let intent = match intent {
+                Ok(intent) => intent,
+                Err(_) if verifier.is_cancelled() => {
+                    return self
+                        .manual_takeover(request, locks, applied_step, "verification_observation_cancelled")
+                        .await;
+                }
+                Err(error) => return Err(error),
+            };
             let timeout_seconds = applied_step.step.compensation.timeout_seconds;
             let response = tokio::time::timeout(
                 Duration::from_secs(timeout_seconds),
@@ -409,7 +453,7 @@ impl ChangeExecutor {
                 .verify_post(
                     &capture,
                     &applied_step.step.verification,
-                    Utc::now(),
+                    verifier.now(),
                     applied_step.pre_evidence_ids.clone(),
                     vec![during],
                 )
@@ -532,6 +576,9 @@ impl ChangeExecutor {
         compensation: bool,
         direction: &str,
     ) -> Result<StepIntent, ExecutorRequestFailure> {
+        if self.verifier.as_ref().is_some_and(ExecutionVerifier::is_cancelled) {
+            return Err(ExecutorRequestFailure::ObservationUnknown);
+        }
         // Verification can legitimately run for the full descriptor window.
         // Re-establish the fenced owner before every dispatch so a lease that
         // expired while observing the previous effect cannot strand rollback.
@@ -600,25 +647,24 @@ impl ChangeExecutor {
         step: &PlanStep,
         intent: StepIntent,
     ) -> Result<AgentDispatchResponse, ExecutorRequestFailure> {
-        self.agent
-            .dispatch(&AgentDispatchRequest {
-                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
-                tenant_id: request.tenant_id,
-                plan_id: Some(request.plan.id),
-                authorization: if request.is_autonomous() {
-                    AgentDispatchAuthorization::Autonomous
-                } else {
-                    AgentDispatchAuthorization::HumanApproved
-                },
-                request: AgentStepRequest {
-                    intent,
-                    action: step.action,
-                    descriptor_version: step.descriptor_version.clone(),
-                    target: step.resource.clone(),
-                    parameters: step.parameters.clone(),
-                },
-            })
-            .await
+        self.drain_mutation(self.agent.dispatch(&AgentDispatchRequest {
+            schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+            tenant_id: request.tenant_id,
+            plan_id: Some(request.plan.id),
+            authorization: if request.is_autonomous() {
+                AgentDispatchAuthorization::Autonomous
+            } else {
+                AgentDispatchAuthorization::HumanApproved
+            },
+            request: AgentStepRequest {
+                intent,
+                action: step.action,
+                descriptor_version: step.descriptor_version.clone(),
+                target: step.resource.clone(),
+                parameters: step.parameters.clone(),
+            },
+        }))
+        .await
     }
 
     async fn evaluate_step_safety(
@@ -798,6 +844,7 @@ fn verification_request(
         phase,
         resource_conditions: step.verification.resource_conditions.clone(),
         technical_slis: step.verification.technical_slis.clone(),
+        verification: step.verification.clone(),
     }
 }
 

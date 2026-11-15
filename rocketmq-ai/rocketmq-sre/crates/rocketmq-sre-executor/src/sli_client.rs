@@ -154,6 +154,14 @@ fn validate_observation(
         || observation.correlation_id != query.correlation_id
         || expected.len() != query.conditions.len()
         || actual != expected
+        || observation
+            .source_facts
+            .as_ref()
+            .is_some_and(|facts| facts.binding != query.binding)
+        || (observation.complete
+            && observation.source_facts.as_ref().is_none_or(|facts| {
+                !facts.exact_target_conditions || facts.binding.is_none() || facts.source_observed_at.is_none()
+            }))
     {
         return Err(ExecutorRequestFailure::VerificationRejected);
     }
@@ -178,11 +186,16 @@ mod tests {
             cluster_id: query.cluster_id,
             correlation_id: query.correlation_id,
             conditions: [("broker_error_ratio".to_owned(), true)].into_iter().collect(),
-            complete: true,
+            complete: false,
             evidence_ids: Vec::new(),
             observed_at: Utc::now(),
+            source_facts: None,
         };
         assert!(validate_observation(&query, &observation).is_ok());
+
+        observation.complete = true;
+        assert!(validate_observation(&query, &observation).is_err());
+        observation.complete = false;
 
         observation.correlation_id = CorrelationId::new();
         assert!(validate_observation(&query, &observation).is_err());
@@ -213,6 +226,7 @@ mod tests {
             cluster_id: ClusterId::new(),
             correlation_id: CorrelationId::new(),
             conditions: vec!["broker_error_ratio".to_owned()],
+            binding: None,
         }
     }
 }

@@ -122,6 +122,7 @@ fn verification_observation_is_bound_to_scope_and_exact_conditions() {
         cluster_id: ClusterId::new(),
         correlation_id: CorrelationId::new(),
         conditions: VERIFICATION_CONDITIONS.iter().map(ToString::to_string).collect(),
+        binding: None,
     };
     let mut observation = ExecutionSliObservation {
         schema_version: EXECUTION_VERIFICATION_SCHEMA_VERSION.to_owned(),
@@ -133,11 +134,15 @@ fn verification_observation_is_bound_to_scope_and_exact_conditions() {
             .iter()
             .map(|condition| (condition.clone(), true))
             .collect(),
-        complete: true,
+        complete: false,
         evidence_ids: Vec::new(),
         observed_at: Utc::now(),
+        source_facts: None,
     };
     assert!(validate_observation(&query, &observation).is_ok());
+    observation.complete = true;
+    assert!(validate_observation(&query, &observation).is_err());
+    observation.complete = false;
     observation.cluster_id = ClusterId::new();
     assert!(validate_observation(&query, &observation).is_err());
 }

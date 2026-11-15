@@ -2968,6 +2968,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/executions/{execution_id}/observation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read exact accepted execution, recorded effects and verification provenance
+         * @description Recorded execution or policy-window success does not prove current business recovery. Missing retained or legacy proof remains explicit. This read does not reconcile or dispatch target work.
+         */
+        get: operations["getExecutionObservation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/executions/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the original authenticated actor's exact accepted intent selector
+         * @description A not_observed result is not proof that no request was accepted or no target effect occurred. This operation never submits, retries, changes a key, acquires a lease or calls an Executor.
+         */
+        post: operations["lookupExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/plans/{plan_id}/executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded accepted receipt references for one authorized immutable Plan/hash */
+        get: operations["getPlanExecutions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -10915,6 +10972,438 @@ export interface components {
          * @description Stable tenant boundary identifier.
          */
         ActionPreparationEvidence__TenantId: string;
+        /**
+         * ExecutionObservationView
+         * @description Safe current read projection; recorded history is distinct from recovery.
+         */
+        ExecutionObservationView: {
+            binding: components["schemas"]["ExecutionObservationView__ExecutionReceiptReference"];
+            /** @description Typed server fact. Execution/verification success alone cannot set it. */
+            business_recovery: components["schemas"]["ExecutionObservationView__ExecutionObservationFact"];
+            history: components["schemas"]["ExecutionObservationView__ExecutionObservationFact"];
+            manual_takeover: components["schemas"]["ExecutionObservationView__ExecutionObservationFact"];
+            /** Format: date-time */
+            observed_at: string;
+            reconciliation: components["schemas"]["ExecutionObservationView__ExecutionObservationFact"];
+            schema_version: string;
+            steps: components["schemas"]["ExecutionObservationView__ExecutionStepObservation"][];
+            timeline: components["schemas"]["ExecutionObservationView__ExecutionObservationEvent"][];
+            timeline_partial: boolean;
+            /** Format: date-time */
+            valid_until: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan.
+         */
+        ExecutionObservationView__ActionPlanId: string;
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ExecutionObservationView__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Identifier propagated across one logical SRE operation.
+         */
+        ExecutionObservationView__CorrelationId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        ExecutionObservationView__DiagnosisRevisionId: string;
+        /**
+         * @description Durable Agent effect state.
+         * @enum {string}
+         */
+        ExecutionObservationView__EffectState: "prepared" | "dispatched" | "confirmed" | "unknown";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        ExecutionObservationView__EvidenceId: string;
+        /**
+         * @description Closed set of Phase 3 actions that may enter supervised planning.
+         *
+         *     Execution remains gated by the exact descriptor's `plan_only` and
+         *     `execution_supported` flags. Permanently destructive R3 and unknown actions
+         *     are intentionally not representable.
+         * @enum {string}
+         */
+        ExecutionObservationView__ExecutionAction: "observability.logger_level_ttl.v1" | "proxy.scale_out_one.v1" | "proxy.restart_one.v1" | "broker.config.patch_allowlisted.v1" | "topic.config.patch_allowlisted.v1" | "subscription_group.patch_allowlisted.v1" | "consumer.request_mode.patch_allowlisted.v1" | "consumer.offset.reset_bounded.v1" | "topic.queue.expand_only.v1" | "namesrv.config.patch_allowlisted.v1" | "controller.config.patch_allowlisted.v1" | "proxy.rollout_image_canary.v1" | "broker.restart_one.v1" | "static_topic.patch_non_remap.v1" | "tiered.cold_data_flow.patch_allowlisted.v1" | "store.readahead.patch_allowlisted.v1" | "security.credential_rotate_overlap.v1" | "telemetry.collector.restart_one.v1" | "consumer.offset.clone_or_reset_broad.v1" | "message.direct_consume.v1" | "message.dlq.resend.v1" | "timer.switch.v1" | "controller.elect.v1" | "static_topic.remap.v1" | "broker.container.add_remove.v1";
+        /** @description Actual append-only attempt identity and bounded recorded effect result. */
+        ExecutionObservationView__ExecutionAttemptObservation: {
+            /** Format: uint16 */
+            attempt: number;
+            compensation: boolean;
+            effect_state?: components["schemas"]["ExecutionObservationView__EffectState"] | null;
+            fact: components["schemas"]["ExecutionObservationView__ExecutionObservationFact"];
+            /** Format: date-time */
+            intended_at: string;
+            /** @description Decimal strings retain u64 precision in browser clients. */
+            lease_epoch: string;
+            lease_id: string;
+            /** Format: date-time */
+            result_at?: string | null;
+            step_id: components["schemas"]["ExecutionObservationView__ExecutionStepId"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a supervised execution.
+         */
+        ExecutionObservationView__ExecutionId: string;
+        /** @description Safe per-execution event in durable sequence order. */
+        ExecutionObservationView__ExecutionObservationEvent: {
+            kind: components["schemas"]["ExecutionObservationView__ExecutionObservationEventKind"];
+            /** Format: date-time */
+            occurred_at: string;
+            reason: components["schemas"]["ExecutionObservationView__ExecutionObservationReason"];
+            sequence: string;
+            state?: components["schemas"]["ExecutionObservationView__ExecutionState"] | null;
+            step_id?: components["schemas"]["ExecutionObservationView__ExecutionStepId"] | null;
+        };
+        /**
+         * @description A recorded event type. It is never expanded into guessed earlier phases.
+         * @enum {string}
+         */
+        ExecutionObservationView__ExecutionObservationEventKind: "accepted" | "state_changed" | "intent_persisted" | "result_recorded" | "verification_captured" | "verification_completed" | "manual_takeover_required" | "quarantine_created" | "quarantine_cleared" | "other";
+        /** @description One typed backend fact. Browser time alone cannot satisfy it. */
+        ExecutionObservationView__ExecutionObservationFact: {
+            reason_codes: components["schemas"]["ExecutionObservationView__ExecutionObservationReason"][];
+            source: components["schemas"]["ExecutionObservationView__ExecutionObservationSource"];
+            state: components["schemas"]["ExecutionObservationView__ExecutionObservationState"];
+        };
+        /**
+         * @description Safe explanation codes; arbitrary stored/remote text is not a public reason.
+         * @enum {string}
+         */
+        ExecutionObservationView__ExecutionObservationReason: "accepted_receipt" | "receipt_not_observed" | "intent_recorded" | "result_recorded" | "effect_unknown" | "no_effect_result" | "reconciled_applied" | "reconciled_not_applied" | "reconciled_failed" | "reconciliation_required" | "verification_not_observed" | "legacy_window_proof_missing" | "window_proof_invalid" | "retained_proof_unavailable" | "policy_not_configured" | "target_version_not_observed" | "exact_sli_source_missing" | "source_missing" | "source_partial" | "source_stale" | "source_future" | "source_before_window" | "source_out_of_order" | "source_repeated" | "observation_gap" | "evidence_hash_invalid" | "evidence_scope_mismatch" | "read_deadline_exceeded" | "observation_budget_exhausted" | "observation_clock_invalid" | "observation_cancelled" | "known_condition_failed" | "stable_window_incomplete" | "policy_window_satisfied" | "compensation_not_observed" | "compensation_result_recorded" | "compensation_unknown" | "compensation_failed" | "manual_takeover_required" | "manual_takeover_not_recorded" | "independent_business_observation_missing" | "partial_history" | "recorded_state_change" | "recorded_verification" | "unrecognized_recorded_event";
+        /**
+         * @description Source of a fact, independent of the fact's observed truth value.
+         * @enum {string}
+         */
+        ExecutionObservationView__ExecutionObservationSource: "accepted_request" | "step_journal" | "verification_journal" | "reconciliation_journal" | "quarantine_journal" | "independent_business_observation" | "not_observed";
+        /**
+         * @description Closed observation status; none of these values grants execution authority.
+         * @enum {string}
+         */
+        ExecutionObservationView__ExecutionObservationState: "not_observed" | "unknown" | "observed" | "satisfied" | "not_satisfied";
+        /**
+         * @description Safe immutable accepted identity, with a separately observed journal state.
+         *
+         *     This omits the signed request, Grants, nonce, parameters and Agent details.
+         */
+        ExecutionObservationView__ExecutionReceiptReference: {
+            /** Format: date-time */
+            accepted_at: string;
+            cluster_id: components["schemas"]["ExecutionObservationView__ClusterId"];
+            correlation_id: components["schemas"]["ExecutionObservationView__CorrelationId"];
+            diagnosis_revision_id: components["schemas"]["ExecutionObservationView__DiagnosisRevisionId"];
+            execution_id: components["schemas"]["ExecutionObservationView__ExecutionId"];
+            incident_id: components["schemas"]["ExecutionObservationView__IncidentId"];
+            plan_hash: string;
+            plan_id: components["schemas"]["ExecutionObservationView__ActionPlanId"];
+            precondition_hash: string;
+            requested_by: string;
+            state: components["schemas"]["ExecutionObservationView__ExecutionState"];
+            tenant_id: components["schemas"]["ExecutionObservationView__TenantId"];
+        };
+        /**
+         * @description Recoverable supervised execution state.
+         * @enum {string}
+         */
+        ExecutionObservationView__ExecutionState: "pending" | "prechecking" | "intent_persisted" | "applying" | "unknown" | "reconciling" | "verifying" | "compensating" | "succeeded" | "rolled_back" | "escalated";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an execution step.
+         */
+        ExecutionObservationView__ExecutionStepId: string;
+        /** @description Exact immutable Plan step with observed attempts, not inferred completion. */
+        ExecutionObservationView__ExecutionStepObservation: {
+            action: components["schemas"]["ExecutionObservationView__ExecutionAction"];
+            attempts: components["schemas"]["ExecutionObservationView__ExecutionAttemptObservation"][];
+            compensation: components["schemas"]["ExecutionObservationView__ExecutionObservationFact"];
+            /** @description Present only for a recognized exact compiled declaration. */
+            declared_verification?: components["schemas"]["ExecutionObservationView__VerificationSpec"] | null;
+            descriptor_version: string;
+            effect: components["schemas"]["ExecutionObservationView__ExecutionObservationFact"];
+            partial: boolean;
+            plan_step_id: components["schemas"]["ExecutionObservationView__PlanStepId"];
+            /** Format: uint16 */
+            sequence: number;
+            target: string;
+            verifications: components["schemas"]["ExecutionObservationView__ExecutionVerificationObservation"][];
+        };
+        /** @description Per-attempt verification metadata without raw source payloads. */
+        ExecutionObservationView__ExecutionVerificationObservation: {
+            /** Format: uint16 */
+            attempt: number;
+            /** Format: date-time */
+            collected_at?: string | null;
+            compensation: boolean;
+            /** Format: date-time */
+            completed_at: string;
+            /** @description A declaration is not a verified physical target version. */
+            declared_target_version?: string | null;
+            evidence_ids: components["schemas"]["ExecutionObservationView__EvidenceId"][];
+            failed_conditions: string[];
+            /** Format: uint64 */
+            max_sample_gap_seconds?: number | null;
+            /** Format: uint64 */
+            max_source_age_seconds?: number | null;
+            /** Format: uint64 */
+            max_wait_seconds?: number | null;
+            missing_conditions: string[];
+            /** Format: uint64 */
+            observed_stable_seconds?: number | null;
+            policy_digest?: string | null;
+            proof_state: components["schemas"]["ExecutionObservationView__ExecutionWindowProofState"];
+            provenance: components["schemas"]["ExecutionObservationView__VerificationProofOrigin"];
+            reason_codes: components["schemas"]["ExecutionObservationView__ExecutionObservationReason"][];
+            recorded_outcome: components["schemas"]["ExecutionObservationView__VerificationOutcome"];
+            /** Format: uint64 */
+            required_stable_window_seconds: number;
+            /** Format: date-time */
+            resource_observed_at?: string | null;
+            /** Format: uint32 */
+            sample_count?: number | null;
+            /** @description Codes are intersected with the recognized exact compiled declaration. */
+            satisfied_conditions: string[];
+            /** Format: date-time */
+            source_first_at?: string | null;
+            /** Format: date-time */
+            source_last_at?: string | null;
+            /** Format: date-time */
+            started_at: string;
+            step_id: components["schemas"]["ExecutionObservationView__ExecutionStepId"];
+            target_version_verified: boolean;
+            /** Format: date-time */
+            technical_sli_observed_at?: string | null;
+        };
+        /**
+         * @description Quality of a saved verification proof, separate from its recorded outcome.
+         * @enum {string}
+         */
+        ExecutionObservationView__ExecutionWindowProofState: "not_observed" | "legacy_missing" | "invalid" | "unavailable" | "inconclusive" | "valid_historical";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        ExecutionObservationView__IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan step.
+         */
+        ExecutionObservationView__PlanStepId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        ExecutionObservationView__TenantId: string;
+        /**
+         * @description Deterministic verification outcome.
+         * @enum {string}
+         */
+        ExecutionObservationView__VerificationOutcome: "succeeded" | "failed" | "inconclusive";
+        /**
+         * @description Engineering fixtures must not be presented as physical production proof.
+         * @enum {string}
+         */
+        ExecutionObservationView__VerificationProofOrigin: "recorded_only" | "synthetic_fixture" | "production_read";
+        /** @description Verification policy frozen by an action descriptor. */
+        ExecutionObservationView__VerificationSpec: {
+            /** Format: uint64 */
+            max_wait_seconds: number;
+            /** @default [] */
+            resource_conditions: string[];
+            /** Format: uint64 */
+            stable_window_seconds: number;
+            /** @default [] */
+            technical_slis: string[];
+        };
+        /**
+         * ExecutionLookupRequest
+         * @description Original accepted intent selector. Reading it never retries execution.
+         */
+        ExecutionLookupRequest: {
+            idempotency_key: string;
+            plan_hash: string;
+            plan_id: components["schemas"]["ExecutionLookupRequest__ActionPlanId"];
+            precondition_hash: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan.
+         */
+        ExecutionLookupRequest__ActionPlanId: string;
+        /**
+         * ExecutionLookupView
+         * @description Readonly receipt lookup bound to the current authenticated requester.
+         */
+        ExecutionLookupView: {
+            actor_subject: string;
+            /** Format: date-time */
+            observed_at: string;
+            receipt?: components["schemas"]["ExecutionLookupView__ExecutionReceiptReference"] | null;
+            request: components["schemas"]["ExecutionLookupView__ExecutionLookupRequest"];
+            schema_version: string;
+            status: components["schemas"]["ExecutionLookupView__ExecutionLookupStatus"];
+            tenant_id: components["schemas"]["ExecutionLookupView__TenantId"];
+            /**
+             * Format: date-time
+             * @description Snapshot expiry never changes the immutable accepted identity.
+             */
+            valid_until: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan.
+         */
+        ExecutionLookupView__ActionPlanId: string;
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ExecutionLookupView__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Identifier propagated across one logical SRE operation.
+         */
+        ExecutionLookupView__CorrelationId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        ExecutionLookupView__DiagnosisRevisionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a supervised execution.
+         */
+        ExecutionLookupView__ExecutionId: string;
+        /** @description Original accepted intent selector. Reading it never retries execution. */
+        ExecutionLookupView__ExecutionLookupRequest: {
+            idempotency_key: string;
+            plan_hash: string;
+            plan_id: components["schemas"]["ExecutionLookupView__ActionPlanId"];
+            precondition_hash: string;
+        };
+        /**
+         * @description A missing receipt at this read snapshot does not prove no acceptance/effect.
+         * @enum {string}
+         */
+        ExecutionLookupView__ExecutionLookupStatus: "accepted" | "not_observed";
+        /**
+         * @description Safe immutable accepted identity, with a separately observed journal state.
+         *
+         *     This omits the signed request, Grants, nonce, parameters and Agent details.
+         */
+        ExecutionLookupView__ExecutionReceiptReference: {
+            /** Format: date-time */
+            accepted_at: string;
+            cluster_id: components["schemas"]["ExecutionLookupView__ClusterId"];
+            correlation_id: components["schemas"]["ExecutionLookupView__CorrelationId"];
+            diagnosis_revision_id: components["schemas"]["ExecutionLookupView__DiagnosisRevisionId"];
+            execution_id: components["schemas"]["ExecutionLookupView__ExecutionId"];
+            incident_id: components["schemas"]["ExecutionLookupView__IncidentId"];
+            plan_hash: string;
+            plan_id: components["schemas"]["ExecutionLookupView__ActionPlanId"];
+            precondition_hash: string;
+            requested_by: string;
+            state: components["schemas"]["ExecutionLookupView__ExecutionState"];
+            tenant_id: components["schemas"]["ExecutionLookupView__TenantId"];
+        };
+        /**
+         * @description Recoverable supervised execution state.
+         * @enum {string}
+         */
+        ExecutionLookupView__ExecutionState: "pending" | "prechecking" | "intent_persisted" | "applying" | "unknown" | "reconciling" | "verifying" | "compensating" | "succeeded" | "rolled_back" | "escalated";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        ExecutionLookupView__IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        ExecutionLookupView__TenantId: string;
+        /**
+         * PlanExecutionPage
+         * @description Bounded receipt discovery for one authorized immutable Plan/hash.
+         */
+        PlanExecutionPage: {
+            cluster_id: components["schemas"]["PlanExecutionPage__ClusterId"];
+            items: components["schemas"]["PlanExecutionPage__ExecutionReceiptReference"][];
+            /** Format: date-time */
+            observed_at: string;
+            partial: boolean;
+            plan_hash: string;
+            plan_id: components["schemas"]["PlanExecutionPage__ActionPlanId"];
+            schema_version: string;
+            tenant_id: components["schemas"]["PlanExecutionPage__TenantId"];
+            /** Format: date-time */
+            valid_until: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan.
+         */
+        PlanExecutionPage__ActionPlanId: string;
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        PlanExecutionPage__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Identifier propagated across one logical SRE operation.
+         */
+        PlanExecutionPage__CorrelationId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        PlanExecutionPage__DiagnosisRevisionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a supervised execution.
+         */
+        PlanExecutionPage__ExecutionId: string;
+        /**
+         * @description Safe immutable accepted identity, with a separately observed journal state.
+         *
+         *     This omits the signed request, Grants, nonce, parameters and Agent details.
+         */
+        PlanExecutionPage__ExecutionReceiptReference: {
+            /** Format: date-time */
+            accepted_at: string;
+            cluster_id: components["schemas"]["PlanExecutionPage__ClusterId"];
+            correlation_id: components["schemas"]["PlanExecutionPage__CorrelationId"];
+            diagnosis_revision_id: components["schemas"]["PlanExecutionPage__DiagnosisRevisionId"];
+            execution_id: components["schemas"]["PlanExecutionPage__ExecutionId"];
+            incident_id: components["schemas"]["PlanExecutionPage__IncidentId"];
+            plan_hash: string;
+            plan_id: components["schemas"]["PlanExecutionPage__ActionPlanId"];
+            precondition_hash: string;
+            requested_by: string;
+            state: components["schemas"]["PlanExecutionPage__ExecutionState"];
+            tenant_id: components["schemas"]["PlanExecutionPage__TenantId"];
+        };
+        /**
+         * @description Recoverable supervised execution state.
+         * @enum {string}
+         */
+        PlanExecutionPage__ExecutionState: "pending" | "prechecking" | "intent_persisted" | "applying" | "unknown" | "reconciling" | "verifying" | "compensating" | "succeeded" | "rolled_back" | "escalated";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        PlanExecutionPage__IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        PlanExecutionPage__TenantId: string;
     };
     responses: {
         /** @description Successful scoped response */
@@ -22310,6 +22799,238 @@ export interface operations {
             };
             /** @description Sanitized request refusal */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getExecutionObservation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                execution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded authorized read snapshot; no target operation is performed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionObservationView"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    lookupExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionLookupRequest"];
+            };
+        };
+        responses: {
+            /** @description Bounded authorized read snapshot; no target operation is performed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionLookupView"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPlanExecutions: {
+        parameters: {
+            query: {
+                plan_hash: string;
+            };
+            header?: never;
+            path: {
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded authorized read snapshot; no target operation is performed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanExecutionPage"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized read refusal or unavailable retained state */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

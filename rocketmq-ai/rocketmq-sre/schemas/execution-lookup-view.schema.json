@@ -1,0 +1,197 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CorrelationId": {
+      "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DiagnosisRevisionId": {
+      "description": "Stable identifier for an immutable diagnosis revision.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionLookupRequest": {
+      "additionalProperties": false,
+      "description": "Original accepted intent selector. Reading it never retries execution.",
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "plan_hash": {
+          "type": "string"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        "precondition_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "plan_hash",
+        "precondition_hash",
+        "idempotency_key"
+      ],
+      "type": "object"
+    },
+    "ExecutionLookupStatus": {
+      "description": "A missing receipt at this read snapshot does not prove no acceptance/effect.",
+      "enum": [
+        "accepted",
+        "not_observed"
+      ],
+      "type": "string"
+    },
+    "ExecutionReceiptReference": {
+      "additionalProperties": false,
+      "description": "Safe immutable accepted identity, with a separately observed journal state.\n\nThis omits the signed request, Grants, nonce, parameters and Agent details.",
+      "properties": {
+        "accepted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/CorrelationId"
+        },
+        "diagnosis_revision_id": {
+          "$ref": "#/$defs/DiagnosisRevisionId"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "incident_id": {
+          "$ref": "#/$defs/IncidentId"
+        },
+        "plan_hash": {
+          "type": "string"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        "precondition_hash": {
+          "type": "string"
+        },
+        "requested_by": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ExecutionState"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        }
+      },
+      "required": [
+        "execution_id",
+        "tenant_id",
+        "cluster_id",
+        "plan_id",
+        "plan_hash",
+        "precondition_hash",
+        "incident_id",
+        "diagnosis_revision_id",
+        "correlation_id",
+        "requested_by",
+        "accepted_at",
+        "state"
+      ],
+      "type": "object"
+    },
+    "ExecutionState": {
+      "description": "Recoverable supervised execution state.",
+      "enum": [
+        "pending",
+        "prechecking",
+        "intent_persisted",
+        "applying",
+        "unknown",
+        "reconciling",
+        "verifying",
+        "compensating",
+        "succeeded",
+        "rolled_back",
+        "escalated"
+      ],
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Readonly receipt lookup bound to the current authenticated requester.",
+  "properties": {
+    "actor_subject": {
+      "type": "string"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "receipt": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionReceiptReference"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "request": {
+      "$ref": "#/$defs/ExecutionLookupRequest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ExecutionLookupStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "valid_until": {
+      "description": "Snapshot expiry never changes the immutable accepted identity.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "actor_subject",
+    "request",
+    "status",
+    "observed_at",
+    "valid_until"
+  ],
+  "title": "ExecutionLookupView",
+  "type": "object"
+}

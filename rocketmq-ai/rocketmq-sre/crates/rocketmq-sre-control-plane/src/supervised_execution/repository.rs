@@ -52,7 +52,10 @@ use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 mod admission;
 mod critic;
+mod observation;
 mod support;
+
+pub(super) use observation::*;
 
 pub(super) use admission::ActionAdmission;
 pub(super) use admission::require_current_diagnosis;

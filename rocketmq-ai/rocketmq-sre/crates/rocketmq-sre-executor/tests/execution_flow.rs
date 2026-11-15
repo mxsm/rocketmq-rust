@@ -98,6 +98,7 @@ use rocketmq_sre_executor::VerificationCaptureRequest;
 use rocketmq_sre_executor::VerificationFuture;
 use rocketmq_sre_executor::VerificationObservation;
 use rocketmq_sre_executor::VerificationSource;
+use rocketmq_sre_executor::{VerificationClock, VerificationProfiles, VerificationSourceFacts};
 use serde::Serialize;
 use serde_json::json;
 use sqlx::PgPool;
@@ -345,11 +346,37 @@ struct Signal {
     offset_seconds: i64,
     resource_ok: bool,
     sli_ok: bool,
+    source_complete: bool,
 }
 
 struct ScriptedVerification {
-    base: chrono::DateTime<Utc>,
+    clock: Arc<FixtureVerificationClock>,
     signals: Mutex<VecDeque<Signal>>,
+}
+
+struct FixtureVerificationClock {
+    base: chrono::DateTime<Utc>,
+    offset: Mutex<(i64, i64, i64)>,
+}
+impl FixtureVerificationClock {
+    fn advance(&self, point: i64) {
+        let mut state = self.offset.lock().unwrap();
+        // Old flow scripts begin compensation at a new local offset. Keep the
+        // injected synthetic wall/monotonic clocks increasing across that phase.
+        if point < state.0 {
+            state.1 = state.2 + 1 - point;
+        }
+        state.0 = point;
+        state.2 = point + state.1;
+    }
+}
+impl VerificationClock for FixtureVerificationClock {
+    fn utc_now(&self) -> chrono::DateTime<Utc> {
+        self.base + TimeDelta::seconds(self.offset.lock().unwrap().2)
+    }
+    fn monotonic_elapsed(&self) -> Duration {
+        Duration::from_secs(u64::try_from(self.offset.lock().unwrap().2).unwrap())
+    }
 }
 
 impl VerificationSource for ScriptedVerification {
@@ -361,19 +388,27 @@ impl VerificationSource for ScriptedVerification {
                 .expect("verification script lock")
                 .pop_front()
                 .ok_or_else(ExecutorError::unavailable)?;
-            let observed_at = self.base + TimeDelta::seconds(signal.offset_seconds);
-            let resource_conditions = request
+            self.clock.advance(signal.offset_seconds);
+            let observed_at = self.clock.utc_now();
+            let resource_conditions: std::collections::BTreeMap<_, _> = request
                 .resource_conditions
                 .iter()
                 .cloned()
                 .map(|condition| (condition, signal.resource_ok))
                 .collect();
-            let technical_slis = request
+            let technical_slis: std::collections::BTreeMap<_, _> = request
                 .technical_slis
                 .iter()
                 .cloned()
                 .map(|condition| (condition, signal.sli_ok))
                 .collect();
+            let source_facts = VerificationSourceFacts {
+                provenance: rocketmq_sre_contracts::VerificationProofOrigin::SyntheticFixture,
+                resource_observed_at: Some(observed_at),
+                technical_sli_observed_at: Some(observed_at),
+                technical_scope_bound: true,
+                target_version_observed: Some("synthetic-test-1".to_owned()),
+            };
             let query = EvidenceQuery {
                 query_id: QueryId::new(),
                 correlation_id: request.correlation_id,
@@ -388,18 +423,25 @@ impl VerificationSource for ScriptedVerification {
                 current_evidence_schema(),
                 observed_at,
                 EvidenceContent::Inline(json!({
-                    "resource_ok": signal.resource_ok,
-                    "sli_ok": signal.sli_ok,
+                    "resource_conditions": resource_conditions,
+                    "technical_slis": technical_slis,
+                    "source_facts":source_facts,
                 })),
             )
             .map_err(|_| ExecutorError::unavailable())?;
-            evidence.coverage = CoverageStatus::Available;
+            evidence.coverage = if signal.source_complete {
+                CoverageStatus::Available
+            } else {
+                CoverageStatus::Partial
+            };
+            evidence.partial = !signal.source_complete;
             evidence.exposure = EvidenceExposure::Synthetic;
             evidence.sensitivity = Sensitivity::Internal;
             Ok(VerificationObservation {
                 evidence,
                 resource_conditions,
                 technical_slis,
+                source_facts: Some(source_facts),
             })
         })
     }
@@ -1124,7 +1166,21 @@ async fn run_logger_execution_with_authorization(signals: &[Signal]) -> Executio
     run_execution_for_action(signals, true, ExecutionAction::ObservabilityLoggerLevelTtl).await
 }
 
-async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: ExecutionAction) -> ExecutionRun {
+struct ExecutionHarness {
+    pool: PgPool,
+    schema: String,
+    fixture: support::Fixture,
+    executor: ChangeExecutor,
+    dispatches: Arc<Mutex<Vec<bool>>>,
+    dynamic_safety_calls: Arc<AtomicUsize>,
+}
+
+async fn build_execution_for_action(
+    signals: &[Signal],
+    autonomous: bool,
+    action: ExecutionAction,
+    decorate: impl FnOnce(Arc<TestAgent>) -> Arc<dyn ExecutionAgentClient>,
+) -> ExecutionHarness {
     let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
     let schema = format!("phase4_flow_{}", Uuid::new_v4().simple());
     let pool = isolated_pool(&database_url, &schema).await;
@@ -1184,13 +1240,48 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
         resource: Arc::from(fixture.plan.steps[0].resource.as_str()),
         dynamic_safety_calls: Arc::clone(&dynamic_safety_calls),
     });
+    let base = Utc::now();
+    let clock = Arc::new(FixtureVerificationClock {
+        base,
+        offset: Mutex::new((0, 0, 0)),
+    });
+    let profiles=VerificationProfiles::from_json(&serde_json::to_vec(&json!({
+        "schema_version":"rocketmq-sre.execution-verification-profiles.v1","rules":[{
+            "tenant_id":fixture.tenant_id,"cluster_id":fixture.cluster_id,"action":action,"descriptor_version":"1.0.0",
+            "target":fixture.plan.steps[0].resource,"declared_target_version":"synthetic-test-1","policy_revision":"SyntheticFixture",
+            "max_source_age_seconds":10,"max_sample_gap_seconds":300}]})).unwrap()).unwrap();
+    let mut expanded = Vec::new();
+    for (index, signal) in signals.iter().copied().enumerate() {
+        let mut next = signal;
+        let max_wait = i64::try_from(fixture.plan.steps[0].verification.max_wait_seconds).unwrap();
+        if (index == 3 && next.offset_seconds == max_wait + 2)
+            || (index == 6 && !next.sli_ok && next.offset_seconds == max_wait + 4)
+        {
+            next.offset_seconds -= 1;
+        }
+        if let Some(previous) = expanded.last().copied() {
+            let previous: Signal = previous;
+            let mut at = previous.offset_seconds + 60;
+            while at < next.offset_seconds {
+                expanded.push(Signal {
+                    offset_seconds: at,
+                    ..previous
+                });
+                at += 60;
+            }
+        }
+        expanded.push(next);
+    }
     let verifier = ExecutionVerifier::new(
         Arc::new(ScriptedVerification {
-            base: Utc::now(),
-            signals: Mutex::new(signals.iter().copied().collect()),
+            clock: clock.clone(),
+            signals: Mutex::new(expanded.into()),
         }),
         Duration::ZERO,
-    );
+    )
+    .with_profiles(profiles)
+    .with_clock(clock);
+    let agent = decorate(agent);
     let executor = ChangeExecutor::new(
         ExecutionJournal::new(pool.clone(), "rocketmq-sre-executor"),
         ResourceSafetyStore::new(pool.clone()),
@@ -1202,6 +1293,25 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
         Duration::from_secs(300),
     )
     .with_verifier(verifier);
+    ExecutionHarness {
+        pool,
+        schema,
+        fixture,
+        executor,
+        dispatches,
+        dynamic_safety_calls,
+    }
+}
+
+async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: ExecutionAction) -> ExecutionRun {
+    let ExecutionHarness {
+        pool,
+        schema,
+        fixture,
+        executor,
+        dispatches,
+        dynamic_safety_calls,
+    } = build_execution_for_action(signals, autonomous, action, |agent| agent).await;
     let outcome = match executor.execute(&fixture.request).await.expect("supervised execution") {
         rocketmq_sre_executor::ExecutorOperationOutcome::Accepted(outcome) => outcome,
         rocketmq_sre_executor::ExecutorOperationOutcome::Rejected(rejection) => {
@@ -1276,8 +1386,12 @@ const fn signal(offset_seconds: i64, healthy: bool) -> Signal {
         offset_seconds,
         resource_ok: healthy,
         sli_ok: healthy,
+        source_complete: true,
     }
 }
+
+#[path = "execution_flow/d20_faults.rs"]
+mod d20_faults;
 
 fn lease_contract(record: &rocketmq_sre_executor::ExecutorLeaseRecord) -> ExecutorLease {
     ExecutorLease {

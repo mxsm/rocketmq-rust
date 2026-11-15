@@ -24,11 +24,14 @@ use rocketmq_sre_contracts::EXECUTION_VERIFICATION_SCHEMA_VERSION;
 use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
+use rocketmq_sre_contracts::ExecutionSliBinding;
 use rocketmq_sre_contracts::ExecutionSliObservation;
 use rocketmq_sre_contracts::ExecutionSliQuery;
 use rocketmq_sre_contracts::QueryId;
 use rocketmq_sre_contracts::Sensitivity;
 use rocketmq_sre_contracts::TimeRange;
+use rocketmq_sre_contracts::VerificationProofOrigin;
+use rocketmq_sre_contracts::canonical_sha256;
 use rocketmq_sre_contracts::current_evidence_schema;
 use rocketmq_sre_contracts::is_sha256_digest;
 use serde_json::json;
@@ -41,6 +44,7 @@ use crate::VerificationFuture;
 use crate::VerificationObservation;
 use crate::VerificationPhase;
 use crate::VerificationSource;
+use crate::VerificationSourceFacts;
 
 /// Production verification source that keeps target resource reads and
 /// technical health evaluation on independent read-only boundaries.
@@ -77,6 +81,7 @@ impl VerificationSource for ProductionVerificationSource {
                 cluster_id: request.cluster_id,
                 correlation_id: request.correlation_id,
                 conditions: request.technical_slis.clone(),
+                binding: Some(sli_binding(request)?),
             };
             let (resource, technical) =
                 tokio::try_join!(self.agent.precheck(&agent_query), self.sli_client.observe(&sli_query))?;
@@ -92,8 +97,8 @@ fn assemble_observation(
 ) -> Result<VerificationObservation, ExecutorRequestFailure> {
     validate_resource(request, &resource)?;
     validate_technical(request, &technical)?;
-    let observed_at = resource.observed_at.max(technical.observed_at);
-    let started_at = resource.observed_at.min(technical.observed_at);
+    // Collection completion cannot stand in for either data source's clock.
+    let observed_at = chrono::Utc::now();
     let requested_resource_conditions = request.resource_conditions.iter().collect::<BTreeSet<_>>();
     let resource_conditions = resource
         .resource_conditions
@@ -101,17 +106,38 @@ fn assemble_observation(
         .filter(|(condition, _)| requested_resource_conditions.contains(condition))
         .collect();
     let technical_slis = technical.conditions;
-    let partial = !technical.complete;
+    let expected_binding = sli_binding(request)?;
+    let technical_source = technical.source_facts.as_ref();
+    let technical_at = technical_source.and_then(|facts| facts.source_observed_at);
+    let technical_scope_bound = technical_source
+        .is_some_and(|facts| facts.exact_target_conditions && facts.binding.as_ref() == Some(&expected_binding));
+    let source_facts = VerificationSourceFacts {
+        provenance: VerificationProofOrigin::ProductionRead,
+        resource_observed_at: Some(resource.observed_at),
+        technical_sli_observed_at: technical_at,
+        technical_scope_bound,
+        // AgentReadResult does not contain an independently observed physical
+        // software version. An operator profile must never fill that gap.
+        target_version_observed: None,
+    };
+    let data_at = technical_at.map(|at| at.min(resource.observed_at));
+    let age_nanos = data_at.and_then(|at| observed_at.signed_duration_since(at).num_nanoseconds());
+    let clock_valid = age_nanos.is_some_and(|age| age >= 0)
+        && resource.observed_at <= observed_at
+        && technical_at.is_some_and(|at| at <= observed_at);
+    let partial = !technical.complete || !technical_scope_bound || !clock_valid;
     let content = EvidenceContent::Inline(json!({
-        "schema_version": "rocketmq-sre.production-verification.v1",
+        "schema_version": "rocketmq-sre.production-verification.v2",
         "action": request.action,
         "phase": phase_name(request.phase),
         "resource_observed_at": resource.observed_at,
-        "technical_sli_observed_at": technical.observed_at,
+        "technical_sli_observed_at": technical_at,
+        "technical_sli_evaluated_at": technical.observed_at,
         "resource_precondition_hash": resource.precondition_hash,
         "resource_conditions": resource_conditions,
         "technical_slis": technical_slis,
         "source_evidence_ids": technical.evidence_ids,
+        "source_facts": source_facts,
     }));
     let query = EvidenceQuery {
         query_id: QueryId::new(),
@@ -120,12 +146,17 @@ fn assemble_observation(
         cluster_id: request.cluster_id,
         source: "execution-verification".to_owned(),
         resource: request.target.clone(),
-        time_range: TimeRange::new(started_at, observed_at)
+        // This is a capture-time point. Actual source clocks above are the
+        // only clocks the qualified window algorithm may advance with.
+        time_range: TimeRange::new(observed_at, observed_at)
             .map_err(|_| ExecutorRequestFailure::VerificationRejected)?,
     };
     let mut evidence = EvidenceSnapshot::capture(query, current_evidence_schema(), observed_at, content)
         .map_err(|_| ExecutorRequestFailure::VerificationRejected)?;
     evidence.sensitivity = Sensitivity::Internal;
+    if let Some(age) = age_nanos.filter(|age| *age >= 0) {
+        evidence.freshness_seconds = (age as u64).div_ceil(1_000_000_000);
+    }
     evidence.partial = partial;
     evidence.coverage = if partial {
         evidence.warnings.push("technical_sli_evidence_incomplete".to_owned());
@@ -137,6 +168,7 @@ fn assemble_observation(
         evidence,
         resource_conditions,
         technical_slis,
+        source_facts: Some(source_facts),
     })
 }
 
@@ -159,15 +191,33 @@ fn validate_technical(
     request: &VerificationCaptureRequest,
     technical: &ExecutionSliObservation,
 ) -> Result<(), ExecutorRequestFailure> {
+    let expected_binding = sli_binding(request)?;
     if technical.schema_version != EXECUTION_VERIFICATION_SCHEMA_VERSION
         || technical.tenant_id != request.tenant_id
         || technical.cluster_id != request.cluster_id
         || technical.correlation_id != request.correlation_id
         || !exact_surface(&request.technical_slis, &technical.conditions)
+        || technical.source_facts.as_ref().is_some_and(|facts| {
+            facts
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding != &expected_binding)
+        })
     {
         return Err(ExecutorRequestFailure::VerificationRejected);
     }
     Ok(())
+}
+
+fn sli_binding(request: &VerificationCaptureRequest) -> Result<ExecutionSliBinding, ExecutorRequestFailure> {
+    Ok(ExecutionSliBinding {
+        execution_id: request.execution_id,
+        plan_step_id: request.plan_step_id,
+        action: request.action,
+        descriptor_version: request.descriptor_version.clone(),
+        target: request.target.clone(),
+        parameters_digest: canonical_sha256(&request.parameters).map_err(|_| ExecutorRequestFailure::InvalidRequest)?,
+    })
 }
 
 fn exact_surface(expected: &[String], actual: &BTreeMap<String, bool>) -> bool {
@@ -205,12 +255,8 @@ mod tests {
     fn independent_resource_and_sli_results_form_canonical_evidence() {
         let request = request();
         let now = Utc::now();
-        let observation = assemble_observation(
-            &request,
-            resource(&request, now),
-            technical(&request, now + TimeDelta::seconds(1), true),
-        )
-        .expect("production observation");
+        let observation = assemble_observation(&request, resource(&request, now), technical(&request, now, true))
+            .expect("production observation");
 
         assert_eq!(observation.resource_conditions.get("patch_visible"), Some(&true));
         assert_eq!(observation.technical_slis.get("broker_error_ratio"), Some(&true));
@@ -269,6 +315,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fresh_resource_and_evaluation_clocks_do_not_renew_old_or_missing_sli_data() {
+        let request = request();
+        let now = Utc::now();
+        let mut old = technical(&request, now, true);
+        old.source_facts.as_mut().unwrap().source_observed_at = Some(now - TimeDelta::seconds(250));
+        let observation = assemble_observation(&request, resource(&request, now), old).unwrap();
+        assert!(observation.evidence.observed_at >= now);
+        assert!(observation.evidence.freshness_seconds >= 250);
+        assert_eq!(
+            observation.source_facts.as_ref().unwrap().technical_sli_observed_at,
+            Some(now - TimeDelta::seconds(250))
+        );
+        assert!(
+            observation
+                .source_facts
+                .as_ref()
+                .unwrap()
+                .target_version_observed
+                .is_none()
+        );
+
+        let mut missing = technical(&request, now, true);
+        missing.source_facts = None;
+        let observation = assemble_observation(&request, resource(&request, now), missing).unwrap();
+        assert!(observation.evidence.partial);
+        assert!(observation.source_facts.unwrap().technical_sli_observed_at.is_none());
+
+        let future = assemble_observation(
+            &request,
+            resource(&request, now + TimeDelta::seconds(1)),
+            technical(&request, now, true),
+        )
+        .unwrap();
+        assert!(future.evidence.partial);
+    }
+
     fn request() -> VerificationCaptureRequest {
         VerificationCaptureRequest {
             tenant_id: TenantId::new(),
@@ -284,6 +367,12 @@ mod tests {
             phase: VerificationPhase::Post,
             resource_conditions: vec!["patch_visible".to_owned()],
             technical_slis: vec!["broker_error_ratio".to_owned()],
+            verification: rocketmq_sre_contracts::VerificationSpec {
+                resource_conditions: vec!["patch_visible".to_owned()],
+                technical_slis: vec!["broker_error_ratio".to_owned()],
+                stable_window_seconds: 30,
+                max_wait_seconds: 60,
+            },
         }
     }
 
@@ -314,6 +403,13 @@ mod tests {
             complete,
             evidence_ids: Vec::new(),
             observed_at,
+            source_facts: Some(rocketmq_sre_contracts::ExecutionSliSourceFacts {
+                binding: Some(sli_binding(request).expect("fixture binding")),
+                source_observed_at: Some(observed_at),
+                collected_at: observed_at,
+                exact_target_conditions: true,
+                reason_codes: Vec::new(),
+            }),
         }
     }
 }

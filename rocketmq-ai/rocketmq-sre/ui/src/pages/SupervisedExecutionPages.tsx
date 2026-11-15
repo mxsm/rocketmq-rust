@@ -19,7 +19,6 @@ import type {
   ActionPlanView,
   ActionReadinessView,
   AuditPage,
-  ExecutionSubmissionView,
   QuarantinePage,
   ResourceQuarantine,
 } from "@/api/types";
@@ -32,11 +31,12 @@ import { useOptionalWorkspaceScope } from "@/context/WorkspaceScopeContext";
 import { ApprovalPanel } from "@/features/approvals/ApprovalPanel";
 import { AuditTimeline } from "@/features/audit/AuditTimeline";
 import { ChangeWorkspaceNav } from "@/features/change-management/ChangeWorkspace";
-import { ExecutionTimeline } from "@/features/executions/ExecutionTimeline";
+import { SubmissionRecoveryPanel } from "@/features/executions/SubmissionRecoveryPanel";
+import { useExecutionSubmission } from "@/features/executions/useExecutionSubmission";
 import { PlanDetail } from "@/features/plans/PlanDetail";
 import { supportedPlanReview } from "@/features/plans/planActionReview";
 import { PlanActionReadiness } from "@/features/plans/PlanActionReadiness";
-import { firstReadinessExpiry, planApprovalChecksPass, planReadinessSatisfied, planScopeObject } from "@/features/plans/planReadinessPresentation";
+import { firstReadinessExpiry, planApprovalChecksPass, planNavigationSearch, planReadinessSatisfied, planScopeObject } from "@/features/plans/planReadinessPresentation";
 import { useReadinessExpiry } from "@/features/incidents/useReadinessExpiry";
 import { ActionReadinessScopeError } from "@/features/incidents/actionReadinessPresentation";
 import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
@@ -48,7 +48,6 @@ import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useSupervisedApi as useActionApi } from "@/hooks/useSupervisedApi";
 import { useActionReadinessMessages } from "@/i18n/actionReadinessMessages";
 import { useClusterScope } from "@/hooks/useClusterScope";
-import { useWorkflowProgress } from "@/hooks/useWorkflowProgress";
 
 function useSupervisedApi() {
   const auth = useAuth();
@@ -192,8 +191,10 @@ export function PlanPage() {
     {...context} planId={planId} />;
 }
 
-function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> & { planId: string }) {
+function PlanPageSession({ planId, auth, api, identityKey }: ReturnType<typeof useActionApi> & { planId: string }) {
   const navigate = useNavigate();
+  const scope = useOptionalWorkspaceScope();
+  const location = useLocation();
   const m = useActionReadinessMessages();
   const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -216,6 +217,24 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
   const onReadiness = useCallback((owner: ActionPlanView, views?: readonly ActionReadinessView[]) => {
     setReadiness({ owner, views });
   }, []);
+  const roles = auth.session?.roles ?? [];
+  const reviewSupported = Boolean(view && supportedPlanReview(view.plan));
+  const dispatchAllowed = Boolean(view && reviewSupported &&
+    (roles.includes("operator") || roles.includes("rocketmq:operate")) &&
+    !expired && planReadinessSatisfied(view.plan, snapshots));
+  const openExecution = (executionId: string) => {
+    if (view) navigate(`/changes/executions/${encodeURIComponent(executionId)}${planNavigationSearch(view.plan, scope?.window)}`);
+  };
+  const submission = useExecutionSubmission({
+    api, view,
+    owner: {
+      tenantId: tenantId ?? "", subject: auth.session?.subject ?? "",
+      clusterId: view?.plan.cluster_id ?? "", principalKey: identityKey,
+      scopeKey: scope?.scopeKey ?? location.search,
+    },
+    enabled: dispatchAllowed && !busy && !resource.loading,
+    onAccepted: openExecution,
+  });
 
   const mutate = async (operation: (signal: AbortSignal) => Promise<void>) => {
     if (pending.current || resource.loading) return;
@@ -242,14 +261,9 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
     return <LoadState title="计划详情" error={resource.error ? m.readFailure : undefined} onRetry={() => void resource.reload()} />;
   }
 
-  const roles = auth.session?.roles ?? [];
-  const reviewSupported = supportedPlanReview(view.plan);
   const canApprove =
     roles.includes("approver") || roles.includes("rocketmq:approve");
-  const canExecute =
-    reviewSupported &&
-    (roles.includes("operator") || roles.includes("rocketmq:operate")) &&
-    !expired && planReadinessSatisfied(view.plan, snapshots);
+  const canExecute = dispatchAllowed && submission.canSubmit;
   const approvalReady = !expired && planApprovalChecksPass(view.plan, snapshots, auth.session?.subject ?? "");
   const canReject = canApprove && auth.session?.subject !== view.plan.created_by;
 
@@ -258,7 +272,7 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
     <div className="page">
       <PageHeader
         actions={
-          <Button disabled={busy || resource.loading} onClick={() => void resource.reload()} size="sm" variant="outline">
+          <Button disabled={busy || submission.busy || resource.loading} onClick={() => void resource.reload()} size="sm" variant="outline">
             <RefreshCw size={14} />
             刷新
           </Button>
@@ -268,7 +282,8 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
         title="变更计划详情"
       />
       {api && <PlanActionReadiness view={view} api={api} subject={auth.session?.subject ?? ""}
-        disabled={resource.loading || busy} onReadiness={onReadiness} />}
+        disabled={resource.loading || busy || submission.busy} onReadiness={onReadiness} />}
+      <SubmissionRecoveryPanel submission={submission} onOpen={openExecution} />
       <div className="plan-approval-layout">
         <main>
           <PlanDetail view={view} />
@@ -276,7 +291,7 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
         <ApprovalPanel
           key={view.plan.plan_hash + view.precondition_hash}
           readOnly={!reviewSupported}
-          busy={busy || resource.loading}
+          busy={busy || submission.busy || resource.loading}
           canApprove={canApprove}
           approvalReady={approvalReady}
           canReject={canReject}
@@ -307,19 +322,14 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
               setMessage(decision === "approve" ? "计划已批准" : "计划已拒绝");
             })
           }
-          onExecute={(preconditionHash) =>
-            mutate(async (signal) => {
-              const result = await api?.submitExecution({
-                plan_id: view.plan.id,
-                plan_hash: view.plan.plan_hash,
-                precondition_hash: preconditionHash,
-                idempotency_key: crypto.randomUUID(),
-              }, signal);
-              if (result && !signal.aborted) {
-                navigate(`/changes/executions/${result.execution.id}`);
-              }
-            })
-          }
+          onExecute={async (preconditionHash) => {
+            // Pin an implicit default window in the URL before the first POST.
+            // Refresh must recover this exact owner, not a newly computed window.
+            if (scope && !scope.invalid) navigate({
+              pathname: location.pathname, search: scope.searchFor(location.search), hash: location.hash,
+            }, { replace: true });
+            await submission.submit(preconditionHash);
+          }}
           view={view}
         />
       </div>
@@ -328,56 +338,7 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
   );
 }
 
-export function ExecutionPage() {
-  const { executionId = "" } = useParams();
-  const { api } = useSupervisedApi();
-  const [execution, setExecution] = useState<ExecutionSubmissionView>();
-  const [error, setError] = useState<string>();
-
-  const load = useCallback(async () => {
-    if (!api || !executionId) return;
-    try {
-      setExecution(await api.getExecution(executionId));
-      setError(undefined);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "执行加载失败");
-    }
-  }, [api, executionId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const progress = useWorkflowProgress(
-    execution?.execution.cluster_id ?? "",
-    load,
-  );
-  if (!execution) {
-    return <LoadState title="执行时间线" error={error} onRetry={() => void load()} />;
-  }
-  return (
-    <ObjectScopeBoundary object={execution.execution}>
-    <div className="page">
-      <PageHeader
-        actions={
-          <Button onClick={() => void load()} size="sm" variant="outline">
-            <RefreshCw size={14} />
-            刷新
-          </Button>
-        }
-        description="围栏状态、类型化 Agent 效果与验证 Evidence 会持续汇聚到同一条执行时间线。"
-        eyebrow="EXECUTION / VERIFICATION"
-        title="执行与回滚"
-      />
-      <ExecutionTimeline
-        events={progress.events}
-        execution={execution}
-        transport={progress.transport}
-      />
-    </div>
-    </ObjectScopeBoundary>
-  );
-}
+export { ExecutionPage } from "./ExecutionObservationPage";
 
 export function AuditPageView() {
   const { correlationId = "" } = useParams();
