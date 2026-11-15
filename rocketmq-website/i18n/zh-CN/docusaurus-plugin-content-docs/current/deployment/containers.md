@@ -11,7 +11,7 @@ title: "构建并运行本地服务容器"
 | 资产 | 行为 |
 | --- | --- |
 | `distribution/container/core-service.Dockerfile` | 将指定二进制和配置复制进 distroless 运行时，不编译 Rust |
-| `docker/Dockerfile.base` | 包含服务及独立测试驱动的多阶段构建/运行目标 |
+| `docker/Dockerfile.base` | 包含服务及独立测试驱动的多阶段构建/运行目标。服务目标用 profile 引导优化（PGO）构建 Broker，训练在构建过程中通过回环地址完成；传入 `--build-arg ROCKETMQ_BROKER_PGO=false` 可跳过 PGO，加快构建 |
 | Core Helm chart 镜像 values | 需要填入实际可用制品的引用；默认标签不证明远端仓库可用 |
 
 以下命令使用第一条路径。二进制 CPU 架构、动态库要求必须与所选 distroless 运行时匹配。主机编译成功本身不能证明容器可以启动。

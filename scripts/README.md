@@ -23,6 +23,7 @@ separate wrappers to enumerate tests, collect prototype reports, or compare hist
 | Refresh the generated validation index | `python scripts/architecture_documentation_guard.py --write` |
 | Inspect request-header compatibility fixtures | [Protocol fixtures](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md) |
 | Generate Admin operation fixtures | [Golden fixture generator](generate_admin_operation_goldens.py) |
+| Train the Broker PGO profile for release images (run by `docker/Dockerfile.base`) | [Bash](pgo-train-broker.sh) |
 
 Scripts used by workflows, compatibility fixtures, or documented manual operations
 belong here. Keep one-time migration edits and ad hoc report converters out of the maintained toolset.

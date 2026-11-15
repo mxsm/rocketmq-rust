@@ -85,7 +85,7 @@ protoc --version
 rm -rf /var/lib/apt/lists/*
 rustup toolchain install "${ROCKETMQ_RUST_TOOLCHAIN}" \
     --profile minimal \
-    --component clippy,rustfmt
+    --component clippy,rustfmt,llvm-tools
 EOF
 
 ENV RUST_VERSION=${ROCKETMQ_RUST_TOOLCHAIN} \
@@ -139,6 +139,10 @@ CMD ["/bin/true"]
 FROM builder-base AS service-builder
 
 ARG SOURCE_REVISION
+# Builds the Broker with profile-guided optimization (PGO): an instrumented Broker is trained on
+# loopback by scripts/pgo-train-broker.sh and the merged profile guides the release build. Set it
+# to false for a faster build without PGO.
+ARG ROCKETMQ_BROKER_PGO=true
 
 RUN <<EOF
 set -eu
@@ -162,13 +166,41 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},target=/workspace/target,sharing=locked <<EOF
 set -eux
-cargo build --locked --release --package rocketmq-broker --features otlp-metrics,otlp-traces,otlp-logs,tls,allocator-mimalloc --bin rocketmq-broker-rust
+broker_features=otlp-metrics,otlp-traces,otlp-logs,tls,allocator-mimalloc
 cargo build --locked --release --package rocketmq-namesrv --features observability,otlp-metrics,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-namesrv-rust
 cargo build --locked --release --package rocketmq-controller --features metrics-otlp,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-controller-rust
 cargo build --locked --release --package rocketmq-proxy --features otlp-metrics,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-proxy-rust
+case "${ROCKETMQ_BROKER_PGO}" in
+    true)
+        # The instrumented and the final Broker get their own target directories because their
+        # RUSTFLAGS differ; both use the release features, so the profile matches the code.
+        pgo=/tmp/rocketmq-pgo
+        RUSTFLAGS="-Cprofile-generate=${pgo}/raw" cargo build --locked --release --target-dir /workspace/target/pgo-generate --package rocketmq-broker --features "${broker_features}" --bin rocketmq-broker-rust
+        cargo build --locked --release --package rocketmq-client-rust --example client-production-benchmark
+        bash scripts/pgo-train-broker.sh \
+            /workspace/target/pgo-generate/release/rocketmq-broker-rust \
+            /workspace/target/release/rocketmq-namesrv-rust \
+            /workspace/target/release/examples/client-production-benchmark \
+            "${pgo}/work" \
+            "${pgo}/raw"
+        host="$(rustc -vV | sed -n 's/^host: //p')"
+        "$(rustc --print sysroot)/lib/rustlib/${host}/bin/llvm-profdata" merge -o "${pgo}/broker.profdata" "${pgo}/raw"
+        RUSTFLAGS="-Cprofile-use=${pgo}/broker.profdata" cargo build --locked --release --target-dir /workspace/target/pgo-use --package rocketmq-broker --features "${broker_features}" --bin rocketmq-broker-rust
+        broker_dir=/workspace/target/pgo-use/release
+        rm -rf "${pgo}"
+        ;;
+    false)
+        cargo build --locked --release --package rocketmq-broker --features "${broker_features}" --bin rocketmq-broker-rust
+        broker_dir=/workspace/target/release
+        ;;
+    *)
+        echo "ROCKETMQ_BROKER_PGO must be true or false" >&2
+        exit 1
+        ;;
+esac
 install -d /opt/rocketmq-binaries
+install -m 0555 "${broker_dir}/rocketmq-broker-rust" /opt/rocketmq-binaries/rocketmq-broker-rust
 for binary in \
-    rocketmq-broker-rust \
     rocketmq-namesrv-rust \
     rocketmq-controller-rust \
     rocketmq-proxy-rust
