@@ -16,7 +16,6 @@ use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
-use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -31,9 +30,6 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::RuntimeResult;
-use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskId;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
@@ -649,34 +645,6 @@ impl NotificationDeferredService {
 
     pub(crate) fn sweep_expired(&self) -> NotificationDeferredSweepBatch {
         NotificationDeferredSweepBatch::from_transport(self.registry.sweep_expired(self.scan_limit))
-    }
-
-    pub(crate) fn start_sweeper<F, Fut>(
-        self: &Arc<Self>,
-        task_group: &TaskGroup,
-        interval_millis: NonZeroU64,
-        handle_claims: F,
-    ) -> RuntimeResult<TaskId>
-    where
-        F: Fn(Vec<ClaimedDeferred<ResumeNotification>>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let service = Arc::clone(self);
-        let cancellation = task_group.cancellation_token();
-        let interval = Duration::from_millis(interval_millis.get());
-        task_group.spawn_service("broker.notification-deferred.sweep", async move {
-            loop {
-                if service.closed.load(Ordering::Acquire)
-                    || tokio::time::timeout(interval, cancellation.cancelled()).await.is_ok()
-                {
-                    break;
-                }
-                let claims = service.sweep_expired().into_claims();
-                if !claims.is_empty() {
-                    handle_claims(claims).await;
-                }
-            }
-        })
     }
 
     pub(crate) async fn resume_claimed<F, Fut>(
