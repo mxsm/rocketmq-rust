@@ -117,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **refactor(client):** Remove the unused one-way egress snapshot and duplicate counters; runtime metrics and bounded admission are unchanged ([#12374](https://github.com/mxsm/rocketmq-rust/issues/12374)).
 - **refactor(client):** Remove unused initial delayed consume admission and exercise the shared retry task through worker retries ([#12407](https://github.com/mxsm/rocketmq-rust/issues/12407)).
+- **refactor(broker):** Remove unused BrokerOuterAPI minimum and maximum offset RPC wrappers; active offset handlers and client APIs are unchanged ([#12651](https://github.com/mxsm/rocketmq-rust/issues/12651)).
 - **refactor(broker):** Remove unused POP scan-and-claim entry points and retain arrival acceptance coverage on the active candidate reservation and claim path ([#12567](https://github.com/mxsm/rocketmq-rust/issues/12567)).
 - **refactor(store):** Remove the unused private GetMessageResult constructor and retain the active capacity-based construction paths ([#12355](https://github.com/mxsm/rocketmq-rust/issues/12355)).
 - **refactor(store):** Remove the unused private async result alias and commented-out write declarations from the internal Store engine trait ([#12472](https://github.com/mxsm/rocketmq-rust/issues/12472)).
