@@ -366,12 +366,13 @@ where
             let min_offset = self
                 .consumer_offset
                 .min_offset_in_queue(request_header.topic.as_ref(), request_header.queue_id);
-            if let Some(value) = request_header.set_zero_if_not_found {
-                if !value {
-                    response = response
-                        .set_code(ResponseCode::QueryNotFound)
-                        .set_remark("Not found, do not set to zero, maybe this group boot first");
-                }
+            // As in Java, only an explicit `false` skips the start-from-zero check; `true` and an
+            // absent flag both start a new group at zero while the queue's first message is in
+            // memory.
+            if request_header.set_zero_if_not_found == Some(false) {
+                response = response
+                    .set_code(ResponseCode::QueryNotFound)
+                    .set_remark("Not found, do not set to zero, maybe this group boot first");
             } else if min_offset <= 0
                 && self
                     .consumer_offset
@@ -851,6 +852,64 @@ mod tests {
                 .query_offset(&group, &topic, 1),
             3
         );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    async fn query_offset(
+        processor: &ConsumerManageProcessor<BrokerMessageStore>,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        set_zero_if_not_found: Option<bool>,
+    ) -> (ResponseCode, Option<i64>) {
+        let mut header = QueryConsumerOffsetRequestHeader::new(group.clone(), topic.clone(), queue_id);
+        header.set_zero_if_not_found = set_zero_if_not_found;
+        let mut request = RemotingCommand::create_request_command(RequestCode::QueryConsumerOffset, header);
+        request.make_custom_header_to_net();
+        let response = processor
+            .query_consumer_offset(&mut request)
+            .await
+            .expect("handler")
+            .expect("response");
+        let offset = response
+            .read_custom_header_ref::<QueryConsumerOffsetResponseHeader>()
+            .and_then(|header| header.offset);
+        (ResponseCode::from(response.code()), offset)
+    }
+
+    #[tokio::test]
+    async fn set_zero_if_not_found_true_answers_like_an_absent_flag() {
+        let mut runtime = new_test_runtime("query-offset-set-zero").await;
+        let topic = CheetahString::from_static_str("SetZeroTopic");
+        let group = CheetahString::from_static_str("SetZeroGroup");
+        {
+            let state = runtime.runtime_state_mut();
+            state
+                .topic_config_manager()
+                .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 2), 0);
+            state
+                .consumer_offset_manager()
+                .commit_offset("test".into(), &group, &topic, 1, 40);
+        }
+        let processor = consumer_processor_for_test(&mut runtime);
+
+        // Queue 0 has no stored offset and no message, so no flag value can start it at zero.
+        for flag in [None, Some(true), Some(false)] {
+            assert_eq!(
+                query_offset(&processor, &group, &topic, 0, flag).await,
+                (ResponseCode::QueryNotFound, None),
+                "set_zero_if_not_found={flag:?}"
+            );
+        }
+        // A stored offset is returned whatever the flag says.
+        for flag in [None, Some(true), Some(false)] {
+            assert_eq!(
+                query_offset(&processor, &group, &topic, 1, flag).await,
+                (ResponseCode::Success, Some(40)),
+                "set_zero_if_not_found={flag:?}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
