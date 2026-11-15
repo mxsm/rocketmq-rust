@@ -49,7 +49,7 @@ impl<S: Copy> Planned<S> {
 /// The operation-bound part of a mutation session.
 ///
 /// A plan is an associated type so that it stays sealed to the session that made it.
-pub(crate) trait OperationBackend: Send {
+pub(crate) trait OperationBoundMutationAdmin: Send {
     type ProxyDrainPlan: Send;
     type LogFilterPlan: Send;
 
@@ -78,7 +78,7 @@ pub(crate) trait OperationBackend: Send {
     ) -> RuntimeFuture<'a, Result<admin::BrokerLogFilterReport, ControlError>>;
 }
 
-impl OperationBackend for MutationAdminSession {
+impl OperationBoundMutationAdmin for MutationAdminSession {
     type ProxyDrainPlan = admin::ProxyDrainPlan;
     type LogFilterPlan = admin::BrokerLogFilterPlan;
 
@@ -182,7 +182,7 @@ impl<S> Outcome<S> {
     }
 }
 
-pub(crate) async fn run_proxy_drain<B: OperationBackend>(
+pub(crate) async fn run_proxy_drain<B: OperationBoundMutationAdmin>(
     backend: &mut B,
     operation: tools::ProxyDrainOperation,
     args: tools::ProxyDrainArgs,
@@ -256,7 +256,7 @@ fn drain_response(
     }
 }
 
-pub(crate) async fn run_set_log_filter<B: OperationBackend>(
+pub(crate) async fn run_set_log_filter<B: OperationBoundMutationAdmin>(
     backend: &mut B,
     args: tools::SetBrokerLogFilterTtlArgs,
     binding: &PlanBinding,
@@ -282,7 +282,7 @@ pub(crate) async fn run_set_log_filter<B: OperationBackend>(
     run_log_filter(backend, call, admin::BrokerLogFilterAction::Set(filter), binding).await
 }
 
-pub(crate) async fn run_restore_log_filter<B: OperationBackend>(
+pub(crate) async fn run_restore_log_filter<B: OperationBoundMutationAdmin>(
     backend: &mut B,
     args: tools::RestoreBrokerLogFilterArgs,
     binding: &PlanBinding,
@@ -308,7 +308,7 @@ struct LogFilterCall<'a> {
     requested: tools::BrokerLogFilterRequested,
 }
 
-async fn run_log_filter<B: OperationBackend>(
+async fn run_log_filter<B: OperationBoundMutationAdmin>(
     backend: &mut B,
     call: LogFilterCall<'_>,
     action: admin::BrokerLogFilterAction,

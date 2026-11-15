@@ -28,7 +28,7 @@ use super::group_executed;
 use super::map_group_to_admin;
 use super::map_topic_to_admin;
 use super::plan_binding::PlanBinding;
-use super::remaining::OperationBackend;
+use super::remaining::OperationBoundMutationAdmin;
 use super::topic_before;
 use super::topic_dry_run;
 use super::topic_executed;
@@ -322,7 +322,7 @@ impl<B> AdminMutationToolSession<B> {
     }
 }
 
-impl<B: OperationBackend> AdminMutationToolSession<B> {
+impl<B: OperationBoundMutationAdmin> AdminMutationToolSession<B> {
     async fn run_proxy_drain(
         &mut self,
         operation: tools::ProxyDrainOperation,
@@ -342,7 +342,7 @@ impl<B: OperationBackend> AdminMutationToolSession<B> {
 
 impl<B> MutationToolSession for AdminMutationToolSession<B>
 where
-    B: MutationAdmin + OperationBackend,
+    B: MutationAdmin + OperationBoundMutationAdmin,
 {
     fn run<'a>(
         &'a mut self,

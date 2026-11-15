@@ -819,7 +819,7 @@ mod tests {
 
     /// The protocol tests call no operation-bound Tool, so this part of the session stays shut.
     #[cfg(feature = "write-tools")]
-    impl crate::tool_runtime::OperationBackend for ProtocolBackend {
+    impl crate::tool_runtime::OperationBoundMutationAdmin for ProtocolBackend {
         type ProxyDrainPlan = ();
         type LogFilterPlan = ();
 

@@ -30,7 +30,7 @@ pub(super) use offset::run_offset;
 pub(super) use operation::run_proxy_drain;
 pub(super) use operation::run_restore_log_filter;
 pub(super) use operation::run_set_log_filter;
-pub(crate) use operation::OperationBackend;
+pub(crate) use operation::OperationBoundMutationAdmin;
 #[cfg(test)]
 pub(crate) use operation::Planned;
 pub(super) use request_mode::run_request_mode;
