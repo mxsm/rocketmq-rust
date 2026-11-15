@@ -30,7 +30,7 @@ pub(crate) struct TopologyReadRequest {
     pub observed_at_ms: u64,
     pub nameservers: Vec<String>,
 }
-pub(crate) trait TopologyBackend: Send + Sync {
+pub(crate) trait TopologyLayerReader: Send + Sync {
     fn layer(&self, request: TopologyReadRequest) -> ServiceFuture<'_, Result<TopologyLayer, UiError>>;
 }
 pub(crate) struct RealTopologyBackend {
@@ -46,7 +46,7 @@ impl RealTopologyBackend {
         Arc::new(Self { provider: None })
     }
 }
-impl TopologyBackend for RealTopologyBackend {
+impl TopologyLayerReader for RealTopologyBackend {
     fn layer(&self, request: TopologyReadRequest) -> ServiceFuture<'_, Result<TopologyLayer, UiError>> {
         Box::pin(async move {
             let provider = self.provider.as_ref().ok_or_else(|| {
@@ -214,7 +214,7 @@ impl AppServices {
         Ok(result)
     }
     #[cfg(test)]
-    pub(crate) fn with_topology_backend(mut self, backend: Arc<dyn TopologyBackend>) -> Self {
+    pub(crate) fn with_topology_backend(mut self, backend: Arc<dyn TopologyLayerReader>) -> Self {
         self.topology = backend;
         self
     }
@@ -259,7 +259,7 @@ fn stale() -> UiError {
     )
 }
 async fn read_layer(
-    backend: Arc<dyn TopologyBackend>,
+    backend: Arc<dyn TopologyLayerReader>,
     request: TopologyReadRequest,
     budget: Option<Duration>,
 ) -> TopologyLayer {

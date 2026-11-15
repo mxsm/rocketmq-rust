@@ -625,7 +625,7 @@ pub struct AppServices {
     messages: Arc<dyn messages::MessageBackend>,
     acl: Arc<dyn acl::AclOperations>,
     dlq: Arc<dyn dlq::DlqBackend>,
-    topology: Arc<dyn topology::TopologyBackend>,
+    topology: Arc<dyn topology::TopologyLayerReader>,
 }
 
 impl AppServices {
