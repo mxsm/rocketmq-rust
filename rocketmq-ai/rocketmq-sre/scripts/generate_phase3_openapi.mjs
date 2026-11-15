@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { extendPhase3ReleaseManagement } from "./openapi/phase3_release_management.mjs";
 import { extendInspectionTemplates } from "./openapi/inspection_templates.mjs";
+import { extendActionReadiness } from "./openapi/action_readiness.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = join(root, "openapi", "rocketmq-sre-phase02.openapi.json");
@@ -928,4 +929,6 @@ document["x-rocketmq-phase3-contracts"] = Object.keys(contractSchemas);
 
 extendInspectionTemplates({ document,
   schema: JSON.parse(readFileSync(join(root, "schemas", "inspection-template.schema.json"), "utf8")) });
+extendActionReadiness({ document, readSchema: (filename) =>
+  JSON.parse(readFileSync(join(root, "schemas", filename), "utf8")) });
 writeFileSync(output, `${JSON.stringify(document, null, 2)}\n`);

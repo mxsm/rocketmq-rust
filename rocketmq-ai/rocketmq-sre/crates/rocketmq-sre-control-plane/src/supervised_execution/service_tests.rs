@@ -66,15 +66,20 @@ async fn postgres_plan_policy_approval_audit_and_quarantine_are_fail_closed() {
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
     let clock_now = Arc::new(Mutex::new(Utc::now()));
     let service_clock = Arc::clone(&clock_now);
+    let observed_at = *clock_now.lock().unwrap() - Duration::seconds(1);
+    let (executor, observer_group) = super::readiness_tests::support::readonly_executor(observed_at).await;
     let service = SupervisedExecutionService::new_with_clock(
         repository.clone(),
         workflow,
         "phase3-test-signing-key-not-exported",
         Arc::new(move || *service_clock.lock().expect("test clock")),
     )
-    .expect("service");
+    .expect("service")
+    .with_test_executor(executor)
+    .with_target_scope(fixture_target_scope(&fixture));
     let operator = auth(fixture.tenant_id, fixture.cluster_id, "operator-a", &["operator"]);
     let approver = auth(fixture.tenant_id, fixture.cluster_id, "approver-b", &["approver"]);
+    let prepared = prepare_proxy(&service, &operator, &fixture).await;
     let create = CreatePlanRequest {
         cluster_id: fixture.cluster_id,
         incident_id: fixture.incident_id,
@@ -89,7 +94,7 @@ async fn postgres_plan_policy_approval_audit_and_quarantine_are_fail_closed() {
                 "workload": "proxy",
                 "expected_replicas": 2
             }),
-            evidence_ids: vec![fixture.evidence_id],
+            evidence_ids: vec![fixture.evidence_id, prepared.evidence_id],
         }],
     };
     let created = service
@@ -359,6 +364,12 @@ async fn postgres_plan_policy_approval_audit_and_quarantine_are_fail_closed() {
         panic!("R3 must never create an ActionPlan");
     };
     assert!(!runbook.execution_supported);
+    assert!(
+        observer_group
+            .shutdown(std::time::Duration::from_secs(2))
+            .await
+            .is_healthy()
+    );
 }
 
 #[tokio::test]
@@ -446,6 +457,8 @@ async fn postgres_plan_accepts_only_incident_linked_execution_precondition_evide
     };
     let repository = PostgresRepository::connect(&database_url, 5).await.expect("repository");
     let fixture = seed_fixture(&repository).await;
+    let (executor, observer_group) =
+        super::readiness_tests::support::readonly_executor(Utc::now() - Duration::seconds(1)).await;
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
     let service = SupervisedExecutionService::new_with_clock(
         repository.clone(),
@@ -453,9 +466,13 @@ async fn postgres_plan_accepts_only_incident_linked_execution_precondition_evide
         "phase3-test-signing-key-not-exported",
         Arc::new(Utc::now),
     )
-    .expect("service");
+    .expect("service")
+    .with_test_executor(executor)
+    .with_target_scope(fixture_target_scope(&fixture));
     let operator = auth(fixture.tenant_id, fixture.cluster_id, "operator-a", &["operator"]);
-    let observed_at = Utc::now().with_nanosecond(0).expect("whole-second timestamp");
+    let observed_at = (Utc::now() - Duration::seconds(3))
+        .with_nanosecond(0)
+        .expect("whole-second timestamp");
     let live_hash = format!("sha256:{}", "7".repeat(64));
     let content = json!({
         "schema_version": "rocketmq-sre.execution-agent.v1",
@@ -530,6 +547,14 @@ async fn postgres_plan_accepts_only_incident_linked_execution_precondition_evide
         .await
         .expect("incident-linked Agent Evidence");
     assert_eq!(linked.evidence_id, unlinked.evidence_id);
+    let error = service
+        .create_plan(&operator, &request, CorrelationId::new())
+        .await
+        .expect_err("a linked legacy plain observation cannot prove the new candidate binding");
+    assert_eq!(error_code(&error), "preparation_binding_missing");
+    let prepared = prepare_proxy(&service, &operator, &fixture).await;
+    let mut request = request;
+    request.steps[0].evidence_ids = vec![fixture.evidence_id, prepared.evidence_id];
     let CreatePlanResponse::ActionPlan { plan, .. } = service
         .create_plan(&operator, &request, CorrelationId::new())
         .await
@@ -537,7 +562,17 @@ async fn postgres_plan_accepts_only_incident_linked_execution_precondition_evide
     else {
         panic!("execution-ready diagnosis must produce an action plan");
     };
-    assert_eq!(plan.steps[0].precondition_hash, live_hash);
+    let EvidenceContent::Inline(content) = prepared.content else {
+        panic!("inline CP preparation");
+    };
+    let proof: rocketmq_sre_contracts::ActionPreparationEvidence = serde_json::from_value(content).unwrap();
+    assert_eq!(plan.steps[0].precondition_hash, proof.agent_result.precondition_hash);
+    assert!(
+        observer_group
+            .shutdown(std::time::Duration::from_secs(2))
+            .await
+            .is_healthy()
+    );
 }
 
 #[tokio::test]
@@ -589,6 +624,44 @@ pub(super) struct Fixture {
     pub(super) evidence_id: rocketmq_sre_contracts::EvidenceId,
 }
 
+pub(super) fn fixture_target_scope(fixture: &Fixture) -> Arc<super::target_scope::ActionTargetScope> {
+    let rules = [("proxy.scale_out_one.v1", "deployment/default/proxy", json!({"kind":"workload","namespace":"default","workload":"proxy"})),
+        ("topic.config.patch_allowlisted.v1", "topic/orders", json!({"kind":"topic","topic":"orders"})),
+        ("broker.config.patch_allowlisted.v1", "broker/broker-a", json!({"kind":"broker","broker":"broker-a"}))].into_iter().map(|(action, target, lookup)| json!({
+            "tenant_id":fixture.tenant_id,"cluster_id":fixture.cluster_id,"action_id":action,"descriptor_version":"1.0.0",
+            "incident_resource":"deployment/default/proxy","target":target,"lookup":lookup,"security_revision":"1"})).collect::<Vec<_>>();
+    Arc::new(
+        super::target_scope::ActionTargetScope::parse(Some(
+            &json!({"schema_version":"rocketmq-sre.action-target-scope.v1","rules":rules}).to_string(),
+        ))
+        .unwrap(),
+    )
+}
+
+async fn prepare_proxy(
+    service: &SupervisedExecutionService,
+    actor: &AuthContext,
+    fixture: &Fixture,
+) -> rocketmq_sre_contracts::EvidenceSnapshot {
+    service
+        .prepare_execution_precondition(
+            actor,
+            fixture.incident_id,
+            &super::model::PrepareExecutionPreconditionRequest {
+                cluster_id: fixture.cluster_id,
+                diagnosis_revision_id: fixture.diagnosis_id,
+                action_id: "proxy.scale_out_one.v1".to_owned(),
+                descriptor_version: "1.0.0".to_owned(),
+                resource: "deployment/default/proxy".to_owned(),
+                parameters: json!({"namespace":"default","workload":"proxy","expected_replicas":2}),
+            },
+            CorrelationId::new(),
+        )
+        .await
+        .unwrap()
+        .evidence
+}
+
 pub(super) async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     let tenant_id = TenantId::new();
     let cluster_id = ClusterId::new();
@@ -628,7 +701,7 @@ pub(super) async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
             fingerprint, status, workflow_checkpoint, created_by_subject,
             created_at, updated_at
          ) VALUES ($1, $2, $3, 'Phase 3 test', 'deployment/default/proxy',
-                   'proxy_saturation', $4, 'diagnosing', '{}'::JSONB,
+                   'proxy_saturation', $4, 'monitoring', '{}'::JSONB,
                    'phase3-test', NOW(), NOW())",
     )
     .bind(incident_id.as_uuid())
@@ -638,7 +711,7 @@ pub(super) async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     .execute(&repository.pool)
     .await
     .expect("incident");
-    for (id, revision) in [(diagnosis_id, 1_i32), (rules_only_diagnosis_id, 2_i32)] {
+    for (id, revision) in [(rules_only_diagnosis_id, 1_i32), (diagnosis_id, 2_i32)] {
         sqlx::query(
             "INSERT INTO diagnosis_revisions (
                 id, incident_id, revision, status, rule_result, hypotheses,

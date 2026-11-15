@@ -714,6 +714,18 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
 fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalError> {
     Ok(vec![
         (
+            "action-readiness-request.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::ActionReadinessRequest))?,
+        ),
+        (
+            "action-readiness-view.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::ActionReadinessView))?,
+        ),
+        (
+            "action-preparation-evidence.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::ActionPreparationEvidence))?,
+        ),
+        (
             "investigation-run-list-page.schema.json",
             serde_json::to_value(schema_for!(rocketmq_sre_contracts::InvestigationRunListPage))?,
         ),
@@ -1163,6 +1175,18 @@ signals:
     #[test]
     fn committed_schema_fixtures_match_public_contracts() {
         let committed = [
+            (
+                "action-readiness-request.schema.json",
+                include_str!("../../../schemas/action-readiness-request.schema.json"),
+            ),
+            (
+                "action-readiness-view.schema.json",
+                include_str!("../../../schemas/action-readiness-view.schema.json"),
+            ),
+            (
+                "action-preparation-evidence.schema.json",
+                include_str!("../../../schemas/action-preparation-evidence.schema.json"),
+            ),
             (
                 "investigation-run-list-page.schema.json",
                 include_str!("../../../schemas/investigation-run-list-page.schema.json"),

@@ -1645,6 +1645,14 @@ fn summarize_evidence(evidence: &[EvidenceSnapshot]) -> (Vec<Value>, DataClass) 
 }
 
 fn sanitize_value(value: &Value, depth: usize) -> Value {
+    if value.get("schema_version").and_then(Value::as_str)
+        == Some(rocketmq_sre_contracts::ACTION_PREPARATION_SCHEMA_VERSION)
+    {
+        // The provenance MAC and raw Agent conditions belong to the local
+        // admission verifier. A model receives no proof or authorization claim.
+        return json!({"schema_version": rocketmq_sre_contracts::ACTION_PREPARATION_SCHEMA_VERSION,
+            "record_kind": "readonly_preparation", "action_authorization": false});
+    }
     if depth >= MAX_EVIDENCE_VALUE_DEPTH {
         return Value::String("[TRUNCATED]".to_owned());
     }
@@ -1684,6 +1692,7 @@ fn forbidden_model_key(key: &str) -> bool {
         "secret",
         "password",
         "private_key",
+        "origin_signature",
         "authorization",
         "credential",
         "access_key",
@@ -2002,6 +2011,23 @@ mod tests {
         assert!(!serialized.contains("never-send"));
         assert!(!serialized.contains("message_body"));
         assert!(!serialized.contains("access_token"));
+    }
+
+    #[test]
+    fn model_preparation_summary_never_contains_origin_seal_or_raw_agent_state() {
+        let prepared = json!({"schema_version": rocketmq_sre_contracts::ACTION_PREPARATION_SCHEMA_VERSION,
+            "origin_signature": "private-origin-marker", "candidate_binding": {"actor_subject": "private-actor-marker"},
+            "agent_result": {"precondition_hash": "private-state-marker", "resource_conditions": {"private-condition": true}}});
+        let summary = sanitize_value(&prepared, 0);
+        assert_eq!(summary["record_kind"], "readonly_preparation");
+        assert_eq!(summary["action_authorization"], false);
+        assert!(!summary.to_string().contains("private-"));
+        let generic = sanitize_value(
+            &json!({"signature": "public-format", "origin_signature": "private-origin-marker"}),
+            0,
+        );
+        assert_eq!(generic["signature"], "public-format");
+        assert!(generic.get("origin_signature").is_none());
     }
 
     #[test]

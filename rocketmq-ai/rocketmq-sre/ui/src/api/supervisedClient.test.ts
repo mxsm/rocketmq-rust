@@ -80,6 +80,8 @@ describe("createSupervisedSreApi", () => {
     await api.getAudit("correlation/one");
     await api.listQuarantines("cluster/one", true);
     await api.clearQuarantine("quarantine/one", clear);
+    const readinessSignal = new AbortController().signal;
+    await api.readActionReadiness("incident/one", precondition, readinessSignal);
 
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       "/v1/incidents/incident%2Fone/diagnosis-revisions/revision%2Fone/confirm-execution",
@@ -94,6 +96,7 @@ describe("createSupervisedSreApi", () => {
       "/v1/audit/correlation%2Fone",
       "/v1/resource-quarantines?cluster_id=cluster%2Fone&include_cleared=true",
       "/v1/resource-quarantines/quarantine%2Fone/clear",
+      "/v1/incidents/incident%2Fone/action-readiness",
     ]);
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("Authorization")).toBe("Bearer phase3-token");
@@ -113,6 +116,9 @@ describe("createSupervisedSreApi", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[5]?.[1]?.body))).toEqual(
       decision,
     );
+    expect(fetchMock.mock.calls[12]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[12]?.[1]?.signal).toBe(readinessSignal);
+    expect(JSON.parse(String(fetchMock.mock.calls[12]?.[1]?.body))).toEqual(precondition);
   });
 
   it("preserves the stable backend error code", async () => {

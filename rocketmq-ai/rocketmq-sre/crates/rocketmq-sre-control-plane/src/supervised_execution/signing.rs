@@ -41,6 +41,8 @@ use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const SIGNATURE_PREFIX: &str = "hmac-sha256:";
 
+mod preparation;
+
 #[derive(Clone)]
 pub(crate) struct GrantSigner {
     key: Arc<[u8]>,

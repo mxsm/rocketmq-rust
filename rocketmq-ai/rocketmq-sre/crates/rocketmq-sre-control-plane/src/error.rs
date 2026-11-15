@@ -134,7 +134,6 @@ impl ControlPlaneRejection {
         self.kind
     }
 
-    #[cfg(test)]
     #[must_use]
     pub(crate) fn code(self) -> &'static str {
         self.code

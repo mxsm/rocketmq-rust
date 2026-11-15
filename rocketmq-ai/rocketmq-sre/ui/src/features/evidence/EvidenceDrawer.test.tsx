@@ -144,6 +144,29 @@ describe("shared evidence drawer", () => {
     expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
   });
 
+  it("keeps new preparation MAC and private Agent content out of the explicit audit viewer", async () => {
+    vi.mocked(state.api.getEvidence).mockResolvedValue({
+      ...phase1Evidence.items[0], source: "execution-agent", resource: "broker/broker-a",
+    });
+    vi.mocked(state.api.getEvidenceContent).mockResolvedValue({
+      schema_version: "rocketmq-sre.action-preparation.v1",
+      evidence_id: ID,
+      candidate_binding: { action_id: "observability.logger_level_ttl.v1", private_extra: "private-binding-marker" },
+      agent_result: { target: "private-agent-marker", ready: true },
+      origin_signature: "private-origin-marker",
+      debug: "private-debug-marker",
+    });
+    const user = userEvent.setup();
+    render(<Fixture />);
+    await user.click(screen.getByRole("button", { name: "open evidence" }));
+    const read = await screen.findByRole("button", { name: "读取脱敏内容" });
+    expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
+    await user.click(read);
+    expect(await screen.findByText(/observability\.logger_level_ttl\.v1/)).toHaveTextContent("[redacted]");
+    expect(screen.queryByText(/private-(agent|binding|origin|debug)-marker/)).not.toBeInTheDocument();
+    expect(state.api.getEvidenceContent).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [403, "当前身份无权读取此证据"],
     [404, "未找到此证据记录"],

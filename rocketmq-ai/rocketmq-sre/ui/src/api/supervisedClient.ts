@@ -2,6 +2,8 @@ import type { ApiRequestContext } from "@/auth/AuthContext";
 
 import { ApiError } from "./client";
 import type {
+  ActionReadinessRequest,
+  ActionReadinessView,
   ActionPlanView,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
@@ -22,6 +24,11 @@ import type {
 } from "./types";
 
 export interface SupervisedSreApi {
+  readActionReadiness: (
+    incidentId: string,
+    input: ActionReadinessRequest,
+    signal?: AbortSignal,
+  ) => Promise<ActionReadinessView>;
   confirmDiagnosisExecution: (
     incidentId: string,
     revisionId: string,
@@ -92,6 +99,12 @@ export function createSupervisedSreApi(
   ) => supervisedRequest<T>(path, auth, "POST", body, signal);
 
   return {
+    readActionReadiness: (incidentId, input, signal) =>
+      post<ActionReadinessView>(
+        `/v1/incidents/${encodeURIComponent(incidentId)}/action-readiness`,
+        input,
+        signal,
+      ),
     confirmDiagnosisExecution: (incidentId, revisionId, input, signal) =>
       post<DiagnosisExecutionConfirmation>(
         `/v1/incidents/${encodeURIComponent(incidentId)}/diagnosis-revisions/${encodeURIComponent(revisionId)}/confirm-execution`,

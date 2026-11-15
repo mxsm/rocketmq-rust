@@ -35,6 +35,11 @@ server DTO，也不复用普通 RocketMQ Dashboard 的 session 和 mutation 接�
 
 执行能力按部署配置启用：Execution Agent 的动作开关默认全部关闭，只有配置完整的驱动才会注册。Control Plane 的计划、审批和执行协调已实现，但 MCP、Connector 以及 Rust/TypeScript SDK 的查询边界仍为只读。具体实现和启用条件见各 crate 的 README。
 
+[动作就绪投影](docs/action-readiness.md)解释服务端九阶段事实，并区分诊断确认、
+显式只读预检、不可变计划草稿和人工审批。新的首次执行准入要求独立的动作/目标
+资格与补偿能力证明；当前相应来源仍为未知，配置处理器并批准计划后仍会阻断新的
+执行提交。自动预检还要求事先配置精确的目标范围规则。
+
 ## 架构
 
 ```mermaid

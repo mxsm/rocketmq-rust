@@ -40,6 +40,14 @@ descriptor, validated authority, and applicable policy/approval checks.
 See [supervised_execution](src/supervised_execution), [automation](src/automation)
 and [configuration](src/config.rs).
 
+[Action readiness](../../docs/action-readiness.md) is a local stored-fact read
+with separate diagnosis, readonly-preparation and draft affordances. Automatic
+preparation requires private `ROCKETMQ_SRE_ACTION_TARGET_SCOPE_JSON` rules,
+defaulting to no authorized targets. New first execution admission also requires
+independent action/target and observed compensation qualification, which remain
+unknown until separate qualification sources are available. This blocks new
+first submissions without altering already accepted execution reconciliation.
+
 The [submission client](src/supervised_execution/executor_client.rs) classifies an explicit
 HTTP 409 or other client-error response as `Rejected`. `Unconfirmed` covers failures without
 a valid acceptance receipt or definitive rejection, including failures before dispatch.

@@ -2948,6 +2948,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/incidents/{incident_id}/action-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read exact action candidate readiness without an Agent call
+         * @description Fresh identity and Incident scope are checked. In-scope blocked and unknown facts return a safe projection. Preparation and draft affordances grant no dispatch authority. Missing action/target qualification remains Unknown; existing first execution admission checks the current facts independently.
+         */
+        post: operations["readActionReadiness"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7639,6 +7659,7 @@ export interface components {
             diagnosis_revision_id: string;
             evidence: components["schemas"]["EvidenceSnapshot"];
             precondition_hash: string;
+            readiness?: components["schemas"]["ActionReadinessView"];
         };
         ConversationQueryIntent: {
             /** @constant */
@@ -10615,6 +10636,285 @@ export interface components {
             /** Format: date-time */
             start: string;
         };
+        /**
+         * ActionReadinessRequest
+         * @description A local, read-only assessment of one closed action candidate.
+         *
+         *     Missing candidate inputs may produce blocked facts while diagnosis-only
+         *     operations remain observable. Selecting a Plan requires both Plan selectors.
+         */
+        ActionReadinessRequest: {
+            action_id: string;
+            cluster_id: components["schemas"]["ActionReadinessRequest__ClusterId"];
+            descriptor_version: string;
+            diagnosis_revision_id: components["schemas"]["ActionReadinessRequest__DiagnosisRevisionId"];
+            parameters: unknown;
+            plan_id?: components["schemas"]["ActionReadinessRequest__ActionPlanId"] | null;
+            plan_step_id?: components["schemas"]["ActionReadinessRequest__PlanStepId"] | null;
+            precondition_evidence_id?: components["schemas"]["ActionReadinessRequest__EvidenceId"] | null;
+            resource: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan.
+         */
+        ActionReadinessRequest__ActionPlanId: string;
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ActionReadinessRequest__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        ActionReadinessRequest__DiagnosisRevisionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        ActionReadinessRequest__EvidenceId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan step.
+         */
+        ActionReadinessRequest__PlanStepId: string;
+        /**
+         * ActionReadinessView
+         * @description Ephemeral, non-authorizing projection for one exact action candidate.
+         */
+        ActionReadinessView: {
+            binding: components["schemas"]["ActionReadinessView__ActionReadinessBinding"];
+            diagnosis: components["schemas"]["ActionReadinessView__ActionReadinessDiagnosis"];
+            execution_readiness: components["schemas"]["ActionReadinessView__ActionExecutionReadiness"];
+            /** Format: date-time */
+            observed_at: string;
+            operations: components["schemas"]["ActionReadinessView__ActionReadinessOperations"];
+            schema_version: string;
+            stages: components["schemas"]["ActionReadinessView__ActionReadinessStages"];
+            /**
+             * Format: date-time
+             * @description Null cannot enable an operation; refreshing does not renew immutable proof.
+             */
+            valid_until?: string | null;
+        };
+        /**
+         * @description Summary of execution gates. Satisfied still requires actual dispatch authorization.
+         * @enum {string}
+         */
+        ActionReadinessView__ActionExecutionReadiness: "blocked" | "unknown" | "awaiting_approval" | "satisfied";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan.
+         */
+        ActionReadinessView__ActionPlanId: string;
+        /** @description Exact candidate and caller observed by the server; its digest grants no authority. */
+        ActionReadinessView__ActionReadinessBinding: {
+            action_id: string;
+            actor_subject: string;
+            binding_digest: string;
+            cluster_id: components["schemas"]["ActionReadinessView__ClusterId"];
+            descriptor_version: string;
+            diagnosis_revision_id: components["schemas"]["ActionReadinessView__DiagnosisRevisionId"];
+            diagnostic_evidence: components["schemas"]["ActionReadinessView__ActionReadinessEvidenceBinding"][];
+            incident_id: components["schemas"]["ActionReadinessView__IncidentId"];
+            latest_diagnosis_revision_id?: components["schemas"]["ActionReadinessView__DiagnosisRevisionId"] | null;
+            /** @description Present only after exact schema and forbidden-argument validation. */
+            parameters?: unknown;
+            parameters_digest?: string | null;
+            plan_hash?: string | null;
+            plan_id?: components["schemas"]["ActionReadinessView__ActionPlanId"] | null;
+            plan_step_id?: components["schemas"]["ActionReadinessView__PlanStepId"] | null;
+            policy_version: string;
+            precondition_evidence?: components["schemas"]["ActionReadinessView__ActionReadinessEvidenceBinding"] | null;
+            precondition_hash?: string | null;
+            /** @description Exact execution-target literal, without rewriting existing Plan aliases. */
+            resource: string;
+            target_scope_digest?: string | null;
+            tenant_id: components["schemas"]["ActionReadinessView__TenantId"];
+        };
+        /** @description A diagnosis-basis fact, separate from action approval. */
+        ActionReadinessView__ActionReadinessDiagnosis: {
+            is_complete: boolean;
+            is_confirmed: boolean;
+            is_current: boolean;
+            primary_model_lineage_valid: boolean;
+            reason_codes: components["schemas"]["ActionReadinessView__ActionReadinessReason"][];
+        };
+        /** @description Immutable evidence identity; a newer same-resource record cannot replace it. */
+        ActionReadinessView__ActionReadinessEvidenceBinding: {
+            content_hash: string;
+            evidence_id: components["schemas"]["ActionReadinessView__EvidenceId"];
+        };
+        /** @description A bounded fact derived from actual catalog, runtime or immutable record data. */
+        ActionReadinessView__ActionReadinessFact: {
+            evidence_ids: components["schemas"]["ActionReadinessView__EvidenceId"][];
+            /** Format: date-time */
+            observed_at?: string | null;
+            reason_codes: components["schemas"]["ActionReadinessView__ActionReadinessReason"][];
+            source: components["schemas"]["ActionReadinessView__ActionReadinessSource"];
+            state: components["schemas"]["ActionReadinessView__ActionReadinessState"];
+            /** Format: date-time */
+            valid_until?: string | null;
+        };
+        /** @description Fresh server availability of one preparation operation; never a bearer grant. */
+        ActionReadinessView__ActionReadinessOperation: {
+            allowed: boolean;
+            reason_codes: components["schemas"]["ActionReadinessView__ActionReadinessReason"][];
+        };
+        /** @description Draft creation and readonly preparation do not require dispatch qualification. */
+        ActionReadinessView__ActionReadinessOperations: {
+            confirm_diagnosis: components["schemas"]["ActionReadinessView__ActionReadinessOperation"];
+            create_plan: components["schemas"]["ActionReadinessView__ActionReadinessOperation"];
+            prepare_precondition: components["schemas"]["ActionReadinessView__ActionReadinessOperation"];
+        };
+        /**
+         * @description Closed explanation codes. Internal source text must not be placed in this view.
+         * @enum {string}
+         */
+        ActionReadinessView__ActionReadinessReason: "action_unknown" | "descriptor_version_mismatch" | "manual_only" | "plan_only" | "parameters_invalid" | "resource_required" | "resource_invalid" | "operator_required" | "diagnosis_not_confirmed" | "diagnosis_already_confirmed" | "diagnosis_not_current" | "incident_inactive" | "diagnosis_incomplete" | "primary_model_lineage_invalid" | "executor_not_configured" | "handler_not_observed" | "handler_read_observed" | "runtime_enablement_not_observed" | "target_support_not_observed" | "target_scope_unverified" | "target_scope_changed" | "target_precondition_not_ready" | "target_unsupported" | "evidence_missing" | "evidence_stale" | "evidence_invalid" | "evidence_scope_mismatch" | "preparation_binding_missing" | "preparation_binding_mismatch" | "preparation_origin_invalid" | "preparation_expired" | "policy_denied" | "maintenance_window_closed" | "resource_quarantined" | "resource_busy" | "compensation_unavailable" | "compensation_not_observed" | "plan_not_created" | "approval_required" | "approval_expired" | "approval_binding_mismatch" | "self_approval_forbidden" | "action_target_qualification_unavailable" | "observation_available" | "plan_expired" | "plan_binding_mismatch" | "plan_completed" | "plan_immutable" | "readiness_expired" | "source_unavailable";
+        /**
+         * @description The actual kind of source used for a stage; registration is not qualification.
+         * @enum {string}
+         */
+        ActionReadinessView__ActionReadinessSource: "descriptor_catalog" | "executor_configuration" | "target_scope_configuration" | "stored_preparation" | "current_diagnosis" | "policy_evaluation" | "stored_approval" | "qualification_unavailable" | "not_observed";
+        /** @description Fixed stage names prevent omitted or duplicated readiness gates. */
+        ActionReadinessView__ActionReadinessStages: {
+            approval: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+            compensation: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+            descriptor: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+            enabled: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+            evidence: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+            handler: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+            policy: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+            qualification: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+            target: components["schemas"]["ActionReadinessView__ActionReadinessFact"];
+        };
+        /**
+         * @description Whether a particular proof is present, missing, or inapplicable.
+         * @enum {string}
+         */
+        ActionReadinessView__ActionReadinessState: "satisfied" | "blocked" | "unknown" | "not_applicable";
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ActionReadinessView__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        ActionReadinessView__DiagnosisRevisionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        ActionReadinessView__EvidenceId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        ActionReadinessView__IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan step.
+         */
+        ActionReadinessView__PlanStepId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        ActionReadinessView__TenantId: string;
+        /**
+         * ActionPreparationEvidence
+         * @description Versioned CP-owned evidence content; the Agent's wire DTO remains unchanged.
+         */
+        ActionPreparationEvidence: {
+            agent_result: components["schemas"]["ActionPreparationEvidence__AgentReadResult"];
+            candidate_binding: components["schemas"]["ActionPreparationEvidence__ActionPreparationBinding"];
+            evidence_id: components["schemas"]["ActionPreparationEvidence__EvidenceId"];
+            /** @description CP origin attestation under a dedicated purpose, never dispatch authority. */
+            origin_signature: string;
+            schema_version: string;
+        };
+        /**
+         * @description CP record of the exact readonly request which produced a prepared observation.
+         *
+         *     This is not an Agent signature or action consent. The immutable Evidence hash
+         *     binds it together with the unchanged Agent response.
+         */
+        ActionPreparationEvidence__ActionPreparationBinding: {
+            action_id: string;
+            actor_subject: string;
+            cluster_id: components["schemas"]["ActionPreparationEvidence__ClusterId"];
+            descriptor_version: string;
+            diagnosis_revision_id: components["schemas"]["ActionPreparationEvidence__DiagnosisRevisionId"];
+            diagnostic_evidence: components["schemas"]["ActionPreparationEvidence__ActionReadinessEvidenceBinding"][];
+            incident_id: components["schemas"]["ActionPreparationEvidence__IncidentId"];
+            parameters_digest: string;
+            policy_version: string;
+            /** Format: date-time */
+            prepared_at: string;
+            resource: string;
+            target_scope_digest: string;
+            tenant_id: components["schemas"]["ActionPreparationEvidence__TenantId"];
+            /** Format: date-time */
+            valid_until: string;
+        };
+        /** @description Immutable evidence identity; a newer same-resource record cannot replace it. */
+        ActionPreparationEvidence__ActionReadinessEvidenceBinding: {
+            content_hash: string;
+            evidence_id: components["schemas"]["ActionPreparationEvidence__EvidenceId"];
+        };
+        /** @description Sanitized live-state result. It never contains target configuration dumps. */
+        ActionPreparationEvidence__AgentReadResult: {
+            action: components["schemas"]["ActionPreparationEvidence__ExecutionAction"];
+            /** Format: date-time */
+            observed_at: string;
+            precondition_hash: string;
+            ready: boolean;
+            reason_codes: string[];
+            /** @default {} */
+            resource_conditions: {
+                [key: string]: boolean;
+            };
+            schema_version: string;
+            target: string;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ActionPreparationEvidence__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        ActionPreparationEvidence__DiagnosisRevisionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        ActionPreparationEvidence__EvidenceId: string;
+        /**
+         * @description Closed set of Phase 3 actions that may enter supervised planning.
+         *
+         *     Execution remains gated by the exact descriptor's `plan_only` and
+         *     `execution_supported` flags. Permanently destructive R3 and unknown actions
+         *     are intentionally not representable.
+         * @enum {string}
+         */
+        ActionPreparationEvidence__ExecutionAction: "observability.logger_level_ttl.v1" | "proxy.scale_out_one.v1" | "proxy.restart_one.v1" | "broker.config.patch_allowlisted.v1" | "topic.config.patch_allowlisted.v1" | "subscription_group.patch_allowlisted.v1" | "consumer.request_mode.patch_allowlisted.v1" | "consumer.offset.reset_bounded.v1" | "topic.queue.expand_only.v1" | "namesrv.config.patch_allowlisted.v1" | "controller.config.patch_allowlisted.v1" | "proxy.rollout_image_canary.v1" | "broker.restart_one.v1" | "static_topic.patch_non_remap.v1" | "tiered.cold_data_flow.patch_allowlisted.v1" | "store.readahead.patch_allowlisted.v1" | "security.credential_rotate_overlap.v1" | "telemetry.collector.restart_one.v1" | "consumer.offset.clone_or_reset_broad.v1" | "message.direct_consume.v1" | "message.dlq.resend.v1" | "timer.switch.v1" | "controller.elect.v1" | "static_topic.remap.v1" | "broker.container.add_remove.v1";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        ActionPreparationEvidence__IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        ActionPreparationEvidence__TenantId: string;
     };
     responses: {
         /** @description Successful scoped response */
@@ -21938,6 +22238,77 @@ export interface operations {
                 };
             };
             /** @description Sanitized request refusal; no source content is returned */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    readActionReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                incident_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActionReadinessRequest"];
+            };
+        };
+        responses: {
+            /** @description Current non-authorizing candidate facts and safe blockers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionReadinessView"];
+                };
+            };
+            /** @description Sanitized request refusal */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized request refusal */
             409: {
                 headers: {
                     [name: string]: unknown;

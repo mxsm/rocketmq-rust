@@ -79,17 +79,19 @@ impl PostgresRepository {
         Ok((primary != critic).then_some(review))
     }
 
-    pub(crate) async fn persist_critic_review(
+    pub(in crate::supervised_execution) async fn persist_critic_review(
         &self,
         plan: &ActionPlan,
         review: &CriticReview,
         audit: &AuditEvent,
         advance_to_approval: bool,
+        admission: &super::ActionAdmission,
     ) -> Result<(ActionPlan, String), ControlPlaneRequestFailure> {
         let review_hash = canonical_sha256(review).map_err(|error| {
             ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_critic_review", error)
         })?;
         let mut transaction = self.pool.begin().await?;
+        admission.lock_incident(&mut transaction).await?;
         let locked_status: Option<String> = sqlx::query_scalar(
             "SELECT status
              FROM action_plans
@@ -111,6 +113,7 @@ impl PostgresRepository {
         .bind(review.created_at)
         .fetch_optional(&mut *transaction)
         .await?;
+        admission.check_locked(&mut transaction).await?;
         if locked_status.as_deref() != Some("needs_critic") {
             return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_state_changed",

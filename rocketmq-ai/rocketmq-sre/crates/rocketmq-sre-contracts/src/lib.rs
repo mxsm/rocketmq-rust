@@ -18,6 +18,7 @@
 //! model SDK, or RocketMQ implementation dependency.
 
 mod action;
+mod action_readiness;
 mod agent;
 mod alert;
 mod api;
@@ -74,6 +75,24 @@ pub use action::CompensationSpec;
 pub use action::ExecutionAction;
 pub use action::ImpactScope;
 pub use action::VerificationSpec;
+pub use action_readiness::ACTION_PREPARATION_SCHEMA_VERSION;
+pub use action_readiness::ACTION_READINESS_SCHEMA_VERSION;
+pub use action_readiness::ActionExecutionReadiness;
+pub use action_readiness::ActionPreparationBinding;
+pub use action_readiness::ActionPreparationEvidence;
+pub use action_readiness::ActionReadinessBinding;
+pub use action_readiness::ActionReadinessDiagnosis;
+pub use action_readiness::ActionReadinessEvidenceBinding;
+pub use action_readiness::ActionReadinessFact;
+pub use action_readiness::ActionReadinessOperation;
+pub use action_readiness::ActionReadinessOperations;
+pub use action_readiness::ActionReadinessReason;
+pub use action_readiness::ActionReadinessRequest;
+pub use action_readiness::ActionReadinessSource;
+pub use action_readiness::ActionReadinessStages;
+pub use action_readiness::ActionReadinessState;
+pub use action_readiness::ActionReadinessView;
+pub use action_readiness::action_evidence_valid_until;
 pub use alert::AlertEvent;
 pub use alert::AlertSeverity;
 pub use alert::AlertSource;

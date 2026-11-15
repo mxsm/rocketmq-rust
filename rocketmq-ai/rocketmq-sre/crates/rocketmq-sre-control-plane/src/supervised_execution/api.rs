@@ -57,6 +57,10 @@ pub(crate) fn routes() -> Router<AppState> {
             post(confirm_diagnosis_for_execution).layer(DefaultBodyLimit::max(32 * 1024)),
         )
         .route(
+            "/v1/incidents/{incident_id}/action-readiness",
+            post(action_readiness).layer(DefaultBodyLimit::max(128 * 1024)),
+        )
+        .route(
             "/v1/incidents/{incident_id}/execution-preconditions",
             post(prepare_execution_precondition).layer(DefaultBodyLimit::max(128 * 1024)),
         )
@@ -116,6 +120,26 @@ async fn create_plan(
     state
         .supervised_execution
         .create_plan(&auth, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn action_readiness(
+    State(state): State<AppState>,
+    Path(incident_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<rocketmq_sre_contracts::ActionReadinessRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<rocketmq_sre_contracts::ActionReadinessView>, ControlPlaneRequestFailure> {
+    let Json(request) = request.map_err(|_| {
+        ControlPlaneRequestFailure::validation(
+            "invalid_action_readiness",
+            "a bounded action readiness JSON request is required",
+        )
+    })?;
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state
+        .supervised_execution
+        .action_readiness(&auth, parse_incident_id(&incident_id)?, &request)
         .await
         .map(Json)
 }

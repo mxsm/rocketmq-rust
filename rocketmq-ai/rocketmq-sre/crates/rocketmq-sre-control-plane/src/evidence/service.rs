@@ -57,6 +57,7 @@ impl EvidenceService {
                 "evidence scope differs from the authenticated connector scope",
             ));
         }
+        reject_preparation_ingress(&request.evidence)?;
         let snapshot = normalize_for_persistence(request.evidence)?;
         let (snapshot, content_digest) = self.externalize_if_needed(snapshot).await?;
         self.repository
@@ -84,6 +85,7 @@ impl EvidenceService {
                 "evidence scope differs from the authenticated cluster scope",
             ));
         }
+        reject_preparation_ingress(&evidence)?;
         let snapshot = normalize_for_persistence(evidence)?;
         let (snapshot, content_digest) = self.externalize_if_needed(snapshot).await?;
         self.repository
@@ -189,6 +191,19 @@ impl EvidenceService {
         })?;
         Ok((snapshot, content_digest))
     }
+}
+
+fn reject_preparation_ingress(snapshot: &EvidenceSnapshot) -> Result<(), ControlPlaneRequestFailure> {
+    if let EvidenceContent::Inline(content) = &snapshot.content
+        && content.get("schema_version").and_then(serde_json::Value::as_str)
+            == Some(rocketmq_sre_contracts::ACTION_PREPARATION_SCHEMA_VERSION)
+    {
+        return Err(ControlPlaneRequestFailure::forbidden(
+            "reserved_evidence_schema",
+            "prepared action evidence is issued only by the Control Plane readonly preparation service",
+        ));
+    }
+    Ok(())
 }
 
 fn normalize_for_persistence(mut snapshot: EvidenceSnapshot) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {

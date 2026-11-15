@@ -84,6 +84,11 @@ impl SupervisedExecutionService {
                 "plan expired before the approval decision",
             ));
         }
+        let admission = if decision == ApprovalDecision::Approved {
+            Some(self.admission_for_plan(auth, &plan).await?)
+        } else {
+            None
+        };
         let approved_precondition_hash = if decision == ApprovalDecision::Approved {
             let live = self.live_plan_state(auth, &plan, now).await?;
             if aggregate_risk(&live.risks)? != persisted_risk {
@@ -126,7 +131,10 @@ impl SupervisedExecutionService {
                 "approval validity must be greater than zero",
             ));
         }
-        let expires_at = (now + duration_seconds(validity)?).min(plan.expires_at);
+        let mut expires_at = (now + duration_seconds(validity)?).min(plan.expires_at);
+        if let Some(admission) = &admission {
+            expires_at = expires_at.min(admission.valid_until);
+        }
         let approval = ApprovalRecord {
             id: ApprovalId::new(),
             plan_id: plan.id,
@@ -212,12 +220,15 @@ impl SupervisedExecutionService {
             .repository
             .persist_approval_decision(
                 &plan,
-                &approval,
-                grant.as_ref(),
-                &expected_statuses,
-                next_status,
-                &audits,
-                external_source,
+                super::super::repository::ApprovalPersistence {
+                    approval: &approval,
+                    grant: grant.as_ref(),
+                    expected_statuses: &expected_statuses,
+                    next_status,
+                    audits: &audits,
+                    external_source,
+                    admission: admission.as_ref(),
+                },
             )
             .await?;
         self.publish_audits(&audits);
@@ -244,6 +255,8 @@ impl SupervisedExecutionService {
             if existing.request.plan.id != request.plan_id
                 || existing.request.plan.plan_hash != request.plan_hash
                 || existing.request.requested_by != auth.subject
+                || existing.request.plan.compute_precondition_hash().ok().as_deref()
+                    != Some(request.precondition_hash.as_str())
             {
                 return Err(ControlPlaneRequestFailure::conflict_code(
                     "idempotency_conflict",
@@ -285,6 +298,7 @@ impl SupervisedExecutionService {
             ));
         }
         let now = self.now();
+        let admission = self.admission_for_plan(auth, &plan).await?;
         let live = self.live_plan_state(auth, &plan, now).await?;
         if aggregate_risk(&live.risks)? != persisted_risk {
             return Err(ControlPlaneRequestFailure::conflict_code(
@@ -327,6 +341,10 @@ impl SupervisedExecutionService {
                 "one or more typed action handlers are not enabled",
             ));
         }
+        // This applies only to the first intent, after the existing precise
+        // policy, live-state and grant checks. Accepted/finished receipts above
+        // retain their original reconciliation linearization.
+        self.require_dispatch_readiness(auth, &plan).await?;
         let expires_at = (now + Duration::minutes(5)).min(grant.expires_at).min(plan.expires_at);
         let id = ExecutionId::new();
         let mut execution = ExecutionRequest {
@@ -384,6 +402,7 @@ impl SupervisedExecutionService {
                     request: execution,
                 },
                 &audit,
+                &admission,
             )
             .await?;
         self.publish_audits(std::slice::from_ref(&audit));

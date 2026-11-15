@@ -20,6 +20,7 @@ use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
@@ -37,6 +38,7 @@ pub struct ControlPlaneConfig {
     shutdown_timeout: Duration,
     internal_token: String,
     grant_signing_key: String,
+    action_target_scope: Arc<crate::supervised_execution::ActionTargetScope>,
     agent_ack_verification_key: String,
     executor_url: Option<Url>,
     executor_token: Option<String>,
@@ -94,6 +96,9 @@ impl ControlPlaneConfig {
             ));
         }
         let dev_auth_enabled = parse_env("ROCKETMQ_SRE_DEV_AUTH", false)?;
+        let action_target_scope = Arc::new(crate::supervised_execution::ActionTargetScope::parse(
+            optional_env("ROCKETMQ_SRE_ACTION_TARGET_SCOPE_JSON").as_deref(),
+        )?);
         let grant_signing_key = match optional_env("ROCKETMQ_SRE_GRANT_SIGNING_KEY") {
             Some(value) if value.len() >= 32 => value,
             Some(_) => {
@@ -176,6 +181,7 @@ impl ControlPlaneConfig {
             shutdown_timeout: Duration::from_secs(shutdown_seconds),
             internal_token,
             grant_signing_key,
+            action_target_scope,
             agent_ack_verification_key,
             executor_url,
             executor_token,
@@ -227,6 +233,10 @@ impl ControlPlaneConfig {
     #[must_use]
     pub fn grant_signing_key(&self) -> &str {
         &self.grant_signing_key
+    }
+
+    pub(crate) fn action_target_scope(&self) -> Arc<crate::supervised_execution::ActionTargetScope> {
+        Arc::clone(&self.action_target_scope)
     }
 
     /// Returns the key used only to verify Execution Agent fence acknowledgements.
@@ -295,6 +305,7 @@ impl ControlPlaneConfig {
             shutdown_timeout: Duration::from_secs(1),
             internal_token: "test-internal-token".to_owned(),
             grant_signing_key: "test-grant-signing-key-at-least-32-bytes".to_owned(),
+            action_target_scope: Arc::new(crate::supervised_execution::ActionTargetScope::default()),
             agent_ack_verification_key: "test-agent-ack-key-at-least-32-bytes".to_owned(),
             executor_url: None,
             executor_token: None,

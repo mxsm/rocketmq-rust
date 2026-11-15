@@ -644,7 +644,7 @@ fn build_routers_with_auth(
     internal_token: Arc<str>,
     grant_signing_key: Arc<str>,
     agent_ack_verification_key: Arc<str>,
-    executor_client: crate::supervised_execution::ExecutorSubmissionClient,
+    executor_runtime: impl Into<crate::supervised_execution::SupervisedExecutionRuntime>,
     auth: AuthService,
     evidence_blobs: EvidenceBlobStore,
     dashboard_links: DashboardDeepLinkPolicy,
@@ -705,13 +705,15 @@ fn build_routers_with_auth(
         assets.clone(),
         slo.clone(),
     )?;
+    let executor_runtime = executor_runtime.into();
     let supervised_execution = crate::supervised_execution::SupervisedExecutionService::new_with_executor(
         repository.clone(),
         workflow.clone(),
         grant_signing_key.as_bytes(),
         model_gateway.clone(),
-        executor_client,
-    )?;
+        executor_runtime.executor,
+    )?
+    .with_target_scope(executor_runtime.target_scope);
     let change_management =
         crate::change_management::ChangeManagementService::new(repository.clone(), supervised_execution.clone())?;
     let release_management =
@@ -1030,7 +1032,10 @@ pub async fn run(
         Arc::<str>::from(config.internal_token()),
         Arc::<str>::from(config.grant_signing_key()),
         Arc::<str>::from(config.agent_ack_verification_key()),
-        executor_client,
+        crate::supervised_execution::SupervisedExecutionRuntime {
+            executor: executor_client,
+            target_scope: config.action_target_scope(),
+        },
         auth,
         evidence_blobs,
         dashboard_links,

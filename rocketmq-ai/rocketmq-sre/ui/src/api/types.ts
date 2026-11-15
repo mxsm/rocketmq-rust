@@ -80,6 +80,9 @@ export type PrepareExecutionPreconditionRequest =
   ApiSchemas["PrepareExecutionPreconditionRequest"];
 export type ExecutionPreconditionEvidenceView =
   ApiSchemas["ExecutionPreconditionEvidenceView"];
+export type ActionReadinessRequest = ApiSchemas["ActionReadinessRequest"];
+export type ActionReadinessView = ApiSchemas["ActionReadinessView"];
+export type ActionPreparationEvidence = ApiSchemas["ActionPreparationEvidence"];
 export type CreatePlanRequest = ApiSchemas["CreatePlanRequest"];
 export type CreatePlanResponse = ApiSchemas["CreatePlanResponse"];
 export type ActionPlanView = ApiSchemas["ActionPlanView"];
@@ -572,7 +575,7 @@ export interface DiagnosisRevision {
   id: string;
   incident_id: string;
   revision: number;
-  status: IncidentStatus;
+  status: IncidentStatus | "confirmed";
   rule_result: Record<string, unknown>;
   hypotheses: Array<{
     title: string;

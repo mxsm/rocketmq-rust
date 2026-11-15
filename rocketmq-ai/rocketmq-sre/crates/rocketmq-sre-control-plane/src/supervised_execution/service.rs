@@ -35,7 +35,6 @@ use rocketmq_sre_contracts::AuditEventId;
 use rocketmq_sre_contracts::AuditEventKind;
 use rocketmq_sre_contracts::CompensationMode;
 use rocketmq_sre_contracts::CorrelationId;
-use rocketmq_sre_contracts::CoverageStatus;
 use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceExposure;
@@ -59,8 +58,6 @@ use rocketmq_sre_contracts::canonical_precondition_hash;
 use rocketmq_sre_contracts::canonical_sha256;
 use rocketmq_sre_contracts::current_evidence_schema;
 use serde_json::json;
-use sha2::Digest;
-use sha2::Sha256;
 use uuid::Uuid;
 
 use super::catalog::ActionCatalog;
@@ -100,6 +97,8 @@ use crate::workflow::WorkflowStreamEvent;
 use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 mod critic;
+mod preparation;
+mod readiness;
 mod support;
 mod workflow;
 
@@ -113,7 +112,7 @@ const MAX_QUARANTINES: u32 = 200;
 const EXECUTION_PRECONDITION_EVIDENCE_SCHEMA: &str = "rocketmq-sre.execution-precondition-evidence.v1";
 const EXECUTION_PRECONDITION_VALIDITY_SECONDS: u64 = 120;
 const CONTROL_PLANE_ISSUER: &str = "rocketmq-sre-control-plane";
-type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
+pub(super) type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct SupervisedExecutionService {
@@ -125,6 +124,7 @@ pub(crate) struct SupervisedExecutionService {
     model_gateway: ModelGatewayService,
     workflow: WorkflowService,
     executor: ExecutorSubmissionClient,
+    target_scope: Arc<super::target_scope::ActionTargetScope>,
     clock: Clock,
 }
 
@@ -173,6 +173,18 @@ impl SupervisedExecutionService {
     }
 
     #[cfg(test)]
+    pub(super) fn new_with_clock_and_executor(
+        repository: PostgresRepository,
+        workflow: WorkflowService,
+        signing_key: impl AsRef<[u8]>,
+        executor: ExecutorSubmissionClient,
+        clock: Clock,
+    ) -> Result<Self, ControlPlaneRequestFailure> {
+        let model_gateway = ModelGatewayService::disabled(repository.clone());
+        Self::new_with_clock_inner(repository, workflow, signing_key, model_gateway, executor, clock)
+    }
+
+    #[cfg(test)]
     pub(super) fn new_with_clock_and_model(
         repository: PostgresRepository,
         workflow: WorkflowService,
@@ -208,6 +220,7 @@ impl SupervisedExecutionService {
             model_gateway,
             workflow,
             executor,
+            target_scope: Arc::new(super::target_scope::ActionTargetScope::default()),
             clock,
         })
     }
@@ -216,140 +229,15 @@ impl SupervisedExecutionService {
         (self.clock)()
     }
 
-    pub(crate) async fn prepare_execution_precondition(
-        &self,
-        auth: &AuthContext,
-        incident_id: rocketmq_sre_contracts::IncidentId,
-        request: &PrepareExecutionPreconditionRequest,
-        correlation_id: CorrelationId,
-    ) -> Result<ExecutionPreconditionEvidenceView, ControlPlaneRequestFailure> {
-        self.policy.require_operator(auth)?;
-        require_cluster(auth, request.cluster_id)?;
-        if request.action_id.trim().is_empty()
-            || request.descriptor_version.trim().is_empty()
-            || request.resource.trim().is_empty()
-            || request.resource.chars().count() > 512
-            || request.resource.chars().any(char::is_control)
-        {
-            return Err(ControlPlaneRequestFailure::validation(
-                "invalid_execution_precondition",
-                "action, descriptor version, and bounded resource are required",
-            ));
-        }
-        let context = self
-            .repository
-            .diagnosis_plan_context(auth, request.cluster_id, incident_id, request.diagnosis_revision_id)
-            .await?;
-        if context.status != "confirmed"
-            || !context.execution_eligible
-            || context.partial
-            || context.primary_model_invocation_id.is_none()
-        {
-            return Err(ControlPlaneRequestFailure::conflict_code(
-                "diagnosis_not_execution_ready",
-                "a confirmed, complete, model-assisted diagnosis is required before a live precondition read",
-            ));
-        }
-        let CatalogResolution::Supervised(action, descriptor) = self.catalog.resolve(&request.action_id)? else {
-            return Err(ControlPlaneRequestFailure::validation(
-                "action_not_executable",
-                "manual-only actions cannot request an Execution Agent precondition",
-            ));
-        };
-        if descriptor.version != request.descriptor_version || !descriptor.execution_supported {
-            return Err(ControlPlaneRequestFailure::validation(
-                "action_version_mismatch",
-                "precondition request does not match an enabled exact action descriptor",
-            ));
-        }
-        validate_parameters(descriptor, &request.parameters)?;
-        let mut result = self
-            .executor
-            .read_precondition(&AgentReadRequest {
-                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
-                tenant_id: auth.tenant_id,
-                cluster_id: request.cluster_id,
-                execution_id: ExecutionId::new(),
-                plan_step_id: PlanStepId::new(),
-                action,
-                descriptor_version: request.descriptor_version.clone(),
-                target: request.resource.clone(),
-                parameters: request.parameters.clone(),
-            })
-            .await?;
-        let observed_at = result
-            .observed_at
-            .with_nanosecond((result.observed_at.nanosecond() / 1_000) * 1_000)
-            .ok_or_else(|| {
-                ControlPlaneRequestFailure::validation(
-                    "invalid_execution_precondition",
-                    "Execution Agent timestamp is outside the supported range",
-                )
-            })?;
-        result.observed_at = observed_at;
-        let content = serde_json::to_value(&result).map_err(|source| {
-            ControlPlaneRequestFailure::from(ControlPlaneError::validation_source(
-                "invalid_execution_precondition",
-                source,
-            ))
-        })?;
-        let content_digest = format!(
-            "sha256:{}",
-            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(serde_json::to_vec(&content).map_err(
-                |source| ControlPlaneRequestFailure::from(ControlPlaneError::validation_source(
-                    "invalid_execution_precondition",
-                    source
-                ))
-            )?,))
-        );
-        let mut evidence = EvidenceSnapshot::capture(
-            EvidenceQuery {
-                query_id: QueryId::new(),
-                correlation_id,
-                tenant_id: auth.tenant_id,
-                cluster_id: request.cluster_id,
-                source: "execution-agent".to_owned(),
-                resource: request.resource.clone(),
-                time_range: TimeRange::new(observed_at, observed_at).map_err(|_| {
-                    ControlPlaneRequestFailure::validation(
-                        "invalid_execution_precondition",
-                        "Execution Agent timestamp cannot form an Evidence range",
-                    )
-                })?,
-            },
-            current_evidence_schema(),
-            observed_at,
-            EvidenceContent::Inline(content),
-        )
-        .map_err(|source| {
-            if source.source().is_some() {
-                ControlPlaneRequestFailure::from(ControlPlaneError::contract(
-                    crate::ControlPlaneFailure::Validation,
-                    "invalid_execution_precondition",
-                    source,
-                ))
-            } else {
-                ControlPlaneRequestFailure::validation(
-                    "invalid_execution_precondition",
-                    "Execution Agent evidence is invalid",
-                )
-            }
-        })?;
-        evidence.freshness_seconds = 0;
-        evidence.sensitivity = Sensitivity::Internal;
-        evidence.coverage = CoverageStatus::Available;
-        evidence.exposure = EvidenceExposure::ExecutionAgentApi;
-        let evidence = self
-            .repository
-            .persist_evidence(auth, &evidence, None, Some(incident_id), &content_digest)
-            .await?;
-        Ok(ExecutionPreconditionEvidenceView {
-            schema_version: EXECUTION_PRECONDITION_EVIDENCE_SCHEMA,
-            incident_id,
-            diagnosis_revision_id: request.diagnosis_revision_id,
-            precondition_hash: result.precondition_hash,
-            evidence,
-        })
+    pub(crate) fn with_target_scope(mut self, target_scope: Arc<super::target_scope::ActionTargetScope>) -> Self {
+        self.target_scope = target_scope;
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_executor(mut self, executor: ExecutorSubmissionClient) -> Self {
+        self.executor = executor;
+        self
     }
 
     pub(crate) async fn create_plan(
@@ -430,6 +318,8 @@ impl SupervisedExecutionService {
             ));
         }
 
+        super::repository::require_current_diagnosis(&context)?;
+
         let now = self.now();
         let expires_at = validated_plan_expiry(now, request.expires_at, self.policy.plan_ttl_seconds())?;
         let version = self
@@ -496,6 +386,7 @@ impl SupervisedExecutionService {
         let mut plan = ActionPlan::seal(draft).map_err(|error| {
             ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_plan", error)
         })?;
+        let admission = self.admission_for_plan(auth, &plan).await?;
         let live = self.live_plan_state(auth, &plan, now).await?;
         let precondition_hash = live.precondition_hash.clone();
         let decision = self.policy.evaluate(auth, &plan, &risks, live.facts, now)?;
@@ -508,7 +399,7 @@ impl SupervisedExecutionService {
         };
         let audits = plan_creation_audits(auth, &plan, &decision, correlation_id, now);
         self.repository
-            .persist_plan_bundle(&plan, risk, &decision, &audits)
+            .persist_plan_bundle(&plan, risk, &decision, &audits, &admission)
             .await?;
         self.publish_audits(&audits);
         Ok(CreatePlanResponse::ActionPlan {
@@ -668,6 +559,9 @@ impl SupervisedExecutionService {
         for id in evidence_ids {
             if let std::collections::btree_map::Entry::Vacant(entry) = evidence.entry(id) {
                 let bound = self.repository.evidence(auth, id).await?;
+                if !self.evidence_is_current(&bound, now)? {
+                    return Err(preparation::preparation_failure("action_evidence_stale_or_invalid"));
+                }
                 let snapshot = self
                     .repository
                     .latest_cluster_source_evidence(auth, bound.cluster_id, &bound.source, &bound.resource)
@@ -769,20 +663,7 @@ impl SupervisedExecutionService {
         snapshot: &EvidenceSnapshot,
         now: DateTime<Utc>,
     ) -> Result<bool, ControlPlaneRequestFailure> {
-        if snapshot.observed_at > now || snapshot.partial || snapshot.coverage != CoverageStatus::Available {
-            return Ok(false);
-        }
-        let maximum_age_seconds = self.policy.max_evidence_age_seconds();
-        if snapshot.freshness_seconds > maximum_age_seconds {
-            return Ok(false);
-        }
-        let allowed_seconds = if snapshot.source == "execution-agent" {
-            EXECUTION_PRECONDITION_VALIDITY_SECONDS.min(maximum_age_seconds)
-        } else {
-            maximum_age_seconds
-        };
-        let allowed = duration_seconds(allowed_seconds)?;
-        Ok(now <= snapshot.observed_at + allowed)
+        Ok(self.evidence_deadline(snapshot, now).is_ok())
     }
 
     fn publish_audits(&self, audits: &[AuditEvent]) {

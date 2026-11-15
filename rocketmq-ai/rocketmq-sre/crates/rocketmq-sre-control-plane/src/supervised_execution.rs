@@ -20,6 +20,7 @@ mod policy;
 mod repository;
 mod service;
 pub(crate) mod signing;
+mod target_scope;
 
 #[cfg(test)]
 mod credential_rotation_e2e_tests;
@@ -27,6 +28,8 @@ mod credential_rotation_e2e_tests;
 mod critic_tests;
 #[cfg(test)]
 mod proxy_restart_e2e_tests;
+#[cfg(test)]
+mod readiness_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
@@ -42,3 +45,18 @@ pub(crate) use model::ExecutionSubmissionView;
 pub(crate) use model::ExternalApprovalSource;
 pub(crate) use model::SubmitExecutionRequest;
 pub(crate) use service::SupervisedExecutionService;
+pub(crate) use target_scope::ActionTargetScope;
+
+pub(crate) struct SupervisedExecutionRuntime {
+    pub(crate) executor: ExecutorSubmissionClient,
+    pub(crate) target_scope: std::sync::Arc<ActionTargetScope>,
+}
+
+impl From<ExecutorSubmissionClient> for SupervisedExecutionRuntime {
+    fn from(executor: ExecutorSubmissionClient) -> Self {
+        Self {
+            executor,
+            target_scope: std::sync::Arc::new(ActionTargetScope::default()),
+        }
+    }
+}

@@ -79,6 +79,8 @@ pub(crate) struct ExecutionPreconditionEvidenceView {
     pub(crate) diagnosis_revision_id: DiagnosisRevisionId,
     pub(crate) evidence: EvidenceSnapshot,
     pub(crate) precondition_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) readiness: Option<rocketmq_sre_contracts::ActionReadinessView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -200,6 +202,10 @@ pub(super) struct DiagnosisPlanContext {
     pub(super) primary_model_invocation_id: Option<ModelInvocationId>,
     pub(super) execution_eligible: bool,
     pub(super) partial: bool,
+    pub(super) incident_status: String,
+    pub(super) incident_resource: Option<String>,
+    pub(super) latest_diagnosis_revision_id: DiagnosisRevisionId,
+    pub(super) primary_model_lineage_valid: bool,
 }
 
 #[derive(Clone, Debug)]

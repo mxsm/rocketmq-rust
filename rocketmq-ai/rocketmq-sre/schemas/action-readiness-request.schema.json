@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DiagnosisRevisionId": {
+      "description": "Stable identifier for an immutable diagnosis revision.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A local, read-only assessment of one closed action candidate.\n\nMissing candidate inputs may produce blocked facts while diagnosis-only\noperations remain observable. Selecting a Plan requires both Plan selectors.",
+  "properties": {
+    "action_id": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "descriptor_version": {
+      "type": "string"
+    },
+    "diagnosis_revision_id": {
+      "$ref": "#/$defs/DiagnosisRevisionId"
+    },
+    "parameters": true,
+    "plan_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "plan_step_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlanStepId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "precondition_evidence_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EvidenceId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resource": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cluster_id",
+    "diagnosis_revision_id",
+    "action_id",
+    "descriptor_version",
+    "resource",
+    "parameters"
+  ],
+  "title": "ActionReadinessRequest",
+  "type": "object"
+}
