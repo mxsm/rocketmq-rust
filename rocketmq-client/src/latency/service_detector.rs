@@ -16,7 +16,7 @@
 ///
 /// [`detect`](Self::detect) returns a `Send` future.
 #[trait_variant::make(Send)]
-pub trait ServiceDetector: Sync + 'static {
+pub trait BrokerReachabilityProbe: Sync + 'static {
     /// Checks if the remote service at the given endpoint is reachable.
     ///
     /// Returns `true` if the service is back to normal; `false` otherwise.

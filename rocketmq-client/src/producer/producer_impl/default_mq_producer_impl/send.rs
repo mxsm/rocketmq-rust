@@ -1742,7 +1742,7 @@ pub(crate) struct DefaultServiceDetector {
     pub(super) topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfoSnapshot>>,
 }
 
-impl ServiceDetector for DefaultServiceDetector {
+impl BrokerReachabilityProbe for DefaultServiceDetector {
     async fn detect(&self, endpoint: &str, timeout_millis: u64) -> bool {
         let topic = match self
             .topic_publish_info_table
