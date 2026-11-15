@@ -413,6 +413,48 @@ fn native_session_storage_failure_fails_closed_and_does_not_create_anonymous_ope
 }
 
 #[test]
+fn native_session_poll_drains_started_storage_read_when_cancelled() {
+    let fixture = Fixture::new();
+    let cancellation = CancellationToken::new();
+    let io = fixture.service.context.storage_io().clone();
+    let (started, started_read) = tokio::sync::oneshot::channel();
+    let (release, wait_release) = std::sync::mpsc::channel();
+    let (finished, finished_read) = tokio::sync::oneshot::channel();
+    let mut read = Some((started, wait_release, finished));
+    fixture.runtime.block_on(async {
+        let mut poll = Box::pin(poll_validation(cancellation.clone(), move || {
+            let (started, wait_release, finished) = read.take().expect("cancelled polling must not start another read");
+            let io = io.clone();
+            async move {
+                io.spawn_io("session-validation-read", move || {
+                    let _ = started.send(());
+                    let _ = wait_release.recv();
+                    let _ = finished.send(());
+                })
+                .await
+                .unwrap();
+            }
+        }));
+        tokio::select! {
+            _ = &mut poll => panic!("session polling ended before cancellation"),
+            result = started_read => result.unwrap(),
+        }
+        cancellation.cancel();
+        let pending = std::future::poll_fn(|cx| std::task::Poll::Ready(poll.as_mut().poll(cx).is_pending())).await;
+        assert!(
+            pending,
+            "session polling must await its started storage read after cancellation"
+        );
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), &mut poll).await.unwrap();
+        finished_read.await.unwrap();
+    });
+    fixture.runtime.block_on(fixture.native.close()).unwrap();
+    let report = fixture.runtime.shutdown_runtime_blocking().unwrap();
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[test]
 fn native_session_queued_owner_never_validates_or_ends_a_replacement() {
     let fixture = Fixture::new();
     let context = fixture.runtime.root_context().component("queued-session-owner");

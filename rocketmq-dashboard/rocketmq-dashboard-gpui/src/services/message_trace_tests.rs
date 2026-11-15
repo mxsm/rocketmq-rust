@@ -93,5 +93,6 @@ fn trace_owned_read_cancels_when_the_gpui_waiter_drops_and_shutdown_drains_it() 
         assert!(services.audit_pending().await.unwrap().is_empty());
     });
     assert_eq!(backend.calls().trace.len(), 1);
-    assert!(runtime.shutdown_runtime_blocking().unwrap().is_healthy());
+    let report = runtime.shutdown_runtime_blocking().unwrap();
+    assert!(report.is_healthy(), "{}", report.to_json());
 }
