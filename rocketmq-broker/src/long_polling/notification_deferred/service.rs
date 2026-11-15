@@ -24,6 +24,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
