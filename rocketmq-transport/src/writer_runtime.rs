@@ -35,6 +35,7 @@ use crate::error_helpers::client_shutting_down;
 use crate::error_helpers::connection_failed;
 use crate::error_helpers::connection_failed_without_source;
 use crate::error_helpers::TransportStage;
+use crate::session_executor::SessionRequestActivity;
 use crate::telemetry::TransportTelemetry;
 use crate::write_result::WriterFailure;
 use crate::write_strategy::OutboundPayload;
@@ -508,7 +509,43 @@ fn fail_envelope(envelope: LaneEnvelope, diagnostics: &SessionWriterDiagnostics,
     write.completion.complete(Err(failure.for_queued_follower()));
 }
 
+/// Largest batch that waits one scheduler turn for responses of requests still running.
+const COALESCE_MAX_ITEMS: usize = 2;
+
+/// Whether a batch of `queued` responses should wait one turn before it is written.
+///
+/// It waits only while more of the session's requests are running than the batch holds, so a
+/// response that has no running sibling (a synchronous caller) goes out at once. Larger batches
+/// never wait: a busy session that waited behind its own requests lost throughput.
+fn waits_for_running_requests(queued: usize, running: usize) -> bool {
+    queued <= COALESCE_MAX_ITEMS && running > queued
+}
+
+/// Lets requests that are still running queue their responses into this batch.
+///
+/// On a session task that also reads, each response from a request task on another worker wakes
+/// the writer, and with few requests in flight per session nearly every response went out in its
+/// own `writev`. One yield lets the session's own request tasks, which usually wait in the same
+/// worker's queue, finish first; whatever they queued is written with this batch.
+async fn coalesce_running_responses(
+    receivers: &mut WriterReceivers,
+    activity: Option<&SessionRequestActivity>,
+    batch: &mut Vec<LaneEnvelope>,
+) {
+    let Some(activity) = activity else {
+        return;
+    };
+    if !waits_for_running_requests(batch.len(), activity.running()) {
+        return;
+    }
+    tokio::task::yield_now().await;
+    receivers.collect_ready(batch);
+}
+
 /// Runs the sole socket writer owner until graceful close, cancellation, or a poisoned write.
+///
+/// `request_activity` is set for a writer that shares the session task with its reader; such a
+/// writer waits one turn before a small batch while the session's requests are still running.
 pub(crate) async fn run_session_writer(
     mut frame_writer: ConnectionFrameWriter,
     mut receivers: WriterReceivers,
@@ -516,6 +553,7 @@ pub(crate) async fn run_session_writer(
     state: tokio::sync::watch::Sender<ConnectionState>,
     reader_shutdown: tokio_util::sync::CancellationToken,
     telemetry: TransportTelemetry,
+    request_activity: Option<SessionRequestActivity>,
 ) {
     let mut closing: Option<CloseRequest> = None;
     let mut scratch = BatchScratch::with_capacity(receivers.config.batch.max_items.get());
@@ -539,6 +577,9 @@ pub(crate) async fn run_session_writer(
             WriterEvent::Write(first) => {
                 scratch.envelopes.push(first);
                 let mut close_during_batch = receivers.collect_batch(&mut scratch.envelopes).await;
+                if close_during_batch.is_none() && closing.is_none() {
+                    coalesce_running_responses(&mut receivers, request_activity.as_ref(), &mut scratch.envelopes).await;
+                }
                 match write_batch(
                     &mut frame_writer,
                     &diagnostics,
@@ -813,7 +854,9 @@ mod queue_regression_tests {
     use bytes::Bytes;
     use tokio::sync::oneshot;
 
+    use super::coalesce_running_responses;
     use super::try_reserve_bytes;
+    use super::waits_for_running_requests;
     use super::writer_lanes;
     use super::CloseRequest;
     use super::LaneEnvelope;
@@ -828,6 +871,7 @@ mod queue_regression_tests {
     use crate::admission::AdmissionScope;
     use crate::error_helpers::connection_failed;
     use crate::error_helpers::TransportStage;
+    use crate::session_executor::SessionRequestActivity;
     use crate::write_strategy::OutboundPayload;
     use crate::write_strategy::QueuedWrite;
     use crate::write_strategy::QueuedWriteProgress;
@@ -1056,6 +1100,67 @@ mod queue_regression_tests {
                     .into_write()
             ),
             "item-third"
+        );
+    }
+
+    #[test]
+    fn only_small_batches_with_running_siblings_wait() {
+        assert!(!waits_for_running_requests(1, 0));
+        assert!(
+            !waits_for_running_requests(1, 1),
+            "a lone synchronous response is not held"
+        );
+        assert!(waits_for_running_requests(1, 2));
+        assert!(waits_for_running_requests(2, 3));
+        assert!(!waits_for_running_requests(2, 2));
+        assert!(!waits_for_running_requests(3, 64), "larger batches go out at once");
+    }
+
+    #[tokio::test]
+    async fn a_small_batch_takes_responses_queued_by_running_requests() {
+        let (lanes, mut receivers) = writer_lanes(queue_config());
+        expect_enqueued(lanes.try_send(AdmissionClass::Data, queued_write("first", 16)));
+        let mut batch = vec![receivers.take_ready().expect("first response")];
+        // On the current-thread test runtime the sibling runs only when the writer yields.
+        let sibling_lanes = lanes.clone();
+        let sibling = tokio::spawn(async move {
+            expect_enqueued(sibling_lanes.try_send(AdmissionClass::Data, queued_write("second", 16)));
+        });
+
+        let activity = SessionRequestActivity::with_running(2);
+        coalesce_running_responses(&mut receivers, Some(&activity), &mut batch).await;
+
+        let labels: Vec<_> = batch
+            .into_iter()
+            .map(|envelope| label(&envelope.into_write()))
+            .collect();
+        assert_eq!(labels, ["first", "second"]);
+        sibling.await.expect("sibling request task");
+    }
+
+    #[tokio::test]
+    async fn a_response_without_running_siblings_is_not_held() {
+        let (lanes, mut receivers) = writer_lanes(queue_config());
+        expect_enqueued(lanes.try_send(AdmissionClass::Data, queued_write("only", 16)));
+        let mut batch = vec![receivers.take_ready().expect("only response")];
+        let later_lanes = lanes.clone();
+        let later = tokio::spawn(async move {
+            expect_enqueued(later_lanes.try_send(AdmissionClass::Data, queued_write("later", 16)));
+        });
+
+        for activity in [None, Some(SessionRequestActivity::with_running(1))] {
+            coalesce_running_responses(&mut receivers, activity.as_ref(), &mut batch).await;
+            assert_eq!(batch.len(), 1, "the writer did not wait for other tasks");
+        }
+        later.await.expect("later task");
+        assert_eq!(
+            label(
+                &receivers
+                    .take_ready()
+                    .expect("later response stays queued")
+                    .into_write()
+            ),
+            "later"
         );
     }
 }

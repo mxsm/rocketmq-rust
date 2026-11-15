@@ -325,6 +325,10 @@ impl AuthorizedDispatchSession {
         self.executor.operation_context()
     }
 
+    pub(crate) fn request_activity(&self) -> crate::session_executor::SessionRequestActivity {
+        self.executor.request_activity()
+    }
+
     /// Dispatches a request handled by the low-level connection callback.
     ///
     /// This adapter shares the same authorization, admission, deadline, and

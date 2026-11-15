@@ -91,6 +91,12 @@ impl SessionExecutor {
         })
     }
 
+    pub(crate) fn request_activity(&self) -> SessionRequestActivity {
+        SessionRequestActivity {
+            counts: Arc::clone(&self.inner.task_counts),
+        }
+    }
+
     pub(crate) fn try_execute<F, Fut, R, Rejected>(
         &self,
         retained_bytes: usize,
@@ -273,6 +279,34 @@ impl SessionExecutorDrainReport {
 struct SessionTaskCounts {
     inline: AtomicUsize,
     resume: AtomicUsize,
+}
+
+/// Read-only count of one session's request tasks that are still running.
+///
+/// A task counts from admission until its future ends, which is after it has queued its
+/// response. The session writer reads it to tell whether more responses are on their way.
+#[derive(Clone)]
+pub(crate) struct SessionRequestActivity {
+    counts: Arc<SessionTaskCounts>,
+}
+
+impl SessionRequestActivity {
+    /// Running request tasks, including deferred resumes. A snapshot for scheduling decisions only.
+    pub(crate) fn running(&self) -> usize {
+        self.counts
+            .inline
+            .load(Ordering::Relaxed)
+            .saturating_add(self.counts.resume.load(Ordering::Relaxed))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_running(running: usize) -> Self {
+        let counts = SessionTaskCounts::default();
+        counts.inline.store(running, Ordering::Relaxed);
+        Self {
+            counts: Arc::new(counts),
+        }
+    }
 }
 
 enum SessionTaskCountKind {
