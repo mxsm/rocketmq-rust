@@ -82,7 +82,7 @@ use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
 use crate::long_polling::pending_arrival_latch::PendingOffsetRangeLatch;
 use crate::long_polling::pending_arrival_latch::PendingOffsetRangeReservation;
-use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
+use crate::long_polling::pending_arrival_latch::RetainedByteSize;
 
 mod continuation;
 mod data;
@@ -917,7 +917,7 @@ impl NotificationPendingOffsetTarget {
     }
 }
 
-impl PendingOffsetTarget for NotificationPendingOffsetTarget {
+impl RetainedByteSize for NotificationPendingOffsetTarget {
     fn retained_bytes(&self) -> usize {
         std::mem::size_of::<Self>().saturating_add(self.topic.len().saturating_mul(2))
     }

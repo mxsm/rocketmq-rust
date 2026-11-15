@@ -88,7 +88,7 @@ use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
 use crate::long_polling::pending_arrival_latch::PendingOffsetRangeLatch;
 use crate::long_polling::pending_arrival_latch::PendingOffsetRangeReservation;
-use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
+use crate::long_polling::pending_arrival_latch::RetainedByteSize;
 use continuation::PullContinuationAdmission;
 pub(crate) use continuation::PullContinuationError;
 use continuation::PullContinuationPermit;
@@ -1028,7 +1028,7 @@ impl PullPendingOffsetReservation {
     }
 }
 
-impl PendingOffsetTarget for PullCriteriaKey {
+impl RetainedByteSize for PullCriteriaKey {
     fn retained_bytes(&self) -> usize {
         std::mem::size_of::<Self>().saturating_add(self.topic().len().saturating_mul(2))
     }

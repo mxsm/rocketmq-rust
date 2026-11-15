@@ -447,7 +447,7 @@ impl PendingOffsetRange {
     }
 }
 
-pub(crate) trait PendingOffsetTarget {
+pub(crate) trait RetainedByteSize {
     fn retained_bytes(&self) -> usize;
 }
 
@@ -460,7 +460,7 @@ pub(crate) struct PendingOffsetRangeLatch<K> {
 
 impl<K> PendingOffsetRangeLatch<K>
 where
-    K: Clone + Eq + Hash + PendingOffsetTarget,
+    K: Clone + Eq + Hash + RetainedByteSize,
 {
     pub(crate) fn new(max_count: usize, max_bytes: usize) -> Arc<Self> {
         Arc::new(Self {
@@ -631,7 +631,7 @@ struct PendingOffsetRangeEntry {
 #[must_use]
 pub(crate) struct PendingOffsetRangeReservation<K>
 where
-    K: Clone + Eq + Hash + PendingOffsetTarget,
+    K: Clone + Eq + Hash + RetainedByteSize,
 {
     latch: Arc<PendingOffsetRangeLatch<K>>,
     key: Option<K>,
@@ -640,7 +640,7 @@ where
 
 impl<K> PendingOffsetRangeReservation<K>
 where
-    K: Clone + Eq + Hash + PendingOffsetTarget,
+    K: Clone + Eq + Hash + RetainedByteSize,
 {
     pub(crate) fn key(&self) -> &K {
         self.key.as_ref().expect("pending offset reservation retains its key")
@@ -679,7 +679,7 @@ where
 
 impl<K> Drop for PendingOffsetRangeReservation<K>
 where
-    K: Clone + Eq + Hash + PendingOffsetTarget,
+    K: Clone + Eq + Hash + RetainedByteSize,
 {
     fn drop(&mut self) {
         if let Some(key) = self.key.take() {
@@ -705,7 +705,7 @@ mod tests {
     #[derive(Clone, Debug, Eq, Hash, PartialEq)]
     struct TestTarget(u8);
 
-    impl PendingOffsetTarget for TestTarget {
+    impl RetainedByteSize for TestTarget {
         fn retained_bytes(&self) -> usize {
             1
         }
