@@ -881,6 +881,44 @@ Initialize-HelperSmokeConfig -SourcePath $SourcePath -DestinationPath $Destinati
         )
         self.assertTrue(any("controller image target missing" in finding for finding in self.audit(dockerfile=wrong_owner)))
 
+    def test_service_build_owners_accept_shell_assignments_and_indentation(self) -> None:
+        command = "cargo build --locked --release --package rocketmq-broker --bin rocketmq-broker-rust"
+        for prefix in (
+            "",
+            "        ",
+            'RUSTFLAGS="-Cprofile-use=/tmp/pgo data" ',
+            "    CARGO_INCREMENTAL=0 RUSTFLAGS='-Cprofile-generate=/tmp/raw data' ",
+        ):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(
+                    {("rocketmq-broker", "rocketmq-broker-rust")},
+                    GUARD.cargo_build_owners(prefix + command),
+                )
+
+    def test_service_build_owners_reject_comments_strings_and_incomplete_commands(self) -> None:
+        command = "cargo build --package rocketmq-broker --bin rocketmq-broker-rust"
+        for source in (
+            "# " + command,
+            'echo "' + command + '"',
+            'RUSTFLAGS="unterminated ' + command,
+            "cargo build --package rocketmq-broker",
+            "cargo build --bin rocketmq-broker-rust",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(set(), GUARD.cargo_build_owners(source))
+
+    def test_wrong_cargo_package_or_binary_owner_is_rejected(self) -> None:
+        for old, replacement in (
+            ("--package rocketmq-broker", "--package unrelated"),
+            ("--bin rocketmq-broker-rust", "--bin unrelated"),
+        ):
+            with self.subTest(argument=old):
+                self.assertIn(old, self.dockerfile)
+                self.assertIn(
+                    "service builder missing owner pair: rocketmq-broker/rocketmq-broker-rust",
+                    self.audit(dockerfile=self.dockerfile.replace(old, replacement)),
+                )
+
     def test_shell_dispatch_or_secret_command_is_rejected(self) -> None:
         shell_entrypoint = self.dockerfile.replace(
             'ENTRYPOINT ["/usr/local/bin/rocketmq-broker-rust"]',
