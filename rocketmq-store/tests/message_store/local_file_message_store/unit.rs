@@ -5969,3 +5969,80 @@ async fn load_reports_failed_and_skipped_phases_and_retains_the_original_error()
         }
     }
 }
+
+#[tokio::test]
+async fn a_filtered_pull_skips_every_non_matching_message_in_the_filter_window() {
+    struct TagFilter(i64);
+
+    impl MessageFilter for TagFilter {
+        fn is_matched_by_consume_queue(
+            &self,
+            tags_code: Option<i64>,
+            _cq_ext_unit: Option<&crate::consume_queue::cq_ext_unit::CqExtUnit>,
+        ) -> bool {
+            tags_code == Some(self.0)
+        }
+
+        fn is_matched_by_commit_log(
+            &self,
+            _msg_buffer: Option<&[u8]>,
+            _properties: Option<&HashMap<CheetahString, CheetahString>>,
+        ) -> bool {
+            true
+        }
+    }
+
+    let temp_dir = tempdir().expect("temporary Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            // No HA listener, so parallel tests do not contend for its port.
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("filtered-pull-window");
+    let group = CheetahString::from_static_str("filtered-pull-window-group");
+    store.init().await.expect("initialize Store");
+    assert!(store.load().await, "load Store");
+    store.start().await.expect("start Store");
+
+    // 100 messages the filter rejects, then 10 it accepts, all inside one filter window
+    // (`max_filter_message_size` 16,000 bytes, 800 consume queue units), as Java scans it.
+    let (skipped, wanted) = (100_i64, 10_i64);
+    for index in 0..skipped + wanted {
+        let mut message = build_test_message(&topic, Bytes::from(format!("filtered-body-{index}")));
+        if index >= skipped {
+            message.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_TAGS),
+                CheetahString::from_static_str("wanted"),
+            );
+        }
+        let put = store.put_message(message).await;
+        assert_eq!(put.put_message_status(), PutMessageStatus::PutOk);
+    }
+    assert_eq!(
+        skipped + wanted,
+        wait_for_max_offset_in_queue(&store, &topic, skipped + wanted).await
+    );
+
+    let filter: crate::filter::ArcMessageFilter =
+        Arc::new(TagFilter(MessageExtBrokerInner::tags_string_to_tags_code("wanted")));
+    let result = store
+        .get_message(&group, &topic, 0, 0, 32, Some(filter))
+        .await
+        .expect("get message result");
+    store.shutdown().await;
+
+    assert_eq!(result.status(), Some(GetMessageStatus::Found));
+    assert_eq!(result.message_count(), 10);
+    assert_eq!(
+        result.message_queue_offset().first().copied(),
+        Some(u64::try_from(skipped).expect("small count"))
+    );
+    assert_eq!(result.next_begin_offset(), skipped + wanted);
+}

@@ -209,12 +209,17 @@ impl LocalFileMessageStore {
                 status = GetMessageStatus::NoMatchedMessage;
                 let mut max_phy_offset_pulling = 0;
                 let mut cq_file_num = 0;
+                // The last queue offset the filter window below admits.
+                let filter_window_end = offset.saturating_add(
+                    i64::from(max_filter_message_size) / i64::from(consume_queue.get_unit_size().max(1)),
+                );
+                let mut select_count = max_msg_nums;
                 while get_result.buffer_total_size() <= 0
                     && next_begin_offset < max_offset
                     && cq_file_num < self.message_store_config.travel_cq_file_num_when_get_message
                 {
                     cq_file_num += 1;
-                    let buffer_consume_queue = consume_queue.iterate_from_with_count(next_begin_offset, max_msg_nums);
+                    let buffer_consume_queue = consume_queue.iterate_from_with_count(next_begin_offset, select_count);
                     if buffer_consume_queue.is_none() {
                         status = GetMessageStatus::OffsetFoundNull;
                         next_begin_offset = self.next_offset_correction(
@@ -233,6 +238,7 @@ impl LocalFileMessageStore {
                     let Some(mut buffer_consume_queue) = buffer_consume_queue else {
                         break;
                     };
+                    let mut selection_exhausted = false;
                     loop {
                         if next_begin_offset >= max_offset {
                             break;
@@ -340,8 +346,22 @@ impl LocalFileMessageStore {
                             status = GetMessageStatus::Found;
                             next_phy_file_start_offset = i64::MIN;
                         } else {
+                            selection_exhausted = true;
                             break;
                         }
+                    }
+                    // The first selection holds `max_msg_nums` units. When the filter rejected all
+                    // of them, read the rest of the filter window before this counts as a traveled
+                    // file, as Java's iteration covers the window; otherwise a filtered consumer
+                    // skips only one batch of non-matching messages per pull.
+                    if selection_exhausted
+                        && select_count == max_msg_nums
+                        && get_result.buffer_total_size() <= 0
+                        && next_begin_offset <= filter_window_end
+                        && next_begin_offset < max_offset
+                    {
+                        select_count = i32::try_from(filter_window_end - next_begin_offset + 1).unwrap_or(i32::MAX);
+                        cq_file_num -= 1;
                     }
                 }
                 if disk_fall_recorded {
