@@ -483,6 +483,7 @@ async fn queued_response_api_records_queue_wait_but_generic_commands_do_not() {
         state_tx,
         CancellationToken::new(),
         telemetry,
+        None,
     ));
 
     connection
@@ -591,6 +592,7 @@ async fn actual_dropped_active_completion_maps_to_typed_possibly_partial() {
         state_tx,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
     let send = tokio::spawn(async move {
         let mut connection = connection;
@@ -843,6 +845,7 @@ async fn queued_preflight_deadline_matches_direct_not_started_classification_wit
         state_tx,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
     let send = tokio::spawn(async move {
         let mut connection = queued_connection;
@@ -923,6 +926,7 @@ async fn micro_batch_preflight_deadline_only_rejects_the_member_that_caused_the_
         state_tx,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
 
     checked.notified().await;
@@ -1007,6 +1011,7 @@ async fn prewrite_stall_without_an_owner_deadline_remains_a_typed_failure() {
         state_tx,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
 
     checked.notified().await;
@@ -1087,6 +1092,7 @@ async fn queued_control_does_not_reclassify_a_completed_stall_after_its_later_de
         state_tx,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
     let owner_deadline = RequestDeadline::after(std::time::Duration::from_millis(80));
     let (control_state_tx, control_state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
@@ -1227,6 +1233,7 @@ async fn queued_control_does_not_reclassify_a_dropped_completion_after_its_later
         state_tx,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
     connection
         .send_command(RemotingCommand::create_remoting_command(14))
@@ -1306,6 +1313,7 @@ async fn queued_typed_transport_failure_matches_direct_possibly_partial_classifi
         state_tx,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
 
     let response = connection
@@ -1365,6 +1373,7 @@ async fn queued_facade_preserves_the_shared_canonical_writer_source() {
         state_tx,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
 
     let error = queued_connection

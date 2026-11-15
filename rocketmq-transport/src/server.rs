@@ -1565,6 +1565,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
         writer_state,
         reader_shutdown,
         telemetry.clone(),
+        shares_task.then(|| executor.request_activity()),
     );
     let writer_stop = writer_operation.cancellation_token();
     let (writer_exit, writer_exit_guard) = SessionWriterExit::new();
@@ -1769,9 +1770,11 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
                 writer_stop.cancel();
             };
             // Both halves are polled on every wake of the session task. The writer writes while
-            // writes are queued and hands over once the queue is empty. Measured alternatives
-            // were slower: yielding after each batch put the session behind its own requests,
-            // and per-half wakers (`FuturesUnordered`) cut single-connection throughput.
+            // writes are queued and hands over once the queue is empty. It yields only before a
+            // batch of at most two responses while more of the session's requests are running,
+            // so their responses share one `writev`. Measured alternatives were slower: yielding
+            // after every batch put the session behind its own requests, and per-half wakers
+            // (`FuturesUnordered`) cut single-connection throughput.
             futures::future::join(body, writer).await;
         }
         None => session_body.await,

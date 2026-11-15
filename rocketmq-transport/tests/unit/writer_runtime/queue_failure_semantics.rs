@@ -401,6 +401,7 @@ async fn active_batch_failure_shares_source_and_drains_followers_without_a_secon
         state,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     )
     .await;
 
@@ -470,6 +471,7 @@ async fn close_collected_with_a_poisoned_batch_receives_the_same_canonical_failu
         state,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
 
     batch_wait_started.notified().await;
@@ -540,6 +542,7 @@ async fn active_file_failure_and_poison_drain_release_each_file_lease_once() {
         state,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     )
     .await;
 
@@ -599,6 +602,7 @@ async fn successful_file_write_releases_its_lease_once_after_completion() {
         state,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     )
     .await;
 
@@ -657,6 +661,7 @@ async fn response_queue_wait_metric_excludes_non_response_writes() {
         state,
         CancellationToken::new(),
         telemetry,
+        None,
     )
     .await;
 
@@ -702,6 +707,7 @@ async fn queued_file_cancellation_releases_its_lease_before_socket_progress() {
         state,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     )
     .await;
 
@@ -772,6 +778,7 @@ async fn queued_cancellation_wins_before_writer_start_and_never_touches_the_sock
         state,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     )
     .await;
 
@@ -847,6 +854,7 @@ async fn dropped_active_completion_is_possibly_partial_and_releases_its_permit()
         state,
         CancellationToken::new(),
         TransportTelemetry::noop(),
+        None,
     ));
 
     entered.notified().await;
