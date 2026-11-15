@@ -54,7 +54,7 @@ impl FakeTopologyBackend {
         (started, release, finished)
     }
 }
-impl TopologyBackend for FakeTopologyBackend {
+impl TopologyLayerReader for FakeTopologyBackend {
     fn layer(&self, request: TopologyReadRequest) -> ServiceFuture<'_, Result<TopologyLayer, UiError>> {
         self.calls.lock().unwrap().push(request.clone());
         let failure = self
