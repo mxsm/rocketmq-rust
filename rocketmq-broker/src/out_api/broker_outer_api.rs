@@ -68,11 +68,7 @@ use rocketmq_protocol::protocol::header::controller::register_broker_to_controll
 use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_protocol::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
 use rocketmq_protocol::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
-use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
-use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
-use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
-use rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_protocol::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
 use rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
@@ -526,57 +522,6 @@ impl BrokerOuterAPI {
         results.into_iter().flatten().collect()
     }
 
-    /// Get maximum offset of a message queue
-    ///
-    /// # Arguments
-    /// * `addr` - Broker address
-    /// * `topic` - Topic name
-    /// * `queue_id` - Queue ID
-    /// * `committed` - Whether to get committed offset
-    ///
-    /// # Returns
-    /// Maximum offset or error
-    pub async fn get_max_offset(
-        &self,
-        addr: &CheetahString,
-        topic: CheetahString,
-        queue_id: i32,
-        committed: bool,
-    ) -> crate::broker_error::BrokerResult<i64> {
-        let request_header = GetMaxOffsetRequestHeader {
-            topic,
-            queue_id,
-            committed,
-            topic_request_header: None,
-        };
-
-        let request = self
-            .command_factory
-            .create_request_command(RequestCode::GetMaxOffset, request_header);
-
-        let response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
-            Ok(OutboundRequestResult::Response(response)) => response,
-            Ok(OutboundRequestResult::Rejected(rejection)) => {
-                return Err(broker_request_rejection_error("get_max_offset", rejection));
-            }
-            Ok(OutboundRequestResult::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
-        };
-
-        match ResponseCode::from(response.code()) {
-            ResponseCode::Success => {
-                let response_header = response.decode_command_custom_header::<GetMaxOffsetResponseHeader>()?;
-                Ok(response_header.offset)
-            }
-            _ => Err(crate::broker_error::broker_operation_failed_with_address(
-                "get_max_offset",
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                Some(addr.to_string()),
-            )),
-        }
-    }
-
     /// The master terms of the Broker at `addr`, and where its CommitLog ends.
     pub async fn get_broker_epoch_cache(
         &self,
@@ -607,54 +552,6 @@ impl BrokerOuterAPI {
             _ => Err(crate::broker_error::broker_operation_failed_with_address(
                 "get_broker_epoch_cache",
                 code,
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                Some(addr.to_string()),
-            )),
-        }
-    }
-
-    /// Get minimum offset of a message queue
-    ///
-    /// # Arguments
-    /// * `addr` - Broker address
-    /// * `topic` - Topic name
-    /// * `queue_id` - Queue ID
-    ///
-    /// # Returns
-    /// Minimum offset or error
-    pub async fn get_min_offset(
-        &self,
-        addr: &CheetahString,
-        topic: CheetahString,
-        queue_id: i32,
-    ) -> crate::broker_error::BrokerResult<i64> {
-        let request_header = GetMinOffsetRequestHeader {
-            topic,
-            queue_id,
-            topic_request_header: None,
-        };
-
-        let request = self
-            .command_factory
-            .create_request_command(RequestCode::GetMinOffset, request_header);
-
-        let response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
-            Ok(OutboundRequestResult::Response(response)) => response,
-            Ok(OutboundRequestResult::Rejected(rejection)) => {
-                return Err(broker_request_rejection_error("get_min_offset", rejection));
-            }
-            Ok(OutboundRequestResult::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
-        };
-
-        match ResponseCode::from(response.code()) {
-            ResponseCode::Success => {
-                let response_header = response.decode_command_custom_header::<GetMinOffsetResponseHeader>()?;
-                Ok(response_header.offset)
-            }
-            _ => Err(crate::broker_error::broker_operation_failed_with_address(
-                "get_min_offset",
-                response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 Some(addr.to_string()),
             )),
