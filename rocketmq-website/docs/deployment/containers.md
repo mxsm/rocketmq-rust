@@ -11,7 +11,7 @@ Use a Linux host or Linux VM with Rust, the repository build prerequisites, and 
 | Asset | Behavior |
 | --- | --- |
 | `distribution/container/core-service.Dockerfile` | Copies the supplied binary and configuration into a distroless runtime; it does not compile Rust |
-| `docker/Dockerfile.base` | Multi-stage builder/runtime targets for services and separate test drivers |
+| `docker/Dockerfile.base` | Multi-stage builder/runtime targets for services and separate test drivers. The service targets build the Broker with profile-guided optimization (PGO), trained on loopback during the build; `--build-arg ROCKETMQ_BROKER_PGO=false` skips it for a faster build |
 | Core Helm chart image values | Image references to supply for your own available artifacts; default tags do not prove registry availability |
 
 The commands below use the first path. Match the binary's CPU architecture and dynamic-library requirements to the selected distroless runtime. A successful host compilation alone does not prove container startup.
