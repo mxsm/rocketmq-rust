@@ -56,7 +56,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::code::response_code::ResponseCode::SystemError;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
-use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
+use rocketmq_protocol::common::message::message_decoder::string_to_message_properties_with_additional;
 use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -114,6 +114,7 @@ use message_builder::enrich_parsed_send_message_request_properties;
 use message_builder::enrich_send_message_properties;
 use message_builder::recall_handle_topic_and_timestamp;
 use message_builder::should_create_uniq_key;
+use message_builder::BROKER_SEND_PROPERTY_COUNT;
 use structured_store::append_message_with_control_reply;
 use structured_store::await_store;
 use structured_store::StoreAwaitControl;
@@ -397,7 +398,10 @@ where
             Some(parsed_request) => parsed_request,
             None => {
                 let header = parse_request_header(request, request_code)?;
-                let properties = string_to_message_properties(header.properties.as_ref());
+                let properties = string_to_message_properties_with_additional(
+                    header.properties.as_ref(),
+                    BROKER_SEND_PROPERTY_COUNT,
+                );
                 ParsedSendRequest { header, properties }
             }
         };
@@ -474,7 +478,10 @@ where
         )
         .then(|| {
             parse_request_header(request, request_code).ok().map(|header| {
-                let properties = string_to_message_properties(header.properties.as_ref());
+                let properties = string_to_message_properties_with_additional(
+                    header.properties.as_ref(),
+                    BROKER_SEND_PROPERTY_COUNT,
+                );
                 ParsedSendRequest { header, properties }
             })
         })

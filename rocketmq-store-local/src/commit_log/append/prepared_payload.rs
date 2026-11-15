@@ -35,6 +35,23 @@ pub enum PreparedPayloadKind {
     Batch,
 }
 
+/// The frame descriptors of a [`PreparedPayload`]. A single message, the common case, keeps its one
+/// descriptor inline instead of allocating a shared slice for it.
+#[derive(Debug, Clone)]
+enum PreparedFrames {
+    One(PreparedFrame),
+    Many(Arc<[PreparedFrame]>),
+}
+
+impl PreparedFrames {
+    fn as_slice(&self) -> &[PreparedFrame] {
+        match self {
+            Self::One(frame) => std::slice::from_ref(frame),
+            Self::Many(frames) => frames,
+        }
+    }
+}
+
 /// Validated immutable metadata for one frame in a [`PreparedPayload`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreparedFrame {
@@ -82,7 +99,7 @@ impl PreparedFrame {
 #[derive(Debug, Clone)]
 pub struct PreparedPayload {
     bytes: Bytes,
-    frames: Arc<[PreparedFrame]>,
+    frames: PreparedFrames,
     message_count: i16,
     kind: PreparedPayloadKind,
     crc_trailer_bytes: usize,
@@ -121,6 +138,9 @@ impl PreparedPayload {
             return Err(PreparedPayloadViolation::PayloadTooLarge { len: bytes.len() });
         }
 
+        // The first frame stays out of `frames` until a second one arrives, so a single frame
+        // allocates nothing.
+        let mut first = None;
         let mut frames = Vec::new();
         let mut start = 0usize;
         while start < bytes.len() {
@@ -172,27 +192,45 @@ impl PreparedPayload {
                     crc_trailer_bytes,
                 });
             }
-            frames.push(PreparedFrame {
+            let frame = PreparedFrame {
                 start,
                 len,
                 born_host_width,
-            });
+            };
+            match first {
+                None => first = Some(frame),
+                Some(head) => {
+                    if frames.is_empty() {
+                        frames.push(head);
+                    }
+                    frames.push(frame);
+                }
+            }
             start = end;
         }
 
-        match (kind, frames.len()) {
+        let frame_count = if frames.is_empty() {
+            usize::from(first.is_some())
+        } else {
+            frames.len()
+        };
+        match (kind, frame_count) {
             (PreparedPayloadKind::Single, 1) | (PreparedPayloadKind::Batch, 1..) => {}
             (PreparedPayloadKind::Single, actual) => {
                 return Err(PreparedPayloadViolation::SingleFrameCount { actual });
             }
             (PreparedPayloadKind::Batch, 0) => return Err(PreparedPayloadViolation::EmptyBatch),
         }
-        let message_count = i16::try_from(frames.len())
-            .map_err(|_| PreparedPayloadViolation::TooManyFrames { actual: frames.len() })?;
+        let message_count =
+            i16::try_from(frame_count).map_err(|_| PreparedPayloadViolation::TooManyFrames { actual: frame_count })?;
+        let frames = match (first, frames.is_empty()) {
+            (Some(frame), true) => PreparedFrames::One(frame),
+            _ => PreparedFrames::Many(frames.into()),
+        };
 
         Ok(Self {
             bytes,
-            frames: frames.into(),
+            frames,
             message_count,
             kind,
             crc_trailer_bytes,
@@ -208,7 +246,7 @@ impl PreparedPayload {
     /// Returns all validated frame descriptors in FIFO order.
     #[must_use]
     pub fn frames(&self) -> &[PreparedFrame] {
-        &self.frames
+        self.frames.as_slice()
     }
 
     /// Returns whether this is a single frame or an encoded frame batch.
@@ -220,7 +258,7 @@ impl PreparedPayload {
     /// Returns the number of encoded CommitLog frames.
     #[must_use]
     pub fn frame_count(&self) -> usize {
-        self.frames.len()
+        self.frames.as_slice().len()
     }
 
     /// Returns the validated message count used by ConsumeQueue offset accounting.
