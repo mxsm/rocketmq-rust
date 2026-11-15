@@ -13,18 +13,26 @@ import { formatTimestamp, shortDigest } from "../plans/planPresentation";
 export function ApprovalPanel({
   view,
   canApprove,
+  approvalReady = true,
+  canReject = canApprove,
   canExecute,
   busy,
   message,
+  dispatchBlockedMessage,
+  approvalBlockedMessage,
   onDecision,
   onExecute,
   onCriticReview,
 }: {
   view: ActionPlanView;
   canApprove: boolean;
+  approvalReady?: boolean;
+  canReject?: boolean;
   canExecute: boolean;
   busy: boolean;
   message?: string;
+  dispatchBlockedMessage?: string;
+  approvalBlockedMessage?: string;
   onDecision: (
     decision: "approve" | "reject",
     request: ApprovalDecisionRequest,
@@ -51,12 +59,13 @@ export function ApprovalPanel({
   const approved =
     approval?.decision === "approved" &&
     new Date(approval.expires_at).getTime() > Date.now();
-  const canDecide =
-    canApprove &&
-    criticReady &&
+  const validDecision =
     !expired &&
     reason.trim().length >= 8 &&
     preconditionHash.startsWith("sha256:");
+  const canDecide = canApprove && validDecision && criticReady && approvalReady;
+  const canDecline = canReject && validDecision &&
+    ["needs_critic", "ready_for_approval", "in_review"].includes(view.plan.status);
 
   const submit = async (decision: "approve" | "reject") => {
     await onDecision(decision, {
@@ -75,7 +84,7 @@ export function ApprovalPanel({
           <p>审批人必须与发起人不同，并拥有当前集群 scope。</p>
         </div>
         <Badge variant={approved ? "success" : expired ? "destructive" : "warning"}>
-          {approved ? "授权有效" : expired ? "计划已过期" : "等待审批"}
+          {approved ? "计划审批有效" : expired ? "计划已过期" : "等待审批"}
         </Badge>
       </header>
 
@@ -150,12 +159,14 @@ export function ApprovalPanel({
           <p className="permission-copy">当前身份没有 approver role，审批按钮保持禁用。</p>
         )}
         {!criticReady && (
-          <p className="permission-copy">R2 计划必须先取得有效异构 Critic 结论。</p>
+              <p className="permission-copy">批准 R2 计划前必须先取得有效异构 Critic 结论。</p>
         )}
+        {dispatchBlockedMessage && <p className="permission-copy" role="status">{dispatchBlockedMessage}</p>}
+        {approvalBlockedMessage && <p className="permission-copy" role="status">{approvalBlockedMessage}</p>}
 
         <div className="approval-actions">
           <Button
-            disabled={busy || !canDecide}
+            disabled={busy || !canDecline}
             onClick={() => void submit("reject")}
             variant="destructive"
           >

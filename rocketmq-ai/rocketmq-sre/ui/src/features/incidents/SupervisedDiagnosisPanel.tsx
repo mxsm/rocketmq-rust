@@ -1,398 +1,373 @@
-import {
-  ArrowRight,
-  CheckCircle2,
-  FileCheck2,
-  LockKeyhole,
-  Radar,
-} from "lucide-react";
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { ArrowRight, CheckCircle2, FileCheck2, Radar } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
-import { createSupervisedSreApi } from "@/api/supervisedClient";
+import { ApiError } from "@/api/client";
 import type {
-  CreatePlanResponse,
-  DiagnosisExecutionConfirmation,
-  DiagnosisRevision,
-  ExecutionPreconditionEvidenceView,
-  Incident,
+  ActionReadinessRequest, ActionReadinessView, CreatePlanResponse,
+  DiagnosisRevision, ExecutionPreconditionEvidenceView, Incident,
   PrepareExecutionPreconditionRequest,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { useOptionalWorkspaceScope } from "@/context/WorkspaceScopeContext";
+import { useSupervisedApi } from "@/hooks/useSupervisedApi";
+import { useActionReadinessMessages } from "@/i18n/actionReadinessMessages";
+import { useActionReadinessLabels } from "@/i18n/actionReadinessReasons";
 
-import { diagnosisAttribution } from "./incidentPresentation";
+import { ActionReadinessPanel } from "./ActionReadinessPanel";
+import {
+  ActionReadinessScopeError, createdPlanMatches, preparedEvidenceMatches,
+  readinessMatches, readinessOperation,
+} from "./actionReadinessPresentation";
+import { LoggerActionForm, type LoggerActionFields } from "./LoggerActionForm";
+import { useReadinessExpiry } from "./useReadinessExpiry";
+import { planNavigationSearch } from "@/features/plans/planReadinessPresentation";
 
 const ACTION_ID = "observability.logger_level_ttl.v1";
 const DESCRIPTOR_VERSION = "1.0.0";
 
-interface SupervisedDiagnosisPanelProps {
+interface Props {
   incident: Incident;
   revisions: DiagnosisRevision[];
-  onChanged: () => void;
+  onChanged: () => void | Promise<void>;
 }
 
-interface ActionParameters {
-  component: "broker";
-  logger: string;
-  level: "DEBUG" | "INFO";
-  ttl_seconds: number;
-}
+type Operation = "read" | "confirm" | "precondition" | "plan";
+type ReadFailure = "read" | "forbidden" | "scope" | "conflict";
 
-export function SupervisedDiagnosisPanel({
-  incident,
-  revisions,
-  onChanged,
-}: SupervisedDiagnosisPanelProps) {
+export function SupervisedDiagnosisPanel(props: Props) {
   const auth = useAuth();
-  const navigate = useNavigate();
-  const api = useMemo(
-    () =>
-      auth.requestContext
-        ? createSupervisedSreApi(auth.requestContext)
-        : undefined,
-    [auth.requestContext],
+  const scope = useOptionalWorkspaceScope();
+  const location = useLocation();
+  const revision = props.revisions.at(-1);
+  const owner = JSON.stringify([
+    auth.status, auth.session?.tenantId, auth.session?.subject,
+    [...(auth.session?.roles ?? [])].sort(),
+    [...(auth.session?.clusterIds ?? [])].sort(),
+    scope?.scopeKey ?? location.search,
+    props.incident.id, props.incident.tenant_id, props.incident.cluster_id,
+    props.incident.resource, props.incident.status,
+    revision?.id, revision?.status, revision?.partial, revision?.execution_eligible,
+    revision?.primary_model_invocation_id, revision?.evidence_ids,
+  ]);
+  return (
+    <SupervisedDiagnosisSession
+      key={owner}
+      {...props}
+      scopeValid={!scope || !scope.invalid && scope.clusterId === props.incident.cluster_id}
+    />
   );
-  const latestRevision = revisions.at(-1);
-  const attribution = latestRevision
-    ? diagnosisAttribution(latestRevision)
-    : undefined;
-  const [confirmation, setConfirmation] =
-    useState<DiagnosisExecutionConfirmation>();
-  const [precondition, setPrecondition] =
-    useState<ExecutionPreconditionEvidenceView>();
-  const [plan, setPlan] = useState<CreatePlanResponse>();
-  const [reason, setReason] = useState(
-    "已人工核对模型诊断、Evidence 引用与影响范围",
-  );
-  const [resource, setResource] = useState(
-    isBrokerResource(incident.resource) ? incident.resource : "",
-  );
-  const [logger, setLogger] = useState("rocketmq_broker::processor");
-  const [level, setLevel] = useState<ActionParameters["level"]>("DEBUG");
-  const [ttlSeconds, setTtlSeconds] = useState(60);
-  const [busy, setBusy] = useState<
-    "confirm" | "precondition" | "plan"
-  >();
-  const [message, setMessage] = useState<string>();
+}
 
-  const confirmedRevisionId =
-    confirmation?.confirmed_revision_id ??
-    (latestRevision?.execution_eligible ? latestRevision.id : undefined);
-  const diagnosisEvidenceIds =
-    confirmation?.evidence_ids ??
-    (latestRevision?.execution_eligible
-      ? latestRevision.evidence_ids
-      : []);
-  const modelAssisted =
-    attribution?.mode === "model_assisted" &&
-    Boolean(latestRevision?.primary_model_invocation_id);
-  const canOperate = Boolean(
-    auth.session?.roles.some(
-      (role) => role === "operator" || role === "rocketmq:operate",
-    ),
-  );
-  const parameters: ActionParameters = {
-    component: "broker",
-    logger,
-    level,
-    ttl_seconds: ttlSeconds,
+function SupervisedDiagnosisSession({
+  incident, revisions, onChanged, scopeValid,
+}: Props & { scopeValid: boolean }) {
+  const { auth, api } = useSupervisedApi();
+  const navigate = useNavigate();
+  const workspace = useOptionalWorkspaceScope();
+  const m = useActionReadinessMessages();
+  const latest = revisions.at(-1);
+  const [fields, setFields] = useState<LoggerActionFields>({
+    resource: isBrokerResource(incident.resource) ? incident.resource : "",
+    logger: "rocketmq_broker::processor",
+    level: "DEBUG",
+    ttlSeconds: 60,
+  });
+  const [reason, setReason] = useState(m.defaultReason);
+  const [view, setView] = useState<ActionReadinessView>();
+  const [proof, setProof] = useState<ExecutionPreconditionEvidenceView>();
+  const [plan, setPlan] = useState<CreatePlanResponse>();
+  const [busy, setBusy] = useState<Operation>();
+  const [error, setError] = useState<ReadFailure>();
+  const [message, setMessage] = useState("");
+  const generation = useRef(0);
+  const pending = useRef<{ controller: AbortController; kind: Operation } | undefined>(undefined);
+  useEffect(() => () => pending.current?.controller.abort(), []);
+  const expired = useReadinessExpiry(view);
+  const owner = {
+    tenantId: auth.session?.tenantId ?? "",
+    subject: auth.session?.subject ?? "",
+    incidentId: incident.id,
+    evidenceIds: latest?.evidence_ids ?? [],
+  };
+  const request: ActionReadinessRequest = {
+    cluster_id: incident.cluster_id,
+    diagnosis_revision_id: latest?.id ?? "",
+    action_id: ACTION_ID,
+    descriptor_version: DESCRIPTOR_VERSION,
+    resource: fields.resource.trim(),
+    parameters: {
+      component: "broker", logger: fields.logger.trim(), level: fields.level,
+      ttl_seconds: fields.ttlSeconds,
+    },
+    ...(proof ? { precondition_evidence_id: proof.evidence.evidence_id } : {}),
+  };
+  const current = view && readinessMatches(view, request, owner) ? view : undefined;
+  const can = (kind: keyof ActionReadinessView["operations"]) =>
+    !busy && !expired && readinessOperation(current, kind);
+  const scopeAllowed = scopeValid && auth.status === "authenticated" &&
+    auth.session?.tenantId === incident.tenant_id && auth.hasClusterScope(incident.cluster_id) &&
+    (!latest || latest.incident_id === incident.id);
+
+  const clearCandidate = () => {
+    generation.current += 1;
+    if (pending.current && pending.current.kind !== "confirm") {
+      pending.current.controller.abort();
+      pending.current = undefined;
+      setBusy(undefined);
+    }
+    setView(undefined);
+    setProof(undefined);
+    setPlan(undefined);
+    setError(undefined);
+    setMessage("");
   };
 
   const run = async (
-    operation: NonNullable<typeof busy>,
-    task: () => Promise<void>,
+    kind: Operation,
+    task: (signal: AbortSignal, active: () => boolean) => Promise<void>,
   ) => {
-    setBusy(operation);
-    setMessage(undefined);
+    if (pending.current || !api || !latest || !scopeAllowed) return;
+    const controller = new AbortController();
+    const version = generation.current;
+    pending.current = { controller, kind };
+    const active = () => !controller.signal.aborted &&
+      pending.current?.controller === controller &&
+      (kind === "confirm" || generation.current === version);
+    setBusy(kind);
+    setError(undefined);
+    setMessage("");
     try {
-      await task();
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "受监督操作请求失败",
-      );
+      await task(controller.signal, active);
+    } catch (failure) {
+      if (!active()) return;
+      setView(undefined);
+      if (failure instanceof ActionReadinessScopeError) {
+        setProof(undefined);
+        setPlan(undefined);
+        setError("scope");
+      } else if (failure instanceof ApiError && [401, 403, 404].includes(failure.status)) {
+        setProof(undefined);
+        setPlan(undefined);
+        setError("forbidden");
+      } else if (failure instanceof ApiError && failure.status === 409) {
+        setProof(undefined);
+        setPlan(undefined);
+        setError("conflict");
+        await onChanged();
+      } else if (kind === "read") {
+        setError("read");
+      } else {
+        setMessage(m.failure);
+        // Confirmation may already have committed even if its response was lost.
+        if (kind === "confirm") await onChanged();
+      }
     } finally {
-      setBusy(undefined);
+      if (pending.current?.controller === controller) {
+        pending.current = undefined;
+        if (!controller.signal.aborted) setBusy(undefined);
+      }
     }
   };
 
-  const confirmDiagnosis = () =>
-    run("confirm", async () => {
-      if (!api || !latestRevision) return;
+  const readReadiness = () => run("read", async (signal, active) => {
+    if (!api) return;
+    setView(undefined);
+    const result = await api.readActionReadiness(incident.id, request, signal);
+    if (!active()) return;
+    if (!readinessMatches(result, request, owner)) throw new ActionReadinessScopeError();
+    setView(result);
+  });
+
+  const confirmDiagnosis = () => {
+    if (!can("confirm_diagnosis") || reason.trim().length < 8) return;
+    return run("confirm", async (signal, active) => {
+      if (!api || !latest) return;
       const result = await api.confirmDiagnosisExecution(
-        incident.id,
-        latestRevision.id,
-        {
-          human_confirmed: true,
-          reason: reason.trim(),
-        },
+        incident.id, latest.id,
+        { human_confirmed: true, reason: reason.trim() }, signal,
       );
-      setConfirmation(result);
-      setPrecondition(undefined);
-      setPlan(undefined);
-      setMessage("已生成不可变的人工作业确认 revision。");
-      onChanged();
-    });
-
-  const preparePrecondition = () =>
-    run("precondition", async () => {
-      if (!api || !confirmedRevisionId) return;
-      const request: PrepareExecutionPreconditionRequest = {
-        cluster_id: incident.cluster_id,
-        diagnosis_revision_id: confirmedRevisionId,
-        action_id: ACTION_ID,
-        descriptor_version: DESCRIPTOR_VERSION,
-        resource: resource.trim(),
-        parameters:
-          parameters as unknown as PrepareExecutionPreconditionRequest["parameters"],
-      };
-      const result = await api.prepareExecutionPrecondition(
-        incident.id,
-        request,
-      );
-      setPrecondition(result);
-      setPlan(undefined);
-      setMessage("Execution Agent 只读前置检查已封装为 Evidence。");
-    });
-
-  const createPlan = () =>
-    run("plan", async () => {
-      if (!api || !confirmedRevisionId || !precondition) return;
-      const evidenceIds = [
-        ...new Set([
-          ...diagnosisEvidenceIds,
-          precondition.evidence.evidence_id,
-        ]),
-      ];
-      const result = await api.createPlan({
-        cluster_id: incident.cluster_id,
-        incident_id: incident.id,
-        diagnosis_revision_id: confirmedRevisionId,
-        steps: [
-          {
-            action_id: ACTION_ID,
-            descriptor_version: DESCRIPTOR_VERSION,
-            resource: resource.trim(),
-            parameters:
-              parameters as unknown as PrepareExecutionPreconditionRequest["parameters"],
-            evidence_ids: evidenceIds,
-          },
-        ],
-      });
-      setPlan(result);
-      if (result.kind === "action_plan") {
-        setMessage("受监督计划已创建，下一步进入 Critic 与人工审批。");
-      } else {
-        setMessage("策略仅允许生成手工 Runbook，未创建可执行计划。");
+      if (!active()) return;
+      if (result.incident_id !== incident.id || result.cluster_id !== incident.cluster_id ||
+          result.source_revision_id !== latest.id || !result.execution_eligible) {
+        throw new ActionReadinessScopeError();
       }
+      setView(undefined);
+      setProof(undefined);
+      setPlan(undefined);
+      setMessage(m.diagnosisSaved);
+      // The receipt does not select a revision. The refreshed Incident owns that choice.
+      await onChanged();
     });
+  };
+
+  const preparePrecondition = () => {
+    if (!can("prepare_precondition")) return;
+    return run("precondition", async (signal, active) => {
+      if (!api) return;
+      setView(undefined);
+      setProof(undefined);
+      setPlan(undefined);
+      const input: PrepareExecutionPreconditionRequest = {
+        cluster_id: request.cluster_id,
+        diagnosis_revision_id: request.diagnosis_revision_id,
+        action_id: request.action_id,
+        descriptor_version: request.descriptor_version,
+        resource: request.resource,
+        parameters: request.parameters as PrepareExecutionPreconditionRequest["parameters"],
+      };
+      const result = await api.prepareExecutionPrecondition(incident.id, input, signal);
+      if (!active()) return;
+      if (!preparedEvidenceMatches(result, request, owner)) throw new ActionReadinessScopeError();
+      const bound = { ...request, precondition_evidence_id: result.evidence.evidence_id };
+      if (result.readiness && !readinessMatches(result.readiness, bound, owner)) {
+        throw new ActionReadinessScopeError();
+      }
+      setProof(result);
+      const readiness = result.readiness ?? await api.readActionReadiness(incident.id, bound, signal);
+      if (!active()) return;
+      if (!readinessMatches(readiness, bound, owner)) throw new ActionReadinessScopeError();
+      setView(readiness);
+      setMessage(m.prepared);
+    });
+  };
+
+  const createPlan = () => {
+    if (!can("create_plan") || !current || !proof || plan) return;
+    const evidenceIds = [...new Set([
+      ...current.binding.diagnostic_evidence.map((item) => item.evidence_id),
+      proof.evidence.evidence_id,
+    ])];
+    return run("plan", async (signal, active) => {
+      if (!api) return;
+      const result = await api.createPlan({
+        cluster_id: incident.cluster_id, incident_id: incident.id,
+        diagnosis_revision_id: request.diagnosis_revision_id,
+        steps: [{
+          action_id: request.action_id, descriptor_version: request.descriptor_version,
+          resource: request.resource,
+          parameters: request.parameters as PrepareExecutionPreconditionRequest["parameters"],
+          evidence_ids: evidenceIds,
+        }],
+      }, signal);
+      if (!active()) return;
+      if (!createdPlanMatches(result, request, owner, evidenceIds)) throw new ActionReadinessScopeError();
+      setPlan(result);
+      setMessage(result.kind === "action_plan" ? m.planCreated : m.manualCreated);
+    });
+  };
 
   return (
     <section className="data-surface supervised-diagnosis-panel">
       <header className="surface-heading">
-        <div>
-          <h2>AI 诊断到受监督执行</h2>
-          <p>
-            人工确认模型诊断后，由隔离的 Execution Agent
-            读取当前状态；这里只暴露固定、带 TTL 的日志级别动作。
-          </p>
-        </div>
-        <Badge variant={confirmedRevisionId ? "success" : "secondary"}>
-          {confirmedRevisionId ? "已确认" : "等待人工确认"}
-        </Badge>
+        <div><h2>{m.title}</h2><p>{m.introduction}</p></div>
       </header>
-
-      <div className="supervised-diagnosis-steps">
-        <article>
-          <div className="supervised-step-heading">
-            <span>01</span>
-            <div>
-              <strong>确认模型诊断</strong>
-              <small>
-                {modelAssisted
-                  ? `${attribution?.provider} · ${attribution?.model}`
-                  : "需要完整的 model_assisted revision"}
-              </small>
-            </div>
-            <LockKeyhole size={17} />
+      {!scopeAllowed ? <p role="alert">{m.scopeMismatch}</p> : !latest ? (
+        <p>{m.diagnosisUnavailable}</p>
+      ) : (
+        <>
+          <div className="action-candidate-form-block">
+            <h3>{m.candidateTitle}</h3>
+            <p className="muted">{m.candidateHint}</p>
+            <LoggerActionForm value={fields} onChange={(change) => {
+              clearCandidate();
+              setFields((previous) => ({ ...previous, ...change }));
+            }} />
           </div>
-          <label className="form-field">
-            <span>人工确认说明</span>
-            <Input
-              onChange={(event) => setReason(event.target.value)}
-              value={reason}
-            />
-          </label>
-          <Button
-            disabled={
-              !api ||
-              !canOperate ||
-              !modelAssisted ||
-              !reason.trim() ||
-              Boolean(confirmedRevisionId) ||
-              Boolean(busy)
-            }
-            onClick={() => void confirmDiagnosis()}
-            variant="outline"
-          >
-            <CheckCircle2 size={15} />
-            {busy === "confirm" ? "确认中…" : "确认执行资格"}
-          </Button>
-        </article>
-
-        <article>
-          <div className="supervised-step-heading">
-            <span>02</span>
-            <div>
-              <strong>采集执行前置 Evidence</strong>
-              <small>{ACTION_ID}</small>
-            </div>
-            <Radar size={17} />
-          </div>
-          <label className="form-field">
-            <span>目标 Broker 资源</span>
-            <Input
-              onChange={(event) => setResource(event.target.value)}
-              placeholder="broker/name-or-address"
-              value={resource}
-            />
-          </label>
-          <div className="supervised-action-fields">
-            <label className="form-field">
-              <span>Logger</span>
-              <Input
-                onChange={(event) => setLogger(event.target.value)}
-                value={logger}
-              />
-            </label>
-            <label className="form-field">
-              <span>级别</span>
-              <Select
-                onValueChange={(value: ActionParameters["level"]) =>
-                  setLevel(value)
-                }
-                value={level}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="DEBUG">DEBUG</SelectItem>
-                  <SelectItem value="INFO">INFO</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="form-field">
-              <span>TTL（秒）</span>
-              <Input
-                max={300}
-                min={60}
-                onChange={(event) =>
-                  setTtlSeconds(Number(event.target.value))
-                }
-                type="number"
-                value={ttlSeconds}
-              />
-            </label>
-          </div>
-          <Button
-            disabled={
-              !api ||
-              !canOperate ||
-              !confirmedRevisionId ||
-              !resource.trim() ||
-              !logger.trim() ||
-              ttlSeconds < 60 ||
-              ttlSeconds > 300 ||
-              Boolean(busy)
-            }
-            onClick={() => void preparePrecondition()}
-            variant="outline"
-          >
-            <Radar size={15} />
-            {busy === "precondition" ? "采集中…" : "运行只读前置检查"}
-          </Button>
-          {precondition && (
-            <dl className="supervised-evidence-summary">
-              <div>
-                <dt>Evidence</dt>
-                <dd>{shortId(precondition.evidence.evidence_id)}</dd>
+          <ActionReadinessPanel
+            view={current} request={request} owner={owner}
+            loading={busy === "read"} disabled={Boolean(busy) || !api}
+            error={error} onRefresh={() => void readReadiness()}
+          />
+          <div className="supervised-diagnosis-steps">
+            <article>
+              <div className="supervised-step-heading">
+                <span>01</span><div><strong>{m.diagnosisTitle}</strong></div><CheckCircle2 size={17} />
               </div>
-              <div>
-                <dt>Precondition hash</dt>
-                <dd>{shortId(precondition.precondition_hash)}</dd>
+              <p>{m.diagnosisHint}</p>
+              <Badge variant="secondary">
+                {current ? current.diagnosis.is_confirmed ? m.diagnosisConfirmed : m.diagnosisUnconfirmed : m.awaitingServer}
+              </Badge>
+              <label className="form-field">
+                <span>{m.confirmationReason}</span>
+                <Input value={reason} maxLength={512} onChange={(event) => setReason(event.target.value)} />
+              </label>
+              <Button disabled={!can("confirm_diagnosis") || reason.trim().length < 8}
+                onClick={() => void confirmDiagnosis()} variant="outline">
+                {busy === "confirm" ? m.confirming : m.confirmDiagnosis}
+              </Button>
+              <OperationBlockers view={current} kind="confirm_diagnosis" />
+              {current && !current.diagnosis.is_current && (
+                <Button disabled={Boolean(busy)} variant="outline" onClick={() => void run("read", async () => {
+                  setView(undefined);
+                  await onChanged();
+                })}>
+                  {m.refreshDiagnosis}
+                </Button>
+              )}
+            </article>
+            <article>
+              <div className="supervised-step-heading">
+                <span>02</span><div><strong>{m.preconditionTitle}</strong></div><Radar size={17} />
               </div>
-            </dl>
-          )}
-        </article>
-
-        <article>
-          <div className="supervised-step-heading">
-            <span>03</span>
-            <div>
-              <strong>创建不可变计划</strong>
-              <small>诊断 Evidence + 实时前置 Evidence</small>
-            </div>
-            <FileCheck2 size={17} />
+              <p>{m.preconditionHint}</p>
+              <p className="muted">{proof ? `${m.proof} · ${shortId(proof.evidence.evidence_id)}` : m.noProof}</p>
+              <Button disabled={!can("prepare_precondition")} onClick={() => void preparePrecondition()} variant="outline">
+                {busy === "precondition" ? m.preparing : m.prepare}
+              </Button>
+              <OperationBlockers view={current} kind="prepare_precondition" />
+            </article>
+            <article>
+              <div className="supervised-step-heading">
+                <span>03</span><div><strong>{m.planTitle}</strong></div><FileCheck2 size={17} />
+              </div>
+              <p>{m.planHint}</p>
+              <p className="muted">{m.approvalHint}</p>
+              <Button disabled={!can("create_plan") || !proof || Boolean(plan)} onClick={() => void createPlan()}>
+                {busy === "plan" ? m.creatingPlan : m.createPlan}
+              </Button>
+              <OperationBlockers view={current} kind="create_plan" />
+              {plan?.kind === "action_plan" && (
+                <>
+                  <Button variant="outline" onClick={() => navigate({
+                    pathname: `/changes/plans/${plan.plan.id}`,
+                    search: planNavigationSearch(plan.plan, workspace?.window),
+                  })}>
+                    {m.openPlan}<ArrowRight size={15} />
+                  </Button>
+                  <p className="muted">{m.openPlanScopeHint}</p>
+                </>
+              )}
+            </article>
           </div>
-          <div className="supervised-plan-readiness">
-            <Badge variant={precondition ? "success" : "secondary"}>
-              {precondition ? "前置证据就绪" : "等待前置证据"}
-            </Badge>
-            <span>
-              {diagnosisEvidenceIds.length} 条诊断 Evidence ·{" "}
-              {precondition ? "1 条执行前置 Evidence" : "0 条执行前置 Evidence"}
-            </span>
-          </div>
-          <Button
-            disabled={!api || !precondition || Boolean(busy)}
-            onClick={() => void createPlan()}
-          >
-            <FileCheck2 size={15} />
-            {busy === "plan" ? "创建中…" : "创建受监督计划"}
-          </Button>
-          {plan?.kind === "action_plan" && (
-            <Button
-              onClick={() =>
-                navigate(`/changes/plans/${plan.plan.id}`)
-              }
-              variant="outline"
-            >
-              打开计划与审批
-              <ArrowRight size={15} />
-            </Button>
-          )}
-        </article>
-      </div>
-
-      {!canOperate && (
-        <div className="inline-alert warning">
-          当前身份缺少 operator / rocketmq:operate 角色，只能查看诊断。
-        </div>
+          <p className="supervised-action-status" role="status" aria-live="polite">
+            {busy ? m.pending : message}
+          </p>
+        </>
       )}
-      {message && <div className="inline-alert">{message}</div>}
     </section>
   );
 }
 
 function shortId(value: string) {
-  return value.length > 24
-    ? `${value.slice(0, 12)}…${value.slice(-8)}`
-    : value;
+  return value.length > 24 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value;
+}
+
+function OperationBlockers({ view, kind }: {
+  view?: ActionReadinessView;
+  kind: keyof ActionReadinessView["operations"];
+}) {
+  const labels = useActionReadinessLabels();
+  const operation = view?.operations[kind];
+  if (!operation || operation.allowed || !operation.reason_codes.length) return null;
+  return <ul className="action-operation-blockers">
+    {operation.reason_codes.map((reason, index) => <li key={`${reason}-${index}`}>{labels.reason(reason)}</li>)}
+  </ul>;
 }
 
 function isBrokerResource(resource: string | undefined): resource is string {
-  return Boolean(
-    resource &&
-      (resource.startsWith("broker/") ||
-        resource.startsWith("broker:")),
-  );
+  return Boolean(resource && (resource.startsWith("broker/") || resource.startsWith("broker:")));
 }

@@ -1,0 +1,480 @@
+{
+  "$defs": {
+    "ActionExecutionReadiness": {
+      "description": "Summary of execution gates. Satisfied still requires actual dispatch authorization.",
+      "enum": [
+        "blocked",
+        "unknown",
+        "awaiting_approval",
+        "satisfied"
+      ],
+      "type": "string"
+    },
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ActionReadinessBinding": {
+      "additionalProperties": false,
+      "description": "Exact candidate and caller observed by the server; its digest grants no authority.",
+      "properties": {
+        "action_id": {
+          "type": "string"
+        },
+        "actor_subject": {
+          "type": "string"
+        },
+        "binding_digest": {
+          "type": "string"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "descriptor_version": {
+          "type": "string"
+        },
+        "diagnosis_revision_id": {
+          "$ref": "#/$defs/DiagnosisRevisionId"
+        },
+        "diagnostic_evidence": {
+          "items": {
+            "$ref": "#/$defs/ActionReadinessEvidenceBinding"
+          },
+          "type": "array"
+        },
+        "incident_id": {
+          "$ref": "#/$defs/IncidentId"
+        },
+        "latest_diagnosis_revision_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiagnosisRevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parameters": {
+          "description": "Present only after exact schema and forbidden-argument validation."
+        },
+        "parameters_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionPlanId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan_step_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanStepId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "precondition_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionReadinessEvidenceBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "precondition_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resource": {
+          "description": "Exact execution-target literal, without rewriting existing Plan aliases.",
+          "type": "string"
+        },
+        "target_scope_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "cluster_id",
+        "incident_id",
+        "diagnosis_revision_id",
+        "action_id",
+        "descriptor_version",
+        "resource",
+        "diagnostic_evidence",
+        "policy_version",
+        "actor_subject",
+        "binding_digest"
+      ],
+      "type": "object"
+    },
+    "ActionReadinessDiagnosis": {
+      "additionalProperties": false,
+      "description": "A diagnosis-basis fact, separate from action approval.",
+      "properties": {
+        "is_complete": {
+          "type": "boolean"
+        },
+        "is_confirmed": {
+          "type": "boolean"
+        },
+        "is_current": {
+          "type": "boolean"
+        },
+        "primary_model_lineage_valid": {
+          "type": "boolean"
+        },
+        "reason_codes": {
+          "items": {
+            "$ref": "#/$defs/ActionReadinessReason"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "is_current",
+        "is_confirmed",
+        "is_complete",
+        "primary_model_lineage_valid",
+        "reason_codes"
+      ],
+      "type": "object"
+    },
+    "ActionReadinessEvidenceBinding": {
+      "additionalProperties": false,
+      "description": "Immutable evidence identity; a newer same-resource record cannot replace it.",
+      "properties": {
+        "content_hash": {
+          "type": "string"
+        },
+        "evidence_id": {
+          "$ref": "#/$defs/EvidenceId"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "content_hash"
+      ],
+      "type": "object"
+    },
+    "ActionReadinessFact": {
+      "additionalProperties": false,
+      "description": "A bounded fact derived from actual catalog, runtime or immutable record data.",
+      "properties": {
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason_codes": {
+          "items": {
+            "$ref": "#/$defs/ActionReadinessReason"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/ActionReadinessSource"
+        },
+        "state": {
+          "$ref": "#/$defs/ActionReadinessState"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "reason_codes",
+        "source",
+        "evidence_ids"
+      ],
+      "type": "object"
+    },
+    "ActionReadinessOperation": {
+      "additionalProperties": false,
+      "description": "Fresh server availability of one preparation operation; never a bearer grant.",
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "reason_codes": {
+          "items": {
+            "$ref": "#/$defs/ActionReadinessReason"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed",
+        "reason_codes"
+      ],
+      "type": "object"
+    },
+    "ActionReadinessOperations": {
+      "additionalProperties": false,
+      "description": "Draft creation and readonly preparation do not require dispatch qualification.",
+      "properties": {
+        "confirm_diagnosis": {
+          "$ref": "#/$defs/ActionReadinessOperation"
+        },
+        "create_plan": {
+          "$ref": "#/$defs/ActionReadinessOperation"
+        },
+        "prepare_precondition": {
+          "$ref": "#/$defs/ActionReadinessOperation"
+        }
+      },
+      "required": [
+        "confirm_diagnosis",
+        "prepare_precondition",
+        "create_plan"
+      ],
+      "type": "object"
+    },
+    "ActionReadinessReason": {
+      "description": "Closed explanation codes. Internal source text must not be placed in this view.",
+      "enum": [
+        "action_unknown",
+        "descriptor_version_mismatch",
+        "manual_only",
+        "plan_only",
+        "parameters_invalid",
+        "resource_required",
+        "resource_invalid",
+        "operator_required",
+        "diagnosis_not_confirmed",
+        "diagnosis_already_confirmed",
+        "diagnosis_not_current",
+        "incident_inactive",
+        "diagnosis_incomplete",
+        "primary_model_lineage_invalid",
+        "executor_not_configured",
+        "handler_not_observed",
+        "handler_read_observed",
+        "runtime_enablement_not_observed",
+        "target_support_not_observed",
+        "target_scope_unverified",
+        "target_scope_changed",
+        "target_precondition_not_ready",
+        "target_unsupported",
+        "evidence_missing",
+        "evidence_stale",
+        "evidence_invalid",
+        "evidence_scope_mismatch",
+        "preparation_binding_missing",
+        "preparation_binding_mismatch",
+        "preparation_origin_invalid",
+        "preparation_expired",
+        "policy_denied",
+        "maintenance_window_closed",
+        "resource_quarantined",
+        "resource_busy",
+        "compensation_unavailable",
+        "compensation_not_observed",
+        "plan_not_created",
+        "approval_required",
+        "approval_expired",
+        "approval_binding_mismatch",
+        "self_approval_forbidden",
+        "action_target_qualification_unavailable",
+        "observation_available",
+        "plan_expired",
+        "plan_binding_mismatch",
+        "plan_completed",
+        "plan_immutable",
+        "readiness_expired",
+        "source_unavailable"
+      ],
+      "type": "string"
+    },
+    "ActionReadinessSource": {
+      "description": "The actual kind of source used for a stage; registration is not qualification.",
+      "enum": [
+        "descriptor_catalog",
+        "executor_configuration",
+        "target_scope_configuration",
+        "stored_preparation",
+        "current_diagnosis",
+        "policy_evaluation",
+        "stored_approval",
+        "qualification_unavailable",
+        "not_observed"
+      ],
+      "type": "string"
+    },
+    "ActionReadinessStages": {
+      "additionalProperties": false,
+      "description": "Fixed stage names prevent omitted or duplicated readiness gates.",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        },
+        "compensation": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        },
+        "enabled": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        },
+        "evidence": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        },
+        "handler": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        },
+        "policy": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        },
+        "target": {
+          "$ref": "#/$defs/ActionReadinessFact"
+        }
+      },
+      "required": [
+        "descriptor",
+        "handler",
+        "enabled",
+        "target",
+        "evidence",
+        "policy",
+        "approval",
+        "qualification",
+        "compensation"
+      ],
+      "type": "object"
+    },
+    "ActionReadinessState": {
+      "description": "Whether a particular proof is present, missing, or inapplicable.",
+      "enum": [
+        "satisfied",
+        "blocked",
+        "unknown",
+        "not_applicable"
+      ],
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DiagnosisRevisionId": {
+      "description": "Stable identifier for an immutable diagnosis revision.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Ephemeral, non-authorizing projection for one exact action candidate.",
+  "properties": {
+    "binding": {
+      "$ref": "#/$defs/ActionReadinessBinding"
+    },
+    "diagnosis": {
+      "$ref": "#/$defs/ActionReadinessDiagnosis"
+    },
+    "execution_readiness": {
+      "$ref": "#/$defs/ActionExecutionReadiness"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "operations": {
+      "$ref": "#/$defs/ActionReadinessOperations"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "stages": {
+      "$ref": "#/$defs/ActionReadinessStages"
+    },
+    "valid_until": {
+      "description": "Null cannot enable an operation; refreshing does not renew immutable proof.",
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "binding",
+    "diagnosis",
+    "stages",
+    "execution_readiness",
+    "operations",
+    "observed_at"
+  ],
+  "title": "ActionReadinessView",
+  "type": "object"
+}

@@ -97,7 +97,7 @@ impl PostgresRepository {
                     d.revision, d.status AS diagnosis_status, d.rule_result,
                     d.hypotheses, d.evidence_ids, d.primary_model_invocation_id,
                     d.execution_eligible, d.partial,
-                    m.purpose AS invocation_purpose,
+                    m.purpose AS invocation_purpose, m.error_code AS invocation_error_code,
                     m.diagnosis_revision_id AS invocation_diagnosis_revision_id
              FROM diagnosis_revisions d
              JOIN sre_incidents i ON i.id = d.incident_id
@@ -154,6 +154,7 @@ impl PostgresRepository {
                 )
             })?;
         if row.try_get::<Option<String>, _>("invocation_purpose")?.as_deref() != Some("primary_diagnosis")
+            || row.try_get::<Option<String>, _>("invocation_error_code")?.is_some()
             || row.try_get::<Option<Uuid>, _>("invocation_diagnosis_revision_id")? != Some(source_revision_id.as_uuid())
         {
             return Err(ControlPlaneRequestFailure::conflict_code(

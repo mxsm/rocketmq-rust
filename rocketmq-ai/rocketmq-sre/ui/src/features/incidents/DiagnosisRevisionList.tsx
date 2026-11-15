@@ -1,5 +1,6 @@
 import type { DiagnosisRevision } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
+import { useActionReadinessMessages } from "@/i18n/actionReadinessMessages";
 
 import { diagnosisAttribution } from "./incidentPresentation";
 
@@ -8,6 +9,7 @@ export function DiagnosisRevisionList({
 }: {
   revisions: DiagnosisRevision[];
 }) {
+  const m = useActionReadinessMessages();
   if (revisions.length === 0) {
     return <div className="state-message">尚无诊断 revision。</div>;
   }
@@ -97,7 +99,8 @@ export function DiagnosisRevisionList({
             </div>
             <footer>
               <span>{revision.evidence_ids.length} Evidence 引用</span>
-              <code>execution_eligible=false</code>
+              <span>{revision.status === "confirmed" && revision.execution_eligible
+                ? m.diagnosisConfirmed : m.diagnosisUnconfirmed}</span>
             </footer>
           </article>
         );

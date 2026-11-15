@@ -140,6 +140,17 @@ pub(super) fn action_precondition_hash(
                 "Execution Agent precondition Evidence must remain inline",
             ));
         };
+        // Old immutable Plans retain their plain Agent payload shape. New
+        // candidate admission separately requires the sealed CP envelope.
+        let content = if content.get("schema_version").and_then(serde_json::Value::as_str)
+            == Some(rocketmq_sre_contracts::ACTION_PREPARATION_SCHEMA_VERSION)
+        {
+            content
+                .get("agent_result")
+                .ok_or_else(|| super::preparation::preparation_failure("preparation_binding_missing"))?
+        } else {
+            content
+        };
         let reason_codes_empty = content
             .get("reason_codes")
             .and_then(serde_json::Value::as_array)

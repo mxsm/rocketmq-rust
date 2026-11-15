@@ -17,6 +17,7 @@ import "./styles/release-management.css";
 import "./styles/investigation-workspace.css";
 import "./styles/investigation-runs.css";
 import "./styles/evidence-quality.css";
+import "./styles/action-readiness.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

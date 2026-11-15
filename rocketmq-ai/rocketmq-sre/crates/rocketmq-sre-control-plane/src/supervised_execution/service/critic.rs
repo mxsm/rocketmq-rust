@@ -60,6 +60,7 @@ impl SupervisedExecutionService {
             ));
         }
         self.ensure_current_policy(auth, &plan).await?;
+        let admission = self.admission_for_plan(auth, &plan).await?;
         let live = self.live_plan_state(auth, &plan, now).await?;
         if !live.facts.diagnosis_confirmed
             || !live.facts.diagnosis_execution_eligible
@@ -141,7 +142,7 @@ impl SupervisedExecutionService {
         );
         let (plan, review_hash) = self
             .repository
-            .persist_critic_review(&plan, &review, &audit, advance)
+            .persist_critic_review(&plan, &review, &audit, advance, &admission)
             .await?;
         self.publish_audits(std::slice::from_ref(&audit));
         Ok(CriticReviewResponse {

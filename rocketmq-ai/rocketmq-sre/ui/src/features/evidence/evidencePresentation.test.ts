@@ -123,4 +123,24 @@ describe("evidence quality and display boundaries", () => {
     );
     expect(content).toContain('"reachable": true');
   });
+
+  it("limits CP preparation audits and keeps unrelated public signature metadata", () => {
+    const prepared = safeEvidenceJson({
+      schema_version: "rocketmq-sre.action-preparation.v1",
+      evidence_id: "saved-evidence",
+      origin_signature: "private-origin-mac",
+      agent_result: { ready: true, internal_detail: "private-agent-detail" },
+      candidate_binding: { action_id: "observability.logger_level_ttl.v1", private_extra: "private-binding-detail" },
+      unexpected: "private-root-detail",
+    });
+    expect(prepared).toContain("observability.logger_level_ttl.v1");
+    expect(prepared).toContain('"origin_signature": "[redacted]"');
+    expect(prepared).not.toMatch(/private-(origin|agent|binding|root)/);
+    const publicMetadata = safeEvidenceJson({
+      governance: { signature: "public-signature-metadata" },
+      nested: { originSignature: "private-origin-mac" },
+    });
+    expect(publicMetadata).toContain("public-signature-metadata");
+    expect(publicMetadata).not.toContain("private-origin-mac");
+  });
 });

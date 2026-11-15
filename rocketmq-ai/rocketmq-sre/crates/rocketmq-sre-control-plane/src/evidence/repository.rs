@@ -82,9 +82,33 @@ impl PostgresRepository {
         incident_id: Option<IncidentId>,
         content_digest: &str,
     ) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
+        let mut transaction = self.pool.begin().await?;
+        let persisted = self
+            .persist_evidence_in(
+                auth,
+                snapshot,
+                investigation_id,
+                incident_id,
+                content_digest,
+                &mut transaction,
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(persisted)
+    }
+
+    /// Shares the caller's Incident admission transaction for CP-owned preparation.
+    pub(crate) async fn persist_evidence_in(
+        &self,
+        auth: &AuthContext,
+        snapshot: &EvidenceSnapshot,
+        investigation_id: Option<InvestigationId>,
+        incident_id: Option<IncidentId>,
+        content_digest: &str,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
         enforce_evidence_scope(auth, snapshot)?;
         let query_hash = query_hash(snapshot);
-        let mut transaction = self.pool.begin().await?;
         let existing = sqlx::query(evidence_query(
             "
              WHERE e.tenant_id = $1 AND e.cluster_id = $2 AND e.query_hash = $3
@@ -98,7 +122,7 @@ impl PostgresRepository {
         .bind(snapshot.time_range.start)
         .bind(snapshot.time_range.end)
         .bind(snapshot.content_hash.as_str())
-        .fetch_optional(&mut *transaction)
+        .fetch_optional(&mut **transaction)
         .await?;
         let persisted = if let Some(row) = existing {
             evidence_from_row(&row)?
@@ -168,7 +192,7 @@ impl PostgresRepository {
             .bind(content_digest)
             .bind(&query_hash)
             .bind(expires_at)
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await?;
             snapshot.clone()
         };
@@ -185,10 +209,9 @@ impl PostgresRepository {
             .bind(investigation_id.map(InvestigationId::as_uuid))
             .bind(incident_id.map(IncidentId::as_uuid))
             .bind(Utc::now())
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await?;
         }
-        transaction.commit().await?;
         Ok(persisted)
     }
 

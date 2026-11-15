@@ -50,12 +50,39 @@ use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
+mod admission;
 mod critic;
 mod support;
 
+pub(super) use admission::ActionAdmission;
+pub(super) use admission::require_current_diagnosis;
 use support::*;
 
+pub(super) struct ApprovalPersistence<'a> {
+    pub(super) approval: &'a ApprovalRecord,
+    pub(super) grant: Option<&'a ApprovalGrant>,
+    pub(super) expected_statuses: &'a [PlanStatus],
+    pub(super) next_status: PlanStatus,
+    pub(super) audits: &'a [AuditEvent],
+    pub(super) external_source: Option<&'a ExternalApprovalSource>,
+    pub(super) admission: Option<&'a ActionAdmission>,
+}
+
 impl PostgresRepository {
+    /// Shared exact primary lineage for confirmed revisions retaining their
+    /// source invocation. This does not grant current action admission.
+    pub(crate) async fn action_primary_model_lineage_valid(
+        &self,
+        auth: &AuthContext,
+        plan: &ActionPlan,
+    ) -> Result<bool, ControlPlaneRequestFailure> {
+        let context = self
+            .diagnosis_plan_context(auth, plan.cluster_id, plan.incident_id, plan.diagnosis_revision)
+            .await?;
+        Ok(context.primary_model_lineage_valid
+            && context.primary_model_invocation_id == Some(plan.primary_model_invocation_id))
+    }
+
     pub(super) async fn diagnosis_plan_context(
         &self,
         auth: &AuthContext,
@@ -63,39 +90,15 @@ impl PostgresRepository {
         incident_id: IncidentId,
         diagnosis_revision_id: DiagnosisRevisionId,
     ) -> Result<DiagnosisPlanContext, ControlPlaneRequestFailure> {
-        let row = sqlx::query(
-            "SELECT i.tenant_id, i.cluster_id, d.id, d.status, d.evidence_ids,
-                    d.primary_model_invocation_id, d.execution_eligible, d.partial
-             FROM diagnosis_revisions d
-             JOIN sre_incidents i ON i.id = d.incident_id
-             WHERE d.id = $1 AND d.incident_id = $2
-               AND i.tenant_id = $3 AND i.cluster_id = $4",
-        )
-        .bind(diagnosis_revision_id.as_uuid())
-        .bind(incident_id.as_uuid())
-        .bind(auth.tenant_id.as_uuid())
-        .bind(cluster_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(ControlPlaneRequestFailure::not_found())?;
-        let evidence_ids = row
-            .try_get::<Vec<Uuid>, _>("evidence_ids")?
-            .into_iter()
-            .map(EvidenceId::from_uuid)
-            .collect();
-        Ok(DiagnosisPlanContext {
-            tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
-            cluster_id: ClusterId::from_uuid(row.try_get("cluster_id")?),
-            incident_id,
-            diagnosis_revision_id,
-            status: row.try_get("status")?,
-            evidence_ids,
-            primary_model_invocation_id: row
-                .try_get::<Option<Uuid>, _>("primary_model_invocation_id")?
-                .map(rocketmq_sre_contracts::ModelInvocationId::from_uuid),
-            execution_eligible: row.try_get("execution_eligible")?,
-            partial: row.try_get("partial")?,
-        })
+        let row = sqlx::query(admission::DIAGNOSIS_CONTEXT_SQL)
+            .bind(diagnosis_revision_id.as_uuid())
+            .bind(incident_id.as_uuid())
+            .bind(auth.tenant_id.as_uuid())
+            .bind(cluster_id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
+        admission::context_from_row(&row, incident_id, diagnosis_revision_id)
     }
 
     pub(super) async fn evidence_linked_to_incident(
@@ -153,8 +156,23 @@ impl PostgresRepository {
         risk: ActionRisk,
         decision: &PolicyDecision,
         audits: &[AuditEvent],
+        admission: &ActionAdmission,
     ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
+        admission.lock_and_check(&mut transaction).await?;
+        let next_version: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(version),0)::BIGINT+1 FROM action_plans WHERE incident_id=$1 AND tenant_id=$2",
+        )
+        .bind(plan.incident_id.as_uuid())
+        .bind(plan.tenant_id.as_uuid())
+        .fetch_one(&mut *transaction)
+        .await?;
+        if next_version != i64::from(plan.version) {
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "plan_revision_changed",
+                "the immutable candidate version changed before admission",
+            ));
+        }
         sqlx::query(
             "INSERT INTO action_plans (
                 id, tenant_id, cluster_id, incident_id, diagnosis_revision_id,
@@ -299,18 +317,46 @@ impl PostgresRepository {
     pub(super) async fn persist_approval_decision(
         &self,
         plan: &ActionPlan,
-        approval: &ApprovalRecord,
-        grant: Option<&ApprovalGrant>,
-        expected_statuses: &[PlanStatus],
-        next_status: PlanStatus,
-        audits: &[AuditEvent],
-        external_source: Option<&ExternalApprovalSource>,
+        input: ApprovalPersistence<'_>,
     ) -> Result<ActionPlan, ControlPlaneRequestFailure> {
+        let ApprovalPersistence {
+            approval,
+            grant,
+            expected_statuses,
+            next_status,
+            audits,
+            external_source,
+            admission,
+        } = input;
         let expected = expected_statuses
             .iter()
             .map(|status| plan_status_name(*status))
             .collect::<Vec<_>>();
         let mut transaction = self.pool.begin().await?;
+        if let Some(admission) = admission {
+            admission.lock_incident(&mut transaction).await?;
+        }
+        sqlx::query(
+            "SELECT id FROM action_plans WHERE id=$1 AND tenant_id=$2 AND cluster_id=$3 AND plan_hash=$4 FOR UPDATE",
+        )
+        .bind(plan.id.as_uuid())
+        .bind(plan.tenant_id.as_uuid())
+        .bind(plan.cluster_id.as_uuid())
+        .bind(&plan.plan_hash)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
+        let admission_time = if let Some(admission) = admission {
+            admission.check_locked(&mut transaction).await?
+        } else {
+            approval.decided_at
+        };
+        if approval.expires_at <= admission_time {
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "approval_expired",
+                "approval expired before admission",
+            ));
+        }
         let changed = sqlx::query(
             "UPDATE action_plans
              SET status = $3
@@ -321,7 +367,7 @@ impl PostgresRepository {
         .bind(&expected)
         .bind(plan_status_name(next_status))
         .bind(&plan.plan_hash)
-        .bind(approval.decided_at)
+        .bind(admission_time)
         .execute(&mut *transaction)
         .await?;
         if changed.rows_affected() != 1 {
@@ -449,8 +495,16 @@ impl PostgresRepository {
         &self,
         projection: &NewExecutionProjection,
         audit: &AuditEvent,
+        admission: &ActionAdmission,
     ) -> Result<StoredExecutionProjection, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
+        let admitted_at = admission.lock_and_check(&mut transaction).await?;
+        if projection.request.expires_at <= admitted_at {
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "execution_expired",
+                "the new execution intent expired before admission",
+            ));
+        }
         let inserted = sqlx::query(
             "INSERT INTO executions (
                 id, tenant_id, cluster_id, correlation_id, plan_id, plan_hash,

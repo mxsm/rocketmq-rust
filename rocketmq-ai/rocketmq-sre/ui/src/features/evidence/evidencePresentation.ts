@@ -126,6 +126,7 @@ export function safeEvidenceJson(value: unknown) {
           .map(([key, entry]) => {
             const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
             const sensitive =
+              normalized === "originsignature" ||
               /body|payload|token|secret|password|credential|privatekey|tls|acl|apikey|accesskey|authorization|cookie|config|certificate|pem|keystore|truststore|clientcert|servercert|cabundle|certchain|pfx|pkcs|ssl/.test(
                 normalized,
               );
@@ -136,9 +137,34 @@ export function safeEvidenceJson(value: unknown) {
     return item;
   };
   const serialized =
-    JSON.stringify(visit(value ?? { status: "missing" }, 0), null, 2) ??
+    JSON.stringify(visit(preparationAudit(value) ?? { status: "missing" }, 0), null, 2) ??
     "missing";
   return serialized.length > 8192
     ? `${serialized.slice(0, 8192)}\n… truncated`
     : serialized;
+}
+
+/** Private preparation material is consumed by the server, never the JSON viewer. */
+function preparationAudit(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const content = value as Record<string, unknown>;
+  if (content.schema_version !== "rocketmq-sre.action-preparation.v1") return value;
+  const binding = content.candidate_binding && typeof content.candidate_binding === "object" &&
+    !Array.isArray(content.candidate_binding)
+    ? content.candidate_binding as Record<string, unknown> : {};
+  const keys = [
+    "tenant_id", "cluster_id", "incident_id", "diagnosis_revision_id", "action_id",
+    "descriptor_version", "resource", "parameters_digest", "policy_version", "actor_subject",
+    "prepared_at", "valid_until",
+  ];
+  const metadata = Object.fromEntries(keys.flatMap((key) =>
+    typeof binding[key] === "string" ? [[key, binding[key]]] : [],
+  ));
+  return {
+    schema_version: content.schema_version,
+    ...(typeof content.evidence_id === "string" ? { evidence_id: content.evidence_id } : {}),
+    candidate_binding: metadata,
+    agent_result: "[redacted]",
+    origin_signature: "[redacted]",
+  };
 }

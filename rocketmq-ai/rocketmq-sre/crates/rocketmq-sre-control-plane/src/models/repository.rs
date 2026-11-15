@@ -382,6 +382,12 @@ impl PostgresRepository {
         auth: &AuthContext,
         plan: &rocketmq_sre_contracts::ActionPlan,
     ) -> Result<ModelInvocationRecord, ControlPlaneRequestFailure> {
+        if !self.action_primary_model_lineage_valid(auth, plan).await? {
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "primary_invocation_mismatch",
+                "plan primary lineage does not match its exact diagnosis basis",
+            ));
+        }
         let row = sqlx::query(
             "SELECT m.id, m.tenant_id, m.cluster_id, m.incident_id,
                     m.conversation_id, m.investigation_id,
@@ -393,18 +399,18 @@ impl PostgresRepository {
                     m.cost_micros, m.rationale, m.started_at, m.completed_at
              FROM model_invocations m
              JOIN diagnosis_revisions d
-               ON d.id = m.diagnosis_revision_id
+               ON d.id = $6
               AND d.incident_id = m.incident_id
               AND d.primary_model_invocation_id = m.id
              JOIN action_plans p
                ON p.id = $1
               AND p.diagnosis_revision_id = d.id
               AND p.primary_model_invocation_id = m.id
+              AND p.tenant_id = m.tenant_id AND p.cluster_id = m.cluster_id AND p.incident_id = m.incident_id
              WHERE m.id = $2
                AND m.tenant_id = $3
                AND m.cluster_id = $4
                AND m.incident_id = $5
-               AND m.diagnosis_revision_id = $6
                AND m.purpose = 'primary_diagnosis'
                AND m.error_code IS NULL",
         )

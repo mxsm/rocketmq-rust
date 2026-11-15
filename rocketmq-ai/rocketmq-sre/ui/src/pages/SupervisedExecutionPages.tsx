@@ -12,11 +12,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { createSupervisedSreApi } from "@/api/supervisedClient";
 import type {
   ActionPlanView,
+  ActionReadinessView,
   AuditPage,
   ExecutionSubmissionView,
   QuarantinePage,
@@ -27,17 +28,24 @@ import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { resourcePath } from "@/context/workspaceScope";
+import { useOptionalWorkspaceScope } from "@/context/WorkspaceScopeContext";
 import { ApprovalPanel } from "@/features/approvals/ApprovalPanel";
 import { AuditTimeline } from "@/features/audit/AuditTimeline";
 import { ChangeWorkspaceNav } from "@/features/change-management/ChangeWorkspace";
 import { ExecutionTimeline } from "@/features/executions/ExecutionTimeline";
 import { PlanDetail } from "@/features/plans/PlanDetail";
+import { PlanActionReadiness } from "@/features/plans/PlanActionReadiness";
+import { firstReadinessExpiry, planApprovalChecksPass, planReadinessSatisfied, planScopeObject } from "@/features/plans/planReadinessPresentation";
+import { useReadinessExpiry } from "@/features/incidents/useReadinessExpiry";
+import { ActionReadinessScopeError } from "@/features/incidents/actionReadinessPresentation";
 import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 import {
   formatTimestamp,
   shortDigest,
 } from "@/features/plans/planPresentation";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
+import { useSupervisedApi as useActionApi } from "@/hooks/useSupervisedApi";
+import { useActionReadinessMessages } from "@/i18n/actionReadinessMessages";
 import { useClusterScope } from "@/hooks/useClusterScope";
 import { useWorkflowProgress } from "@/hooks/useWorkflowProgress";
 
@@ -176,31 +184,40 @@ export function ChangeCenterPage() {
 
 export function PlanPage() {
   const { planId = "" } = useParams();
+  const context = useActionApi();
+  const scope = useOptionalWorkspaceScope();
+  const location = useLocation();
+  return <PlanPageSession key={`${context.identityKey}:${scope?.scopeKey ?? location.search}:${planId}`}
+    {...context} planId={planId} />;
+}
+
+function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> & { planId: string }) {
   const navigate = useNavigate();
-  const { auth, api } = useSupervisedApi();
-  const [view, setView] = useState<ActionPlanView>();
-  const [error, setError] = useState<string>();
+  const m = useActionReadinessMessages();
   const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [readiness, setReadiness] = useState<{ owner: ActionPlanView; views?: readonly ActionReadinessView[] }>();
   const pending = useRef<AbortController | undefined>(undefined);
   useEffect(() => () => pending.current?.abort(), []);
-
-  const load = useCallback(async () => {
-    if (!api || !planId) return;
-    setError(undefined);
-    try {
-      setView(await api.getPlan(planId));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "计划加载失败");
-    }
-  }, [api, planId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const tenantId = auth.session?.tenantId;
+  const claims = JSON.stringify([...(auth.session?.clusterIds ?? [])].sort());
+  const load = useCallback(async (signal: AbortSignal) => {
+    if (!api || !planId) throw new Error("Plan unavailable");
+    const value = await api.getPlan(planId, signal);
+    if (value.plan.id !== planId || value.plan.tenant_id !== tenantId ||
+        !(JSON.parse(claims) as string[]).includes(value.plan.cluster_id)) throw new ActionReadinessScopeError();
+    return value;
+  }, [api, claims, planId, tenantId]);
+  const resource = useAsyncResource(load);
+  const view = resource.error ? undefined : resource.data;
+  const snapshots = readiness && readiness.owner === view ? readiness.views : undefined;
+  const expired = useReadinessExpiry(firstReadinessExpiry(snapshots));
+  const onReadiness = useCallback((owner: ActionPlanView, views?: readonly ActionReadinessView[]) => {
+    setReadiness({ owner, views });
+  }, []);
 
   const mutate = async (operation: (signal: AbortSignal) => Promise<void>) => {
-    if (busy) return;
+    if (pending.current || resource.loading) return;
     const controller = new AbortController();
     pending.current = controller;
     setBusy(true);
@@ -208,31 +225,37 @@ export function PlanPage() {
     try {
       await operation(controller.signal);
       if (controller.signal.aborted) return;
-      await load();
+      await resource.reload();
     } catch (reason) {
       if (controller.signal.aborted) return;
-      setMessage(reason instanceof Error ? reason.message : "请求失败");
+      setMessage(reason instanceof ActionReadinessScopeError ? m.scopeMismatch : m.rejected);
     } finally {
-      if (!controller.signal.aborted) setBusy(false);
+      if (pending.current === controller) {
+        pending.current = undefined;
+        if (!controller.signal.aborted) setBusy(false);
+      }
     }
   };
 
   if (!view) {
-    return <LoadState title="计划详情" error={error} onRetry={() => void load()} />;
+    return <LoadState title="计划详情" error={resource.error ? m.readFailure : undefined} onRetry={() => void resource.reload()} />;
   }
 
   const roles = auth.session?.roles ?? [];
   const canApprove =
     roles.includes("approver") || roles.includes("rocketmq:approve");
   const canExecute =
-    roles.includes("operator") || roles.includes("rocketmq:operate");
+    (roles.includes("operator") || roles.includes("rocketmq:operate")) &&
+    !expired && planReadinessSatisfied(view.plan, snapshots);
+  const approvalReady = !expired && planApprovalChecksPass(view.plan, snapshots, auth.session?.subject ?? "");
+  const canReject = canApprove && auth.session?.subject !== view.plan.created_by;
 
   return (
-    <ObjectScopeBoundary object={view.plan}>
+    <ObjectScopeBoundary object={planScopeObject(view.plan)}>
     <div className="page">
       <PageHeader
         actions={
-          <Button onClick={() => void load()} size="sm" variant="outline">
+          <Button disabled={busy || resource.loading} onClick={() => void resource.reload()} size="sm" variant="outline">
             <RefreshCw size={14} />
             刷新
           </Button>
@@ -241,14 +264,21 @@ export function PlanPage() {
         eyebrow="PLAN / APPROVAL"
         title="变更计划详情"
       />
+      {api && <PlanActionReadiness view={view} api={api} subject={auth.session?.subject ?? ""}
+        disabled={resource.loading || busy} onReadiness={onReadiness} />}
       <div className="plan-approval-layout">
         <main>
           <PlanDetail view={view} />
         </main>
         <ApprovalPanel
-          busy={busy}
+          busy={busy || resource.loading}
           canApprove={canApprove}
+          approvalReady={approvalReady}
+          canReject={canReject}
+          approvalBlockedMessage={!approvalReady ? auth.session?.subject === view.plan.created_by
+            ? m.independentApprover : m.approvalBasisBlocked : undefined}
           canExecute={canExecute}
+          dispatchBlockedMessage={!canExecute ? m.planReadinessBlocked : undefined}
           message={message}
           onCriticReview={() =>
             mutate(async (signal) => {

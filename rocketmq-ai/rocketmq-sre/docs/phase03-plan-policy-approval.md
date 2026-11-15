@@ -13,6 +13,11 @@ Control Plane 是计划、策略和人工审批的唯一入口。模型只能提
 - 执行提交时再次读取 Evidence、锁、quarantine 与计划状态。plan hash、precondition hash、审批有效期或 live state 任一变化都会 fail closed。
 - quarantine 解除需要 approver、目标 cluster scope、原因和至少一个仍有效的人工验证 Evidence。
 
+新增 [ActionReadiness 与精确预检](action-readiness.md)进一步约束自动计划的新进度：
+要求当前诊断修订、精确参数与目标范围、带来源验证的预检及锁后时效复核。首次执行
+还检查独立动作/目标资格与实际补偿能力；当前这两类来源仍未知，首次提交会保持阻断。
+已经接收的执行协调和已完成回执保留原有历史语义。
+
 ## 配置
 
 确定性策略保存在 `config/policy/supervised-execution.v1.yaml`。生产模式必须配置：
@@ -27,6 +32,8 @@ ROCKETMQ_SRE_GRANT_SIGNING_KEY=<至少 32 字节的独立随机值>
 
 ```text
 POST /v1/plans
+POST /v1/incidents/{incident_id}/action-readiness
+POST /v1/incidents/{incident_id}/execution-preconditions
 GET  /v1/plans/{id}
 POST /v1/plans/{id}/approve
 POST /v1/plans/{id}/reject

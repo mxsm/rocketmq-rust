@@ -104,6 +104,8 @@ async fn postgres_r2_critic_is_heterogeneous_durable_and_required_for_approval()
             .expect("Critic profile certification fixture");
     }
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
+    let (executor, observer_group) =
+        super::readiness_tests::support::readonly_executor(Utc::now() - Duration::seconds(1)).await;
     let service = SupervisedExecutionService::new_with_clock_and_model(
         repository.clone(),
         workflow,
@@ -111,7 +113,9 @@ async fn postgres_r2_critic_is_heterogeneous_durable_and_required_for_approval()
         model_gateway,
         Arc::new(Utc::now),
     )
-    .expect("service");
+    .expect("service")
+    .with_test_executor(executor)
+    .with_target_scope(super::service_tests::fixture_target_scope(&fixture));
 
     let topic_plan = create_r2_plan(
         &service,
@@ -245,6 +249,12 @@ async fn postgres_r2_critic_is_heterogeneous_durable_and_required_for_approval()
             .len(),
         1
     );
+    assert!(
+        observer_group
+            .shutdown(std::time::Duration::from_secs(2))
+            .await
+            .is_healthy()
+    );
 }
 
 #[tokio::test]
@@ -285,6 +295,8 @@ async fn postgres_same_family_alias_and_endpoint_degrade_without_unlocking_r2() 
         .await
         .expect("same-family profile certification fixture");
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
+    let (executor, observer_group) =
+        super::readiness_tests::support::readonly_executor(Utc::now() - Duration::seconds(1)).await;
     let service = SupervisedExecutionService::new_with_clock_and_model(
         repository,
         workflow,
@@ -292,7 +304,9 @@ async fn postgres_same_family_alias_and_endpoint_degrade_without_unlocking_r2() 
         model_gateway,
         Arc::new(Utc::now),
     )
-    .expect("service");
+    .expect("service")
+    .with_test_executor(executor)
+    .with_target_scope(super::service_tests::fixture_target_scope(&fixture));
     let plan = create_r2_plan(
         &service,
         &operator,
@@ -334,6 +348,12 @@ async fn postgres_same_family_alias_and_endpoint_degrade_without_unlocking_r2() 
         .await
         .expect_err("same-family alias must not unlock R2 approval");
     assert_eq!(super::service_tests::error_code(&error), "critic_required");
+    assert!(
+        observer_group
+            .shutdown(std::time::Duration::from_secs(2))
+            .await
+            .is_healthy()
+    );
 }
 
 fn profile(id: &str, priority: u16) -> rocketmq_sre_model_gateway::ProviderProfile {
@@ -386,6 +406,22 @@ async fn create_r2_plan(
     resource: &str,
     parameters: serde_json::Value,
 ) -> ActionPlan {
+    let prepared = service
+        .prepare_execution_precondition(
+            operator,
+            fixture.incident_id,
+            &super::model::PrepareExecutionPreconditionRequest {
+                cluster_id: fixture.cluster_id,
+                diagnosis_revision_id: fixture.diagnosis_id,
+                action_id: action_id.to_owned(),
+                descriptor_version: "1.0.0".to_owned(),
+                resource: resource.to_owned(),
+                parameters: parameters.clone(),
+            },
+            rocketmq_sre_contracts::CorrelationId::new(),
+        )
+        .await
+        .expect("real bounded readonly preparation for the exact Critic candidate");
     let response = service
         .create_plan(
             operator,
@@ -399,7 +435,7 @@ async fn create_r2_plan(
                     descriptor_version: "1.0.0".to_owned(),
                     resource: resource.to_owned(),
                     parameters,
-                    evidence_ids: vec![fixture.evidence_id],
+                    evidence_ids: vec![fixture.evidence_id, prepared.evidence.evidence_id],
                 }],
             },
             rocketmq_sre_contracts::CorrelationId::new(),

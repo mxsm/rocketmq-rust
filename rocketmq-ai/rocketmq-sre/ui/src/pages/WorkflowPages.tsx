@@ -65,6 +65,7 @@ import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useClusterScope } from "@/hooks/useClusterScope";
 import { useWorkflowProgress } from "@/hooks/useWorkflowProgress";
+import { useActionReadinessMessages } from "@/i18n/actionReadinessMessages";
 
 const investigationLabels: Record<InvestigationStatus, string> = {
   open: "已开启",
@@ -1159,6 +1160,7 @@ export function IncidentsPage() {
 export function IncidentDetailPage() {
   const { incidentId = "" } = useParams();
   const { api } = useSreData();
+  const readinessMessages = useActionReadinessMessages();
   const [dispatch, setDispatch] = useState<string>();
   const [dispatching, setDispatching] = useState(false);
   const load = useCallback(
@@ -1265,15 +1267,10 @@ export function IncidentDetailPage() {
               value={String(resource.data.incident.occurrence_count)}
             />
             <Summary
-              label="执行资格"
-              value={String(
-                resource.data.diagnosis_revisions.at(-1)
-                  ?.execution_eligible ?? false,
-              )}
-              safe={Boolean(
-                resource.data.diagnosis_revisions.at(-1)
-                  ?.execution_eligible,
-              )}
+              label={readinessMessages.diagnosisBasis}
+              value={resource.data.diagnosis_revisions.at(-1)?.status === "confirmed" &&
+                resource.data.diagnosis_revisions.at(-1)?.execution_eligible
+                ? readinessMessages.diagnosisBasisConfirmed : readinessMessages.diagnosisBasisUnconfirmed}
             />
           </section>
           <SupervisedDiagnosisPanel

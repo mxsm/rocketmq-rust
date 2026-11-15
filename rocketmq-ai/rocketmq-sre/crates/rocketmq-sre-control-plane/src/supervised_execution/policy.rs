@@ -108,37 +108,7 @@ impl PolicyEvaluator {
         facts: PolicyFacts,
         now: DateTime<Utc>,
     ) -> Result<PolicyDecision, ControlPlaneRequestFailure> {
-        let mut reasons = Vec::new();
-        if !auth.roles.contains(&self.config.required_operator_role) {
-            reasons.push("OperatorRoleRequired".to_owned());
-        }
-        if auth.tenant_id != plan.tenant_id || !auth.clusters.contains(&plan.cluster_id) {
-            reasons.push("IdentityScopeMismatch".to_owned());
-        }
-        if !facts.diagnosis_execution_eligible {
-            reasons.push(RULES_ONLY_NOT_EXECUTABLE.to_owned());
-        }
-        if !facts.diagnosis_confirmed {
-            reasons.push("DiagnosisNotConfirmed".to_owned());
-        }
-        if !facts.evidence_current {
-            reasons.push("EvidenceMissingOrStale".to_owned());
-        }
-        if facts.resource_quarantined {
-            reasons.push(RESOURCE_QUARANTINED.to_owned());
-        }
-        if facts.resource_busy {
-            reasons.push("ResourceChangeInProgress".to_owned());
-        }
-        if !facts.maintenance_window_open {
-            reasons.push("MaintenanceWindowClosed".to_owned());
-        }
-        if !facts.rollback_available {
-            reasons.push("RollbackUnavailable".to_owned());
-        }
-        if risks.is_empty() || risks.iter().any(|risk| !self.config.approval_required.contains(risk)) {
-            reasons.push("UnsupportedExecutionRisk".to_owned());
-        }
+        let mut reasons = self.denial_reasons(auth, plan.tenant_id, plan.cluster_id, risks, facts);
         let effect = if reasons.is_empty() {
             PolicyEffect::RequireApproval
         } else {
@@ -178,6 +148,48 @@ impl PolicyEvaluator {
             evaluated_by: self.config.evaluator.clone(),
             evaluated_at: now,
         })
+    }
+
+    pub(super) fn denial_reasons(
+        &self,
+        auth: &AuthContext,
+        tenant_id: rocketmq_sre_contracts::TenantId,
+        cluster_id: rocketmq_sre_contracts::ClusterId,
+        risks: &[ActionRisk],
+        facts: PolicyFacts,
+    ) -> Vec<String> {
+        let mut reasons = Vec::new();
+        if !auth.roles.contains(&self.config.required_operator_role) {
+            reasons.push("OperatorRoleRequired".to_owned());
+        }
+        if auth.tenant_id != tenant_id || !auth.clusters.contains(&cluster_id) {
+            reasons.push("IdentityScopeMismatch".to_owned());
+        }
+        if !facts.diagnosis_execution_eligible {
+            reasons.push(RULES_ONLY_NOT_EXECUTABLE.to_owned());
+        }
+        if !facts.diagnosis_confirmed {
+            reasons.push("DiagnosisNotConfirmed".to_owned());
+        }
+        if !facts.evidence_current {
+            reasons.push("EvidenceMissingOrStale".to_owned());
+        }
+        if facts.resource_quarantined {
+            reasons.push(RESOURCE_QUARANTINED.to_owned());
+        }
+        if facts.resource_busy {
+            reasons.push("ResourceChangeInProgress".to_owned());
+        }
+        if !facts.maintenance_window_open {
+            reasons.push("MaintenanceWindowClosed".to_owned());
+        }
+        if !facts.rollback_available {
+            reasons.push("RollbackUnavailable".to_owned());
+        }
+        if risks.is_empty() || risks.iter().any(|risk| !self.config.approval_required.contains(risk)) {
+            reasons.push("UnsupportedExecutionRisk".to_owned());
+        }
+        reasons
     }
 
     pub(super) fn require_operator(&self, auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
