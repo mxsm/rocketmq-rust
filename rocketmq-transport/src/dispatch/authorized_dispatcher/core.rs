@@ -332,7 +332,7 @@ where
                     }
                 },
             ) {
-                Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchSubmissionResult::Accepted(task_id)),
+                Ok(SessionDispatchAttempt::Accepted) => Ok(DispatchSubmissionResult::Accepted),
                 Ok(SessionDispatchAttempt::AdmissionRejected {
                     rejection,
                     retained_partial,

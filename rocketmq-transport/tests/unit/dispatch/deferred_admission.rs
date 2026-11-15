@@ -450,7 +450,7 @@ async fn deferred_permit_is_independent_from_real_session_execution_and_baseline
             |_operation, _error| async {},
         )
         .expect("first real session task");
-    assert!(matches!(first_attempt, SessionDispatchAttempt::Accepted(_)));
+    assert!(matches!(first_attempt, SessionDispatchAttempt::Accepted));
     let deferred = permit_rx
         .await
         .expect("first task must execute and transfer its permit");
@@ -483,7 +483,7 @@ async fn deferred_permit_is_independent_from_real_session_execution_and_baseline
             |_operation, _error| async {},
         )
         .expect("second real session task must be admitted with processor capacity one");
-    assert!(matches!(second_attempt, SessionDispatchAttempt::Accepted(_)));
+    assert!(matches!(second_attempt, SessionDispatchAttempt::Accepted));
     second_rx.await.expect("second real session task must execute");
     assert!(
         executor
@@ -562,8 +562,11 @@ async fn closed_session_dispatch_recovers_the_unconsumed_partial_frame_without_a
         .expect("runtime owner tasks must drain");
 }
 
+// Inline request tasks are counted by the session executor and never bind the request
+// operation to an owner, so a closed task group is the only answer here. The owner invariant
+// still guards deferred resumes, which run as operation tasks (see deferred_resume.rs).
 #[tokio::test]
-async fn closed_task_group_does_not_mask_an_operation_owner_invariant() {
+async fn inline_requests_ignore_the_operation_owner_and_report_a_closed_task_group() {
     let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("session-dispatch-owner-invariant"))
         .expect("test runtime configuration is valid")
         .build()
@@ -595,17 +598,17 @@ async fn closed_task_group_does_not_mask_an_operation_owner_invariant() {
     );
     let _ = service.task_group().shutdown_now();
 
-    let error = executor
+    let attempt = executor
         .try_execute(
             64,
             AdmissionClass::Data,
             None,
             RequestOrdering::Concurrent,
-            |_operation| async { panic!("owner mismatch must not execute the request") },
-            |_operation, _rejection| async { panic!("owner mismatch must not run rejection handling") },
+            |_operation| async { panic!("a closed task group must not execute the request") },
+            |_operation, _rejection| async { panic!("a closed task group must not run rejection handling") },
         )
-        .expect_err("operation-owner invariant must remain an operational error");
-    assert_eq!(error.operation(), rocketmq_runtime::RuntimeOperation::OperationOwner);
+        .expect("a closed task group is not an operational error");
+    assert!(matches!(attempt, SessionDispatchAttempt::SessionClosed { .. }));
     assert_eq!(controller.snapshot().queued.current_count, 0);
     assert_eq!(controller.snapshot().inflight.current_count, 0);
 

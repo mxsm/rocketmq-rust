@@ -329,10 +329,10 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("dispatch real deferred registration");
-    let DispatchSubmissionResult::Accepted(_) = outcome else {
+    let DispatchSubmissionResult::Accepted = outcome else {
         panic!("deferred request must enter session execution");
     };
-    while harness.authorized.operation_context().active_task_count() > 0 {
+    while harness.authorized.request_activity().running() > 0 {
         tokio::task::yield_now().await;
     }
 
@@ -457,7 +457,7 @@ async fn deferred_commit_session_close_is_a_normal_terminal_race_without_recordi
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("request admission succeeds before deferred commit");
-    assert!(matches!(outcome, DispatchSubmissionResult::Accepted(_)));
+    assert!(matches!(outcome, DispatchSubmissionResult::Accepted));
     harness.drain_requests().await;
 
     assert!(dispatcher.reported_failure_categories().is_empty());
@@ -518,7 +518,7 @@ async fn deferred_commit_classifies_only_invariants_as_admitted_failures() {
             .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
             .await
             .expect("dispatch admission succeeds before the deferred commit");
-        assert!(matches!(outcome, DispatchSubmissionResult::Accepted(_)));
+        assert!(matches!(outcome, DispatchSubmissionResult::Accepted));
         harness.drain_requests().await;
 
         assert_eq!(registered_events.load(Ordering::SeqCst), 0);
@@ -570,7 +570,7 @@ async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_respons
         )
         .await
         .expect("dispatch deferred deadline request");
-    while harness.authorized.operation_context().active_task_count() > 0 {
+    while harness.authorized.request_activity().running() > 0 {
         tokio::task::yield_now().await;
     }
     let id = registered_id

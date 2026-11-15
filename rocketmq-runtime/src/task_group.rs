@@ -48,10 +48,13 @@ use crate::shutdown_report::ShutdownReport;
 use crate::shutdown_report::TaskSnapshot;
 
 mod completion;
+mod counted;
 mod diagnostics;
 mod registry;
 mod shutdown;
 mod submission;
+
+pub use counted::CountedTaskSet;
 
 use registry::ActiveTaskRegistry;
 use shutdown::ShutdownCoordinator;
@@ -408,6 +411,9 @@ struct TaskGroupInner {
     spawn_gate: Mutex<()>,
     settlement_gate: Mutex<()>,
     shutdown: ShutdownCoordinator,
+    // Sets whose tasks this group tracks without registering them; a shutdown that reaches its
+    // deadline stops their tasks as it aborts registered ones.
+    counted_sets: Mutex<Vec<std::sync::Weak<counted::CountedTaskSetInner>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1187,6 +1193,8 @@ impl TaskGroup {
                 abort_handle.abort();
             }
         }
+        let stopped = counted::stop_counted_sets(&self.inner.counted_sets);
+        self.inner.aborted.fetch_add(stopped, Ordering::AcqRel);
     }
 
     fn record_task_outcomes(&self, report: &mut ShutdownReport) {
@@ -1247,6 +1255,7 @@ impl TaskGroupInner {
             spawn_gate: Mutex::new(()),
             settlement_gate: Mutex::new(()),
             shutdown: ShutdownCoordinator::new(),
+            counted_sets: Mutex::new(Vec::new()),
         }
     }
 
