@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -79,7 +78,6 @@ use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
-use rocketmq_store_api::StoreHealth;
 use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
@@ -1573,17 +1571,6 @@ fn set_success_response_header(
     response_header.set_recall_handle(recall_handle);
 }
 
-fn append_message_with_store<'a, S, M>(
-    store: &'a mut S,
-    message: M,
-) -> impl Future<Output = Result<Result<S::Receipt, rocketmq_store_api::StoreError>, StoreAwaitStopped>> + Send + 'a
-where
-    S: MessageAppender<M> + 'a,
-    M: Send + 'a,
-{
-    await_store(StoreAwaitControl::Legacy, store.append_message(message))
-}
-
 fn map_legacy_store_wait_stopped(_: StoreAwaitStopped) -> SharedError {
     crate::broker_error::invariant_violated("legacy message store await cannot observe request cancellation")
 }
@@ -1655,14 +1642,6 @@ fn map_store_api_error(error: rocketmq_store_api::StoreError) -> StoreApiErrorPr
         public_message: descriptor.public_message(),
         retry,
     }
-}
-
-fn store_health_reject_remark_from<P, S>(policy: &P, store: &S) -> Option<String>
-where
-    P: SendBackpressurePolicy,
-    S: StoreHealth<Snapshot = StoreHealthSnapshot>,
-{
-    store_health_reject_remark(policy, store.health_snapshot())
 }
 
 fn store_health_reject_remark(policy: &impl SendBackpressurePolicy, snapshot: StoreHealthSnapshot) -> Option<String> {
@@ -2305,13 +2284,15 @@ mod tests {
     use rocketmq_store::StoreAppendReceipt;
     use rocketmq_store::StoreHealthSnapshot;
     use rocketmq_store::SyncFlushRuntimeInfo;
+    use rocketmq_store_api::MessageAppender;
+    use rocketmq_store_api::StoreHealth;
 
     use crate::mqtrace::send_message_context::SendMessageContext;
     use crate::mqtrace::send_message_hook::SendMessageHook;
     use crate::send_message_constants::error_messages;
 
     use super::add_send_response_metadata;
-    use super::append_message_with_store;
+    use super::await_store;
     use super::broker_send_permission_denied;
     use super::has_registered_send_message_hooks;
     use super::has_valid_compaction_key;
@@ -2321,9 +2302,9 @@ mod tests {
     use super::message_store_not_initialized;
     use super::no_retry_queue_response;
     use super::store_health_reject_remark;
-    use super::store_health_reject_remark_from;
     use super::sync_flush_backlog_reject_remark;
     use super::StoreApiRetryDisposition;
+    use super::StoreAwaitControl;
     use crate::send_message_constants::apply_topic_delivery_properties;
 
     #[test]
@@ -2798,14 +2779,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_seam_depends_only_on_message_appender() {
+    async fn store_await_preserves_message_appender_receipt() {
         let expected = store_append_receipt(PutMessageResult::new_default(PutMessageStatus::PutOk), 20, 20);
         let mut store = CapabilityStore {
             health: StoreHealthSnapshot::default(),
             receipt: Some(expected),
         };
 
-        let actual = append_message_with_store(&mut store, ())
+        let actual = await_store(StoreAwaitControl::Legacy, store.append_message(()))
             .await
             .expect("legacy append await remains active")
             .expect("append succeeds");
@@ -2816,7 +2797,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_seam_depends_only_on_store_health() {
+    fn store_health_snapshot_rejection_preserves_error_code() {
         let store = CapabilityStore {
             health: StoreHealthSnapshot {
                 writable: false,
@@ -2826,8 +2807,8 @@ mod tests {
             receipt: None,
         };
 
-        let remark =
-            store_health_reject_remark_from(&BrokerConfig::default(), &store).expect("non-writable store rejects");
+        let remark = store_health_reject_remark(&BrokerConfig::default(), store.health_snapshot())
+            .expect("non-writable store rejects");
 
         assert!(remark.contains("reason=store_not_writeable"));
         assert!(remark.contains("lastFlushErrorCode=storage.write.failed"));
