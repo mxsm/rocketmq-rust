@@ -220,6 +220,15 @@ promise a hard wall-clock bound.
 `TaskGroup::cancel()` only broadcasts cancellation. Use `shutdown(...)` or
 `shutdown_until(...)` to close task admission and wait for shutdown evidence.
 
+`CancellationToken::is_cancelled` and every poll of `cancelled()` lock the
+token, so a token that many tasks on different threads check, such as the
+request stop of one connection, moves that lock between cores on every check.
+`CancellationObserver` answers the same questions without the lock: it
+registers a waker with the token that sets an atomic flag before `cancel()`
+returns, also when the cancellation comes from a parent token, and spreads its
+waiters over per-thread lists. Use one for a token on a per-message path; each
+observer takes about 1 KiB. `CountedTaskSet` observes its token this way.
+
 ### TaskGroup Invariants
 
 | State | Meaning |

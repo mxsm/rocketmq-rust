@@ -32,6 +32,7 @@ use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingCommandType;
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::CancellationObserver;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeError;
@@ -517,7 +518,10 @@ struct SessionSendHandle {
     /// cancelled wherever this handle publishes the session closed, so a request needs to wait on
     /// this token alone. A writer failure publishes the close itself and stops the reader, whose
     /// exit then closes the session through [`SessionHandle::request_close`].
-    request_stop: CancellationToken,
+    ///
+    /// Every request checks and waits on it, so they read it through an observer instead of the
+    /// token's lock.
+    request_stop: CancellationObserver,
     /// Cancels `request_stop` when the handle, and with it the session's close publisher, is dropped.
     _request_stop_on_drop: tokio_util::sync::DropGuard,
     server_outbound: Arc<ServerOutboundAdmission>,
@@ -693,7 +697,7 @@ impl SessionHandle {
     }
 
     /// Returns the token that stops this session's requests; see [`SessionSendHandle`].
-    pub(crate) fn request_stop(&self) -> &CancellationToken {
+    pub(crate) fn request_stop(&self) -> &CancellationObserver {
         &self.send.request_stop
     }
 
@@ -706,7 +710,7 @@ impl SessionHandle {
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
-        self.send.request_stop.cancel();
+        self.send.request_stop.token().cancel();
         self.request_operation.cancel();
         self.abort_writer();
     }
@@ -735,7 +739,7 @@ impl SessionHandle {
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
-        self.send.request_stop.cancel();
+        self.send.request_stop.token().cancel();
         self.request_operation.cancel();
         self.send.writer_operation.cancel();
         if !self.writer_stopped_within(SESSION_RETIREMENT_TIMEOUT).await {
@@ -787,7 +791,7 @@ impl SessionHandle {
         let outcome = self.send.server_outbound.close(cause);
         let _ = self.send.session_closed_tx.send(true);
         self.send.reader_cancellation.cancel();
-        self.send.request_stop.cancel();
+        self.send.request_stop.token().cancel();
         outcome
     }
 
@@ -854,7 +858,7 @@ impl SessionHandle {
             let _ = self.send.session_closed_tx.send(true);
             let _ = self.send.state_tx.send(ConnectionState::Closed);
             self.send.reader_cancellation.cancel();
-            self.send.request_stop.cancel();
+            self.send.request_stop.token().cancel();
             self.request_operation.cancel();
             self.abort_writer();
             return Err(connection_failed(TransportStage::Closed, source));
@@ -863,7 +867,7 @@ impl SessionHandle {
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
-        self.send.request_stop.cancel();
+        self.send.request_stop.token().cancel();
         self.request_operation.cancel();
         let _ = self.writer_stopped_within(SESSION_RETIREMENT_TIMEOUT).await;
         close_result
@@ -1555,7 +1559,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     let request_operation = executor.operation_context().clone();
     let reader_cancellation = CancellationToken::new();
     let reader_shutdown = reader_cancellation.clone();
-    let request_stop = task_group.cancellation_token().child_token();
+    let request_stop = CancellationObserver::new(task_group.cancellation_token().child_token());
     let writer_group = task_group.clone();
     let writer_cancellation = writer_operation.cancellation_token();
     let writer_loop = run_session_writer(
@@ -1619,7 +1623,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
                 session_view,
                 task_group: task_group.clone(),
                 reader_cancellation: reader_cancellation.clone(),
-                _request_stop_on_drop: request_stop.clone().drop_guard(),
+                _request_stop_on_drop: request_stop.token().clone().drop_guard(),
                 request_stop,
                 server_outbound: ServerOutboundAdmission::new(),
                 close_coordinator: SessionCloseCoordinator::new(),

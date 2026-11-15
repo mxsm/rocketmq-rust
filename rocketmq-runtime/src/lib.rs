@@ -32,6 +32,7 @@
 //! as a test.
 
 pub mod blocking;
+mod cancellation_observer;
 /// Common types and operations.
 pub mod common;
 /// Config types and operations.
@@ -78,6 +79,7 @@ pub use blocking::BlockingLane;
 pub use blocking::BlockingLanePolicies;
 pub use blocking::BlockingPoolPolicy;
 pub use blocking::BlockingTaskSnapshot;
+pub use cancellation_observer::CancellationObserver;
 pub use config::RuntimeConfig;
 pub use context::RuntimeContext;
 pub use critical::CriticalFailure;
