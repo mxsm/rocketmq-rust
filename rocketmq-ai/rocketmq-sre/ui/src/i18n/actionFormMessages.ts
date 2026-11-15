@@ -1,0 +1,61 @@
+import { useOperatorPreferences } from "@/preferences/OperatorPreferences";
+
+const zh = {
+  actionType: "动作类型", target: "动作目标资源", loggerTarget: "目标 Broker 资源",
+  modelHint: "表单仅支持已有动作的固定版本。实际可用操作、范围和资格由服务端重新核对。",
+  include: "变更", referenceHint: "仅填写 vault:// 或 kubernetes:// 受管引用；不要输入密钥值。评审中隐藏引用全文。",
+  invalid: "请完成目标和此动作的必填字段，并核对允许范围；配置补丁至少选择一项。",
+  reviewTitle: "不可变动作评审", reviewHint: "核对保存的目标、拟变更、风险和验证声明。当前值未随计划提供，不能把参数当作实际差异或执行资格。",
+  diagnosisConfirmed: "保存的诊断依据已确认", diagnosisUnconfirmed: "保存的诊断依据未确认",
+  historical: "旧版本或未识别参数仅供只读审阅；不能从此页面批准或派发。",
+  requested: "拟变更与版本前置条件", beforeUnknown: "当前目标值：未提供；须依赖服务端只读预检。",
+  masked: "[引用已隐藏]", verification: "保存的验证条件", noCondition: "未提供可识别条件",
+  unknownCondition: "未识别的条件（未显示原值）", compensation: "保存的补偿声明",
+  automatic: "声明自动补偿", manual: "失败后人工接管", noAutomatic: "未声明自动补偿",
+  compensationHint: "计划声明不证明目标支持或补偿成功，仍需服务端资格与实际验证。",
+  beforeCount: "所需 before 字段", stableWindow: "稳定窗口", maxWait: "最长等待", timeout: "超时",
+  evidence: "不可变证据引用", seconds: "秒", status: "计划状态", risk: "服务端风险",
+  imprecise: "未提供可精确读取的数值",
+  impact: "影响范围", steps: "步骤", expiry: "计划截止", requester: "请求人",
+  singleResource: "单一资源", singleInstance: "单个实例", oneReplica: "一个副本", allowlistedFields: "限定配置项", unknownImpact: "影响范围未知",
+  title: "人工审批与派发检查", intro: "审批绑定不可变计划。批准记录未到期不等于执行授权；角色分离与派发条件由服务端强制。",
+  currentApproval: "人工批准记录（未到期）", historicalApproval: "历史人工批准记录（已失效）",
+  rejectedApproval: "历史拒绝记录", waiting: "等待审批", expired: "计划已过期", invalidTime: "有效时间未知",
+  approvalUntil: "审批截止", role: "审批角色", noRole: "无审批权限", critic: "运行 Critic",
+  boundHash: "Precondition hash", validity: "审批有效期（秒）", reason: "审批或拒绝原因（至少 8 个字符）",
+  reasonHint: "说明风险判断、观察窗口和回滚依据", roleHint: "当前身份没有审批角色，操作保持禁用。",
+  criticHint: "批准 R2 计划前必须先取得有效异构 Critic 结论。",
+  submit: "提交 Executor", approve: "Approve", reject: "Reject", record: "审批记录",
+};
+const en: typeof zh = {
+  actionType: "Action type", target: "Action target resource", loggerTarget: "Target Broker resource",
+  modelHint: "Forms support fixed versions of existing actions. The server rechecks operations, scope and qualification.",
+  include: "Change", referenceHint: "Enter only a managed vault:// or kubernetes:// reference, never a secret value. Review hides the full reference.",
+  invalid: "Complete the target and required fields within their allowed bounds. Select at least one configuration patch field.",
+  reviewTitle: "Immutable action review", reviewHint: "Review the saved target, requested changes, risk and verification declarations. Current values are not supplied by this Plan; parameters do not establish an observed diff or execution qualification.",
+  diagnosisConfirmed: "Saved diagnosis basis confirmed", diagnosisUnconfirmed: "Saved diagnosis basis unconfirmed",
+  historical: "Older versions or unrecognized parameters remain read-only; this page cannot approve or dispatch them.",
+  requested: "Requested changes and version preconditions", beforeUnknown: "Current target values: not provided. Use the server's read-only precheck.",
+  masked: "[Reference hidden]", verification: "Saved verification conditions", noCondition: "No recognized condition supplied",
+  unknownCondition: "Unrecognized condition (raw value hidden)", compensation: "Saved compensation declaration",
+  automatic: "Automatic compensation declared", manual: "Human takeover on failure", noAutomatic: "No automatic compensation declared",
+  compensationHint: "A declaration does not prove target support or successful compensation. Server qualification and actual verification still apply.",
+  beforeCount: "Required before fields", stableWindow: "Stable window", maxWait: "Maximum wait", timeout: "Timeout",
+  evidence: "Immutable evidence references", seconds: "seconds", status: "Plan status", risk: "Server risk",
+  imprecise: "No precisely readable value supplied",
+  impact: "Impact scope", steps: "Steps", expiry: "Plan deadline", requester: "Requester",
+  singleResource: "One resource", singleInstance: "One instance", oneReplica: "One replica", allowlistedFields: "Allowlisted fields", unknownImpact: "Impact scope unknown",
+  title: "Human approval and dispatch checks", intro: "Approval binds the immutable Plan. An unexpired record is not execution authority; the server enforces independent approval and dispatch conditions.",
+  currentApproval: "Human approval record (unexpired)", historicalApproval: "Historical human approval (no longer current)",
+  rejectedApproval: "Historical rejection", waiting: "Awaiting approval", expired: "Plan expired", invalidTime: "Validity time unknown",
+  approvalUntil: "Approval deadline", role: "Approval role", noRole: "No approval permission", critic: "Run Critic",
+  boundHash: "Precondition hash", validity: "Approval validity in seconds", reason: "Approval or rejection reason (at least 8 characters)",
+  reasonHint: "Explain risk, observation window and rollback evidence", roleHint: "The current identity lacks an approval role; operations remain disabled.",
+  criticHint: "An accepted heterogeneous Critic review is required before approving an R2 Plan.",
+  submit: "Submit to Executor", approve: "Approve", reject: "Reject", record: "Approval record",
+};
+
+export function useActionFormMessages() {
+  const { locale, formatDateTime } = useOperatorPreferences();
+  return { m: locale === "en-US" ? en : zh, english: locale === "en-US", formatDateTime };
+}

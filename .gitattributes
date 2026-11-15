@@ -8,4 +8,5 @@ docker/Dockerfile* text eol=lf
 scripts/pgo-train-broker.sh text eol=lf
 rocketmq-ai/rocketmq-sre/deploy/docker/40-sre-runtime-config.sh text eol=lf
 rocketmq-ai/rocketmq-sre/migrations/0064_namesrv_route_legacy_inspection.sql text eol=lf
+rocketmq-ai/rocketmq-sre/ui/src/api/generated.d.ts text eol=lf
 distribution/helm/rocketmq-rust/files/maintenance-policy.json text eol=lf

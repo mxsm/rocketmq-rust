@@ -1,0 +1,24 @@
+.typed-action-field { min-width: 0; }
+.action-type-selector { grid-column: 1 / -1; }
+.action-candidate-form select {
+  width: 100%; min-height: 36px; border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 9px; color: var(--foreground); background: var(--background); font: inherit;
+}
+.typed-action-include { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.typed-action-intent { overflow-wrap: anywhere; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+.action-review-values { margin: 12px 0 0; display: grid; gap: 8px; }
+.action-review-values > div { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(0, 1fr); gap: 10px; }
+.action-review-values dt { color: var(--muted-foreground); font-size: 12px; }
+.action-review-values dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.action-review-conditions { margin: 8px 0; padding-left: 18px; font-size: 12px; line-height: 1.7; }
+.change-plan-surface { min-width: 0; }
+@media (max-width: 640px) {
+  .action-candidate-form { grid-template-columns: minmax(0, 1fr); }
+  .change-step-grid { grid-template-columns: minmax(0, 1fr); }
+  .change-step-grid > section, .change-step-grid > section:nth-child(2n), .change-step-grid > section:nth-last-child(-n + 2) {
+    border-right: 0; border-bottom: 1px solid var(--border); min-height: auto;
+  }
+  .change-step-grid > section:last-child { border-bottom: 0; }
+  .change-step-main > header { flex-wrap: wrap; }
+  .action-review-values > div { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+}

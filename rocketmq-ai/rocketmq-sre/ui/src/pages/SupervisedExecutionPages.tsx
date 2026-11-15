@@ -34,6 +34,7 @@ import { AuditTimeline } from "@/features/audit/AuditTimeline";
 import { ChangeWorkspaceNav } from "@/features/change-management/ChangeWorkspace";
 import { ExecutionTimeline } from "@/features/executions/ExecutionTimeline";
 import { PlanDetail } from "@/features/plans/PlanDetail";
+import { supportedPlanReview } from "@/features/plans/planActionReview";
 import { PlanActionReadiness } from "@/features/plans/PlanActionReadiness";
 import { firstReadinessExpiry, planApprovalChecksPass, planReadinessSatisfied, planScopeObject } from "@/features/plans/planReadinessPresentation";
 import { useReadinessExpiry } from "@/features/incidents/useReadinessExpiry";
@@ -242,9 +243,11 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
   }
 
   const roles = auth.session?.roles ?? [];
+  const reviewSupported = supportedPlanReview(view.plan);
   const canApprove =
     roles.includes("approver") || roles.includes("rocketmq:approve");
   const canExecute =
+    reviewSupported &&
     (roles.includes("operator") || roles.includes("rocketmq:operate")) &&
     !expired && planReadinessSatisfied(view.plan, snapshots);
   const approvalReady = !expired && planApprovalChecksPass(view.plan, snapshots, auth.session?.subject ?? "");
@@ -271,6 +274,8 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
           <PlanDetail view={view} />
         </main>
         <ApprovalPanel
+          key={view.plan.plan_hash + view.precondition_hash}
+          readOnly={!reviewSupported}
           busy={busy || resource.loading}
           canApprove={canApprove}
           approvalReady={approvalReady}
@@ -278,6 +283,8 @@ function PlanPageSession({ planId, auth, api }: ReturnType<typeof useActionApi> 
           approvalBlockedMessage={!approvalReady ? auth.session?.subject === view.plan.created_by
             ? m.independentApprover : m.approvalBasisBlocked : undefined}
           canExecute={canExecute}
+          canCriticReview={reviewSupported && view.plan.status === "needs_critic" &&
+            (roles.includes("operator") || roles.includes("rocketmq:operate"))}
           dispatchBlockedMessage={!canExecute ? m.planReadinessBlocked : undefined}
           message={message}
           onCriticReview={() =>

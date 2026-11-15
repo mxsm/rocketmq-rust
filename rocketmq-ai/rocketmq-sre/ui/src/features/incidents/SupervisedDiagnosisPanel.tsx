@@ -22,12 +22,11 @@ import {
   ActionReadinessScopeError, createdPlanMatches, preparedEvidenceMatches,
   readinessMatches, readinessOperation,
 } from "./actionReadinessPresentation";
-import { LoggerActionForm, type LoggerActionFields } from "./LoggerActionForm";
+import { TypedActionForm } from "@/features/actions/TypedActionForm";
+import { actionDefinition } from "@/features/actions/actionDefinitions";
+import { buildActionParameters, initialActionDraft, validActionResource } from "@/features/actions/actionParameters";
 import { useReadinessExpiry } from "./useReadinessExpiry";
 import { planNavigationSearch } from "@/features/plans/planReadinessPresentation";
-
-const ACTION_ID = "observability.logger_level_ttl.v1";
-const DESCRIPTOR_VERSION = "1.0.0";
 
 interface Props {
   incident: Incident;
@@ -70,12 +69,9 @@ function SupervisedDiagnosisSession({
   const workspace = useOptionalWorkspaceScope();
   const m = useActionReadinessMessages();
   const latest = revisions.at(-1);
-  const [fields, setFields] = useState<LoggerActionFields>({
-    resource: isBrokerResource(incident.resource) ? incident.resource : "",
-    logger: "rocketmq_broker::processor",
-    level: "DEBUG",
-    ttlSeconds: 60,
-  });
+  const [fields, setFields] = useState(() => initialActionDraft(
+    "observability.logger_level_ttl.v1", isBrokerResource(incident.resource) ? incident.resource : "",
+  ));
   const [reason, setReason] = useState(m.defaultReason);
   const [view, setView] = useState<ActionReadinessView>();
   const [proof, setProof] = useState<ExecutionPreconditionEvidenceView>();
@@ -93,21 +89,21 @@ function SupervisedDiagnosisSession({
     incidentId: incident.id,
     evidenceIds: latest?.evidence_ids ?? [],
   };
+  const definition = actionDefinition(fields.actionId)!;
+  const parameters = buildActionParameters(fields);
+  const candidateValid = Boolean(parameters && validActionResource(fields.resource.trim()));
   const request: ActionReadinessRequest = {
     cluster_id: incident.cluster_id,
     diagnosis_revision_id: latest?.id ?? "",
-    action_id: ACTION_ID,
-    descriptor_version: DESCRIPTOR_VERSION,
+    action_id: definition.id,
+    descriptor_version: definition.version,
     resource: fields.resource.trim(),
-    parameters: {
-      component: "broker", logger: fields.logger.trim(), level: fields.level,
-      ttl_seconds: fields.ttlSeconds,
-    },
+    parameters: parameters ?? {},
     ...(proof ? { precondition_evidence_id: proof.evidence.evidence_id } : {}),
   };
   const current = view && readinessMatches(view, request, owner) ? view : undefined;
   const can = (kind: keyof ActionReadinessView["operations"]) =>
-    !busy && !expired && readinessOperation(current, kind);
+    !busy && !expired && (kind === "confirm_diagnosis" || candidateValid) && readinessOperation(current, kind);
   const scopeAllowed = scopeValid && auth.status === "authenticated" &&
     auth.session?.tenantId === incident.tenant_id && auth.hasClusterScope(incident.cluster_id) &&
     (!latest || latest.incident_id === incident.id);
@@ -272,9 +268,12 @@ function SupervisedDiagnosisSession({
           <div className="action-candidate-form-block">
             <h3>{m.candidateTitle}</h3>
             <p className="muted">{m.candidateHint}</p>
-            <LoggerActionForm value={fields} onChange={(change) => {
+            <TypedActionForm value={fields} onChange={(change) => {
               clearCandidate();
               setFields((previous) => ({ ...previous, ...change }));
+            }} onActionChange={(action) => {
+              clearCandidate();
+              setFields(initialActionDraft(action));
             }} />
           </div>
           <ActionReadinessPanel
