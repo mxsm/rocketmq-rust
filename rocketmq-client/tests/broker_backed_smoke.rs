@@ -67,6 +67,7 @@ use rocketmq_client_rust::MessageUtil;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::TransactionListener;
 use rocketmq_client_rust::TransactionMQProducer;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
@@ -1814,6 +1815,12 @@ async fn broker_backed_lite_pull_subscribe_poll_smoke() -> ClientResult<()> {
     )))
     .consumer_group(unique_group("lite-pull-subscribe"))
     .name_server_addr(env.namesrv_addr.clone())
+    // A new group starting from the last offset reads each queue's maximum offset when its pull
+    // task starts. The assignment is visible before those reads finish, so a message sent right
+    // after it can land between a queue's offset lookup and its maximum-offset read and be
+    // skipped, as in Java. Starting from the first offset reads the smoke message wherever it
+    // lands; the bootstrap message does not match the subscribed tag.
+    .consume_from_where(ConsumeFromWhere::ConsumeFromFirstOffset)
     .pull_batch_size(4)
     .poll_timeout_millis(500)
     .auto_commit(true)
