@@ -157,6 +157,7 @@ mod tests {
         "/v1/inventory/{id}",
         "/v1/investigation-runs/{id}",
         "/v1/investigation-runs/{id}/commands",
+        "/v1/investigation-runs/{id}/controls",
         "/v1/investigation-runs/{id}/events",
         "/v1/investigation-runs/{id}/revisions/{revision_id}",
         "/v1/investigations",
