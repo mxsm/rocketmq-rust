@@ -135,7 +135,7 @@ async fn postgres_rejects_wrong_query_resource_and_preserves_unknown_reservation
     let wire = async {
         let envelope = next_query(&fixture, &principal, session, 0).await;
         let mut snapshot = healthy_snapshot(&envelope.query);
-        snapshot.resource = "store-pressure/other-broker".to_owned();
+        snapshot.resource = "rocksdb-health/other-broker".to_owned();
         snapshot.content_hash = snapshot.compute_content_hash().unwrap();
         respond(&fixture, &principal, &envelope, snapshot).await;
     };

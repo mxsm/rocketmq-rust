@@ -104,7 +104,7 @@ async fn postgres_model_explanation_never_repairs_or_falls_back_and_preserves_ru
             .dispatch_one(owner.task_group(), created.run.id);
         let wire = async {
             let mut after = 0;
-            for _ in 0..4 {
+            for _ in 0..3 {
                 let envelope = next_query(&fixture, &principal, session, after).await;
                 respond(&fixture, &principal, &envelope, healthy_snapshot(&envelope.query)).await;
                 after = envelope.sequence;
@@ -122,7 +122,7 @@ async fn postgres_model_explanation_never_repairs_or_falls_back_and_preserves_ru
             .unwrap();
         assert_eq!(run.status, InvestigationRunStatus::Completed, "{mode}: {run:?}");
         assert_eq!(run.stop_reason, None);
-        assert_eq!(run.pack_results.len(), 2);
+        assert_eq!(run.pack_results.len(), 1);
         assert_eq!(
             calls.load(Ordering::SeqCst),
             if mode == "none" { 0 } else { 1 },

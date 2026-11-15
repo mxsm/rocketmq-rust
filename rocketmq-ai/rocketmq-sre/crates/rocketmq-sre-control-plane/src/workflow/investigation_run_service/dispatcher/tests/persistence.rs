@@ -186,7 +186,7 @@ async fn postgres_dispatch_admission_rejects_a_different_subject_and_offboarding
             scope: run.effective_scope.clone(),
             pack: run.effective_packs[0].clone(),
             work: InvestigationStepKind::CollectEvidence {
-                requirement_id: "store-pressure".to_owned(),
+                requirement_id: "rocksdb-health".to_owned(),
             },
         },
         reservation: InvestigationBudgetCost {
@@ -198,7 +198,7 @@ async fn postgres_dispatch_admission_rejects_a_different_subject_and_offboarding
     };
     let reference = InvestigationRequirementRef {
         pack: admission.spec.pack.clone(),
-        requirement_id: "store-pressure".to_owned(),
+        requirement_id: "rocksdb-health".to_owned(),
     };
     let mut proof = crate::workflow::investigation_run_repository::RunReadProof {
         requirement: reference.clone(),
@@ -210,7 +210,7 @@ async fn postgres_dispatch_admission_rejects_a_different_subject_and_offboarding
             tenant_id: fixture.auth.tenant_id,
             cluster_id: run.initial_scope.cluster_id,
             source: "admin-query".to_owned(),
-            resource: "store-pressure/other-broker".to_owned(),
+            resource: "rocksdb-health/other-broker".to_owned(),
             time_range: run.effective_scope.time_range.clone(),
         },
     };
@@ -228,7 +228,7 @@ async fn postgres_dispatch_admission_rejects_a_different_subject_and_offboarding
             .await
             .is_err()
     );
-    proof.query.resource = "store-pressure/broker-a".to_owned();
+    proof.query.resource = "rocksdb-health/broker-a".to_owned();
     sqlx::query("UPDATE clusters SET onboarding_state='offboarded' WHERE id=$1")
         .bind(run.initial_scope.cluster_id.as_uuid())
         .execute(&fixture.repository.pool)
