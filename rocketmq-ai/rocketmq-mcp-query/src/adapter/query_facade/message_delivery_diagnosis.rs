@@ -26,8 +26,8 @@ use super::diagnosis_support::wrap_report;
 use super::diagnosis_support::SupportingBudget;
 use super::message_metadata_output;
 use super::normalized_identifier;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::adapter::admin_session::ResolvedCluster;
 use crate::adapter::identifier_alias::IdentifierAliaser;
@@ -138,7 +138,7 @@ async fn diagnose_in_session<S>(
     mut budget: SupportingBudget,
 ) -> Result<QueryPayload<DiagnosisReport>, ToolFailure>
 where
-    S: AdminSession,
+    S: QueryAdminSession,
 {
     let DeliveryRequest {
         target,

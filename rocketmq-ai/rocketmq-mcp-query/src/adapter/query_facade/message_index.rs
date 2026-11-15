@@ -22,8 +22,8 @@
 use super::alias_error;
 use super::normalized_identifier;
 use super::normalized_logical_identifier;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::adapter::admin_session::SessionMessageKeyMatches;
 use crate::adapter::admin_session::SessionMessageTrace;

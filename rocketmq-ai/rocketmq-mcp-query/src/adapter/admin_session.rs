@@ -187,7 +187,7 @@ pub(crate) struct SessionMessageMetadata {
     pub prepared_transaction_offset: i64,
 }
 
-pub(crate) trait AdminSession: Send {
+pub(crate) trait QueryAdminSession: Send {
     fn broker_rows(&mut self) -> impl Future<Output = Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure>> + Send;
 
     fn topic_inventory(&mut self) -> impl Future<Output = Result<Vec<String>, ToolFailure>> + Send;
@@ -428,7 +428,7 @@ pub(crate) trait AdminSession: Send {
 }
 
 pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
-    type Session: AdminSession;
+    type Session: QueryAdminSession;
 
     fn start(&self, cluster: ResolvedCluster) -> impl Future<Output = Result<Self::Session, ToolFailure>> + Send;
 }
@@ -540,7 +540,7 @@ impl AdminCoreSession {
     }
 }
 
-impl AdminSession for AdminCoreSession {
+impl QueryAdminSession for AdminCoreSession {
     async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
@@ -1347,7 +1347,7 @@ mod protocol_test_support {
         gate: Option<Arc<ProtocolTestGate>>,
     }
 
-    impl AdminSession for ProtocolTestSession {
+    impl QueryAdminSession for ProtocolTestSession {
         async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             self.counters.broker_queries.fetch_add(1, Ordering::SeqCst);
             Ok(QueryPayload::complete(Vec::new()))

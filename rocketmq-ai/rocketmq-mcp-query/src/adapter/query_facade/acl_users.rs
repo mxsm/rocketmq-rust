@@ -16,8 +16,8 @@
 //! `security-admin` feature.
 
 use super::normalized_logical_identifier;
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::model::contract::observed_at;
 use crate::model::contract::CacheStatus;

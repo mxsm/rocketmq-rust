@@ -19,8 +19,8 @@ use rocketmq_admin_core::core::infrastructure_observation::QueryControllerMetada
 use rocketmq_admin_core::core::infrastructure_observation::QueryHaStatusRequest;
 use rocketmq_admin_core::core::infrastructure_observation::QueryNameserverConfigSummaryRequest;
 
-use super::AdminSession;
 use super::AdminSessionFactory;
+use super::QueryAdminSession;
 use super::QueryFacade;
 use crate::model::contract::QueryResult;
 use crate::tools::executor::ToolFailure;
@@ -144,7 +144,7 @@ mod tests {
     use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
 
     use super::*;
-    use crate::adapter::admin_session::AdminSession;
+    use crate::adapter::admin_session::QueryAdminSession;
     use crate::adapter::admin_session::ResolvedCluster;
     use crate::adapter::admin_session::SessionConsumerLag;
     use crate::adapter::admin_session::SessionTopicRoute;
@@ -193,7 +193,7 @@ mod tests {
         counters: Arc<Counters>,
     }
 
-    impl AdminSession for Session {
+    impl QueryAdminSession for Session {
         async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }

@@ -24,8 +24,8 @@ use std::sync::Mutex;
 
 use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
 
-use crate::adapter::admin_session::AdminSession;
 use crate::adapter::admin_session::AdminSessionFactory;
+use crate::adapter::admin_session::QueryAdminSession;
 use crate::adapter::admin_session::ResolvedCluster;
 use crate::adapter::admin_session::SessionConnections;
 use crate::adapter::admin_session::SessionConsumerClientRuntime;
@@ -110,7 +110,7 @@ impl StubSession {
     }
 }
 
-impl AdminSession for StubSession {
+impl QueryAdminSession for StubSession {
     async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
         Ok(QueryPayload::complete(Vec::new()))
     }
