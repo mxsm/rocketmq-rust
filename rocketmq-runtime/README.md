@@ -192,6 +192,7 @@ active tasks can keep their group alive.
 | `spawn_operation` | Keeps work under a fixed component owner and observes both owner cancellation and the operation's cancellation/deadline. |
 | `spawn_draining_operation` | Accepted work can continue after owner cancellation; operation cancellation/deadline and task-group shutdown still bound it. |
 | `spawn_with_handle` | Returns a join handle for a specific task while retaining group tracking. |
+| `counted_task_set` | Returns a `CountedTaskSet` for many short-lived tasks of one owner, such as one session's requests. Its tasks are tracked by the group but counted instead of registered, which removes the registry's per-task locks and allocations. They behave like draining operation tasks: they stop when the set's cancellation token is cancelled, the owner drains them with `drain_until`, and a group shutdown that reaches its deadline cancels the token of every set the group created. There are no per-task ids, abort handles or remaining-task snapshots. |
 
 For bounded requests or restartable work, use `OperationContext` instead of
 creating a component group for every operation. `close_admission()` stops new

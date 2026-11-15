@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Instant;
 
+use rocketmq_runtime::CountedTaskSet;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeErrorKind;
@@ -27,7 +28,6 @@ use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 
 use crate::admission::AdmissionClass;
@@ -45,7 +45,7 @@ use crate::request_ordering::RequestSequencer;
 #[must_use]
 #[derive(Debug)]
 pub(crate) enum SessionDispatchAttempt {
-    Accepted(TaskId),
+    Accepted,
     AdmissionRejected {
         rejection: AdmissionRejection,
         retained_partial: Option<Box<PartialFramePermit>>,
@@ -60,6 +60,12 @@ pub(crate) enum SessionDispatchAttempt {
 /// A request first reserves queued and in-flight capacity. Its task then waits
 /// for any declared ordering predecessor, converts queued capacity into a
 /// processor permit, and runs under the session's bounded operation context.
+///
+/// Request tasks are counted, not registered one by one with the session's task group: they
+/// live for one request, and the registry's per-task bookkeeping cost more than the rest of
+/// spawning them. The executor still owns them. Closing the session drains them, cancelling the
+/// session's request operation stops them, and the task group's shutdown waits for them.
+/// Deferred resumes stay registered operation tasks.
 pub(crate) struct SessionExecutor {
     inner: Arc<SessionExecutorInner>,
 }
@@ -68,6 +74,7 @@ struct SessionExecutorInner {
     admission: AdmissionScopeHandle,
     request_group: TaskGroup,
     operation: OperationContext,
+    requests: CountedTaskSet,
     sequencer: RequestSequencer,
     accepting: AtomicBool,
     task_counts: Arc<SessionTaskCounts>,
@@ -77,11 +84,15 @@ struct SessionExecutorInner {
 
 impl SessionExecutor {
     pub(crate) fn try_new(session_group: &TaskGroup, admission: AdmissionScopeHandle) -> RuntimeResult<Self> {
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        // Request tasks stop with the request operation, which every session close path cancels.
+        let requests = session_group.counted_task_set(operation.cancellation_token());
         Ok(Self {
             inner: Arc::new(SessionExecutorInner {
                 admission,
                 request_group: session_group.clone(),
-                operation: OperationContext::without_deadline(TaskKind::Worker),
+                operation,
+                requests,
                 sequencer: RequestSequencer::default(),
                 accepting: AtomicBool::new(true),
                 task_counts: Arc::new(SessionTaskCounts::default()),
@@ -160,9 +171,7 @@ impl SessionExecutor {
         // Claimed here, on the reader, in arrival order: the runtime may start request tasks in
         // any order, and a same-key request must still run after the one that arrived first.
         let ordering_ticket = self.inner.sequencer.claim(ordering);
-        let request_operation = self.inner.operation.clone();
-        let request_operation_for_task = request_operation.clone();
-        let spawn_group = self.inner.request_group.clone();
+        let request_operation_for_task = self.inner.operation.clone();
         let task_count = SessionTaskCountGuard::inline(Arc::clone(&self.inner.task_counts));
         // Each task wrapper keeps its future both as an argument and inside the future it awaits,
         // so an unboxed request future grows several-fold per wrapper (one Broker request task
@@ -192,8 +201,8 @@ impl SessionExecutor {
             )
             .await;
         });
-        match spawn_group.spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", request) {
-            Ok(task_id) => Ok(SessionDispatchAttempt::Accepted(task_id)),
+        match self.inner.requests.spawn(request) {
+            Ok(()) => Ok(SessionDispatchAttempt::Accepted),
             Err(error) if session_stopped_admission(&error) => {
                 Ok(SessionDispatchAttempt::SessionClosed { retained_partial: None })
             }
@@ -203,6 +212,7 @@ impl SessionExecutor {
 
     fn stop_admission(&self) {
         self.inner.accepting.store(false, Ordering::Release);
+        self.inner.requests.close();
         self.inner.operation.close_admission();
     }
 
@@ -233,12 +243,16 @@ impl SessionExecutor {
         let active_inline_tasks = self.inner.task_counts.inline.load(Ordering::Acquire);
         let active_resume_tasks = self.inner.task_counts.resume.load(Ordering::Acquire);
         let active_before = active_inline_tasks.saturating_add(active_resume_tasks);
-        let joined = self
+        // Request tasks first; a set that is not drained by the deadline stops its tasks through
+        // the request operation, which also stops the deferred resumes awaited next.
+        let requests_drained = self.inner.requests.drain_until(deadline).await;
+        let resumes_drained = self
             .inner
             .operation
             .wait(&self.inner.request_group, deadline.remaining())
             .await
             .unwrap_or(false);
+        let joined = requests_drained && resumes_drained;
         let mut report = ShutdownReport::new("rocketmq.transport.session.requests", started_at.elapsed());
         if joined {
             report.completed = active_before;

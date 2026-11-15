@@ -25,7 +25,6 @@ use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskId;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Resource;
@@ -70,7 +69,7 @@ pub(crate) use core::AuthorizedDispatcherCore;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DispatchSubmissionResult {
     /// The lifecycle-owned processor task was accepted.
-    Accepted(TaskId),
+    Accepted,
     /// Authorization, deadline, or reject-policy admission produced a response.
     Rejected,
     /// Admission policy requires the owning connection to close the session.
@@ -81,7 +80,7 @@ pub(crate) enum DispatchSubmissionResult {
 
 impl DispatchSubmissionResult {
     pub(crate) const fn keeps_session_open(self) -> bool {
-        matches!(self, Self::Accepted(_) | Self::Rejected)
+        matches!(self, Self::Accepted | Self::Rejected)
     }
 }
 
@@ -411,7 +410,7 @@ impl AuthorizedDispatchSession {
                         .await;
             },
         ) {
-            Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchSubmissionResult::Accepted(task_id)),
+            Ok(SessionDispatchAttempt::Accepted) => Ok(DispatchSubmissionResult::Accepted),
             Ok(SessionDispatchAttempt::AdmissionRejected {
                 rejection,
                 retained_partial,

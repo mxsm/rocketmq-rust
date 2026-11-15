@@ -394,7 +394,7 @@ where
                 }
             },
         ) {
-            Ok(SessionDispatchAttempt::Accepted(_)) => {}
+            Ok(SessionDispatchAttempt::Accepted) => {}
             Ok(SessionDispatchAttempt::AdmissionRejected {
                 rejection,
                 retained_partial,

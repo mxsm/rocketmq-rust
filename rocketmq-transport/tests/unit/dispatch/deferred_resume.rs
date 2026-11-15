@@ -869,7 +869,7 @@ async fn drain_report_separates_inline_and_resume_tasks_and_joins_both() {
             move |_operation, _error| async {},
         )
         .expect("inline request accepted");
-    assert!(matches!(inline_attempt, SessionDispatchAttempt::Accepted(_)));
+    assert!(matches!(inline_attempt, SessionDispatchAttempt::Accepted));
     inline_entered.notified().await;
 
     let resume_release = Arc::new(Notify::new());
