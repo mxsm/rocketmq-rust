@@ -288,8 +288,12 @@ impl ConsumeQueueLookupHandle {
         };
         let consume_queue = ConsumeQueueStoreTrait::find_or_create_consume_queue(&store, topic, queue_id);
         let table = QueueOffsetTable::of(consume_queue.read().get_cq_type());
-        let key = CheetahString::from_string(format!("{topic}-{queue_id}"));
-        Some(store.inner.queue_offset_operator.queue_offset_handle(table, key))
+        Some(
+            store
+                .inner
+                .queue_offset_operator
+                .queue_offset_handle_for_queue(table, topic, queue_id),
+        )
     }
 
     pub(crate) fn put_message_position_info_wrapper(&self, request: &DispatchRequest) -> bool {

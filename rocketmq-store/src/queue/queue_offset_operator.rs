@@ -104,8 +104,17 @@ impl QueueOffsetTable {
 /// A queue's offset slot, resolved before an append takes the CommitLog writer lock.
 pub(crate) struct QueueOffsetHandle {
     table: QueueOffsetTable,
-    key: CheetahString,
+    key: QueueOffsetKey,
     slot: Arc<QueueOffsetSlot>,
+}
+
+/// The queue a handle resolves again once its slot is retired.
+enum QueueOffsetKey {
+    /// A table key given in full.
+    #[cfg(test)]
+    Key(CheetahString),
+    /// A topic's queue, whose `topic-queueId` table key is formatted only for each lookup.
+    Queue { topic: CheetahString, queue_id: i32 },
 }
 
 impl QueueOffsetHandle {
@@ -113,10 +122,37 @@ impl QueueOffsetHandle {
     #[inline]
     pub(crate) fn live_slot(&mut self, operator: &QueueOffsetOperator) -> &QueueOffsetSlot {
         if self.slot.is_retired() {
-            self.slot = operator.queue_offset_slot(self.table, &self.key);
+            self.slot = match &self.key {
+                #[cfg(test)]
+                QueueOffsetKey::Key(key) => operator.queue_offset_slot(self.table, key),
+                QueueOffsetKey::Queue { topic, queue_id } => {
+                    operator.queue_offset_slot_for_queue(self.table, topic, *queue_id)
+                }
+            };
         }
         &self.slot
     }
+}
+
+/// Room for the `topic-queueId` key of every topic that fits RocketMQ's topic length limit.
+const STACK_QUEUE_KEY_BYTES: usize = 192;
+
+/// Calls `f` with the `topic-queueId` offset table key of `topic`'s queue `queue_id`.
+///
+/// The key is formatted on the stack, so looking up an existing queue allocates nothing.
+fn with_queue_key<R>(topic: &str, queue_id: i32, f: impl FnOnce(&str) -> R) -> R {
+    use std::io::Write as _;
+
+    let mut buffer = [0_u8; STACK_QUEUE_KEY_BYTES];
+    let mut cursor = std::io::Cursor::new(&mut buffer[..]);
+    let written = cursor.write_all(topic.as_bytes()).is_ok() && write!(cursor, "-{queue_id}").is_ok();
+    let len = usize::try_from(cursor.position()).ok();
+    if let (true, Some(len)) = (written, len) {
+        if let Ok(key) = std::str::from_utf8(&buffer[..len]) {
+            return f(key);
+        }
+    }
+    f(&format!("{topic}-{queue_id}"))
 }
 
 type QueueOffsetSlots = DashMap<CheetahString, Arc<QueueOffsetSlot>>;
@@ -166,10 +202,51 @@ impl QueueOffsetOperator {
         )
     }
 
+    /// Returns the slot of `topic`'s queue `queue_id`, as [`Self::queue_offset_slot`] does for its
+    /// `topic-queueId` key. The key is allocated only when the slot is created.
+    fn queue_offset_slot_for_queue(&self, table: QueueOffsetTable, topic: &str, queue_id: i32) -> Arc<QueueOffsetSlot> {
+        with_queue_key(topic, queue_id, |key| {
+            let slots = self.slots(table);
+            if let Some(slot) = slots.get(key) {
+                return Arc::clone(slot.value());
+            }
+            Arc::clone(
+                slots
+                    .entry(CheetahString::from_slice(key))
+                    .or_insert_with(|| Arc::new(QueueOffsetSlot::new(0)))
+                    .value(),
+            )
+        })
+    }
+
     /// Resolves `key`'s slot in `table` for an append that will run under the writer lock.
+    #[cfg(test)]
     pub(crate) fn queue_offset_handle(&self, table: QueueOffsetTable, key: CheetahString) -> QueueOffsetHandle {
         let slot = self.queue_offset_slot(table, &key);
-        QueueOffsetHandle { table, key, slot }
+        QueueOffsetHandle {
+            table,
+            key: QueueOffsetKey::Key(key),
+            slot,
+        }
+    }
+
+    /// Resolves the slot of `topic`'s queue `queue_id` in `table` for an append that will run under
+    /// the writer lock.
+    pub(crate) fn queue_offset_handle_for_queue(
+        &self,
+        table: QueueOffsetTable,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> QueueOffsetHandle {
+        let slot = self.queue_offset_slot_for_queue(table, topic, queue_id);
+        QueueOffsetHandle {
+            table,
+            key: QueueOffsetKey::Queue {
+                topic: topic.clone(),
+                queue_id,
+            },
+            slot,
+        }
     }
 
     fn set_slot(slots: &QueueOffsetSlots, key: CheetahString, next: i64) {
@@ -501,6 +578,36 @@ mod tests {
         operator.set_topic_queue_table(HashMap::new());
         assert_eq!(handle.live_slot(&operator).next_offset(), 0);
         assert_eq!(operator.get_topic_queue_next_offset(&key), Some(0));
+    }
+
+    #[test]
+    fn queue_handles_share_the_slot_of_their_topic_queue_key() {
+        let operator = QueueOffsetOperator::new();
+        let topic = CheetahString::from_static_str("topic");
+        let key = CheetahString::from_static_str("topic-1");
+        operator.set_topic_queue_table(HashMap::from([(key.clone(), 7)]));
+
+        let mut handle = operator.queue_offset_handle_for_queue(QueueOffsetTable::Simple, &topic, 1);
+        assert_eq!(handle.live_slot(&operator).next_offset(), 7);
+        handle.live_slot(&operator).advance(2);
+        assert_eq!(operator.current_queue_offset(&key), 9);
+
+        operator.remove(&topic, 1);
+        assert_eq!(handle.live_slot(&operator).next_offset(), 0);
+        handle.live_slot(&operator).advance(1);
+        assert_eq!(operator.current_queue_offset(&key), 1);
+    }
+
+    #[test]
+    fn queue_handles_of_topics_longer_than_the_stack_key_use_the_same_key() {
+        let operator = QueueOffsetOperator::new();
+        let topic = CheetahString::from_string("t".repeat(STACK_QUEUE_KEY_BYTES));
+        let key = CheetahString::from_string(format!("{topic}-{}", i32::MIN));
+
+        let mut handle = operator.queue_offset_handle_for_queue(QueueOffsetTable::Simple, &topic, i32::MIN);
+        handle.live_slot(&operator).advance(3);
+
+        assert_eq!(operator.current_queue_offset(&key), 3);
     }
 
     #[test]

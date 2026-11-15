@@ -60,9 +60,6 @@ pub const QUEUE_OFFSET_POSITION: usize = 4 + 4 + 4 + 4 + 4;
 pub const SYSFLAG_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8;
 pub const BORN_TIMESTAMP_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
 
-const SMALL_PROPERTIES_PREALLOC_THRESHOLD: usize = 16;
-const SMALL_PROPERTY_PREALLOC_BYTES: usize = 34;
-
 macro_rules! decode_message_properties_into {
     ($map:ident, $properties:expr) => {{
         let properties = $properties;
@@ -111,18 +108,42 @@ fn split_to_checked(buffer: &mut Bytes, len: usize) -> Option<Bytes> {
 }
 
 pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashMap<CheetahString, CheetahString> {
-    if let Some(properties) = properties {
-        str_to_message_properties(Some(properties.as_str()))
-    } else {
-        HashMap::new()
-    }
+    string_to_message_properties_with_additional(properties, 0)
+}
+
+/// Decodes message properties into a map with room for `additional` more entries.
+///
+/// See [`str_to_message_properties_with_additional`].
+pub fn string_to_message_properties_with_additional(
+    properties: Option<&CheetahString>,
+    additional: usize,
+) -> HashMap<CheetahString, CheetahString> {
+    str_to_message_properties_with_additional(properties.map(CheetahString::as_str), additional)
 }
 
 pub fn str_to_message_properties(properties: Option<&str>) -> HashMap<CheetahString, CheetahString> {
-    let mut map = HashMap::new();
-    if let Some(properties) = properties {
-        decode_message_properties_into!(map, properties);
-    }
+    str_to_message_properties_with_additional(properties, 0)
+}
+
+/// Decodes message properties into a map with room for `additional` more entries.
+///
+/// The map is sized for every encoded pair before decoding, so it is not grown and rehashed while
+/// the pairs are inserted. A caller that inserts a known number of properties afterwards passes
+/// that number as `additional`.
+pub fn str_to_message_properties_with_additional(
+    properties: Option<&str>,
+    additional: usize,
+) -> HashMap<CheetahString, CheetahString> {
+    let Some(properties) = properties else {
+        return HashMap::with_capacity(additional);
+    };
+    // One name/value separator per encoded pair; malformed pairs only leave spare capacity.
+    let pairs = properties
+        .bytes()
+        .filter(|&byte| byte == NAME_VALUE_SEPARATOR as u8)
+        .count();
+    let mut map = HashMap::with_capacity(pairs + additional);
+    decode_message_properties_into!(map, properties);
     map
 }
 
@@ -134,18 +155,12 @@ pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahS
         return CheetahString::empty();
     }
 
-    let property_count = properties.len();
-    let capacity = if property_count <= SMALL_PROPERTIES_PREALLOC_THRESHOLD {
-        property_count * SMALL_PROPERTY_PREALLOC_BYTES
-    } else {
-        let mut len = 0;
-        for (name, value) in properties.iter() {
-            len += name.len();
-            len += value.len();
-            len += 2; // separator
-        }
-        len
-    };
+    // The exact length: the builder's string is frozen into shared storage, which shrinks a
+    // string with spare capacity by reallocating it first.
+    let capacity = properties
+        .iter()
+        .map(|(name, value)| name.len() + value.len() + 2)
+        .sum();
 
     let mut builder = CheetahBuilder::with_capacity(capacity);
     for (name, value) in properties.iter() {
@@ -1093,6 +1108,19 @@ mod tests {
         assert_eq!(decoded.len(), 2);
         assert_eq!(decoded.get("valid").map(CheetahString::as_str), Some("value"));
         assert_eq!(decoded.get("second").map(CheetahString::as_str), Some("two"));
+    }
+
+    #[test]
+    fn property_maps_are_sized_for_their_pairs_and_the_requested_additional_entries() {
+        let encoded = "a\u{0001}1\u{0002}b\u{0001}2\u{0002}";
+        let decoded = str_to_message_properties_with_additional(Some(encoded), 3);
+        assert_eq!(decoded.len(), 2);
+        assert!(decoded.capacity() >= 5, "capacity {}", decoded.capacity());
+        assert_eq!(decoded, str_to_message_properties(Some(encoded)));
+
+        let absent = string_to_message_properties_with_additional(None, 2);
+        assert!(absent.is_empty());
+        assert!(absent.capacity() >= 2);
     }
 
     #[test]

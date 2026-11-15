@@ -73,6 +73,10 @@ pub(super) fn enrich_parsed_send_message_request_properties(
     properties
 }
 
+/// The number of properties [`enrich_send_message_properties`] adds, which request property maps
+/// are sized for when they are parsed.
+pub(super) const BROKER_SEND_PROPERTY_COUNT: usize = 2;
+
 /// Adds the Broker-owned region and trace switch to parsed request properties.
 ///
 /// The stored message reads these values from the returned map. Apart from send hooks, the
@@ -83,6 +87,8 @@ pub(super) fn enrich_send_message_properties(
     region_id: CheetahString,
     trace_on: bool,
 ) -> HashMap<CheetahString, CheetahString> {
+    // Free when the map was parsed with room for these entries; otherwise it grows once.
+    properties.reserve(BROKER_SEND_PROPERTY_COUNT);
     properties.insert(
         CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
         region_id,
@@ -98,29 +104,36 @@ pub(super) fn clear_reserved_properties(
     request_header: &mut SendMessageRequestHeader,
     request_properties: &mut HashMap<CheetahString, CheetahString>,
 ) {
-    let mut changed = request_properties.remove(MessageConst::PROPERTY_POP_CK).is_some();
-    for property in [
-        MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
-        MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
-        MessageConst::PROPERTY_TIMER_ID,
-        MessageConst::PROPERTY_TIMER_OWNER_EPOCH,
-        MessageConst::PROPERTY_TIMER_LANE,
-        MessageConst::PROPERTY_TIMER_GENERATION,
-        MessageConst::TIMER_ENGINE_TYPE,
-        MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
-        MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
-    ] {
-        changed |= request_properties.remove(property).is_some();
-    }
-    if changed {
+    // One pass over the request's few properties, instead of hashing every reserved name.
+    let before = request_properties.len();
+    request_properties.retain(|name, _| !is_broker_reserved_property(name.as_str()));
+    if request_properties.len() != before {
         request_header.properties = Some(message_properties_to_string(request_properties));
     }
+}
+
+/// Whether a client-supplied property is one only the Broker may set.
+fn is_broker_reserved_property(name: &str) -> bool {
+    matches!(
+        name,
+        MessageConst::PROPERTY_POP_CK
+            | MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS
+            | MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN
+            | MessageConst::PROPERTY_TIMER_ID
+            | MessageConst::PROPERTY_TIMER_OWNER_EPOCH
+            | MessageConst::PROPERTY_TIMER_LANE
+            | MessageConst::PROPERTY_TIMER_GENERATION
+            | MessageConst::TIMER_ENGINE_TYPE
+            | MessageConst::PROPERTY_TIMER_FORMAT_VERSION
+            | MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
+    use rocketmq_protocol::common::message::message_decoder::string_to_message_properties_with_additional;
     use rocketmq_store::MessageStoreConfig;
 
     fn recall_handle_topic_and_timestamp_with_defaults(
@@ -264,6 +277,45 @@ mod tests {
         );
         let header_properties = string_to_message_properties(request_header.properties.as_ref());
         assert_eq!(header_properties, properties);
+    }
+
+    #[test]
+    fn clear_reserved_properties_leaves_requests_without_reserved_properties_unchanged() {
+        let mut request_properties = HashMap::from([
+            (
+                CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
+                CheetahString::from_static_str("order-1"),
+            ),
+            (
+                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
+                CheetahString::from_static_str("1700000000000"),
+            ),
+        ]);
+        let expected = request_properties.clone();
+        let mut request_header = SendMessageRequestHeader {
+            properties: Some(CheetahString::from_static_str("unchanged")),
+            ..SendMessageRequestHeader::default()
+        };
+
+        clear_reserved_properties(&mut request_header, &mut request_properties);
+
+        assert_eq!(request_properties, expected);
+        assert_eq!(request_header.properties.as_deref(), Some("unchanged"));
+        assert!(is_broker_reserved_property(
+            MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS
+        ));
+    }
+
+    #[test]
+    fn enriched_properties_parsed_with_room_for_them_do_not_grow() {
+        let encoded = CheetahString::from_static_str("a\u{0001}1\u{0002}b\u{0001}2\u{0002}c\u{0001}3\u{0002}");
+        let properties = string_to_message_properties_with_additional(Some(&encoded), BROKER_SEND_PROPERTY_COUNT);
+        let capacity = properties.capacity();
+
+        let properties = enrich_send_message_properties(properties, CheetahString::from_static_str("region"), true);
+
+        assert_eq!(properties.len(), 5);
+        assert_eq!(properties.capacity(), capacity);
     }
 
     #[test]
