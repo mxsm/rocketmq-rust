@@ -55,7 +55,7 @@ pub struct LoggerLevelTtlRestore {
 }
 
 /// Narrow configuration writer. It has no generic key/value method.
-pub trait ConfigWriteClient: Send + Sync {
+pub trait LoggerLevelTtlWriter: Send + Sync {
     fn set_logger_level_ttl<'a>(
         &'a self,
         request: &'a LoggerLevelTtlWrite,
@@ -65,10 +65,10 @@ pub trait ConfigWriteClient: Send + Sync {
 /// Read/restore companion for the bounded logger-level writer.
 ///
 /// Implementations must durably retain the original logger level when
-/// [`ConfigWriteClient::set_logger_level_ttl`] succeeds. The original value is
+/// [`LoggerLevelTtlWriter::set_logger_level_ttl`] succeeds. The original value is
 /// addressed by `(execution_id, plan_step_id)` and is never supplied by an
 /// untrusted action parameter.
-pub trait LoggerLevelControlClient: ConfigWriteClient {
+pub trait LoggerLevelControlClient: LoggerLevelTtlWriter {
     fn logger_level_state<'a>(
         &'a self,
         component: &'a str,

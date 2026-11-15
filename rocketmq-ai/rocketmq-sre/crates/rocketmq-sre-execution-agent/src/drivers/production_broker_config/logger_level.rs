@@ -28,12 +28,12 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::ProductionBrokerConfigPatchClient;
-use crate::ConfigWriteClient;
 use crate::DriverFuture;
 use crate::LoggerLevelControlClient;
 use crate::LoggerLevelState;
 use crate::LoggerLevelTtlRestore;
 use crate::LoggerLevelTtlWrite;
+use crate::LoggerLevelTtlWriter;
 use crate::error::AgentStoreFailure;
 
 const COMPONENT: &str = "broker";
@@ -248,7 +248,7 @@ impl ProductionBrokerConfigPatchClient {
     }
 }
 
-impl ConfigWriteClient for ProductionBrokerConfigPatchClient {
+impl LoggerLevelTtlWriter for ProductionBrokerConfigPatchClient {
     fn set_logger_level_ttl<'a>(&'a self, request: &'a LoggerLevelTtlWrite) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             require_scope(&request.component, &request.broker_addr, &request.logger)?;
