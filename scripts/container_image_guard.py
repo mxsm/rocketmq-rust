@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sys
 import tomllib
 from pathlib import Path
@@ -74,6 +75,26 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
 }
 
 
+def cargo_build_owners(dockerfile: str) -> set[tuple[str, str]]:
+    owners: set[tuple[str, str]] = set()
+    for line in dockerfile.splitlines():
+        try:
+            words = shlex.split(line, comments=True)
+        except ValueError:
+            continue
+        while words and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words = words[1:]
+        if words[:2] != ["cargo", "build"]:
+            continue
+        try:
+            package = words[words.index("--package", 2) + 1]
+            binary = words[words.index("--bin", 2) + 1]
+        except (ValueError, IndexError):
+            continue
+        owners.add((package, binary))
+    return owners
+
+
 def load_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -91,6 +112,7 @@ def audit_foundation(
     publication_workflow: str = "",
 ) -> list[str]:
     findings: list[str] = []
+    build_owners = cargo_build_owners(dockerfile)
     if policy.get("schema_version") != 1:
         findings.append("container policy schema_version must be 1")
     if policy.get("milestone") != "M11-10":
@@ -344,11 +366,7 @@ def audit_foundation(
             findings.append(f"{service_name} image command must not contain secret arguments")
         if re.search(r"(?i)(?:password|secret|token|access[-_]?key)", " ".join(contract["command"])):
             findings.append(f"{service_name} image command must not contain secret arguments")
-        build_pattern = (
-            rf"(?m)^cargo build .*--package {re.escape(contract['package'])}"
-            rf" .*--bin {re.escape(binary)}$"
-        )
-        if not re.search(build_pattern, dockerfile):
+        if (contract["package"], binary) not in build_owners:
             findings.append(f"service builder missing owner pair: {contract['package']}/{binary}")
 
     expected_signal_sources = {
