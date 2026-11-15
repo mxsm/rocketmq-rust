@@ -26,9 +26,10 @@ async fn prepared() -> (Fixture, ConnectorPrincipal, ConnectorSessionId) {
         kind: ResourceKind::Broker,
         key: "broker-a".to_owned(),
     });
+    // Both active packs share Store trend evidence, preserving read deduplication coverage.
     fixture.request.packs = vec![
         InvestigationPackRef {
-            pack_id: "store-pressure.v1".to_owned(),
+            pack_id: "rocksdb-health.v1".to_owned(),
             pack_version: "1.0.0".to_owned(),
         },
         InvestigationPackRef {
@@ -93,16 +94,12 @@ async fn prepared_range() -> (Fixture, ConnectorPrincipal, ConnectorSessionId) {
         kind: ResourceKind::Topic,
         key: "orders".to_owned(),
     });
-    fixture.request.packs = vec![
-        InvestigationPackRef {
-            pack_id: "broker-health.v1".to_owned(),
-            pack_version: "1.0.0".to_owned(),
-        },
-        InvestigationPackRef {
-            pack_id: "send-latency.v1".to_owned(),
-            pack_version: "1.0.0".to_owned(),
-        },
-    ];
+    // Model completion needs a fully observed historical pack; legacy latency is inactive
+    // and its active version intentionally cannot certify the complete send path.
+    fixture.request.packs = vec![InvestigationPackRef {
+        pack_id: "broker-health.v1".to_owned(),
+        pack_version: "1.0.0".to_owned(),
+    }];
     let inventory = uuid::Uuid::new_v4();
     let at = Utc::now();
     let digest = format!("sha256:{}", "0".repeat(64));
@@ -141,6 +138,7 @@ async fn next_query(
 
 fn healthy_snapshot(query: &EvidenceQuery) -> EvidenceSnapshot {
     let content = match query.resource.split('/').next().unwrap() {
+        "rocksdb-health" => json!({"maintenance_stuck":false,"read_amplification":1.0,"cache_hit_ratio":0.95}),
         "store-pressure" => {
             json!({"disk_pressure":false,"flush_or_dispatch_stalled":false,"tiered_wal_pressure":false})
         }
@@ -151,7 +149,6 @@ fn healthy_snapshot(query: &EvidenceQuery) -> EvidenceSnapshot {
         "broker-health" => {
             json!({"ready":true,"request_error_rate_percent":0.0,"active_connections":10,"cpu_percent":10.0,"rss_bytes":1024,"disk_used_percent":10.0,"flush_latency_ms":1.0,"dispatch_backlog":0,"ha_lag_bytes":0})
         }
-        "send-latency" => json!({"client_or_proxy_slow":false,"remoting_or_broker_slow":false,"store_slow":false}),
         "broker-runtime" => json!({"broker_up":false}),
         "broker-connections" => json!({"synthetic_context":"current connection inventory"}),
         unexpected => panic!("unexpected closed query {unexpected}"),

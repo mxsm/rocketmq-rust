@@ -98,7 +98,7 @@ async fn postgres_large_bounded_evidence_is_materialized_and_null_fields_remain_
         .dispatch_one(owner.task_group(), created.run.id);
     let wire = async {
         let mut after = 0;
-        for _ in 0..4 {
+        for _ in 0..3 {
             let envelope = next_query(&fixture, &principal, session, after).await;
             let mut snapshot = healthy_snapshot(&envelope.query);
             if snapshot.resource.starts_with("broker-health/") {
@@ -124,7 +124,7 @@ async fn postgres_large_bounded_evidence_is_materialized_and_null_fields_remain_
         .await
         .unwrap();
     assert_eq!(run.status, InvestigationRunStatus::Inconclusive);
-    assert_eq!(charged_reads(&run), 4);
+    assert_eq!(charged_reads(&run), 3);
     let pressure = run
         .pack_results
         .iter()
@@ -150,7 +150,7 @@ async fn postgres_large_bounded_evidence_is_materialized_and_null_fields_remain_
     else {
         panic!("null evidence cannot become healthy");
     };
-    assert_eq!(considered_evidence_ids.len(), 4);
+    assert_eq!(considered_evidence_ids.len(), 3);
     assert_eq!(missing_requirements.len(), 1);
 }
 
