@@ -118,6 +118,13 @@ impl LoggerLevelControlClient for FakeLoggerClient {
     }
 }
 
+#[test]
+fn config_write_client_alias_implements_logger_level_ttl_writer() {
+    fn assert_writer<T: crate::LoggerLevelTtlWriter>() {}
+
+    assert_writer::<FakeLoggerClient>();
+}
+
 #[tokio::test]
 async fn precheck_rejects_payload_and_out_of_range_logger_requests() {
     let client = Arc::new(FakeLoggerClient::new("WARN"));

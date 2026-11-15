@@ -19,7 +19,7 @@ use std::sync::Arc;
 use rocketmq_admin_core::mutation_client_adapter::MutationAdminSession;
 use tokio::sync::Mutex;
 
-use crate::ConfigWriteClient;
+use crate::LoggerLevelTtlWriter;
 
 /// The only SRE component allowed to own target mutation clients.
 ///
@@ -29,7 +29,7 @@ use crate::ConfigWriteClient;
 pub struct MutationCredentialOwner {
     admin: Option<Arc<Mutex<MutationAdminSession>>>,
     kubernetes: Option<kube::Client>,
-    config: Option<Arc<dyn ConfigWriteClient>>,
+    config: Option<Arc<dyn LoggerLevelTtlWriter>>,
 }
 
 impl MutationCredentialOwner {
@@ -37,7 +37,7 @@ impl MutationCredentialOwner {
     pub fn new(
         admin: Option<MutationAdminSession>,
         kubernetes: Option<kube::Client>,
-        config: Option<Arc<dyn ConfigWriteClient>>,
+        config: Option<Arc<dyn LoggerLevelTtlWriter>>,
     ) -> Self {
         Self {
             admin: admin.map(|session| Arc::new(Mutex::new(session))),
