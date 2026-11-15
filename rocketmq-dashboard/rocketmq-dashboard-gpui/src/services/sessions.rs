@@ -28,6 +28,7 @@ use rocketmq_dashboard_storage::{
     SessionCursor, SessionQuery, SessionRecord, StorageEngine, StorageError, StorageErrorKind,
 };
 use rocketmq_runtime::{ChildServiceContext, TaskKind};
+use tokio_util::sync::CancellationToken;
 
 use super::{
     AppServices, SessionState,
@@ -162,24 +163,13 @@ impl SessionService {
         if let Err(error) = self
             .context
             .spawn("gpui-session-validation", TaskKind::Other, async move {
-                let mut ticks = tokio::time::interval(VALIDATION_INTERVAL);
-                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = cancellation.cancelled() => break,
-                        _ = ticks.tick() => {
-                            // Also load config in anonymous mode: its revision stamp drives the
-                            // shared-config watcher when a peer enables auth or changes profiles.
-                            // Validation clears only a captured established session on failure.
-                            tokio::select! {
-                                biased;
-                                _ = cancellation.cancelled() => break,
-                                _ = service.validate() => {},
-                            }
-                        }
-                    }
-                }
+                poll_validation(cancellation, || async {
+                    // Also load config in anonymous mode: its revision stamp drives the
+                    // shared-config watcher when a peer enables auth or changes profiles.
+                    // Validation clears only a captured established session on failure.
+                    let _ = service.validate().await;
+                })
+                .await;
             })
         {
             self.polling_started.store(false, Ordering::Release);
@@ -544,6 +534,24 @@ pub(crate) fn validate_username(username: &str) -> Result<(), UiError> {
         ));
     }
     Ok(())
+}
+
+async fn poll_validation<F>(cancellation: CancellationToken, mut validate: impl FnMut() -> F)
+where
+    F: Future<Output = ()>,
+{
+    let mut ticks = tokio::time::interval(VALIDATION_INTERVAL);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => break,
+            _ = ticks.tick() => {}
+        }
+        // An admitted storage read can outlive its waiter. Keep it owned until validation
+        // finishes; cancellation stops the next poll, and validation retains its timeout.
+        validate().await;
+    }
 }
 
 fn unavailable() -> UiError {
