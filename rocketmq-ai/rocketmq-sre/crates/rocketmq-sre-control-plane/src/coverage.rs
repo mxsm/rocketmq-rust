@@ -572,7 +572,7 @@ mod tests {
             .iter()
             .map(|id| registry.resolve(id).expect("registered pack"))
             .collect::<Vec<_>>();
-        assert_eq!(packs.len(), 34);
+        assert_eq!(packs.len(), 35);
         assert_eq!(
             packs.iter().map(|pack| pack.qualified_id()).collect::<BTreeSet<_>>(),
             rocketmq_sre_core::diagnostics::full_pack_ids().into_iter().collect()
