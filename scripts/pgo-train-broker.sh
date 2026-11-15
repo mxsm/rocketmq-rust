@@ -14,12 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Trains the profile-guided optimization (PGO) profile of the Broker for release images.
+# Trains the profile-guided optimization (PGO) and BOLT profiles of the Broker for release images.
 #
 # Runs an instrumented Broker with a local NameServer on loopback and drives the send and pull
 # workloads that dominate production with the client benchmark: synchronous and asynchronous
 # sends, LitePull consumption and several concurrent sessions. The Broker writes its raw profile
-# when it exits after SIGTERM; merge the files in <profile-dir> with llvm-profdata.
+# when it exits after SIGTERM: merge PGO files in <profile-dir> with llvm-profdata, BOLT files
+# with merge-fdata. ROCKETMQ_TRAINING_PROFILE_GLOB names the files the run must leave in
+# <profile-dir> (default `*.profraw`; a BOLT-instrumented Broker writes `*.fdata`).
 #
 # Usage: pgo-train-broker.sh <instrumented-broker> <namesrv> <client-benchmark> <work-dir> <profile-dir>
 # docker/Dockerfile.base runs it; it needs bash, coreutils and free loopback ports 9876, 10911,
@@ -196,7 +198,7 @@ stop_process "${NAMESRV_PID}" || true
 NAMESRV_PID=""
 
 shopt -s nullglob
-profiles=("${PROFILE_DIR}"/*.profraw)
+profiles=("${PROFILE_DIR}"/${ROCKETMQ_TRAINING_PROFILE_GLOB:-*.profraw})
 if [[ ${#profiles[@]} -eq 0 ]]; then
   echo "the instrumented Broker wrote no profile to ${PROFILE_DIR}" >&2
   exit 1

@@ -67,6 +67,7 @@ RUN <<EOF
 set -eux
 apt-get -o Acquire::Check-Valid-Until=false update
 apt-get install -y --no-install-recommends \
+    bolt-19 \
     build-essential \
     clang \
     cmake \
@@ -143,6 +144,10 @@ ARG SOURCE_REVISION
 # loopback by scripts/pgo-train-broker.sh and the merged profile guides the release build. Set it
 # to false for a faster build without PGO.
 ARG ROCKETMQ_BROKER_PGO=true
+# With PGO, also lays out the Broker's code with BOLT: llvm-bolt instruments the PGO Broker, the
+# same training records which paths run, and llvm-bolt rewrites the binary from that profile. It
+# applies only together with ROCKETMQ_BROKER_PGO=true; set it to false to keep the PGO binary.
+ARG ROCKETMQ_BROKER_BOLT=true
 
 RUN <<EOF
 set -eu
@@ -167,6 +172,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},target=/workspace/target,sharing=locked <<EOF
 set -eux
 broker_features=otlp-metrics,otlp-traces,otlp-logs,tls,allocator-mimalloc
+case "${ROCKETMQ_BROKER_BOLT}" in
+    true|false) ;;
+    *)
+        echo "ROCKETMQ_BROKER_BOLT must be true or false" >&2
+        exit 1
+        ;;
+esac
 cargo build --locked --release --package rocketmq-namesrv --features observability,otlp-metrics,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-namesrv-rust
 cargo build --locked --release --package rocketmq-controller --features metrics-otlp,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-controller-rust
 cargo build --locked --release --package rocketmq-proxy --features otlp-metrics,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-proxy-rust
@@ -174,8 +186,16 @@ case "${ROCKETMQ_BROKER_PGO}" in
     true)
         # The instrumented and the final Broker get their own target directories because their
         # RUSTFLAGS differ; both use the release features, so the profile matches the code.
+        # Both use v0 symbol names: BOLT reads legacy names that contain `..cold` as split
+        # function fragments, and the PGO profile must name functions the way the final build
+        # does. BOLT also needs the final build's static relocations.
         pgo=/tmp/rocketmq-pgo
-        RUSTFLAGS="-Cprofile-generate=${pgo}/raw" cargo build --locked --release --target-dir /workspace/target/pgo-generate --package rocketmq-broker --features "${broker_features}" --bin rocketmq-broker-rust
+        mangling="-C symbol-mangling-version=v0"
+        relocations=""
+        if [ "${ROCKETMQ_BROKER_BOLT}" = true ]; then
+            relocations="-C link-arg=-Wl,--emit-relocs"
+        fi
+        RUSTFLAGS="${mangling} -Cprofile-generate=${pgo}/raw" cargo build --locked --release --target-dir /workspace/target/pgo-generate --package rocketmq-broker --features "${broker_features}" --bin rocketmq-broker-rust
         cargo build --locked --release --package rocketmq-client-rust --example client-production-benchmark
         bash scripts/pgo-train-broker.sh \
             /workspace/target/pgo-generate/release/rocketmq-broker-rust \
@@ -185,13 +205,39 @@ case "${ROCKETMQ_BROKER_PGO}" in
             "${pgo}/raw"
         host="$(rustc -vV | sed -n 's/^host: //p')"
         "$(rustc --print sysroot)/lib/rustlib/${host}/bin/llvm-profdata" merge -o "${pgo}/broker.profdata" "${pgo}/raw"
-        RUSTFLAGS="-Cprofile-use=${pgo}/broker.profdata" cargo build --locked --release --target-dir /workspace/target/pgo-use --package rocketmq-broker --features "${broker_features}" --bin rocketmq-broker-rust
-        broker_dir=/workspace/target/pgo-use/release
-        rm -rf "${pgo}"
+        RUSTFLAGS="${mangling} -Cprofile-use=${pgo}/broker.profdata ${relocations}" cargo build --locked --release --target-dir /workspace/target/pgo-use --package rocketmq-broker --features "${broker_features}" --bin rocketmq-broker-rust
+        broker_binary=/workspace/target/pgo-use/release/rocketmq-broker-rust
+        if [ "${ROCKETMQ_BROKER_BOLT}" = true ]; then
+            # Instrumentation instead of sampled branch records, which a build container cannot
+            # take; the instrumented Broker writes its profile when it exits after SIGTERM. The
+            # tools run from the LLVM prefix: llvm-bolt looks for its instrumentation runtime in
+            # the lib directory next to the directory it was started from, and Debian installs
+            # that runtime in /usr/lib/llvm-19/lib, not next to the /usr/bin/llvm-bolt-19 link.
+            bolt="${pgo}/bolt"
+            bolt_bin=/usr/lib/llvm-19/bin
+            mkdir -p "${bolt}"
+            "${bolt_bin}/llvm-bolt" "${broker_binary}" -instrument \
+                -instrumentation-file="${bolt}/raw/broker.fdata" -instrumentation-file-append-pid \
+                -o "${bolt}/rocketmq-broker-instrumented"
+            ROCKETMQ_TRAINING_PROFILE_GLOB='*.fdata' bash scripts/pgo-train-broker.sh \
+                "${bolt}/rocketmq-broker-instrumented" \
+                /workspace/target/release/rocketmq-namesrv-rust \
+                /workspace/target/release/examples/client-production-benchmark \
+                "${bolt}/work" \
+                "${bolt}/raw"
+            "${bolt_bin}/merge-fdata" "${bolt}"/raw/*.fdata > "${bolt}/broker.fdata"
+            "${bolt_bin}/llvm-bolt" "${broker_binary}" -o "${bolt}/rocketmq-broker-rust" -data="${bolt}/broker.fdata" \
+                -reorder-blocks=ext-tsp -reorder-functions=cdsort -split-functions -split-all-cold -split-eh \
+                -icf=1 -use-gnu-stack
+            broker_binary="${bolt}/rocketmq-broker-rust"
+        fi
         ;;
     false)
+        if [ "${ROCKETMQ_BROKER_BOLT}" = true ]; then
+            echo "ROCKETMQ_BROKER_BOLT applies only with ROCKETMQ_BROKER_PGO=true; building without BOLT"
+        fi
         cargo build --locked --release --package rocketmq-broker --features "${broker_features}" --bin rocketmq-broker-rust
-        broker_dir=/workspace/target/release
+        broker_binary=/workspace/target/release/rocketmq-broker-rust
         ;;
     *)
         echo "ROCKETMQ_BROKER_PGO must be true or false" >&2
@@ -199,7 +245,8 @@ case "${ROCKETMQ_BROKER_PGO}" in
         ;;
 esac
 install -d /opt/rocketmq-binaries
-install -m 0555 "${broker_dir}/rocketmq-broker-rust" /opt/rocketmq-binaries/rocketmq-broker-rust
+install -m 0555 "${broker_binary}" /opt/rocketmq-binaries/rocketmq-broker-rust
+rm -rf /tmp/rocketmq-pgo
 for binary in \
     rocketmq-namesrv-rust \
     rocketmq-controller-rust \
