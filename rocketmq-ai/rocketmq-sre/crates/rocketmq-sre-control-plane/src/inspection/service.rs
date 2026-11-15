@@ -247,7 +247,7 @@ fn inspection_inputs<'a>(
     evidence: &'a [rocketmq_sre_contracts::EvidenceSnapshot],
     as_of_unix_ms: i64,
 ) -> std::borrow::Cow<'a, [rocketmq_sre_contracts::EvidenceSnapshot]> {
-    if pack_id != "send-latency.v2" {
+    if !matches!(pack_id, "send-latency.v2" | "namesrv-route.v2") {
         return std::borrow::Cow::Borrowed(evidence);
     }
     // This version's observed_at is capture time, and its source age describes
@@ -257,7 +257,13 @@ fn inspection_inputs<'a>(
         evidence
             .iter()
             .filter(|snapshot| {
-                rocketmq_sre_core::diagnostics::packs::assess_send_latency_observation(snapshot, as_of_unix_ms).is_ok()
+                if pack_id == "namesrv-route.v2" {
+                    rocketmq_sre_core::diagnostics::packs::assess_namesrv_route_observation(snapshot, as_of_unix_ms)
+                        .is_ok()
+                } else {
+                    rocketmq_sre_core::diagnostics::packs::assess_send_latency_observation(snapshot, as_of_unix_ms)
+                        .is_ok()
+                }
             })
             .cloned()
             .collect(),
@@ -268,10 +274,11 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
     match template {
         InspectionTemplate::StorePressureLegacyV1 => &["store-pressure.v1"],
         InspectionTemplate::SendLatencyLegacyV1 => &["send-latency.v1"],
+        InspectionTemplate::NamesrvRouteLegacyV1 => &["namesrv-route.v1"],
         InspectionTemplate::ClusterHealth => &[
             "cluster-topology.v1",
             "deployment-drift.v1",
-            "namesrv-route.v1",
+            "namesrv-route.v2",
             "controller-ha.v1",
             "upgrade-readiness.v1",
             "capacity-runway.v1",
@@ -315,7 +322,7 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
             "store-integrity.v1",
             "broker-ha.v1",
             "controller-ha.v1",
-            "namesrv-route.v1",
+            "namesrv-route.v2",
             "proxy-connectivity.v1",
             "security-posture.v1",
             "upgrade-readiness.v1",
@@ -349,7 +356,7 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
         ],
         InspectionTemplate::RoutingProxy => &[
             "cluster-topology.v1",
-            "namesrv-route.v1",
+            "namesrv-route.v2",
             "static-topic-route.v1",
             "proxy-connectivity.v1",
             "send-latency.v2",
@@ -562,6 +569,7 @@ mod tests {
             InspectionTemplate::DisasterRecovery,
             InspectionTemplate::StorePressureLegacyV1,
             InspectionTemplate::SendLatencyLegacyV1,
+            InspectionTemplate::NamesrvRouteLegacyV1,
         ] {
             assert!(!template_packs(template).is_empty());
         }
@@ -620,6 +628,22 @@ mod tests {
         ] {
             assert!(template_packs(template).contains(&"send-latency.v2"));
             assert!(!template_packs(template).contains(&"send-latency.v1"));
+        }
+    }
+
+    #[test]
+    fn namesrv_current_defaults_and_exact_legacy_template_use_distinct_source_contracts() {
+        assert_eq!(
+            template_packs(InspectionTemplate::NamesrvRouteLegacyV1),
+            &["namesrv-route.v1"]
+        );
+        for template in [
+            InspectionTemplate::ClusterHealth,
+            InspectionTemplate::FullCluster,
+            InspectionTemplate::RoutingProxy,
+        ] {
+            assert!(template_packs(template).contains(&"namesrv-route.v2"));
+            assert!(!template_packs(template).contains(&"namesrv-route.v1"));
         }
     }
 

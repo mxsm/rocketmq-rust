@@ -1,0 +1,235 @@
+{
+  "schema_version": "rocketmq.sre-namesrv-route-observation.v1",
+  "profile": "nameserver_route_comparison",
+  "tenant_id": "11111111-1111-4111-8111-111111111111",
+  "cluster_id": "22222222-2222-4222-8222-222222222222",
+  "topic": "orders",
+  "requested_window": {
+    "start": "2026-11-14T11:45:00.000000123Z",
+    "end": "2026-11-14T11:59:59.000000123Z"
+  },
+  "collection_started_at": "2026-11-14T12:00:00.000000000Z",
+  "collected_at": "2026-11-14T12:00:00.100000000Z",
+  "source_age_seconds": 1,
+  "temporal_semantics": "current_context_only",
+  "historical_coverage": "unknown",
+  "configuration": {
+    "revision": "fixture-v1",
+    "deployment_reference": "synthetic-fixture",
+    "independence_source": "operator_declared_direct_peers",
+    "expected_view": {
+      "cluster_test": false,
+      "order_message_enable": false,
+      "support_acting_master": false
+    },
+    "fingerprint_algorithm": "hmac-sha256-v1",
+    "fingerprint_domain": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "peers": [
+      {
+        "peer_id": "ns-a",
+        "peer_endpoint_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "instance_reference": "fixture-ns-a"
+      },
+      {
+        "peer_id": "ns-b",
+        "peer_endpoint_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "instance_reference": "fixture-ns-b"
+      }
+    ],
+    "physical_cluster": "physical-fixture"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "started_at": "2026-11-14T12:00:00.000000000Z",
+      "finished_at": "2026-11-14T12:00:00.000000000Z",
+      "peers": [
+        {
+          "peer_id": "ns-a",
+          "peer_endpoint_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "configuration": {
+            "status": "available",
+            "reason_code": "view_configuration_observed",
+            "flags": {
+              "cluster_test": false,
+              "order_message_enable": false,
+              "support_acting_master": false
+            },
+            "started_at": "2026-11-14T12:00:00.000000000Z",
+            "finished_at": "2026-11-14T12:00:00.000000000Z",
+            "received_body_bytes": 180
+          },
+          "route": {
+            "status": "found",
+            "reason_code": "route_observed",
+            "started_at": "2026-11-14T12:00:00.000000000Z",
+            "finished_at": "2026-11-14T12:00:00.000000000Z",
+            "received_body_bytes": 350,
+            "normalized": {
+              "brokers": {
+                "broker-a": {
+                  "cluster": "physical-fixture",
+                  "addresses": {
+                    "0": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                  },
+                  "zone": null,
+                  "acting_master": false
+                }
+              },
+              "queues": {
+                "broker-a": {
+                  "read_queue_nums": 4,
+                  "write_queue_nums": 4,
+                  "perm": 6,
+                  "topic_sys_flag": 0
+                }
+              },
+              "order_config": null,
+              "filter_servers": {},
+              "static_mapping": null,
+              "unknown_dimensions": []
+            }
+          }
+        },
+        {
+          "peer_id": "ns-b",
+          "peer_endpoint_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "configuration": {
+            "status": "available",
+            "reason_code": "view_configuration_observed",
+            "flags": {
+              "cluster_test": false,
+              "order_message_enable": false,
+              "support_acting_master": false
+            },
+            "started_at": "2026-11-14T12:00:00.000000000Z",
+            "finished_at": "2026-11-14T12:00:00.000000000Z",
+            "received_body_bytes": 180
+          },
+          "route": {
+            "status": "topic_absent",
+            "reason_code": "topic_absent",
+            "started_at": "2026-11-14T12:00:00.000000000Z",
+            "finished_at": "2026-11-14T12:00:00.000000000Z",
+            "received_body_bytes": 0,
+            "normalized": null
+          }
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "started_at": "2026-11-14T12:00:00.000000000Z",
+      "finished_at": "2026-11-14T12:00:00.100000000Z",
+      "peers": [
+        {
+          "peer_id": "ns-a",
+          "peer_endpoint_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "configuration": {
+            "status": "available",
+            "reason_code": "view_configuration_observed",
+            "flags": {
+              "cluster_test": false,
+              "order_message_enable": false,
+              "support_acting_master": false
+            },
+            "started_at": "2026-11-14T12:00:00.000000000Z",
+            "finished_at": "2026-11-14T12:00:00.000000000Z",
+            "received_body_bytes": 180
+          },
+          "route": {
+            "status": "found",
+            "reason_code": "route_observed",
+            "started_at": "2026-11-14T12:00:00.000000000Z",
+            "finished_at": "2026-11-14T12:00:00.000000000Z",
+            "received_body_bytes": 350,
+            "normalized": {
+              "brokers": {
+                "broker-a": {
+                  "cluster": "physical-fixture",
+                  "addresses": {
+                    "0": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                  },
+                  "zone": null,
+                  "acting_master": false
+                }
+              },
+              "queues": {
+                "broker-a": {
+                  "read_queue_nums": 4,
+                  "write_queue_nums": 4,
+                  "perm": 6,
+                  "topic_sys_flag": 0
+                }
+              },
+              "order_config": null,
+              "filter_servers": {},
+              "static_mapping": null,
+              "unknown_dimensions": []
+            }
+          }
+        },
+        {
+          "peer_id": "ns-b",
+          "peer_endpoint_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "configuration": {
+            "status": "available",
+            "reason_code": "view_configuration_observed",
+            "flags": {
+              "cluster_test": false,
+              "order_message_enable": false,
+              "support_acting_master": false
+            },
+            "started_at": "2026-11-14T12:00:00.000000000Z",
+            "finished_at": "2026-11-14T12:00:00.000000000Z",
+            "received_body_bytes": 180
+          },
+          "route": {
+            "status": "topic_absent",
+            "reason_code": "topic_absent",
+            "started_at": "2026-11-14T12:00:00.000000000Z",
+            "finished_at": "2026-11-14T12:00:00.000000000Z",
+            "received_body_bytes": 0,
+            "normalized": null
+          }
+        }
+      ]
+    }
+  ],
+  "comparison": {
+    "state": "stable_observed_difference",
+    "reason_code": "current_route_difference_observed",
+    "compared_dimensions": [
+      "topic_presence"
+    ],
+    "differing_dimensions": [
+      "topic_presence"
+    ],
+    "unknown_dimensions": [],
+    "timing_eligible": true,
+    "change_observed": false,
+    "acquisition_span_millis": 100
+  },
+  "read_statistics": {
+    "planned_config_rpcs": 4,
+    "planned_route_rpcs": 4,
+    "started_config_rpcs": 4,
+    "started_route_rpcs": 4,
+    "known_received_body_bytes": 1420,
+    "unknown_response_byte_count": 0,
+    "accepted_body_bytes": 1420,
+    "row_work": 24,
+    "bounded": false
+  },
+  "missing_facts": [
+    "registration.first_registration_time",
+    "registration.last_registration_time",
+    "registration.last_heartbeat_time",
+    "route.source_generation_time",
+    "route.source_generation",
+    "route.source_instance_id",
+    "route.local_origin_atomic_proof",
+    "broker.scope_bound_reachability",
+    "historical_window_coverage"
+  ]
+}

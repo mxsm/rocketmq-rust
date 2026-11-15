@@ -439,6 +439,8 @@ where
 mod admin;
 mod callback_executor;
 mod consumer;
+#[cfg(feature = "admin-read")]
+mod nameserver_observation;
 mod producer;
 mod producer_client;
 mod producer_retry;

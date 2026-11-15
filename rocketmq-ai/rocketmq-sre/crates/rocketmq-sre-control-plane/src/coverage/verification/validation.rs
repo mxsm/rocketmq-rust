@@ -254,6 +254,8 @@ fn invalid(code: &'static str) -> ControlPlaneRequestFailure {
 }
 
 #[cfg(test)]
+mod namesrv_route_tests;
+#[cfg(test)]
 mod send_latency_tests;
 #[cfg(test)]
 mod store_pressure_tests;

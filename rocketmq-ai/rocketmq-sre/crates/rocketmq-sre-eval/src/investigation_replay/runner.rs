@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use super::validation::{COLLECTION_BYTES, LOCAL_BYTES, context, create_request, json_len};
 use super::*;
 
+#[cfg(test)]
+mod checkpoint_tests;
 mod execution;
 
 #[derive(Serialize, Deserialize)]
@@ -226,13 +228,36 @@ fn restore_checkpoint(case: &InvestigationReplayCase, mut state: State) -> Resul
     let encoded = serde_json::to_vec(&state).map_err(|_| Invalid)?;
     let restored: State = serde_json::from_slice(&encoded).map_err(|_| Invalid)?;
     restored.run.validate().map_err(|_| Invalid)?;
+    let mut bindings = Vec::new();
+    for binding in &case.bindings {
+        for scope in
+            std::iter::once(&restored.run.effective_scope).chain(restored.run.steps.iter().map(|step| &step.spec.scope))
+        {
+            let candidate = InvestigationReadBinding {
+                requirement: binding.requirement.clone(),
+                source: binding.source.clone(),
+                resource: binding.resource.clone(),
+                scope: scope.clone(),
+            };
+            if !bindings.contains(&candidate) {
+                bindings.push(candidate);
+            }
+        }
+    }
+    let anchors = investigation_namesrv_anchor_ids(&restored.run, &bindings);
     if restored.run.initial_scope != case.scope
         || restored.run.budget != case.budget
         || restored.run.deadline != case.deadline
         || restored.run.in_flight_count() != 0
         || restored.evidence.iter().any(|snapshot| {
-            snapshot.verify_content_hash().is_err() || !restored.run.evidence_ids.contains(&snapshot.evidence_id)
+            snapshot.verify_content_hash().is_err()
+                || (!restored.run.evidence_ids.contains(&snapshot.evidence_id)
+                    && !checkpoint_metadata_reference(&restored.run, snapshot))
         })
+        || anchors
+            .iter()
+            .any(|id| !restored.evidence.iter().any(|snapshot| snapshot.evidence_id == *id))
+        || investigation_namesrv_domain_continuity(&input(case, &restored, &bindings)).blocks_progress()
         || restored.revisions.iter().any(|revision| {
             revision.pack_result().is_err()
                 || !restored
@@ -245,6 +270,29 @@ fn restore_checkpoint(case: &InvestigationReplayCase, mut state: State) -> Resul
         return Err(Invalid);
     }
     Ok(restored)
+}
+
+fn checkpoint_metadata_reference(run: &InvestigationRun, snapshot: &EvidenceSnapshot) -> bool {
+    snapshot.tenant_id == run.initial_scope.tenant_id
+        && snapshot.cluster_id == run.initial_scope.cluster_id
+        && snapshot.source == "admin-query"
+        && snapshot.resource.starts_with("namesrv-route/")
+        && rocketmq_sre_core::diagnostics::packs::namesrv_route_domain(snapshot).is_ok()
+        && (run.supplied_evidence_ids.contains(&snapshot.evidence_id)
+            || run.steps.iter().any(|step| {
+                step.spec.pack.pack_id == "namesrv-route.v2"
+                    && step.spec.pack.pack_version == "2.0.0"
+                    && matches!(step.spec.work, InvestigationStepKind::CollectEvidence { .. })
+                    && step.spec.scope.time_range.start.timestamp_micros()
+                        == snapshot.time_range.start.timestamp_micros()
+                    && step.spec.scope.time_range.end.timestamp_micros() == snapshot.time_range.end.timestamp_micros()
+                    && step.attempts.iter().any(|attempt| {
+                        attempt.result.as_ref().is_some_and(|result| {
+                            result.outcome == InvestigationStepOutcome::Succeeded
+                                && result.evidence_ids.contains(&snapshot.evidence_id)
+                        })
+                    })
+            }))
 }
 
 impl State {
@@ -351,7 +399,17 @@ impl State {
         bindings: &[InvestigationReadBinding],
         reason: Option<InvestigationStopReason>,
     ) -> Result<(), InvestigationReplayRejection> {
-        match aggregate_investigation(registry, &input(case, self, bindings), &self.revisions, reason)? {
+        let active = self
+            .evidence
+            .iter()
+            .filter(|snapshot| self.run.evidence_ids.contains(&snapshot.evidence_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let current_input = InvestigationPlanningInput {
+            evidence: &active,
+            ..input(case, self, bindings)
+        };
+        match aggregate_investigation(registry, &current_input, &self.revisions, reason)? {
             InvestigationAggregateDecision::Stop { reason } => self.stop(case, reason),
             InvestigationAggregateDecision::Assess {
                 basis_revision_id,

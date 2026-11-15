@@ -25,11 +25,14 @@ mod inventory;
 mod kubernetes;
 mod kubernetes_events;
 #[cfg(test)]
+mod live_namesrv_route;
+#[cfg(test)]
 mod live_send_latency;
 #[cfg(test)]
 mod live_store_pressure;
 mod loki;
 mod mcp;
+mod namesrv_route;
 mod projection;
 mod prometheus;
 mod proxy_diagnostics;
@@ -320,6 +323,13 @@ where
         .map_err(|error| error.with_correlation_id(query.correlation_id))?;
         output.content = content;
         if bounded {
+            if output.content["schema_version"].as_str() == Some("rocketmq.sre-namesrv-route-observation.v1") {
+                return Err(ConnectorError::new(
+                    ConnectorFailure::OutputTooLarge,
+                    false,
+                    "NameServer observation proof was bounded",
+                ));
+            }
             if output.content["observation_schema"].as_str() == Some("rocketmq.send-latency-window.v1") {
                 // A truncated proof cannot retain a displayed qualified estimate.
                 output.content["raw_histograms"] = serde_json::json!([]);
@@ -1086,6 +1096,10 @@ fn capture(
     snapshot.sensitivity = output.sensitivity;
     snapshot.coverage = output.coverage;
     snapshot.exposure = output.exposure;
+    if matches!(&snapshot.content,EvidenceContent::Inline(content) if content["schema_version"].as_str()==Some("rocketmq.sre-namesrv-route-observation.v1"))
+    {
+        snapshot = namesrv_route::bounded_capture(snapshot)?;
+    }
     Ok(ConnectorAdmissionOutcome::Accepted(snapshot))
 }
 
@@ -1298,6 +1312,7 @@ mod tests {
             expected_tool_surface_digest: None,
             prometheus_url: None,
             send_latency_policies: Vec::new(),
+            namesrv_routes: std::collections::BTreeMap::new(),
             alertmanager_url: None,
             loki_url: None,
             tempo_url: None,

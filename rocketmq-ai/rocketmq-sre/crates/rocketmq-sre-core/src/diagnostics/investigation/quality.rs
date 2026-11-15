@@ -17,7 +17,7 @@ use rocketmq_sre_contracts::{
     EvidenceSnapshot, InvestigationPackRef, InvestigationRequirementRef, InvestigationRunFailure,
 };
 
-use super::super::{DiagnosticPack, DiagnosticPackRegistry, PackVersion};
+use super::super::{DiagnosticPack, DiagnosticPackRegistry, EvidenceTemporalPolicy, PackVersion};
 use super::InvestigationPlanningInput;
 
 pub(super) fn exact_pack<'a>(
@@ -104,7 +104,7 @@ pub(super) fn requirements(
                 quality.reason_code = "evidence_not_observed".to_owned();
                 return quality;
             };
-            assess(&mut quality, snapshot, input.as_of_unix_ms);
+            assess(&mut quality, snapshot, input.as_of_unix_ms, pack);
             if matches!(
                 quality.quality,
                 DiagnosticEvidenceQuality::Available | DiagnosticEvidenceQuality::Partial
@@ -171,7 +171,12 @@ pub(super) fn input_fingerprint(
         .map_err(|_| InvestigationRunFailure::InvalidInput)
 }
 
-fn assess(quality: &mut DiagnosticRequirementQuality, snapshot: &EvidenceSnapshot, as_of_unix_ms: i64) {
+fn assess(
+    quality: &mut DiagnosticRequirementQuality,
+    snapshot: &EvidenceSnapshot,
+    as_of_unix_ms: i64,
+    pack: &dyn DiagnosticPack,
+) {
     if snapshot.verify_content_hash().is_err() {
         quality.quality = DiagnosticEvidenceQuality::Unknown;
         quality.reason_code = "invalid_evidence_content_hash".to_owned();
@@ -209,6 +214,16 @@ fn assess(quality: &mut DiagnosticRequirementQuality, snapshot: &EvidenceSnapsho
             return;
         }
         CoverageStatus::Available | CoverageStatus::Partial => {}
+    }
+    if pack.temporal_evidence_policy() == EvidenceTemporalPolicy::CurrentContextOnly {
+        if pack.accepts_partial_context(&quality.id, snapshot, as_of_unix_ms) {
+            quality.quality = DiagnosticEvidenceQuality::Partial;
+            quality.reason_code = "current_context_only".to_owned();
+        } else {
+            quality.quality = DiagnosticEvidenceQuality::Unknown;
+            quality.reason_code = "invalid_current_context_observation".to_owned();
+        }
+        return;
     }
     let point_in_window = match snapshot.source.as_str() {
         // These public read adapters cannot request historical state. An echoed

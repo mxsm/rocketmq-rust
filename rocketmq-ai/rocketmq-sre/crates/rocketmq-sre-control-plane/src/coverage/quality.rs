@@ -135,7 +135,7 @@ pub(super) fn project(
     let scenarios = [
         ("backlog_store", ["consumer-lag.v2", "store-pressure.v2"]),
         ("send_latency_ha", ["send-latency.v2", "broker-ha.v1"]),
-        ("routing_disconnect", ["namesrv-route.v1", "producer-connectivity.v1"]),
+        ("routing_disconnect", ["namesrv-route.v2", "producer-connectivity.v1"]),
     ]
     .into_iter()
     .map(|(id, ids)| DiagnosticScenarioCoverage {
@@ -174,6 +174,7 @@ pub(super) fn bind_primary_revision(projection: &mut CapabilityQualityProjection
     let (scenario_id, ids) = match primary_pack {
         "store-pressure.v1" => ("backlog_store", ["consumer-lag.v2", "store-pressure.v1"]),
         "send-latency.v1" => ("send_latency_ha", ["send-latency.v1", "broker-ha.v1"]),
+        "namesrv-route.v1" => ("routing_disconnect", ["namesrv-route.v1", "producer-connectivity.v1"]),
         _ => return,
     };
     let Some(scenario) = projection.scenarios.iter_mut().find(|item| item.id == scenario_id) else {
@@ -292,6 +293,21 @@ fn requirement_quality(
             fields.iter().map(|field| field.path.clone()).collect(),
         )
     };
+    if matches!(
+        quality,
+        DiagnosticEvidenceQuality::Available | DiagnosticEvidenceQuality::Partial
+    ) && pack.temporal_evidence_policy()
+        == rocketmq_sre_core::diagnostics::EvidenceTemporalPolicy::CurrentContextOnly
+        && let Some(snapshot) = snapshot
+    {
+        if pack.accepts_partial_context(requirement.key, snapshot, now.timestamp_millis()) {
+            quality = DiagnosticEvidenceQuality::Partial;
+            reason = "current_context_only";
+        } else {
+            quality = DiagnosticEvidenceQuality::Unknown;
+            reason = "invalid_current_context_observation";
+        }
+    }
     if matches!(
         quality,
         DiagnosticEvidenceQuality::Available | DiagnosticEvidenceQuality::Partial

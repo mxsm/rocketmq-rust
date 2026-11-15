@@ -265,6 +265,8 @@ pub struct InvestigationDiagnosisRevision {
 /// ordinary Store inspections select the active numeric observation version.
 /// `SendLatencyLegacyV1` likewise preserves saved Boolean latency fixtures;
 /// ordinary latency inspections use the active window-distribution version.
+/// `NamesrvRouteLegacyV1` preserves the historical Boolean route contract;
+/// ordinary route inspections use the active current-context comparison version.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectionTemplate {
@@ -281,6 +283,7 @@ pub enum InspectionTemplate {
     DisasterRecovery,
     StorePressureLegacyV1,
     SendLatencyLegacyV1,
+    NamesrvRouteLegacyV1,
 }
 
 /// Inspection lifecycle.
@@ -519,6 +522,14 @@ mod tests {
             InspectionTemplate::SendLatencyLegacyV1
         );
         assert!(serde_json::from_value::<InspectionTemplate>(serde_json::json!("arbitrary_pack")).is_err());
+        assert_eq!(
+            serde_json::to_value(InspectionTemplate::NamesrvRouteLegacyV1).unwrap(),
+            "namesrv_route_legacy_v1"
+        );
+        assert_eq!(
+            serde_json::from_value::<InspectionTemplate>(serde_json::json!("namesrv_route_legacy_v1")).unwrap(),
+            InspectionTemplate::NamesrvRouteLegacyV1
+        );
     }
 
     #[test]

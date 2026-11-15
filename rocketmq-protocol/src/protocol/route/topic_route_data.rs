@@ -40,6 +40,18 @@ pub struct TopicRouteData {
 }
 
 impl TopicRouteData {
+    /// Preserves field presence and duplicate keys for an observation decoder,
+    /// while reusing the legacy numeric-object-key compatibility normalization.
+    /// This does not deserialize or alter existing route/equality semantics.
+    #[must_use]
+    pub fn observation_json(bytes: &[u8]) -> Option<std::borrow::Cow<'_, str>> {
+        let input = std::str::from_utf8(bytes).ok()?;
+        Some(match quote_unquoted_numeric_object_keys(input) {
+            Some(normalized) => std::borrow::Cow::Owned(normalized),
+            None => std::borrow::Cow::Borrowed(input),
+        })
+    }
+
     pub fn topic_route_data_changed(&self, old_data: Option<&TopicRouteData>) -> bool {
         let Some(old_data) = old_data else { return true };
         let mut now = TopicRouteData::from_existing(self);

@@ -60,6 +60,67 @@ pub(super) fn catalog_context(
 }
 
 impl RunDispatcher {
+    pub(super) async fn planning_snapshots(
+        &self,
+        service: &InvestigationRunService,
+        auth: &AuthContext,
+        run: &InvestigationRun,
+        bindings: &[InvestigationReadBinding],
+        active: &[EvidenceSnapshot],
+    ) -> Result<Vec<EvidenceSnapshot>, ControlPlaneRequestFailure> {
+        let ids = investigation_namesrv_anchor_ids(run, bindings);
+        let mut pool = active.to_vec();
+        if ids.is_empty() {
+            return Ok(pool);
+        }
+        let proofs = service.repository.investigation_run_read_proofs(auth, run).await?;
+        let parent = super::super::scope::authorize_saved_scope(&service.repository, auth, &run.initial_scope).await?;
+        for id in ids {
+            if pool.iter().any(|snapshot| snapshot.evidence_id == id) {
+                continue;
+            }
+            if pool.len() >= 256 {
+                return Err(contract_failure(InvestigationRunFailure::InvalidInput));
+            }
+            let Some(snapshot) = self.snapshots(auth, &[id]).await?.pop() else {
+                return Err(ControlPlaneRequestFailure::not_found());
+            };
+            if snapshot.tenant_id != auth.tenant_id || snapshot.cluster_id != run.initial_scope.cluster_id {
+                return Err(contract_failure(InvestigationRunFailure::ScopeMismatch));
+            }
+            if snapshot.source == "admin-query" && snapshot.resource.starts_with("namesrv-route/") {
+                let from_read = proofs.iter().any(|proof| {
+                    proof.query.query_id == snapshot.query_id
+                        && proof.query.correlation_id == snapshot.correlation_id
+                        && proof.query.source == snapshot.source
+                        && proof.query.resource == snapshot.resource
+                        && proof.query.time_range.start.timestamp_micros()
+                            == snapshot.time_range.start.timestamp_micros()
+                        && proof.query.time_range.end.timestamp_micros() == snapshot.time_range.end.timestamp_micros()
+                        && proof.scope.narrows(&run.initial_scope)
+                });
+                if !from_read {
+                    if !run.supplied_evidence_ids.contains(&id) {
+                        return Err(contract_failure(InvestigationRunFailure::ScopeMismatch));
+                    }
+                    // Original saved references are checked against their
+                    // immutable initial scope, not a later Steer window.
+                    let mut original = run.initial_scope.clone();
+                    original.time_range.start =
+                        chrono::DateTime::from_timestamp_micros(original.time_range.start.timestamp_micros())
+                            .ok_or_else(|| contract_failure(InvestigationRunFailure::InvalidInput))?;
+                    original.time_range.end =
+                        chrono::DateTime::from_timestamp_micros(original.time_range.end.timestamp_micros())
+                            .ok_or_else(|| contract_failure(InvestigationRunFailure::InvalidInput))?;
+                    super::super::scope::evidence_context(&service.repository, auth, &original, parent.as_ref(), &[id])
+                        .await?;
+                }
+            }
+            pool.push(snapshot);
+        }
+        Ok(pool)
+    }
+
     pub(super) async fn snapshots(
         &self,
         auth: &AuthContext,

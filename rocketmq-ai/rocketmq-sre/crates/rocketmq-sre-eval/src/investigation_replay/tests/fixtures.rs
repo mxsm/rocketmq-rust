@@ -51,7 +51,7 @@ pub(super) fn snapshot(
     Box::new(snapshot)
 }
 
-pub(super) fn case() -> InvestigationReplayCase {
+pub(in crate::investigation_replay) fn case() -> InvestigationReplayCase {
     let at = "2026-11-14T12:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap();
     let scope = InvestigationRunScope {
         tenant_id: "00000000-0000-4000-8000-000000000001".parse().unwrap(),

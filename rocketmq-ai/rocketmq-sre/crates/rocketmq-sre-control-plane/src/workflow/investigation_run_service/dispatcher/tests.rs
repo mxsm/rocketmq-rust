@@ -212,6 +212,7 @@ fn charged_reads(run: &InvestigationRun) -> u64 {
 }
 
 mod models;
+mod namesrv_route;
 mod persistence;
 mod quality;
 mod runtime;

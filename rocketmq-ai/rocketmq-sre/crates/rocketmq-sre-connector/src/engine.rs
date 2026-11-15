@@ -479,6 +479,7 @@ mod tests {
             expected_tool_surface_digest: None,
             prometheus_url: None,
             send_latency_policies: Vec::new(),
+            namesrv_routes: std::collections::BTreeMap::new(),
             alertmanager_url: None,
             loki_url: None,
             tempo_url: None,

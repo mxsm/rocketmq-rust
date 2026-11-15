@@ -41,6 +41,12 @@ struct Projected {
 /// field names consumed by Wave A. A projection never supplies neutral
 /// defaults for unavailable fields.
 pub(super) fn apply(mut output: SourceOutput, projection: CanonicalProjection) -> Result<SourceOutput, ConnectorError> {
+    if projection == CanonicalProjection::RouteDiagnostics(super::canonical::RouteDiagnosticProfile::NameServer)
+        && (output.content["schema_version"].as_str() == Some("rocketmq.sre-namesrv-route-observation.v1")
+            || output.content["reason_code"].as_str() == Some("namesrv_route_peers_unconfigured"))
+    {
+        return Ok(output);
+    }
     if projection == CanonicalProjection::MetricDiagnostics(super::canonical::MetricDiagnosticProfile::SendLatency)
         && output.content["observation_schema"].as_str() == Some("rocketmq.send-latency-window.v1")
     {

@@ -238,7 +238,13 @@ impl RunDispatcher {
                     bindings.push(binding);
                 }
             }
-            let input = self.planning_input(&run, &bindings, &evidence);
+            // Historical anchors are authorized metadata for source-domain
+            // continuity only. Never pass this augmented pool to rules, model
+            // explanation, SavedR citations or finalization.
+            let planning_evidence = self
+                .planning_snapshots(service, auth, &run, &bindings, &evidence)
+                .await?;
+            let input = self.planning_input(&run, &bindings, &planning_evidence);
             match plan_investigation(&service.catalog, input).map_err(contract_failure)? {
                 InvestigationPlanDecision::Collect(plan) => self.collect(&execution, &run, plan).await?,
                 InvestigationPlanDecision::Evaluate(plan) => {

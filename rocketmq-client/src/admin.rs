@@ -31,6 +31,12 @@ mod mq_admin_consumer_runtime_read_ext;
 #[cfg(feature = "admin-read")]
 mod mq_admin_infrastructure_observation_read_ext;
 #[cfg(feature = "admin-read")]
+mod mq_admin_nameserver_route_read_ext;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_nameserver_route_read_ext::{
+    MQAdminNameserverRouteReadExt, NameserverReadOperation, NameserverReadReply, NameserverReplyStatus,
+};
+#[cfg(feature = "admin-read")]
 mod mq_admin_lite_read_ext;
 #[cfg(feature = "admin-read")]
 mod mq_admin_message_index_read_ext;

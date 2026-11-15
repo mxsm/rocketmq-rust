@@ -44,7 +44,7 @@ pub(crate) fn verification_routes() -> axum::Router<AppState> {
     verification::routes()
 }
 
-const PACK_ORDER: [&str; 34] = [
+const PACK_ORDER: [&str; 35] = [
     "cluster-topology.v1",
     "consumer-lag.v2",
     "consumer-runtime.v1",
@@ -61,6 +61,7 @@ const PACK_ORDER: [&str; 34] = [
     "broker-ha.v1",
     "controller-ha.v1",
     "namesrv-route.v1",
+    "namesrv-route.v2",
     "send-latency.v1",
     "send-latency.v2",
     "proxy-connectivity.v1",

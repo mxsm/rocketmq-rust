@@ -227,6 +227,7 @@ pub(super) fn generated_manifest() -> Result<DiagnosticQualificationManifest, Di
             "producer_consumer".to_owned(),
             "store_pressure_legacy_v1".to_owned(),
             "send_latency_legacy_v1".to_owned(),
+            "namesrv_route_legacy_v1".to_owned(),
         ],
         fixture_assets: WAVE_A_FIXTURES
             .iter()
@@ -319,9 +320,9 @@ fn inspection_template_for(pack_id: &str) -> Result<&'static str, DiagnosticQual
     match pack_id {
         "store-pressure.v1" => Ok("store_pressure_legacy_v1"),
         "send-latency.v1" => Ok("send_latency_legacy_v1"),
+        "namesrv-route.v1" => Ok("namesrv_route_legacy_v1"),
         "cluster-topology.v1"
         | "deployment-drift.v1"
-        | "namesrv-route.v1"
         | "controller-ha.v1"
         | "upgrade-readiness.v1"
         | "capacity-runway.v1"

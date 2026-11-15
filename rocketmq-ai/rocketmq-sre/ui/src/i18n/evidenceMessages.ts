@@ -16,6 +16,8 @@ const zh = {
   not_verified: "未完成生产验证",
   outside: "观测时间不在当前时间窗内",
   collectionOutside: "采集完成时间在当前时间窗外；实际数据采样范围另列。",
+  currentContextOutside: "这是采集时的当前点状态，不能证明所选历史窗的路由状态。",
+  namesrvCurrentContextOnly: "此证据仅提供当前采样上下文；历史覆盖仍未知。",
   unknownExpiry: "未提供有效期；不能仅凭记录存在认定当前证据有效。",
   related: "当前修订关联资源的证据",
   read: "读取脱敏内容",
@@ -78,6 +80,8 @@ const en: EvidenceMessages = {
   not_verified: "Not production verified",
   outside: "Observed outside the current window",
   collectionOutside: "Collection completed outside the current window; the actual data span is shown separately.",
+  currentContextOutside: "This is current state at collection; it does not establish route state in the selected historical window.",
+  namesrvCurrentContextOnly: "This evidence provides current sampling context only; historical coverage remains unknown.",
   unknownExpiry:
     "No validity period provided. A saved record alone does not establish current validity.",
   related: "Evidence from a related resource in this revision",

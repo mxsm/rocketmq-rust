@@ -24,6 +24,7 @@ mod consumer_lag_v2;
 mod consumer_runtime_v1;
 mod deployment_drift_v1;
 mod message_path_v1;
+mod namesrv_route_v2;
 mod prevention;
 mod producer_connectivity_v1;
 mod routing_proxy;
@@ -39,6 +40,11 @@ pub use consumer_lag_v2::ConsumerLagV2;
 pub use consumer_runtime_v1::ConsumerRuntimeV1;
 pub use deployment_drift_v1::DeploymentDriftV1;
 pub use message_path_v1::MessagePathV1;
+pub use namesrv_route_v2::{
+    NAMESRV_MISSING_FACTS, NAMESRV_ROUTE_SCHEMA, NamesrvComparisonState, NamesrvObservationIssue,
+    NamesrvRouteObservation, NamesrvRouteV2, assess_namesrv_route_observation, compare_namesrv_route_content,
+    namesrv_route_domain,
+};
 pub use producer_connectivity_v1::ProducerConnectivityV1;
 pub use send_latency_v2::{
     LATENCY_FAMILIES, LATENCY_GRID, LatencyBucket, LatencyCounterSample, LatencyHistogram, LatencyObservationIssue,
@@ -88,6 +94,7 @@ pub fn wave_b_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRej
     register_specs(&mut registry, wave_b_specs())?;
     registry.register(StorePressureV2)?;
     registry.register(SendLatencyV2)?;
+    registry.register(NamesrvRouteV2)?;
     Ok(registry)
 }
 
@@ -115,6 +122,7 @@ pub fn full_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejec
     register_specs(&mut registry, wave_b_specs())?;
     registry.register(StorePressureV2)?;
     registry.register(SendLatencyV2)?;
+    registry.register(NamesrvRouteV2)?;
     register_specs(&mut registry, prevention::specs())?;
     Ok(registry)
 }
@@ -124,7 +132,11 @@ pub fn full_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejec
 pub fn full_pack_ids() -> Vec<String> {
     qualification_baseline_pack_ids()
         .into_iter()
-        .chain(["store-pressure.v2".to_owned(), "send-latency.v2".to_owned()])
+        .chain([
+            "store-pressure.v2".to_owned(),
+            "send-latency.v2".to_owned(),
+            "namesrv-route.v2".to_owned(),
+        ])
         .collect()
 }
 
@@ -152,6 +164,7 @@ pub fn active_pack_ids() -> Vec<String> {
         .map(|id| match id.as_str() {
             "store-pressure.v1" => "store-pressure.v2".to_owned(),
             "send-latency.v1" => "send-latency.v2".to_owned(),
+            "namesrv-route.v1" => "namesrv-route.v2".to_owned(),
             _ => id,
         })
         .collect()
@@ -233,7 +246,7 @@ mod tests {
         let ids = full_pack_ids();
 
         assert_eq!(registry.len(), 32);
-        assert_eq!(ids.len(), 34);
+        assert_eq!(ids.len(), 35);
         for id in ids {
             assert!(registry.resolve(&id).is_some(), "{id} should be registered");
         }
@@ -246,5 +259,7 @@ mod tests {
         assert!(!active.contains("store-pressure.v1"));
         assert!(active.contains("send-latency.v2"));
         assert!(!active.contains("send-latency.v1"));
+        assert!(active.contains("namesrv-route.v2"));
+        assert!(!active.contains("namesrv-route.v1"));
     }
 }

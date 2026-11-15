@@ -540,6 +540,7 @@ const fn preventive_risk(template: InspectionTemplate) -> Option<PreventiveRiskF
         | InspectionTemplate::DisasterRecovery => None,
         InspectionTemplate::StorePressureLegacyV1 => None,
         InspectionTemplate::SendLatencyLegacyV1 => None,
+        InspectionTemplate::NamesrvRouteLegacyV1 => None,
     }
 }
 

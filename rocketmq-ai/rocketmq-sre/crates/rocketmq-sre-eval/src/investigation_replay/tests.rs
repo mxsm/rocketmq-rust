@@ -18,7 +18,7 @@ use serde_json::json;
 
 mod adjudication;
 mod files;
-mod fixtures;
+pub(super) mod fixtures;
 mod quality;
 
 use fixtures::{case, counter_case, snapshot};

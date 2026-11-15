@@ -163,7 +163,7 @@ impl MQAdminInfrastructureObservationReadExt for DefaultMQAdminExt {
     }
 }
 
-fn sanitized_error(error: ClientError) -> InfrastructureObservationReadError {
+pub(super) fn sanitized_error(error: ClientError) -> InfrastructureObservationReadError {
     let descriptor = error.descriptor();
     let code = match descriptor.projection().http().status.as_u16() {
         401 | 403 => InfrastructureObservationReadErrorCode::PermissionDenied,

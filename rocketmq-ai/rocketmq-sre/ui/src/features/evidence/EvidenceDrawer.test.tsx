@@ -13,8 +13,9 @@ import {
 } from "@/data/phase1Demo";
 import { OperatorPreferencesProvider } from "@/preferences/OperatorPreferences";
 import { EvidenceDrawer } from "./EvidenceDrawer";
-import type { EvidenceAccess } from "./evidencePresentation";
+import type { EvidenceAccess, EvidenceFreshnessPolicy } from "./evidencePresentation";
 import { sendLatencyFixture } from "./test-fixtures/sendLatency";
+import { namesrvRouteFixture } from "./test-fixtures/namesrvRoute";
 
 const state = vi.hoisted(() => ({ api: undefined as unknown as SreApi }));
 vi.mock("@/data/SreDataContext", () => ({
@@ -37,9 +38,11 @@ const ID = phase1Evidence.items[0].evidence_id;
 function OpenDrawer({
   id = ID,
   access,
+  freshnessPolicy,
 }: {
   id?: string;
   access?: EvidenceAccess;
+  freshnessPolicy?: EvidenceFreshnessPolicy;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -52,6 +55,7 @@ function OpenDrawer({
           evidenceId={id}
           onClose={() => setOpen(false)}
           access={access}
+          freshnessPolicy={freshnessPolicy}
         />
       )}
     </>
@@ -61,10 +65,12 @@ function Fixture({
   id,
   access,
   resource = "",
+  freshnessPolicy,
 }: {
   id?: string;
   access?: EvidenceAccess;
   resource?: string;
+  freshnessPolicy?: EvidenceFreshnessPolicy;
 }) {
   return (
     <OperatorPreferencesProvider>
@@ -74,7 +80,7 @@ function Fixture({
         ]}
       >
         <WorkspaceScopeProvider>
-          <OpenDrawer id={id} access={access} />
+          <OpenDrawer id={id} access={access} freshnessPolicy={freshnessPolicy} />
         </WorkspaceScopeProvider>
       </MemoryRouter>
     </OperatorPreferencesProvider>
@@ -115,6 +121,27 @@ describe("shared evidence drawer", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it.each([
+    ["zh-CN", "此证据仅提供当前采样上下文；历史覆盖仍未知。"],
+    ["en-US", "This evidence provides current sampling context only; historical coverage remains unknown."],
+  ])("explains the current-context metadata warning in %s without reading content", async (locale, message) => {
+    window.localStorage.setItem("rocketmq-sre-operator-preferences.v1", JSON.stringify({
+      locale, timeZone: "UTC", theme: "system",
+    }));
+    const { evidence } = namesrvRouteFixture();
+    vi.mocked(state.api.getEvidence).mockResolvedValue({
+      ...evidence,
+      warnings: ["namesrv_current_context_only", "existing_warning_marker"],
+    });
+    const user = userEvent.setup();
+    render(<Fixture />);
+    await user.click(screen.getByRole("button", { name: "open evidence" }));
+    expect(await screen.findByText(message)).toBeVisible();
+    expect(screen.queryByText("namesrv_current_context_only")).not.toBeInTheDocument();
+    expect(screen.getByText("existing_warning_marker")).toBeVisible();
+    expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -266,5 +293,79 @@ describe("shared evidence drawer", () => {
     await user.click(await screen.findByRole("button", { name: "读取脱敏内容" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("范围不一致");
     expect(screen.queryByText(/foreign-scope-marker|248.5/)).not.toBeInTheDocument();
+  });
+
+  it("loads the route summary only on the authorized content click and whitelists its expanded audit", async () => {
+    const user = userEvent.setup();
+    const { payload, evidence } = namesrvRouteFixture();
+    payload.rounds[0].peers[0].route.normalized = { addresses: ["private-route-address"], config: "private-route-config" };
+    vi.mocked(state.api.getEvidence).mockResolvedValue(evidence);
+    vi.mocked(state.api.getEvidenceContent).mockResolvedValue({
+      ...payload, remote_error: "private-remote-error", raw_config: "private-route-config",
+    });
+    render(<Fixture />);
+    await user.click(screen.getByRole("button", { name: "open evidence" }));
+    const read = await screen.findByRole("button", { name: "读取脱敏内容" });
+    expect(state.api.getEvidenceContent).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "NameServer 路由对比" })).not.toBeInTheDocument();
+    await user.click(read);
+    expect(await screen.findByRole("heading", { name: "NameServer 路由对比" })).toBeVisible();
+    expect(screen.getByText(/不能证明所选历史窗的路由状态/)).toBeVisible();
+    await user.click(screen.getByText("脱敏 JSON 审计内容"));
+    expect(screen.getByText(/"plannedRoute": 4/)).toBeVisible();
+    expect(screen.queryByText(/private-route-address|private-route-config|private-remote-error/)).not.toBeInTheDocument();
+    expect(state.api.getEvidenceContent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["scope", "structure"] as const)("hides raw route content after a recognized %s failure", async (failure) => {
+    const user = userEvent.setup();
+    const { payload, evidence } = namesrvRouteFixture();
+    if (failure === "scope") payload.cluster_id = "foreign-route-marker";
+    else payload.rounds[1].round = 1;
+    vi.mocked(state.api.getEvidence).mockResolvedValue(evidence);
+    vi.mocked(state.api.getEvidenceContent).mockResolvedValue({ ...payload, raw_config: "private-route-config" });
+    render(<Fixture />);
+    await user.click(screen.getByRole("button", { name: "open evidence" }));
+    await user.click(await screen.findByRole("button", { name: "读取脱敏内容" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(failure === "scope" ? "范围不一致" : "安全展示校验");
+    expect(screen.queryByRole("heading", { name: "NameServer 路由对比" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/foreign-route-marker|private-route-config|"ns-a"/)).not.toBeInTheDocument();
+  });
+
+  it("does not restore late route content after the saved revision changes", async () => {
+    const user = userEvent.setup();
+    const { payload, evidence } = namesrvRouteFixture();
+    let finish!: (value: unknown) => void;
+    let oldSignal: AbortSignal | undefined;
+    vi.mocked(state.api.getEvidence).mockResolvedValue(evidence);
+    vi.mocked(state.api.getEvidenceContent).mockImplementation((_id, signal) => {
+      oldSignal = signal;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const access = { kind: "revision_evidence" as const, revisionId: "route-revision-a", evidenceIds: [evidence.evidence_id] };
+    const view = render(<Fixture access={access} />);
+    await user.click(screen.getByRole("button", { name: "open evidence" }));
+    await user.click(await screen.findByRole("button", { name: "读取脱敏内容" }));
+    await waitFor(() => expect(state.api.getEvidenceContent).toHaveBeenCalledTimes(1));
+    view.rerender(<Fixture access={{ ...access, revisionId: "route-revision-b" }} />);
+    await waitFor(() => expect(oldSignal?.aborted).toBe(true));
+    await act(async () => finish(payload));
+    expect(screen.queryByRole("heading", { name: "NameServer 路由对比" })).not.toBeInTheDocument();
+    expect(screen.queryByText("持续观察到局部路由差异")).not.toBeInTheDocument();
+  });
+
+  it("keeps expired route evidence expired when its saved comparison is opened", async () => {
+    const user = userEvent.setup();
+    const { payload, evidence } = namesrvRouteFixture();
+    vi.mocked(state.api.getEvidence).mockResolvedValue(evidence);
+    vi.mocked(state.api.getEvidenceContent).mockResolvedValue(payload);
+    render(<Fixture freshnessPolicy={{ maxAgeSeconds: 300, asOf: "2026-07-27T09:05:03Z", sourceRef: "compiled-route-fixture" }} />);
+    await user.click(screen.getByRole("button", { name: "open evidence" }));
+    expect(await screen.findByText(/超过要求时效/)).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "读取脱敏内容" }));
+    expect(await screen.findByRole("heading", { name: "NameServer 路由对比" })).toBeVisible();
+    expect(screen.getByText("保存时的比较结果")).toBeVisible();
+    expect(screen.getByText(/超过要求时效/)).toBeVisible();
+    expect(state.api.getEvidenceContent).toHaveBeenCalledTimes(1);
   });
 });

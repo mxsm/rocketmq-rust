@@ -32,6 +32,9 @@ use crate::TenantId;
 /// Schema carried by a bounded component Required Signals evidence document.
 pub const REQUIRED_SIGNALS_EVIDENCE_SCHEMA_VERSION: &str = "rocketmq.sre.required-signals-evidence.v1";
 
+/// Existing reverse-channel bound for the complete serialized response envelope.
+pub const CONNECTOR_RESPONSE_MAX_BYTES: usize = 512 * 1024;
+
 /// Current availability reported for a connector-backed evidence source.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -14,7 +14,8 @@
     "telemetry",
     "producer_consumer",
     "store_pressure_legacy_v1",
-    "send_latency_legacy_v1"
+    "send_latency_legacy_v1",
+    "namesrv_route_legacy_v1"
   ],
   "fixture_assets": [
     "tests/fixtures/diagnostics/cluster-topology.v1/normal.json",
@@ -611,7 +612,7 @@
     },
     {
       "id": "namesrv-route.v1",
-      "inspection_template": "cluster_health",
+      "inspection_template": "namesrv_route_legacy_v1",
       "required_evidence": [
         {
           "key": "namesrv-route",

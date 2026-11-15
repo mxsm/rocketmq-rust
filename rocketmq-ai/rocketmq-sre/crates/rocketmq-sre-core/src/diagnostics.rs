@@ -28,8 +28,9 @@ pub use engine::DiagnosticEngine;
 pub use investigation::{
     InvestigationAggregateDecision, InvestigationExplanationPolicy, InvestigationPlanDecision,
     InvestigationPlannedCollection, InvestigationPlannedEvaluation, InvestigationPlannedExplanation,
-    InvestigationPlanningInput, InvestigationReadBinding, InvestigationReservationPolicy, aggregate_investigation,
-    investigation_conclusion_evidence_available, investigation_findings, investigation_requirements,
+    InvestigationPlanningInput, InvestigationReadBinding, InvestigationReservationPolicy, NamesrvDomainContinuity,
+    aggregate_investigation, investigation_conclusion_evidence_available, investigation_findings,
+    investigation_namesrv_anchor_ids, investigation_namesrv_domain_continuity, investigation_requirements,
     investigation_rule_inputs, plan_investigation,
 };
 pub use packs::active_pack_ids;
@@ -51,6 +52,7 @@ pub use types::DiagnosticPack;
 pub use types::DiagnosticReport;
 pub use types::DiagnosticStatus;
 pub use types::EvidenceRequirement;
+pub use types::EvidenceTemporalPolicy;
 pub use types::FindingOutcome;
 pub use types::FollowUpQuery;
 pub use types::PackVersion;

@@ -423,6 +423,12 @@ async fn postgres_versioned_scenarios_pin_only_an_authorized_exact_primary_revis
             "consumer-lag.v2",
         ),
         ("send-latency.v1", "send-latency.v2", "send_latency_ha", "broker-ha.v1"),
+        (
+            "namesrv-route.v1",
+            "namesrv-route.v2",
+            "routing_disconnect",
+            "producer-connectivity.v1",
+        ),
     ] {
         let url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("explicit disposable test database");
         let repository = PostgresRepository::connect(&url, 4).await.unwrap();

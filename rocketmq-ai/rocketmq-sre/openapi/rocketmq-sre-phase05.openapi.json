@@ -33320,7 +33320,7 @@
         "type": "object"
       },
       "InspectionTemplate": {
-        "description": "Supported read-only inspection templates.\n\nThe original Phase 1 variants remain wire-compatible. Phase 2 adds\ndomain-complete templates used by preventive operations.\n`StorePressureLegacyV1` explicitly pins the original Boolean Store pack;\nordinary Store inspections select the active numeric observation version.\n`SendLatencyLegacyV1` likewise preserves saved Boolean latency fixtures;\nordinary latency inspections use the active window-distribution version.",
+        "description": "Supported read-only inspection templates.\n\nThe original Phase 1 variants remain wire-compatible. Phase 2 adds\ndomain-complete templates used by preventive operations.\n`StorePressureLegacyV1` explicitly pins the original Boolean Store pack;\nordinary Store inspections select the active numeric observation version.\n`SendLatencyLegacyV1` likewise preserves saved Boolean latency fixtures;\nordinary latency inspections use the active window-distribution version.\n`NamesrvRouteLegacyV1` preserves the historical Boolean route contract;\nordinary route inspections use the active current-context comparison version.",
         "enum": [
           "cluster_health",
           "consumer",
@@ -33334,7 +33334,8 @@
           "upgrade",
           "disaster_recovery",
           "store_pressure_legacy_v1",
-          "send_latency_legacy_v1"
+          "send_latency_legacy_v1",
+          "namesrv_route_legacy_v1"
         ],
         "title": "InspectionTemplate",
         "type": "string"

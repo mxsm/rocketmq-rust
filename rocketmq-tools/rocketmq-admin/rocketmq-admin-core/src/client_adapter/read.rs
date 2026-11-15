@@ -366,7 +366,120 @@ impl InfrastructureObservationQueryAdmin for ReadAdminSession {
     }
 }
 
+fn nameserver_observation_target_configured(endpoints: &[CheetahString], requested: &str) -> bool {
+    endpoints.iter().any(|endpoint| {
+        crate::core::broker::canonical_remoting_endpoint(endpoint.as_str()).as_deref() == Some(requested)
+    })
+}
+
 impl ReadAdminSession {
+    /// One uncached native NameServer read to a member of this session's
+    /// configured allowlist. The request cannot select an arbitrary request code.
+    ///
+    /// # Errors
+    /// Rejects a closed session, invalid bounds, or an unconfigured target before
+    /// network dispatch. Source failures are closed typed reply outcomes.
+    pub async fn observe_nameserver(
+        &mut self,
+        request: &crate::core::nameserver_route::NameserverObservationRequest,
+    ) -> AdminResult<crate::core::nameserver_route::NameserverObservationReply> {
+        use crate::core::nameserver_route::{NameserverObservationReply, NameserverObservationStatus as Status};
+        use rocketmq_client_rust::{
+            InfrastructureObservationReadErrorCode as Code, MQAdminNameserverRouteReadExt, NameserverReadOperation,
+            NameserverReplyStatus as Native,
+        };
+        self.ensure_open()?;
+        request.bounds.validate()?;
+        if !nameserver_observation_target_configured(&self.nameserver_endpoints, request.endpoint()) {
+            return Err(AdminError::invalid_argument(
+                "nameserver",
+                "observation target is not configured",
+            ));
+        }
+        let operation = request
+            .topic
+            .as_ref()
+            .map_or(NameserverReadOperation::ViewConfiguration, |topic| {
+                NameserverReadOperation::TopicRoute { topic: topic.clone() }
+            });
+        let raw = match self
+            .inner
+            .nameserver_observation_at(
+                CheetahString::from(request.endpoint()),
+                operation,
+                request.bounds.timeout_millis,
+                request.bounds.max_body_bytes,
+            )
+            .await
+        {
+            Ok(reply) => reply,
+            Err(error) => {
+                return Ok(NameserverObservationReply {
+                    status: match error.code() {
+                        Code::PermissionDenied => Status::PermissionDenied,
+                        Code::InvalidResponse => Status::Invalid,
+                        Code::NotFound => Status::Unavailable,
+                        Code::SourceUnavailable | Code::Timeout | Code::RateLimited => Status::Unavailable,
+                    },
+                    received_body_bytes: None,
+                    rows: None,
+                    view: None,
+                    route: None,
+                })
+            }
+        };
+        let mut reply = NameserverObservationReply {
+            status: match raw.status {
+                Native::Success => Status::Available,
+                Native::TopicAbsent => Status::TopicAbsent,
+                Native::PermissionDenied => Status::PermissionDenied,
+                Native::Unsupported => Status::Unsupported,
+                Native::Unavailable => Status::Unavailable,
+                Native::Invalid => Status::Invalid,
+                Native::TooLarge => Status::TooLarge,
+            },
+            received_body_bytes: Some(raw.received_body_bytes),
+            rows: None,
+            view: None,
+            route: None,
+        };
+        if raw.status != Native::Success {
+            if raw.received_body_bytes == 0 {
+                reply.rows = Some(0);
+            }
+            return Ok(reply);
+        }
+        match (&request.topic, &request.cluster) {
+            (None, None) => {
+                reply.rows = crate::core::nameserver_route::view_row_work(raw.body());
+                match crate::core::nameserver_route::decode_nameserver_view(raw.body(), request.bounds.max_rows) {
+                    Ok((view, rows)) => {
+                        reply.view = Some(view);
+                        reply.rows = Some(rows);
+                    }
+                    Err(status) => reply.status = status,
+                }
+            }
+            (Some(topic), Some(cluster)) => {
+                reply.rows = crate::core::nameserver_route::route_row_work(raw.body());
+                match crate::core::nameserver_route::decode_nameserver_route(
+                    raw.body(),
+                    cluster,
+                    topic,
+                    request.bounds.max_rows,
+                ) {
+                    Ok(route) => {
+                        reply.rows = Some(route.rows);
+                        reply.route = Some(route);
+                    }
+                    Err(status) => reply.status = status,
+                }
+            }
+            _ => reply.status = Status::Invalid,
+        }
+        Ok(reply)
+    }
+
     pub async fn shutdown(&mut self) {
         if !self.closed {
             MQAdminReadExt::shutdown(&mut self.inner).await;
@@ -2528,6 +2641,30 @@ fn map_proxy_drain_state(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nameserver_route_target_accepts_equivalent_configured_spelling_only() {
+        let endpoints = vec![
+            cheetah_string::CheetahString::from("HOST-A:09876"),
+            cheetah_string::CheetahString::from("[0:0:0:0:0:0:0:1]:9886"),
+        ];
+        assert!(super::nameserver_observation_target_configured(
+            &endpoints,
+            "host-a:9876"
+        ));
+        assert!(super::nameserver_observation_target_configured(
+            &endpoints,
+            "[::1]:9886"
+        ));
+        assert!(!super::nameserver_observation_target_configured(
+            &endpoints,
+            "host-b:9876"
+        ));
+        assert!(!super::nameserver_observation_target_configured(
+            &endpoints,
+            "[::1]:9876"
+        ));
+    }
+
     use std::collections::HashMap;
 
     use rocketmq_protocol::protocol::body::connection::Connection;
