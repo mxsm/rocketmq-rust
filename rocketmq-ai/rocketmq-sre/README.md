@@ -450,6 +450,7 @@ design is intentionally outside the current scope.
 - [Connector ReadGateway](docs/read-gateway-contract.md)
 - [Diagnostic Pack catalog](docs/phase02-diagnostic-packs.md)
 - [Store pressure fields, units and source limits](docs/store-pressure-observations.md)
+- [Current NameServer route comparison and source limits](docs/namesrv-route-observations.md)
 - [Execution contracts](docs/phase03-execution-contracts.md)
 - [Plan, policy, approval, and audit](docs/phase03-plan-policy-approval.md)
 - [Operations guide](docs/phase05-operations-guide.md)

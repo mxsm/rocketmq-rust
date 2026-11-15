@@ -320,6 +320,13 @@ where
         .map_err(|error| error.with_correlation_id(context.correlation_id))?;
         output.content = content;
         if bounded {
+            if output.content["schema_version"].as_str() == Some("rocketmq.sre-namesrv-route-observation.v1") {
+                return Err(ConnectorError::new(
+                    crate::ConnectorFailure::OutputTooLarge,
+                    false,
+                    "NameServer observation proof was bounded",
+                ));
+            }
             output.partial = true;
             output.warnings.push("read_gateway_output_bounded".to_owned());
         }
@@ -340,7 +347,7 @@ where
         Self::with_adapters(
             ReadPolicy::from_config(config),
             McpReadAdapter::new(gateway),
-            AdminReadAdapter::new(config.admin_source.clone()),
+            AdminReadAdapter::new(config),
         )
     }
 

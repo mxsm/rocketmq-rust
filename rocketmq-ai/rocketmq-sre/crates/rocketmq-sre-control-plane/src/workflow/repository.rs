@@ -2147,6 +2147,7 @@ pub(super) fn inspection_template_name(value: InspectionTemplate) -> &'static st
         InspectionTemplate::DisasterRecovery => "disaster_recovery",
         InspectionTemplate::StorePressureLegacyV1 => "store_pressure_legacy_v1",
         InspectionTemplate::SendLatencyLegacyV1 => "send_latency_legacy_v1",
+        InspectionTemplate::NamesrvRouteLegacyV1 => "namesrv_route_legacy_v1",
     }
 }
 
@@ -2165,6 +2166,7 @@ fn parse_inspection_template(value: &str) -> Result<InspectionTemplate, ControlP
         "disaster_recovery" => Ok(InspectionTemplate::DisasterRecovery),
         "store_pressure_legacy_v1" => Ok(InspectionTemplate::StorePressureLegacyV1),
         "send_latency_legacy_v1" => Ok(InspectionTemplate::SendLatencyLegacyV1),
+        "namesrv_route_legacy_v1" => Ok(InspectionTemplate::NamesrvRouteLegacyV1),
         _ => Err(invalid_database_enum("inspection template")),
     }
 }

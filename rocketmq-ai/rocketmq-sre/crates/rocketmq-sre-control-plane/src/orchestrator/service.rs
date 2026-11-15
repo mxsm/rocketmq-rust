@@ -513,7 +513,7 @@ fn select_pack(incident: &IncidentView) -> &'static str {
     } else if symptom.contains("subscription-config") || symptom.contains("filter-drift") {
         "topic-subscription-config.v1"
     } else if symptom.contains("namesrv") || symptom.contains("route") {
-        "namesrv-route.v1"
+        "namesrv-route.v2"
     } else if symptom.contains("proxy") || symptom.contains("grpc") {
         "proxy-connectivity.v1"
     } else if symptom.contains("auth") || symptom.contains("certificate") {

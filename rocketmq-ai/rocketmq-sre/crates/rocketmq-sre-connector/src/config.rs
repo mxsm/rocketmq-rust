@@ -29,7 +29,9 @@ use url::Url;
 use crate::ConnectorError;
 use crate::ConnectorFailure;
 
+mod namesrv_route;
 mod send_latency;
+pub(crate) use namesrv_route::NamesrvRouteConfig;
 pub(crate) use send_latency::SendLatencyPolicy;
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8091";
@@ -334,6 +336,7 @@ pub struct ConnectorConfig {
     pub loki_url: Option<Url>,
     pub tempo_url: Option<Url>,
     pub(crate) admin_source: Option<AdminSourceConfig>,
+    pub(crate) namesrv_routes: BTreeMap<ClusterId, NamesrvRouteConfig>,
     pub(crate) kubernetes_source: Option<KubernetesSourceConfig>,
     pub(crate) runtime_diagnostics_source: Option<RuntimeDiagnosticsSourceConfig>,
     pub(crate) source_limits: SourceLimits,
@@ -465,6 +468,7 @@ impl ConnectorConfig {
         let tempo_url = optional_http_url("ROCKETMQ_SRE_TEMPO_URL")?;
         let source_limits = load_source_limits(request_timeout, max_concurrency, max_response_bytes)?;
         let admin_source = load_admin_source(request_timeout, shutdown_timeout)?;
+        let namesrv_routes = namesrv_route::load(&cluster_ids, admin_source.as_ref())?;
         let kubernetes_source = load_kubernetes_source(request_timeout, &source_limits.label_allowlist)?;
         let runtime_diagnostics_source = load_runtime_diagnostics_source()?;
         let internal_token_env =
@@ -493,6 +497,7 @@ impl ConnectorConfig {
             loki_url,
             tempo_url,
             admin_source,
+            namesrv_routes,
             kubernetes_source,
             runtime_diagnostics_source,
             source_limits,
@@ -1137,6 +1142,7 @@ mod tests {
             expected_tool_surface_digest: None,
             prometheus_url: None,
             send_latency_policies: Vec::new(),
+            namesrv_routes: std::collections::BTreeMap::new(),
             alertmanager_url: None,
             loki_url: None,
             tempo_url: None,

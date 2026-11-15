@@ -41,6 +41,7 @@ pub mod lite;
 pub mod message;
 pub mod message_index;
 pub mod message_trace;
+pub mod nameserver_route;
 pub mod proxy;
 pub mod query;
 pub mod queue;

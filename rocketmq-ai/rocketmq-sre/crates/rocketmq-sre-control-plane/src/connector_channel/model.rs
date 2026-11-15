@@ -33,7 +33,7 @@ pub(crate) const CHANNEL_SCHEMA_FAMILY: &str = "rocketmq-sre.connector-channel";
 pub(crate) const CHANNEL_SCHEMA_MAJOR: u16 = 1;
 pub(crate) const MAX_COMMANDS_PER_POLL: usize = 64;
 pub(crate) const MAX_POLL_WAIT_MILLIS: u64 = 30_000;
-pub(crate) const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+pub(crate) const MAX_RESPONSE_BYTES: usize = rocketmq_sre_contracts::CONNECTOR_RESPONSE_MAX_BYTES;
 pub(crate) const MAX_SOURCES: usize = 64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

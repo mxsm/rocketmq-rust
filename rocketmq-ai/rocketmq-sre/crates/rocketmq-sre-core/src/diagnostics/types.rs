@@ -226,6 +226,17 @@ pub struct DiagnosticReport {
     pub follow_up_queries: Vec<FollowUpQuery>,
 }
 
+/// Version-owned interpretation of a source's temporal capabilities.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EvidenceTemporalPolicy {
+    /// Evidence must establish the requested window or a point within it.
+    #[default]
+    RequestedWindow,
+    /// A current, validated observation may be saved as partial context only.
+    /// It never establishes historical coverage or a conclusive whole-pack result.
+    CurrentContextOnly,
+}
+
 /// Versioned, implementation-neutral diagnostic pack.
 pub trait DiagnosticPack: fmt::Debug + Send + Sync {
     /// Stable base ID without the `.vN` major suffix.
@@ -242,6 +253,12 @@ pub trait DiagnosticPack: fmt::Debug + Send + Sync {
 
     /// Evidence that improves attribution or provides counter-evidence.
     fn optional_evidence(&self) -> &'static [EvidenceRequirement];
+
+    /// The compiled version's temporal contract. Only an explicit override may
+    /// interpret a current read outside an ended investigation window as context.
+    fn temporal_evidence_policy(&self) -> EvidenceTemporalPolicy {
+        EvidenceTemporalPolicy::RequestedWindow
+    }
 
     /// Primitive fields required by the compiled predicates for this evidence key.
     ///

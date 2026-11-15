@@ -225,6 +225,7 @@ fn resource(source: &str, prefix: &str, targets: &Targets) -> Option<String> {
         )
         | ("prometheus", "broker-health/" | "store-trend/") => targets.broker.clone(),
         ("rocketmq-mcp", "topic-route/" | "namesrv-route/" | "static-topic-route/")
+        | ("admin-query", "namesrv-route/")
         | ("prometheus", "send-latency/") => targets.topic.clone(),
         ("admin-query", "consumer-runtime/") => targets.consumer.clone(),
         ("admin-query", "producer-connectivity/") => targets.producer.clone(),

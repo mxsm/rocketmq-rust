@@ -456,8 +456,10 @@ fn connect(
             process_budget,
             ready,
         )?;
+        // The accepted session must observe owner cancellation itself so its
+        // deferred cleanup and writer retirement can publish their close report.
         task_group
-            .spawn_operation(&operation, "rocketmq.transport.client-session", session_runner)
+            .spawn_draining_operation(&operation, "rocketmq.transport.client-session", session_runner)
             .map_err(|source| connection_failed(TransportStage::Connect, source))?;
         let (channel, pending_request_owner, session) = deadline
             .timeout(connected_session)
@@ -1202,6 +1204,63 @@ mod lifecycle_tests {
     use super::*;
     use crate::base::pending_request_table::PendingRequestTable;
     use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+
+    #[tokio::test]
+    async fn owner_cancellation_drains_the_session_before_repeated_close_reports() {
+        use tokio::io::AsyncReadExt;
+
+        let runtime = RuntimeContext::from_current("client-owner-cancellation");
+        let service = runtime.service_context("client");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept client");
+            let mut byte = [0];
+            assert_eq!(socket.read(&mut byte).await.expect("read until local close"), 0);
+        });
+        let pending = PendingRequestTable::new();
+        let handler = Arc::new(ProcessorClientInboundOwner::new(
+            DefaultRequestProcessor,
+            pending.clone(),
+            &service.process_budget(),
+        ));
+        let client = TransportSession::<DefaultRequestProcessor>::connect_with_service_context_until(
+            &service,
+            address.to_string(),
+            handler,
+            None,
+            TlsConfig::default(),
+            RequestDeadline::after(Duration::from_secs(1)),
+        )
+        .await
+        .expect("connect client");
+
+        service.task_group().cancel();
+        let report = client.close_with_report(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let completion = client
+            .session
+            .close_completion_snapshot()
+            .await
+            .expect("ordered close publishes completion");
+        assert!(completion.healthy);
+        assert!(completion.writer_healthy);
+        assert_eq!(completion.remaining_inline_tasks, 0);
+        assert_eq!(completion.remaining_resume_tasks, 0);
+        assert_eq!(completion.remaining_wait_permits, 0);
+        assert_eq!(completion.remaining_server_outbound_leases, 0);
+        assert_eq!(completion.writer_queued_items, 0);
+        assert_eq!(completion.writer_queued_bytes, 0);
+        assert_eq!(client.task_lifecycle.operation.active_task_count(), 0);
+        assert_eq!(pending.usage().count, 0);
+        assert_eq!(pending.usage().bytes, 0);
+        let repeated = client.close_with_report(Duration::from_secs(1)).await;
+        assert!(repeated.is_healthy(), "{}", repeated.to_json());
+        time::timeout(Duration::from_secs(1), peer)
+            .await
+            .expect("peer observes closed socket")
+            .expect("peer task completes");
+    }
 
     #[tokio::test]
     async fn request_timeout_cancels_only_the_connection_operation() {

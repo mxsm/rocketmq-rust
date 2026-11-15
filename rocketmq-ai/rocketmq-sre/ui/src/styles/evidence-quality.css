@@ -145,6 +145,74 @@
   border: 1px solid var(--border);
   border-radius: 5px;
 }
+.namesrv-route-summary {
+  min-width: 0;
+  margin-top: 16px;
+}
+.namesrv-route-summary h4,
+.namesrv-route-summary h5 {
+  margin: 0;
+  font-size: 14px;
+}
+.namesrv-route-summary .phase1-definition-grid {
+  padding: 12px 0;
+}
+.namesrv-route-state,
+.namesrv-peer-list > li {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.namesrv-route-state {
+  display: grid;
+  gap: 8px;
+}
+.namesrv-route-state .namesrv-summary-badge {
+  width: fit-content;
+}
+.namesrv-dimensions,
+.namesrv-peer-list {
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+.namesrv-dimensions > li + li,
+.namesrv-peer-list > li + li {
+  margin-top: 10px;
+}
+.namesrv-peer-list h5 {
+  overflow-wrap: anywhere;
+}
+.namesrv-rounds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.namesrv-round-card {
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.namesrv-round-card dl {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+}
+.namesrv-round-card dt {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.namesrv-round-card dd {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+@media (max-width: 480px) {
+  .namesrv-rounds {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .evidence-list-table td,
 .evidence-list-table th {
   font-size: 14px;

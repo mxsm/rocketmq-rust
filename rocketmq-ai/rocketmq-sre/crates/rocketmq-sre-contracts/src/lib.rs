@@ -135,6 +135,7 @@ pub use capability_verification::{
     CAPABILITY_VERIFICATION_SCHEMA_VERSION, CapabilityVerificationLevel, CapabilityVerificationMethod,
     CapabilityVerificationOutcome, CapabilityVerificationRecord, CapabilityVerificationRequest,
 };
+pub use connector::CONNECTOR_RESPONSE_MAX_BYTES;
 pub use connector::ConnectorCapabilityState;
 pub use connector::ConnectorHeartbeat;
 pub use connector::ConnectorQueryEnvelope;

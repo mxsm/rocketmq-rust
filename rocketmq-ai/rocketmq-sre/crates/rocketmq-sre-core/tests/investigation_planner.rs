@@ -19,6 +19,8 @@ use serde_json::json;
 
 #[path = "investigation_planner/compiled_fields.rs"]
 mod compiled_fields;
+#[path = "investigation_planner/namesrv_route.rs"]
+mod namesrv_route;
 #[path = "investigation_planner/send_latency.rs"]
 mod send_latency;
 

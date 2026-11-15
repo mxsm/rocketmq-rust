@@ -37,6 +37,9 @@ pub(super) fn plan(
     if run.in_flight_count() != 0 {
         return Ok(InvestigationPlanDecision::Wait);
     }
+    if super::investigation_namesrv_domain_continuity(&input).blocks_progress() {
+        return Ok(stop(InvestigationStopReason::NoProgress));
+    }
     let remaining = remaining(run)?;
     let packs: Vec<_> = run
         .effective_packs

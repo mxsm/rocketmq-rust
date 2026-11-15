@@ -90,6 +90,7 @@ const templateLabels: Record<InspectionTemplate, string> = {
   disaster_recovery: "DR",
   store_pressure_legacy_v1: "Store v1（历史布尔契约）",
   send_latency_legacy_v1: "发送延迟 v1（历史布尔契约）",
+  namesrv_route_legacy_v1: "NameServer 路由 v1（历史布尔契约）",
 };
 
 export function AskSrePage() {

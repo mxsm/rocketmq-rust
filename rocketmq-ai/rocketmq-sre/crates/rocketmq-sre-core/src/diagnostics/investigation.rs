@@ -23,12 +23,14 @@ use rocketmq_sre_contracts::{
 use super::{DiagnosticPackRegistry, DiagnosticReport, FindingOutcome};
 
 mod aggregation;
+mod domain;
 mod planning;
 mod quality;
 mod rule_inputs;
 pub use aggregation::{
     InvestigationAggregateDecision, aggregate_investigation, investigation_conclusion_evidence_available,
 };
+pub use domain::{NamesrvDomainContinuity, investigation_namesrv_anchor_ids, investigation_namesrv_domain_continuity};
 pub use rule_inputs::investigation_rule_inputs;
 
 /// Trusted service resolution of a fixed compiled requirement. No URL, query

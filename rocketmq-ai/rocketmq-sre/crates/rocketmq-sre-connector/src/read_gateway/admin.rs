@@ -20,18 +20,22 @@ use super::ReadAdapterKind;
 use super::ReadContext;
 use crate::ConnectorError;
 use crate::ConnectorFailure;
-use crate::config::AdminSourceConfig;
+use crate::config::{ConnectorConfig, NamesrvRouteConfig, SourceLimits};
 use crate::sources::AdminQuerySource;
 use crate::sources::SourceOutput;
 
 pub(crate) struct AdminReadAdapter {
     source: AdminQuerySource,
+    routes: std::collections::BTreeMap<rocketmq_sre_contracts::ClusterId, NamesrvRouteConfig>,
+    limits: SourceLimits,
 }
 
 impl AdminReadAdapter {
-    pub(crate) fn new(config: Option<AdminSourceConfig>) -> Self {
+    pub(crate) fn new(config: &ConnectorConfig) -> Self {
         Self {
-            source: AdminQuerySource::new(config),
+            source: AdminQuerySource::new(config.admin_source.clone()),
+            routes: config.namesrv_routes.clone(),
+            limits: config.source_limits.clone(),
         }
     }
 
@@ -60,6 +64,18 @@ impl ReadAdapter for AdminReadAdapter {
     ) -> Result<SourceOutput, ConnectorError> {
         match request {
             CanonicalRead::Admin(resource) => {
+                if let Some(topic) = resource.strip_prefix("namesrv-route/") {
+                    let Some(config) = self.routes.get(&context.cluster_id) else {
+                        return Ok(SourceOutput::not_production_verified(
+                            "admin-query",
+                            "namesrv_route_peers_unconfigured",
+                        ));
+                    };
+                    return self
+                        .source
+                        .query_namesrv_route(context, topic, config, &self.limits)
+                        .await;
+                }
                 self.source
                     .query(context.external_cluster, resource, context.deadline, context.cancel)
                     .await

@@ -1,0 +1,17 @@
+# Current implementation metadata; no operator registration policy is inferred.
+pack: namesrv-route.v2
+version: 2.0.0
+required:
+  source: admin-query
+  resource_prefix: namesrv-route/
+  exposure: admin_rpc
+temporal_semantics: current_context_only
+historical_coverage: unknown
+max_age_seconds: 300
+comparison_engineering_limits:
+  max_round_milliseconds: 2000
+  max_acquisition_milliseconds: 5000
+conclusive_result_supported: false
+compatibility:
+  retained_pack: namesrv-route.v1
+  qualification_baseline: frozen_32_versions_only

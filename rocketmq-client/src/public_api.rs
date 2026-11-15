@@ -137,6 +137,10 @@ pub use crate::admin::TopicConfigPatchResult;
 pub use crate::admin::TopicConfigVersioned;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::TopicOffsetMutationFailureCode;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::{
+    MQAdminNameserverRouteReadExt, NameserverReadOperation, NameserverReadReply, NameserverReplyStatus,
+};
 pub use crate::base::client_config::ClientConfig;
 pub use crate::base::client_options::ClientOptions;
 pub use crate::cluster_session::{

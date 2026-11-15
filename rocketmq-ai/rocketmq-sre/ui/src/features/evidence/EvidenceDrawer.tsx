@@ -33,6 +33,8 @@ import {
 } from "./useEvidenceMetadata";
 import { SendLatencySummary } from "./SendLatencySummary";
 import { sendLatencyDisplay, type LatencyEvidence } from "./sendLatencyPresentation";
+import { NamesrvRouteSummary } from "./NamesrvRouteSummary";
+import { namesrvRouteDisplay } from "./namesrvRoutePresentation";
 
 interface EvidenceDrawerProps {
   evidenceId: string;
@@ -97,8 +99,14 @@ function EvidenceDrawerSession({
     async (signal: AbortSignal) => {
       if (!canRead || !contentKey || requested !== contentKey) return undefined;
       const content = await api.getEvidenceContent(evidenceId, signal);
+      const namesrv = displayBinding ? namesrvRouteDisplay(content, displayBinding) : undefined;
       return {
-        json: safeEvidenceJson(content),
+        // Route observations have a closed display contract. Their audit view
+        // must not reflect unexpected endpoint, configuration or error fields.
+        json: namesrv
+          ? namesrv.kind === "summary" ? safeEvidenceJson(namesrv) : undefined
+          : safeEvidenceJson(content),
+        namesrv,
         latency: displayBinding
           ? sendLatencyDisplay(content, displayBinding)
           : undefined,
@@ -246,9 +254,9 @@ function EvidenceDrawerSession({
               )}
               {evidenceOutsideWindow(evidence, scope) && (
                 <p className="inline-alert warning" role="status">
-                  {content.data?.latency?.kind === "summary"
-                    ? m.collectionOutside
-                    : m.outside}
+                  {content.data?.namesrv?.kind === "summary"
+                    ? m.currentContextOutside
+                    : content.data?.latency?.kind === "summary" ? m.collectionOutside : m.outside}
                 </p>
               )}
               <DefinitionGrid
@@ -283,7 +291,11 @@ function EvidenceDrawerSession({
               {evidence.warnings?.length ? (
                 <ul className="evidence-warning-list">
                   {evidence.warnings.map((warning, index) => (
-                    <li key={index}>{warning}</li>
+                    <li key={index}>
+                      {warning === "namesrv_current_context_only"
+                        ? m.namesrvCurrentContextOnly
+                        : warning}
+                    </li>
                   ))}
                 </ul>
               ) : null}
@@ -362,12 +374,15 @@ function EvidenceDrawerSession({
                     {content.data.latency && (
                       <SendLatencySummary display={content.data.latency} />
                     )}
-                    {content.data.latency?.kind === "summary" ? (
+                    {content.data.namesrv && (
+                      <NamesrvRouteSummary display={content.data.namesrv} />
+                    )}
+                    {content.data.latency?.kind === "summary" || content.data.namesrv?.kind === "summary" ? (
                       <details className="investigation-audit-details">
                         <summary>{m.contentAudit}</summary>
                         <pre>{content.data.json}</pre>
                       </details>
-                    ) : !(
+                    ) : !content.data.namesrv && !(
                       content.data.latency?.kind === "invalid" &&
                       content.data.latency.reason === "scope"
                     ) && <pre>{content.data.json}</pre>}

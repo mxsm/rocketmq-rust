@@ -387,6 +387,8 @@ pub(super) fn diagnostic_pack_for_intent(intent: &ConversationQueryIntent) -> &'
     match intent.kind {
         ConversationQueryKind::ConsumerLag => "consumer-lag.v2",
         ConversationQueryKind::BrokerRuntime => "broker-health.v1",
+        // This existing operation still collects the legacy pooled MCP view.
+        // A version label alone cannot turn that result into direct-peer proof.
         ConversationQueryKind::TopicDescribe => "namesrv-route.v1",
         ConversationQueryKind::ClusterOverview | ConversationQueryKind::TopicList => "cluster-topology.v1",
         ConversationQueryKind::MetricInstant | ConversationQueryKind::MetricRange => {
@@ -572,6 +574,7 @@ mod tests {
             .expect("valid topic resource")
             .expect("topic intent");
         assert_eq!(topic.resource, "namesrv-route/orders");
+        assert_eq!(topic.source, "rocketmq-mcp");
         assert_eq!(diagnostic_pack_for_intent(&topic), "namesrv-route.v1");
     }
 
@@ -596,6 +599,54 @@ mod tests {
                 .expect("metric intent");
             assert_eq!(diagnostic_pack_for_intent(&intent), expected);
         }
+    }
+
+    #[test]
+    fn fixed_mcp_topic_description_keeps_its_legacy_source_contract_through_evaluation() {
+        use rocketmq_sre_contracts::*;
+        use rocketmq_sre_core::diagnostics::{DiagnosticEngine, DiagnosticStatus, full_registry};
+        let call = ModelToolCall {
+            id: "legacy-topic-fixture".to_owned(),
+            name: "describe_topic".to_owned(),
+            arguments: json!({"topic":"orders"}),
+        };
+        let model = model_intent(&call, Some("topics/orders"), Some(300)).unwrap();
+        let deterministic = deterministic_intent("topic route", Some("topics/orders"), Some(300))
+            .unwrap()
+            .unwrap();
+        assert_eq!(model, deterministic);
+        assert_eq!(model.source, "rocketmq-mcp");
+        let at = Utc::now();
+        let snapshot = EvidenceSnapshot::capture(
+            EvidenceQuery {
+                query_id: QueryId::new(),
+                correlation_id: CorrelationId::new(),
+                tenant_id: TenantId::new(),
+                cluster_id: ClusterId::new(),
+                source: model.source.clone(),
+                resource: model.resource.clone(),
+                time_range: TimeRange::new(at - chrono::Duration::seconds(300), at).unwrap(),
+            },
+            current_evidence_schema(),
+            at,
+            EvidenceContent::Inline(
+                json!({"route_divergent":false,"registration_stale":false,"broker_unreachable":false}),
+            ),
+        )
+        .unwrap();
+        // Frozen Boolean contract fixture, not a real-source qualification.
+        let engine = DiagnosticEngine::new(full_registry().unwrap());
+        assert_eq!(
+            engine
+                .evaluate(diagnostic_pack_for_intent(&model), std::slice::from_ref(&snapshot))
+                .unwrap()
+                .status,
+            DiagnosticStatus::Healthy
+        );
+        assert_eq!(
+            engine.evaluate("namesrv-route.v2", &[snapshot]).unwrap().status,
+            DiagnosticStatus::Inconclusive
+        );
     }
 
     #[test]

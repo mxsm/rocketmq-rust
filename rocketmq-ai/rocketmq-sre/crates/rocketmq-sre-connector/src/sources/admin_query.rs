@@ -114,6 +114,30 @@ impl AdminQuerySource {
         self.config.is_some()
     }
 
+    pub(crate) async fn query_namesrv_route(
+        &self,
+        context: &crate::read_gateway::ReadContext<'_>,
+        topic: &str,
+        config: &crate::config::NamesrvRouteConfig,
+        limits: &crate::config::SourceLimits,
+    ) -> Result<SourceOutput, ConnectorError> {
+        validate_identifier(topic, "topic")?;
+        let mut state = self.state.lock().await;
+        let session = state
+            .session
+            .as_mut()
+            .ok_or_else(|| ConnectorError::source("read-only Admin source is not ready"))?;
+        let timeout = self
+            .config
+            .as_ref()
+            .ok_or_else(|| ConnectorError::source("read-only Admin source is not configured"))?
+            .request_timeout;
+        Box::pin(super::namesrv_route::collect(
+            session, context, topic, config, limits, timeout,
+        ))
+        .await
+    }
+
     pub(crate) async fn start(&self, context: ChildServiceContext) -> Result<(), ConnectorError> {
         let Some(config) = &self.config else {
             return Ok(());

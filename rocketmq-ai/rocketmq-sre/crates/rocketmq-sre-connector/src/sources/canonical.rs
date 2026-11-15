@@ -187,6 +187,17 @@ fn resolve_mcp(resource: &str) -> Option<CanonicalResourceRoute> {
 }
 
 fn resolve_admin(resource: &str) -> Option<CanonicalResourceRoute> {
+    if let Some(topic) = resource.strip_prefix("namesrv-route/") {
+        return Some(identifier(topic).map_or_else(
+            || not_verified("canonical_resource_parameters_unavailable"),
+            |_| {
+                query(
+                    CanonicalQuery::Admin(resource.to_owned()),
+                    CanonicalProjection::RouteDiagnostics(RouteDiagnosticProfile::NameServer),
+                )
+            },
+        ));
+    }
     if let Some(group) = resource.strip_prefix("consumer-runtime/") {
         return Some(identifier(group).map_or_else(
             || not_verified("canonical_resource_parameters_unavailable"),
