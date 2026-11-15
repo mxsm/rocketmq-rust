@@ -2466,6 +2466,16 @@ expression: surface
                   }
                 ]
               },
+              "store_pressure": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StorePressureDiagnostics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "tiered": {
                 "$ref": "#/$defs/TieredDispatchDiagnostics"
               },
@@ -2849,6 +2859,64 @@ expression: surface
             ],
             "type": "string"
           },
+          "StoreDiskUsageDiagnostics": {
+            "properties": {
+              "commit_log_expected_paths": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "commit_log_legacy_min_used_ratio": {
+                "format": "double",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "commit_log_max_used_ratio": {
+                "format": "double",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "commit_log_observed_paths": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "commit_log_samples_complete": {
+                "type": "boolean"
+              },
+              "commit_log_unknown_paths": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "consume_queue_used_ratio": {
+                "format": "double",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "commit_log_observed_paths",
+              "commit_log_unknown_paths",
+              "commit_log_samples_complete"
+            ],
+            "type": "object"
+          },
           "StoreHealthDiagnostics": {
             "properties": {
               "dispatch_behind_bytes": {
@@ -2895,6 +2963,210 @@ expression: surface
               "ha_pending_oldest_wait_millis",
               "sync_flush"
             ],
+            "type": "object"
+          },
+          "StorePressureDiagnostics": {
+            "description": "Safe Store observations from the public read-only Admin contract. Absence remains distinct from a measured zero; no filesystem roots are exported.",
+            "properties": {
+              "configuration_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "disk": {
+                "$ref": "#/$defs/StoreDiskUsageDiagnostics"
+              },
+              "generation_status": {
+                "$ref": "#/$defs/StorePressureGenerationStatus"
+              },
+              "observed_at_millis": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "policy": {
+                "$ref": "#/$defs/StorePressurePolicyDiagnostics"
+              },
+              "runtime": {
+                "$ref": "#/$defs/StorePressureRuntimeDiagnostics"
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/StorePressureObservationSource"
+              },
+              "tiered_configured": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "schema_version",
+              "source",
+              "generation_status",
+              "runtime",
+              "disk",
+              "policy"
+            ],
+            "type": "object"
+          },
+          "StorePressureGenerationStatus": {
+            "enum": [
+              "matched_runtime_configuration",
+              "store_policy_generation_unverified"
+            ],
+            "type": "string"
+          },
+          "StorePressureObservationSource": {
+            "enum": [
+              "broker_runtime_info"
+            ],
+            "type": "string"
+          },
+          "StorePressurePolicyDiagnostics": {
+            "properties": {
+              "clean_file_forcibly_enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "disk_clean_forcibly_used_ratio": {
+                "format": "double",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "disk_max_used_ratio": {
+                "format": "double",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "disk_warning_used_ratio": {
+                "format": "double",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "dispatch_backlog_reject_bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "page_cache_busy_timeout_millis": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sync_flush_backlog_reject_depth": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sync_flush_backlog_reject_wait_millis": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "StorePressureRuntimeDiagnostics": {
+            "properties": {
+              "dispatch_behind_bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "last_flush_error": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "os_page_cache_busy": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "shutdown": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "sync_flush_oldest_wait_millis": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sync_flush_queue_depth": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sync_flush_timeout_total": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "transient_store_pool_deficient": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "writeable": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
             "type": "object"
           },
           "SyncFlushDiagnostics": {
