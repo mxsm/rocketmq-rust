@@ -32,6 +32,7 @@ use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_deadline::ABORT_CONFIRMATION_TIMEOUT;
+use crate::CancellationObserver;
 use crate::RuntimeOperation;
 
 /// Short-lived tasks of one owner, counted instead of registered one by one.
@@ -54,7 +55,8 @@ pub struct CountedTaskSet {
 
 pub(super) struct CountedTaskSetInner {
     group: TaskGroup,
-    stop: CancellationToken,
+    // Checked and awaited by every task, so through an observer rather than the token's lock.
+    stop: CancellationObserver,
     active: AtomicUsize,
     closed: AtomicBool,
     // Set by a waiter; only then does a task that leaves the set idle notify `idle`.
@@ -69,7 +71,7 @@ impl TaskGroup {
     pub fn counted_task_set(&self, stop: CancellationToken) -> CountedTaskSet {
         let inner = Arc::new(CountedTaskSetInner {
             group: self.clone(),
-            stop,
+            stop: CancellationObserver::new(stop),
             active: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
             draining: AtomicBool::new(false),
@@ -89,7 +91,7 @@ pub(super) fn stop_counted_sets(sets: &parking_lot::Mutex<Vec<Weak<CountedTaskSe
     let live: Vec<_> = sets.lock().iter().filter_map(Weak::upgrade).collect();
     live.iter()
         .map(|set| {
-            set.stop.cancel();
+            set.stop.token().cancel();
             set.active.load(Ordering::SeqCst)
         })
         .sum()
@@ -154,7 +156,7 @@ impl CountedTaskSet {
         if self.wait_idle(deadline.instant()).await {
             return true;
         }
-        self.inner.stop.cancel();
+        self.inner.stop.token().cancel();
         let _ = self.wait_idle(Instant::now() + ABORT_CONFIRMATION_TIMEOUT).await;
         false
     }

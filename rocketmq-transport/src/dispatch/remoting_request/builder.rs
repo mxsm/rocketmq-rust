@@ -15,8 +15,8 @@
 use std::time::Instant;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::CancellationObserver;
 use rocketmq_runtime::TaskGroup;
-use tokio_util::sync::CancellationToken;
 
 use super::IngressRequestView;
 use super::RemotingRequest;
@@ -44,7 +44,7 @@ pub(crate) struct RequestLifecycleProvenance {
     parent_task_group: TaskGroup,
     /// The session's request stop token, for network sessions; see
     /// [`RequestControlView::from_meta_with_session_stop`].
-    session_stop: Option<CancellationToken>,
+    session_stop: Option<CancellationObserver>,
 }
 
 impl RequestLifecycleProvenance {
@@ -121,7 +121,7 @@ impl RemotingRequestBuilder {
         let control = RequestControlView::from_meta_with_session_stop(
             &meta,
             lifecycle.session.state().clone(),
-            &lifecycle.parent_task_group,
+            lifecycle.parent_task_group,
             lifecycle.session_stop,
         );
         Self {

@@ -21,6 +21,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
+use rocketmq_runtime::CancellationObserver;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupId;
@@ -157,19 +158,32 @@ pub struct RequestControlView {
 struct RequestLifecycle {
     session: SessionStateView,
     parent_task_group_id: TaskGroupId,
-    parent_cancellation: CancellationToken,
-    /// For a network request, the session's request stop token: a child of
-    /// `parent_cancellation` that the session cancels whenever it publishes its close. Waiting on
-    /// it alone replaces waiting on both session watch channels and the parent token, whose
-    /// waiter lists every request of the session registers with.
-    session_stop: Option<CancellationToken>,
+    stop: LifecycleStop,
+}
+
+/// How a request observes the cancellation of its parent task group.
+enum LifecycleStop {
+    /// A network request observes its session's request stop: a child of the parent task group's
+    /// token that the session cancels whenever it publishes its close or loses its close
+    /// publisher. Waiting on it alone replaces waiting on both session watch channels and the
+    /// parent token, and the observer answers checks and waits without the token's lock, which
+    /// every request of the session would otherwise share.
+    ///
+    /// The parent's cancellation cancels the stop before it returns, so the parent itself is
+    /// read only to tell a parent cancellation from a session close once the stop is cancelled.
+    Session {
+        stop: CancellationObserver,
+        parent: TaskGroup,
+    },
+    /// Other requests check and wait on the session channels and the parent token directly.
+    Parent(CancellationToken),
 }
 
 impl RequestControlView {
     /// Creates a view that waits on the session channels and the parent token directly.
     #[cfg(test)]
     pub(crate) fn from_meta(meta: &RequestMeta, session: SessionStateView, parent_task_group: &TaskGroup) -> Self {
-        Self::from_meta_with_session_stop(meta, session, parent_task_group, None)
+        Self::from_meta_with_session_stop(meta, session, parent_task_group.clone(), None)
     }
 
     /// Creates an observer view from the canonical metadata and its lifecycle owners.
@@ -178,21 +192,28 @@ impl RequestControlView {
     /// layer observes the same absolute expiry instant and original budget.
     ///
     /// With `session_stop`, the waits observe that token instead of the session channels and
-    /// the parent token. It must be a child of `parent_task_group`'s token that is cancelled
+    /// the parent token. It must observe a child of `parent_task_group`'s token that is cancelled
     /// whenever `session` publishes its close or loses its close publisher.
     pub(crate) fn from_meta_with_session_stop(
         meta: &RequestMeta,
         session: SessionStateView,
-        parent_task_group: &TaskGroup,
-        session_stop: Option<CancellationToken>,
+        parent_task_group: TaskGroup,
+        session_stop: Option<CancellationObserver>,
     ) -> Self {
+        let parent_task_group_id = parent_task_group.id();
+        let stop = match session_stop {
+            Some(stop) => LifecycleStop::Session {
+                stop,
+                parent: parent_task_group,
+            },
+            None => LifecycleStop::Parent(parent_task_group.cancellation_token()),
+        };
         Self {
             deadline: meta.deadline(),
             lifecycle: Arc::new(RequestLifecycle {
                 session,
-                parent_task_group_id: parent_task_group.id(),
-                parent_cancellation: parent_task_group.cancellation_token(),
-                session_stop,
+                parent_task_group_id,
+                stop,
             }),
         }
     }
@@ -223,9 +244,15 @@ impl RequestControlView {
     /// or its parent task group is cancelled.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.deadline.is_some_and(RequestDeadline::is_expired)
-            || self.lifecycle.session.is_closed()
-            || self.lifecycle.parent_cancellation.is_cancelled()
+        let expired = || self.deadline.is_some_and(RequestDeadline::is_expired);
+        match &self.lifecycle.stop {
+            // The stop covers the parent; the session channels still answer for a close that the
+            // session published before it cancelled the stop.
+            LifecycleStop::Session { stop, .. } => {
+                stop.is_cancelled() || expired() || self.lifecycle.session.is_closed()
+            }
+            LifecycleStop::Parent(parent) => expired() || self.lifecycle.session.is_closed() || parent.is_cancelled(),
+        }
     }
 
     pub(crate) fn session_is_closed(&self) -> bool {
@@ -233,7 +260,12 @@ impl RequestControlView {
     }
 
     pub(crate) fn parent_is_cancelled(&self) -> bool {
-        self.lifecycle.parent_cancellation.is_cancelled()
+        match &self.lifecycle.stop {
+            LifecycleStop::Session { stop, parent } => {
+                stop.is_cancelled() && parent.cancellation_token().is_cancelled()
+            }
+            LifecycleStop::Parent(parent) => parent.is_cancelled(),
+        }
     }
 
     /// Derives the lifecycle-only control used to deliver a boundary rejection.
@@ -267,25 +299,23 @@ impl RequestControlView {
     }
 
     async fn stopped(&self, deadline: Option<RequestDeadline>) {
-        let RequestLifecycle {
-            session,
-            parent_cancellation,
-            session_stop,
-            ..
-        } = &*self.lifecycle;
+        let RequestLifecycle { session, stop, .. } = &*self.lifecycle;
 
-        if let Some(session_stop) = session_stop {
-            match deadline {
-                Some(deadline) => {
-                    tokio::select! {
-                        _ = deadline.timeout(std::future::pending::<()>()) => {}
-                        () = session_stop.cancelled() => {}
+        let parent_cancellation = match stop {
+            LifecycleStop::Session { stop, .. } => {
+                match deadline {
+                    Some(deadline) => {
+                        tokio::select! {
+                            _ = deadline.timeout(std::future::pending::<()>()) => {}
+                            () = stop.cancelled() => {}
+                        }
                     }
+                    None => stop.cancelled().await,
                 }
-                None => session_stop.cancelled().await,
+                return;
             }
-            return;
-        }
+            LifecycleStop::Parent(parent) => parent,
+        };
         match deadline {
             Some(deadline) => {
                 tokio::select! {
@@ -504,8 +534,8 @@ mod tests {
         let closing = RequestControlView::from_meta_with_session_stop(
             &RequestMeta::new(Instant::now(), None),
             session,
-            &parent,
-            Some(session_stop.clone()),
+            parent.clone(),
+            Some(CancellationObserver::new(session_stop.clone())),
         );
         assert!(tokio::time::timeout(Duration::from_secs(1), closing.cancelled())
             .await
@@ -519,8 +549,8 @@ mod tests {
         let expiring = RequestControlView::from_meta_with_session_stop(
             &RequestMeta::new(Instant::now(), Some(deadline)),
             session,
-            &parent,
-            Some(parent.cancellation_token().child_token()),
+            parent.clone(),
+            Some(CancellationObserver::new(parent.cancellation_token().child_token())),
         );
         tokio::time::advance(Duration::from_secs(5)).await;
         expiring.cancelled().await;
