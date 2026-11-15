@@ -24,6 +24,7 @@ use crate::workflow::{WorkflowEventBus, WorkflowService};
 
 mod critic;
 mod history;
+mod observation;
 mod protocol;
 mod races;
 mod selectors;

@@ -9,6 +9,7 @@ import { extendBoundedAutonomySettings } from "./openapi/bounded_autonomy_settin
 import { extendModelCapabilities } from "./openapi/model_capabilities.mjs";
 import { extendInspectionTemplates } from "./openapi/inspection_templates.mjs";
 import { extendActionReadiness } from "./openapi/action_readiness.mjs";
+import { extendExecutionObservation } from "./openapi/execution_observation.mjs";
 import { extendCapabilityQuality } from "./openapi/capability_quality.mjs";
 import { extendInvestigationRunContracts, extendInvestigationRunTransport } from "./openapi/investigation_run.mjs";
 import { extendOperationsAnalytics } from "./openapi/operations_analytics.mjs";
@@ -274,6 +275,8 @@ function validateDocument() {
 extendInspectionTemplates({ document,
   schema: JSON.parse(readFileSync(join(root, "schemas", "inspection-template.schema.json"), "utf8")) });
 extendActionReadiness({ document, readSchema: (filename) =>
+  JSON.parse(readFileSync(join(root, "schemas", filename), "utf8")) });
+extendExecutionObservation({ document, readSchema: (filename) =>
   JSON.parse(readFileSync(join(root, "schemas", filename), "utf8")) });
 validateDocument();
 writeFileSync(output, `${JSON.stringify(document, null, 2)}\n`);

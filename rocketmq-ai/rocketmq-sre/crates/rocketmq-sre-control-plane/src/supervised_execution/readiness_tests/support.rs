@@ -227,6 +227,10 @@ impl Fixture {
         call(self.router(), path, actor, body).await
     }
 
+    pub(super) async fn get(&self, path: &str, actor: &AuthContext) -> (StatusCode, Value) {
+        call_method(self.router(), "GET", path, actor, Value::Null).await
+    }
+
     pub(super) async fn readiness(&self, actor: &AuthContext, request: &ActionReadinessRequest) -> ActionReadinessView {
         let (status, body) = self
             .call(
@@ -321,6 +325,16 @@ pub(super) fn scope(actor: &AuthContext, revision: &str) -> Arc<ActionTargetScop
 }
 
 pub(super) async fn call(router: Router, path: &str, actor: &AuthContext, body: Value) -> (StatusCode, Value) {
+    call_method(router, "POST", path, actor, body).await
+}
+
+async fn call_method(
+    router: Router,
+    method: &str,
+    path: &str,
+    actor: &AuthContext,
+    body: Value,
+) -> (StatusCode, Value) {
     let mut header = Header::new(Algorithm::RS256);
     header.kid = Some("d18-key".to_owned());
     let token = jsonwebtoken::encode(&header, &json!({"iss":ISSUER,"aud":AUDIENCE,"sub":actor.subject,
@@ -330,7 +344,7 @@ pub(super) async fn call(router: Router, path: &str, actor: &AuthContext, body: 
     let response = router
         .oneshot(
             Request::builder()
-                .method("POST")
+                .method(method)
                 .uri(path)
                 .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {token}"))

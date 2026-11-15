@@ -37,6 +37,7 @@ mod dr;
 mod error;
 mod evidence;
 mod execution;
+mod execution_observation;
 mod fencing;
 mod finops;
 mod fleet;
@@ -68,6 +69,7 @@ mod simulation;
 mod slo;
 mod topology;
 mod verification;
+mod verification_window;
 mod version;
 
 pub use action::CompensationMode;
@@ -226,6 +228,14 @@ pub use execution::ExecutionState;
 pub use execution::ExecutionTransition;
 pub use execution::StepIntent;
 pub use execution::StepResult;
+pub use execution_observation::{
+    EXECUTION_OBSERVATION_SCHEMA_VERSION, ExecutionAttemptObservation, ExecutionLookupRequest, ExecutionLookupStatus,
+    ExecutionLookupView, ExecutionObservationEvent, ExecutionObservationEventKind, ExecutionObservationFact,
+    ExecutionObservationReason, ExecutionObservationSource, ExecutionObservationState, ExecutionObservationView,
+    ExecutionReceiptReference, ExecutionStepObservation, ExecutionVerificationObservation, ExecutionWindowProofState,
+    MAX_EXECUTION_OBSERVATION_ATTEMPTS, MAX_EXECUTION_OBSERVATION_STEPS, MAX_EXECUTION_OBSERVATION_TIMELINE,
+    MAX_EXECUTION_OBSERVATION_VERIFICATIONS, MAX_PLAN_EXECUTION_RECEIPTS, PlanExecutionPage, VerificationProofOrigin,
+};
 pub use fencing::ActivateLeaseRequest;
 pub use fencing::BeginLeaseTakeoverRequest;
 pub use fencing::BeginLeaseTakeoverResponse;
@@ -567,10 +577,16 @@ pub use slo::SloDimension;
 pub use topology::TopologyNode;
 pub use topology::TopologySnapshot;
 pub use verification::EXECUTION_VERIFICATION_SCHEMA_VERSION;
+pub use verification::ExecutionSliBinding;
 pub use verification::ExecutionSliObservation;
 pub use verification::ExecutionSliQuery;
+pub use verification::ExecutionSliSourceFacts;
 pub use verification::VerificationOutcome;
 pub use verification::VerificationResult;
+pub use verification_window::{
+    VERIFICATION_WINDOW_PROOF_SCHEMA_VERSION, VerificationWindowPolicy, VerificationWindowProof,
+    VerificationWindowSample,
+};
 pub use version::SchemaVersion;
 
 /// UTC timestamp type used by cross-crate SRE contracts.

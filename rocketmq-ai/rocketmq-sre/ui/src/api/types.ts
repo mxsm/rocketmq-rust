@@ -96,6 +96,10 @@ export type SubmitExecutionRequest =
   ApiSchemas["SubmitExecutionRequest"];
 export type ExecutionSubmissionView =
   ApiSchemas["ExecutionSubmissionView"];
+export type ExecutionObservationView = ApiSchemas["ExecutionObservationView"];
+export type ExecutionLookupRequest = ApiSchemas["ExecutionLookupRequest"];
+export type ExecutionLookupView = ApiSchemas["ExecutionLookupView"];
+export type PlanExecutionPage = ApiSchemas["PlanExecutionPage"];
 export type AuditPage = ApiSchemas["AuditPage"];
 export type QuarantinePage = ApiSchemas["QuarantinePage"];
 export type ClearQuarantineRequest =

@@ -714,6 +714,22 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
 fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalError> {
     Ok(vec![
         (
+            "execution-observation-view.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::ExecutionObservationView))?,
+        ),
+        (
+            "execution-lookup-request.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::ExecutionLookupRequest))?,
+        ),
+        (
+            "execution-lookup-view.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::ExecutionLookupView))?,
+        ),
+        (
+            "plan-execution-page.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::PlanExecutionPage))?,
+        ),
+        (
             "action-readiness-request.schema.json",
             serde_json::to_value(schema_for!(rocketmq_sre_contracts::ActionReadinessRequest))?,
         ),
@@ -1175,6 +1191,22 @@ signals:
     #[test]
     fn committed_schema_fixtures_match_public_contracts() {
         let committed = [
+            (
+                "execution-observation-view.schema.json",
+                include_str!("../../../schemas/execution-observation-view.schema.json"),
+            ),
+            (
+                "execution-lookup-request.schema.json",
+                include_str!("../../../schemas/execution-lookup-request.schema.json"),
+            ),
+            (
+                "execution-lookup-view.schema.json",
+                include_str!("../../../schemas/execution-lookup-view.schema.json"),
+            ),
+            (
+                "plan-execution-page.schema.json",
+                include_str!("../../../schemas/plan-execution-page.schema.json"),
+            ),
             (
                 "action-readiness-request.schema.json",
                 include_str!("../../../schemas/action-readiness-request.schema.json"),

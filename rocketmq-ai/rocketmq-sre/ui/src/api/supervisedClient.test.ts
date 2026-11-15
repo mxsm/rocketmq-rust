@@ -17,6 +17,29 @@ afterEach(() => {
 });
 
 describe("createSupervisedSreApi", () => {
+  it("reads observation and original-intent discovery through fixed scoped endpoints without resubmitting", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    const api = createSupervisedSreApi({ token: "synthetic-token", tenantId: "tenant-a", clusterIds: ["cluster-a"], subject: "operator-a", roles: ["operator"] });
+    const signal = new AbortController().signal;
+    const input = { plan_id: "plan/one", plan_hash: "sha256:" + "a".repeat(64), precondition_hash: "sha256:" + "b".repeat(64), idempotency_key: "original-key" };
+    await api.getExecutionObservation("execution/one", signal);
+    await api.lookupExecution(input, signal);
+    await api.listPlanExecutions("plan/one", input.plan_hash, signal);
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+      "/v1/executions/execution%2Fone/observation", "/v1/executions/lookup",
+      "/v1/plans/plan%2Fone/executions?plan_hash=sha256%3A" + "a".repeat(64),
+    ]);
+    expect(fetch.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST", "GET"]);
+    expect(fetch.mock.calls.every(([, init]) => init?.signal === signal)).toBe(true);
+    expect(JSON.parse(String(fetch.mock.calls[1][1]?.body))).toEqual(input);
+    for (const [, init] of fetch.mock.calls) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer synthetic-token");
+      expect(headers.get("X-RocketMQ-Subject")).toBe("operator-a");
+    }
+    expect(fetch.mock.calls.some(([url]) => String(url) === "/v1/executions")).toBe(false);
+  });
   it("uses the complete Phase 3 supervised workflow surface and scoped headers", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

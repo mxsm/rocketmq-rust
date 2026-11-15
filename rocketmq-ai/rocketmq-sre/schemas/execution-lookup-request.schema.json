@@ -1,0 +1,34 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Original accepted intent selector. Reading it never retries execution.",
+  "properties": {
+    "idempotency_key": {
+      "type": "string"
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "precondition_hash": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan_id",
+    "plan_hash",
+    "precondition_hash",
+    "idempotency_key"
+  ],
+  "title": "ExecutionLookupRequest",
+  "type": "object"
+}

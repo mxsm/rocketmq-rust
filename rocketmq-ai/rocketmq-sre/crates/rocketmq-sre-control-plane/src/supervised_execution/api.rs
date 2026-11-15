@@ -50,6 +50,8 @@ use crate::observability::CORRELATION_ID_HEADER;
 use crate::workflow::ConfirmDiagnosisExecutionRequest;
 use crate::workflow::DiagnosisExecutionConfirmation;
 
+mod observation;
+
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -66,6 +68,7 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route("/v1/plans", post(create_plan).layer(DefaultBodyLimit::max(256 * 1024)))
         .route("/v1/plans/{id}", get(get_plan))
+        .route("/v1/plans/{id}/executions", get(observation::plan_executions))
         .route(
             "/v1/plans/{id}/critic",
             post(review_plan_with_critic).layer(DefaultBodyLimit::max(32 * 1024)),
@@ -83,6 +86,14 @@ pub(crate) fn routes() -> Router<AppState> {
             post(submit_execution).layer(DefaultBodyLimit::max(32 * 1024)),
         )
         .route("/v1/executions/{id}", get(get_execution))
+        .route(
+            "/v1/executions/{id}/observation",
+            get(observation::execution_observation),
+        )
+        .route(
+            "/v1/executions/lookup",
+            post(observation::lookup).layer(DefaultBodyLimit::max(8 * 1024)),
+        )
         .route("/v1/audit/{correlation_id}", get(get_audit))
         .route("/v1/resource-quarantines", get(list_quarantines))
         .route(

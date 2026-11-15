@@ -38,6 +38,7 @@ pub struct ExecutorConfig {
     pub(crate) lease_ttl_seconds: u32,
     pub(crate) resource_lock_ttl: Duration,
     pub(crate) verification_poll_interval: Duration,
+    pub(crate) verification_profiles: crate::VerificationProfiles,
     pub(crate) shutdown_timeout: Duration,
     pub(crate) dev_insecure_http: bool,
 }
@@ -73,6 +74,10 @@ impl ExecutorConfig {
             return Err(ExecutorError::Configuration);
         }
         let shutdown_timeout = duration_env("ROCKETMQ_SRE_EXECUTOR_SHUTDOWN_SECONDS", 30)?;
+        let verification_profiles = match std::env::var_os("ROCKETMQ_SRE_EXECUTOR_VERIFICATION_PROFILES_FILE") {
+            Some(path) => crate::VerificationProfiles::load(std::path::Path::new(&path))?,
+            None => crate::VerificationProfiles::default(),
+        };
         let lease_ttl_seconds = parse_env("ROCKETMQ_SRE_EXECUTOR_LEASE_TTL_SECONDS", 120_u32)?;
         if !(5..=300).contains(&lease_ttl_seconds) {
             return Err(ExecutorError::Configuration);
@@ -90,6 +95,7 @@ impl ExecutorConfig {
             lease_ttl_seconds,
             resource_lock_ttl,
             verification_poll_interval,
+            verification_profiles,
             shutdown_timeout,
             dev_insecure_http,
         })
@@ -250,6 +256,7 @@ mod tests {
             lease_ttl_seconds: 30,
             resource_lock_ttl: Duration::from_secs(30),
             verification_poll_interval: Duration::from_secs(1),
+            verification_profiles: crate::VerificationProfiles::default(),
             shutdown_timeout: Duration::from_secs(1),
             dev_insecure_http: false,
         };

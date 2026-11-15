@@ -122,6 +122,19 @@ impl ExecutorActionRegistry {
     pub fn executable_actions(&self) -> Vec<ExecutionAction> {
         self.executable.iter().copied().collect()
     }
+
+    pub(crate) fn verification_spec(
+        &self,
+        action: ExecutionAction,
+        version: &str,
+    ) -> Result<&rocketmq_sre_contracts::VerificationSpec, ExecutorRequestFailure> {
+        let descriptor = self
+            .catalog
+            .executable_descriptor(action, version)
+            .map_err(SreContractError::from)
+            .map_err(ExecutorRequestFailure::from)?;
+        Ok(&descriptor.verification)
+    }
 }
 
 fn validate_parameters(descriptor: &ActionDescriptor, parameters: &Value) -> Result<(), ExecutorRequestFailure> {

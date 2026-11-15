@@ -187,6 +187,7 @@ async fn migrations_journal_locks_fences_and_restart_recovery_are_durable() {
         satisfied_conditions: vec!["resource:ready".to_owned(), "sli:error_ratio".to_owned()],
         failed_conditions: Vec::new(),
         stable_window_seconds: 30,
+        window_proof: None,
     };
     assert!(
         journal

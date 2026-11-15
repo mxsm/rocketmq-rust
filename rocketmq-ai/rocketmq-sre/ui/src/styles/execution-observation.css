@@ -1,0 +1,210 @@
+.execution-observation-workspace,
+.execution-observation-panel,
+.submission-recovery-panel,
+.execution-handoff-panel {
+  min-width: 0;
+}
+
+.execution-layer-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.execution-layer-grid > article,
+.execution-fact-grid > section {
+  min-width: 0;
+  padding: 16px;
+}
+
+.execution-layer-grid h2,
+.execution-fact-grid h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.execution-layer-grid p,
+.execution-layer-grid time,
+.execution-observation-fact small {
+  display: block;
+  margin: 8px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.execution-record-list,
+.execution-observation-steps,
+.accepted-execution-references {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.execution-record-list > li {
+  display: grid;
+  grid-template-columns: minmax(28px, auto) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.execution-record-order {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.execution-record-list strong,
+.execution-record-list time,
+.execution-record-list div > span {
+  display: block;
+}
+
+.execution-record-list p,
+.execution-observation-fact ul {
+  margin: 7px 0;
+}
+
+.execution-record-list time,
+.execution-record-list code {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.execution-observation-steps > li {
+  border-top: 1px solid var(--border);
+  padding: 18px 0;
+}
+
+.execution-step-heading,
+.execution-read-links,
+.accepted-execution-references > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.execution-step-heading h4 {
+  margin: 0;
+}
+
+.execution-observation-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 20px;
+  margin: 14px 0;
+}
+
+.execution-observation-values > div {
+  min-width: 0;
+}
+
+.execution-observation-values dt {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.execution-observation-values dd {
+  margin: 5px 0 0;
+  font-size: 12px;
+}
+
+.execution-observation-workspace p,
+.execution-observation-workspace dd,
+.execution-observation-workspace code,
+.submission-recovery-panel small {
+  overflow-wrap: anywhere;
+}
+
+.execution-fact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.execution-fact-grid > section,
+.execution-attempt-record,
+.execution-verification-record {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.execution-attempt-record,
+.execution-verification-record {
+  margin-top: 14px;
+  padding: 14px;
+}
+
+.execution-observation-fact,
+.execution-condition-list,
+.execution-policy-declaration,
+.execution-observation-reasons {
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.execution-policy-declaration {
+  margin: 14px 0;
+}
+
+.execution-policy-declaration summary,
+.execution-history-quality summary,
+.execution-verification-record summary {
+  cursor: pointer;
+  padding: 7px 0;
+}
+
+.execution-condition-list h5 {
+  font-size: 12px;
+  margin: 10px 0 5px;
+}
+
+.execution-condition-list ul,
+.execution-observation-reasons,
+.execution-evidence-references,
+.execution-observation-fact ul {
+  padding-left: 18px;
+}
+
+.accepted-execution-references > li {
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.accepted-execution-references small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 1100px) {
+  .execution-layer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .execution-layer-grid,
+  .execution-fact-grid,
+  .execution-observation-values {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .execution-record-list > li {
+    grid-template-columns: minmax(24px, auto) minmax(0, 1fr);
+  }
+
+  .execution-record-list > li > code {
+    grid-column: 2;
+  }
+
+  .accepted-execution-references > li {
+    align-items: flex-start;
+  }
+
+  .execution-step-heading {
+    align-items: flex-start;
+  }
+}

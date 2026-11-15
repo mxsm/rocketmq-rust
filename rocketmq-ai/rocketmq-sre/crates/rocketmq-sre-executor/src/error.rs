@@ -23,6 +23,7 @@ pub enum ExecutorRejection {
     AuthorityRejected,
     AgentRejected,
     VerificationRejected,
+    ObservationUnknown,
     PreconditionChanged,
     ReconcileBlocked,
 }
@@ -44,6 +45,7 @@ impl ExecutorRejection {
                 "execution_verification_rejected",
                 false,
             ),
+            Self::ObservationUnknown => (axum::http::StatusCode::CONFLICT, "execution_observation_unknown", false),
             Self::PreconditionChanged => (axum::http::StatusCode::CONFLICT, "precondition_changed", false),
             Self::ReconcileBlocked => (axum::http::StatusCode::CONFLICT, "unresolved_old_effects", false),
         }
@@ -101,6 +103,11 @@ impl ExecutorRequestFailure {
         reason = "private constructors preserve concise internal closed-outcome call sites"
     )]
     pub(crate) const VerificationRejected: Self = Self::Rejected(ExecutorRejection::VerificationRejected);
+    #[allow(
+        non_upper_case_globals,
+        reason = "private constructors preserve concise internal closed-outcome call sites"
+    )]
+    pub(crate) const ObservationUnknown: Self = Self::Rejected(ExecutorRejection::ObservationUnknown);
     #[allow(
         non_upper_case_globals,
         reason = "private constructors preserve concise internal closed-outcome call sites"
@@ -261,6 +268,9 @@ enum ExecutorErrorKind {
 }
 
 impl ExecutorError {
+    pub(crate) fn is_persistence_failure(&self) -> bool {
+        matches!(self.kind, ExecutorErrorKind::Journal(_))
+    }
     /// Creates a fixed, redacted operational-unavailability error.
     #[must_use]
     pub const fn unavailable() -> Self {

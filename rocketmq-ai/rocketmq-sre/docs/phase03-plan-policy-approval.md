@@ -44,6 +44,9 @@ POST /v1/plans/{id}/approve
 POST /v1/plans/{id}/reject
 POST /v1/executions
 GET  /v1/executions/{id}
+GET  /v1/executions/{id}/observation
+POST /v1/executions/lookup
+GET  /v1/plans/{id}/executions?plan_hash=...
 GET  /v1/events/stream
 GET  /v1/audit/{correlation_id}
 GET  /v1/resource-quarantines
@@ -51,3 +54,6 @@ POST /v1/resource-quarantines/{id}/clear
 ```
 
 所有写操作使用或生成同一个 correlation ID，并追加到 PostgreSQL `audit_events`。SSE 只向同 tenant 且具有对应 cluster scope 的订阅者推送脱敏事件。
+
+新增 observation、lookup 和 Plan receipt 列表均只读，不重发执行。提交、效果、策略稳定窗口和业务恢复分别呈现，
+详见 [执行观测与恢复边界](execution-observation.md)。升级时先部署新 Executor，再部署 Control Plane，或配套受控停机升级。

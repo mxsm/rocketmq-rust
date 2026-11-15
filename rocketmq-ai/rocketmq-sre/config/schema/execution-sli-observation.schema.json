@@ -15,6 +15,173 @@
       "format": "uuid",
       "type": "string"
     },
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised planning.\n\nExecution remains gated by the exact descriptor's `plan_only` and\n`execution_supported` flags. Permanently destructive R3 and unknown actions\nare intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1",
+        "subscription_group.patch_allowlisted.v1",
+        "consumer.request_mode.patch_allowlisted.v1",
+        "consumer.offset.reset_bounded.v1",
+        "topic.queue.expand_only.v1",
+        "namesrv.config.patch_allowlisted.v1",
+        "controller.config.patch_allowlisted.v1",
+        "proxy.rollout_image_canary.v1",
+        "broker.restart_one.v1",
+        "static_topic.patch_non_remap.v1",
+        "tiered.cold_data_flow.patch_allowlisted.v1",
+        "store.readahead.patch_allowlisted.v1",
+        "security.credential_rotate_overlap.v1",
+        "telemetry.collector.restart_one.v1",
+        "consumer.offset.clone_or_reset_broad.v1",
+        "message.direct_consume.v1",
+        "message.dlq.resend.v1",
+        "timer.switch.v1",
+        "controller.elect.v1",
+        "static_topic.remap.v1",
+        "broker.container.add_remove.v1"
+      ],
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionObservationReason": {
+      "description": "Safe explanation codes; arbitrary stored/remote text is not a public reason.",
+      "enum": [
+        "accepted_receipt",
+        "receipt_not_observed",
+        "intent_recorded",
+        "result_recorded",
+        "effect_unknown",
+        "no_effect_result",
+        "reconciled_applied",
+        "reconciled_not_applied",
+        "reconciled_failed",
+        "reconciliation_required",
+        "verification_not_observed",
+        "legacy_window_proof_missing",
+        "window_proof_invalid",
+        "retained_proof_unavailable",
+        "policy_not_configured",
+        "target_version_not_observed",
+        "exact_sli_source_missing",
+        "source_missing",
+        "source_partial",
+        "source_stale",
+        "source_future",
+        "source_before_window",
+        "source_out_of_order",
+        "source_repeated",
+        "observation_gap",
+        "evidence_hash_invalid",
+        "evidence_scope_mismatch",
+        "read_deadline_exceeded",
+        "observation_budget_exhausted",
+        "observation_clock_invalid",
+        "observation_cancelled",
+        "known_condition_failed",
+        "stable_window_incomplete",
+        "policy_window_satisfied",
+        "compensation_not_observed",
+        "compensation_result_recorded",
+        "compensation_unknown",
+        "compensation_failed",
+        "manual_takeover_required",
+        "manual_takeover_not_recorded",
+        "independent_business_observation_missing",
+        "partial_history",
+        "recorded_state_change",
+        "recorded_verification",
+        "unrecognized_recorded_event"
+      ],
+      "type": "string"
+    },
+    "ExecutionSliBinding": {
+      "additionalProperties": false,
+      "description": "Exact execution selector; it does not create a metric source or authority.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
+        "descriptor_version": {
+          "type": "string"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "parameters_digest": {
+          "type": "string"
+        },
+        "plan_step_id": {
+          "$ref": "#/$defs/PlanStepId"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id",
+        "plan_step_id",
+        "action",
+        "descriptor_version",
+        "target",
+        "parameters_digest"
+      ],
+      "type": "object"
+    },
+    "ExecutionSliSourceFacts": {
+      "additionalProperties": false,
+      "description": "Actual source clock and scope, kept separate from report evaluation time.",
+      "properties": {
+        "binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionSliBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collected_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "exact_target_conditions": {
+          "type": "boolean"
+        },
+        "reason_codes": {
+          "items": {
+            "$ref": "#/$defs/ExecutionObservationReason"
+          },
+          "type": "array"
+        },
+        "source_observed_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "collected_at",
+        "exact_target_conditions",
+        "reason_codes"
+      ],
+      "type": "object"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
+      "format": "uuid",
+      "type": "string"
+    },
     "TenantId": {
       "description": "Stable tenant boundary identifier.",
       "format": "uuid",
@@ -53,6 +220,16 @@
     },
     "schema_version": {
       "type": "string"
+    },
+    "source_facts": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionSliSourceFacts"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "tenant_id": {
       "$ref": "#/$defs/TenantId"

@@ -31,6 +31,7 @@ mod production_verification;
 mod reconcile;
 mod registry;
 mod sli_client;
+mod verification_profiles;
 mod verifier;
 
 pub use agent_client::ExecutionAgentClient;
@@ -69,13 +70,16 @@ pub use registry::ExecutorActionRegistry;
 pub use sli_client::ExecutionSliClient;
 pub use sli_client::HttpExecutionSliClient;
 pub use sli_client::SliFuture;
+pub use verification_profiles::VerificationProfiles;
 pub use verifier::ExecutionVerifier;
 pub use verifier::VerificationCaptureRequest;
+pub use verifier::VerificationClock;
 pub use verifier::VerificationFuture;
 pub use verifier::VerificationObservation;
 pub use verifier::VerificationPhase;
 pub use verifier::VerificationRun;
 pub use verifier::VerificationSource;
+pub use verifier::VerificationSourceFacts;
 
 /// Compile-time-visible execution availability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

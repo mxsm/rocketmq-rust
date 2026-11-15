@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::IntoFuture;
 use std::sync::Arc;
 
 use axum::Json;
@@ -25,6 +26,9 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::OperationContext;
+use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::TaskKind;
 use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::AgentReadResult;
@@ -65,6 +69,7 @@ struct ServiceStatus {
 
 #[derive(Serialize)]
 struct ExecutorStatus {
+    shutdown_storage_failures_total: u64,
     schema_version: &'static str,
     active_executions: usize,
     execution_total: u64,
@@ -111,11 +116,31 @@ pub fn build_router(
 ///
 /// Returns configuration, database, HTTP client, bind, or serving failures.
 pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -> Result<(), ExecutorError> {
-    let pool = sqlx::postgres::PgPoolOptions::new()
+    let signal_owner = service_context.task_group().clone();
+    let grace = config.shutdown_timeout;
+    service_context
+        .task_group()
+        .spawn_cancellable_service("executor-shutdown-signal", async move {
+            if let Err(error) = wait_for_signal_result().await {
+                tracing::warn!(error=%error,"Change Executor shutdown signal watcher failed");
+            }
+            // Publish the same boundary before interrupting any startup read.
+            drop(signal_owner.shutdown_until(ShutdownDeadline::after(grace)));
+            signal_owner.cancel();
+        })
+        .map_err(ExecutorError::configuration_source)?;
+    let connect = sqlx::postgres::PgPoolOptions::new()
         .max_connections(16)
-        .connect(&config.database_url)
-        .await
-        .map_err(crate::error::JournalError::Database)?;
+        .connect(&config.database_url);
+    let owner = service_context.task_group().clone();
+    let pool = tokio::select! { biased;
+        ()=owner.cancellation_token().cancelled_owned()=>{
+            let deadline=owner.shutdown_deadline().unwrap_or_else(||ShutdownDeadline::after(grace));
+            let report=owner.shutdown_until(deadline).await;
+            return if report.is_healthy() {Ok(())} else {Err(ExecutorError::Io(std::io::Error::other("startup connection drain did not complete healthily")))};
+        },
+        pool=connect=>pool.map_err(crate::error::JournalError::Database)?,
+    };
     let authority = Arc::new(HttpExecutorAuthorityClient::new(
         config.authority_url.clone(),
         Arc::<str>::from(config.authority_token.as_str()),
@@ -139,7 +164,9 @@ pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -
     let registry = Arc::new(ExecutorActionRegistry::embedded()?);
     let prechecker = ExecutionPrechecker::new(Arc::clone(&registry), agent.clone());
     let verification_source = Arc::new(ProductionVerificationSource::new(agent.clone(), sli_client));
-    let verifier = ExecutionVerifier::new(verification_source, config.verification_poll_interval);
+    let verifier = ExecutionVerifier::new(verification_source, config.verification_poll_interval)
+        .with_profiles(config.verification_profiles.clone())
+        .with_owner(service_context.task_group().clone());
     let executor = ChangeExecutor::new(
         ExecutionJournal::new(pool.clone(), "rocketmq-sre-executor"),
         ResourceSafetyStore::new(pool),
@@ -150,8 +177,33 @@ pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -
         config.lease_ttl_seconds,
         config.resource_lock_ttl,
     )
-    .with_verifier(verifier);
-    match executor.recover_interrupted_executions(100).await {
+    .with_verifier(verifier)
+    .with_lifecycle(
+        service_context.task_group().clone(),
+        config.shutdown_timeout,
+        config.request_timeout,
+    );
+    let startup_owner = service_context.task_group().clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let recovery_executor = executor.clone();
+    startup_owner
+        .spawn_draining_operation(
+            &OperationContext::without_deadline(TaskKind::Worker),
+            "startup-reconciliation",
+            async move {
+                let _ = sender.send(recovery_executor.recover_interrupted_executions(100).await);
+            },
+        )
+        .map_err(ExecutorError::configuration_source)?;
+    let recovery = tokio::select! { biased;
+        ()=startup_owner.cancellation_token().cancelled_owned()=>{
+            let deadline=startup_owner.shutdown_deadline().unwrap_or_else(||ShutdownDeadline::after(grace));
+            let report=startup_owner.shutdown_until(deadline).await;
+            return if report.is_healthy() && executor.settlement_healthy() {Ok(())} else {Err(ExecutorError::Io(std::io::Error::other("startup reconciliation drain did not complete healthily")))};
+        },
+        result=receiver=>result.map_err(|_|ExecutorError::AuthorityUnavailable)?,
+    };
+    match recovery {
         Ok(summary) => tracing::info!(
             attempted = summary.attempted,
             recovered = summary.recovered,
@@ -171,22 +223,70 @@ pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -
         target_credentials = false,
         "RocketMQ SRE Change Executor is serving"
     );
-    let result = axum::serve(
+    let settlement = executor.clone();
+    let router = build_router(
+        executor,
+        Arc::<str>::from(config.control_plane_token.as_str()),
+        !config.dev_insecure_http,
+    );
+    let owner = service_context.task_group().clone();
+    let signal_owner = owner.clone();
+    serve_owned(
         listener,
-        build_router(
-            executor,
-            Arc::<str>::from(config.control_plane_token.as_str()),
-            !config.dev_insecure_http,
-        ),
+        router,
+        owner,
+        settlement,
+        config.shutdown_timeout,
+        async move {
+            signal_owner.cancellation_token().cancelled_owned().await;
+        },
     )
-    .with_graceful_shutdown(async {
-        if let Err(error) = wait_for_signal_result().await {
-            tracing::warn!(error = %error, "Change Executor shutdown signal watcher failed");
-        }
-    })
-    .await;
-    service_context.task_group().cancel();
-    result.map_err(ExecutorError::Io)
+    .await
+    .map_err(ExecutorError::Io)
+}
+
+async fn serve_owned(
+    listener: tokio::net::TcpListener,
+    router: Router,
+    owner: rocketmq_runtime::task_group::TaskGroup,
+    settlement: ChangeExecutor,
+    timeout: std::time::Duration,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> std::io::Result<()> {
+    let server = axum::serve(listener, router)
+        .with_graceful_shutdown(owner.cancellation_token().cancelled_owned())
+        .into_future();
+    tokio::pin!(server);
+    let early = tokio::select! {
+        result=&mut server=>Some(result),
+        ()=shutdown=>None,
+    };
+    let deadline = owner
+        .shutdown_deadline()
+        .unwrap_or_else(|| ShutdownDeadline::after(timeout));
+    // Publish one absolute deadline before cancellation. Admitted operations
+    // reserve settlement time against this same boundary, independently of a
+    // lost HTTP response waiter. No journal append gets its own reset timeout.
+    let drain = owner.shutdown_until(deadline);
+    owner.cancel();
+    let (served, report) = match early {
+        Some(result) => (Ok(result), drain.await),
+        None => tokio::join!(
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline.instant()), &mut server),
+            drain
+        ),
+    };
+    if !report.is_healthy() || !settlement.settlement_healthy() {
+        return Err(std::io::Error::other(
+            "Executor operation drain did not complete healthily",
+        ));
+    }
+    served.map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "Executor HTTP drain exceeded the shared deadline",
+        )
+    })?
 }
 
 async fn health() -> Json<ServiceStatus> {
@@ -220,6 +320,7 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Result<Jso
     authorize(&state, &headers)?;
     let metrics = state.executor.metrics();
     Ok(Json(ExecutorStatus {
+        shutdown_storage_failures_total: metrics.shutdown_storage_failures_total,
         schema_version: "rocketmq-sre.executor-status.v1",
         active_executions: metrics.active_executions,
         execution_total: metrics.execution_total,
@@ -236,7 +337,23 @@ async fn execute(
     Json(request): Json<ExecutionRequest>,
 ) -> Result<Json<crate::ExecuteOutcome>, ExecutorApiFailure> {
     authorize(&state, &headers)?;
-    match state.executor.execute(&request).await? {
+    let result = if let Some(owner) = state.executor.operation_owner().cloned() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let executor = state.executor.clone();
+        owner
+            .spawn_draining_operation(
+                &OperationContext::without_deadline(TaskKind::Worker),
+                "accepted-execution",
+                async move {
+                    let _ = sender.send(executor.execute(&request).await);
+                },
+            )
+            .map_err(|_| ExecutorRejection::ObservationUnknown)?;
+        receiver.await.map_err(|_| ExecutorError::AuthorityUnavailable)?
+    } else {
+        state.executor.execute(&request).await
+    };
+    match result? {
         ExecutorOperationOutcome::Accepted(outcome) => Ok(Json(outcome)),
         ExecutorOperationOutcome::Rejected(rejection) => Err(rejection.into()),
     }
@@ -260,7 +377,24 @@ async fn recover_execution(
     headers: HeaderMap,
 ) -> Result<Json<crate::ExecuteOutcome>, ExecutorApiFailure> {
     authorize(&state, &headers)?;
-    match state.executor.recover_execution(parse_execution_id(&id)?).await? {
+    let id = parse_execution_id(&id)?;
+    let result = if let Some(owner) = state.executor.operation_owner().cloned() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let executor = state.executor.clone();
+        owner
+            .spawn_draining_operation(
+                &OperationContext::without_deadline(TaskKind::Worker),
+                "accepted-reconciliation-read",
+                async move {
+                    let _ = sender.send(executor.recover_execution(id).await);
+                },
+            )
+            .map_err(|_| ExecutorRejection::ObservationUnknown)?;
+        receiver.await.map_err(|_| ExecutorError::AuthorityUnavailable)?
+    } else {
+        state.executor.recover_execution(id).await
+    };
+    match result? {
         ExecutorOperationOutcome::Accepted(outcome) => Ok(Json(outcome)),
         ExecutorOperationOutcome::Rejected(rejection) => Err(rejection.into()),
     }
@@ -381,5 +515,63 @@ mod tests {
     #[test]
     fn recovery_path_rejects_invalid_execution_ids() {
         assert!(parse_execution_id("not-an-execution-id").is_err());
+    }
+
+    #[tokio::test]
+    async fn startup_owner_cancel_interrupts_unconnected_database_and_signal_watcher_without_os_signal() {
+        use rocketmq_runtime::RuntimeContext;
+        use std::{sync::Arc, time::Duration};
+        let runtime = RuntimeContext::from_current("d20-startup-owner");
+        let context = runtime.service_context("http");
+        let owner = context.task_group().clone();
+        let peer_owner = runtime.service_context("postgres-peer").task_group().clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let accepted = entered.clone();
+        let token = peer_owner.cancellation_token();
+        peer_owner
+            .spawn_service("stalled-startup-handshake", async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                accepted.notify_one();
+                token.cancelled().await;
+                drop(stream);
+            })
+            .unwrap();
+        let config = crate::ExecutorConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            database_url: format!("postgres://synthetic:synthetic@{endpoint}/synthetic?sslmode=disable"),
+            authority_url: "http://127.0.0.1:1".parse().unwrap(),
+            authority_token: "synthetic".to_owned(),
+            agent_url: "http://127.0.0.1:1".parse().unwrap(),
+            agent_token: "synthetic".to_owned(),
+            control_plane_token: "synthetic".to_owned(),
+            executor_subject: "SyntheticFixture".to_owned(),
+            request_timeout: Duration::from_secs(30),
+            lease_ttl_seconds: 30,
+            resource_lock_ttl: Duration::from_secs(30),
+            verification_poll_interval: Duration::from_secs(1),
+            verification_profiles: crate::VerificationProfiles::default(),
+            shutdown_timeout: Duration::from_secs(1),
+            dev_insecure_http: true,
+        };
+        let runner = runtime.service_context("process-root").task_group().clone();
+        let (finished, done) = tokio::sync::oneshot::channel();
+        runner
+            .spawn_service("run-root", async move {
+                finished.send(super::run(config, context).await.is_ok()).unwrap();
+            })
+            .unwrap();
+        entered.notified().await;
+        owner.cancel();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), done)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+        assert!(owner.shutdown(Duration::from_secs(1)).await.is_healthy());
+        assert!(runner.shutdown(Duration::from_secs(1)).await.is_healthy());
+        assert!(peer_owner.shutdown(Duration::from_secs(1)).await.is_healthy());
     }
 }

@@ -19,6 +19,7 @@ import "./styles/investigation-runs.css";
 import "./styles/evidence-quality.css";
 import "./styles/action-readiness.css";
 import "./styles/action-forms.css";
+import "./styles/execution-observation.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

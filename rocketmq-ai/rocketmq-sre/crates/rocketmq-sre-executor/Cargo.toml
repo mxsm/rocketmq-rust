@@ -43,6 +43,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 rocketmq-sre-execution-agent = { path = "../rocketmq-sre-execution-agent" }
 tower.workspace = true
 

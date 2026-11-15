@@ -97,6 +97,7 @@ use crate::workflow::WorkflowStreamEvent;
 use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 mod critic;
+mod observation;
 mod preparation;
 mod readiness;
 mod support;

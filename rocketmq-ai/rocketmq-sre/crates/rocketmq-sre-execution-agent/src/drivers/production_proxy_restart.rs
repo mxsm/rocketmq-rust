@@ -572,6 +572,7 @@ impl VerificationClient {
             cluster_id: self.cluster_id,
             correlation_id: CorrelationId::new(),
             conditions: VERIFICATION_CONDITIONS.iter().map(ToString::to_string).collect(),
+            binding: None,
         };
         let url = self
             .base_url
@@ -789,6 +790,14 @@ fn validate_observation(
         || observation.correlation_id != query.correlation_id
         || expected.len() != query.conditions.len()
         || actual != expected
+        || observation
+            .source_facts
+            .as_ref()
+            .is_some_and(|facts| facts.binding != query.binding)
+        || (observation.complete
+            && observation.source_facts.as_ref().is_none_or(|facts| {
+                !facts.exact_target_conditions || facts.binding.is_none() || facts.source_observed_at.is_none()
+            }))
     {
         Err(crate::ExecutionAgentRequestFailure::DriverFailed)
     } else {
