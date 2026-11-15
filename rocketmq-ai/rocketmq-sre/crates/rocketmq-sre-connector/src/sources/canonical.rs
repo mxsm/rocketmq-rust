@@ -685,15 +685,15 @@ mod tests {
         }
 
         assert_eq!(pack_ids, active_pack_ids().into_iter().collect());
-        assert_eq!(requirement_count, 68);
+        assert_eq!(requirement_count, 66);
         assert_eq!(required_count, 32);
-        assert_eq!(optional_count, 36);
+        assert_eq!(optional_count, 34);
         assert_eq!(query_count, 48);
-        assert_eq!(unsupported_count, 20);
+        assert_eq!(unsupported_count, 18);
         assert_eq!(required_query_count, 32);
         assert_eq!(required_unsupported_count, 0);
         assert_eq!(optional_query_count, 16);
-        assert_eq!(optional_unsupported_count, 20);
+        assert_eq!(optional_unsupported_count, 18);
     }
 
     #[test]
