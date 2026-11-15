@@ -27,7 +27,7 @@ use rocketmq_client_rust::{
     MutationSubscriptionGroupConfig, MutationSubscriptionGroupConfigState,
 };
 
-trait PatchExecutor {
+trait SubscriptionGroupConfigPatchExecutor {
     fn current<'a>(&'a self, address: &'a str, group: &'a str)
         -> AdminFuture<'a, MutationSubscriptionGroupConfigState>;
     fn commit<'a>(
@@ -37,7 +37,7 @@ trait PatchExecutor {
     ) -> AdminFuture<'a, MetadataCasReport>;
 }
 
-impl PatchExecutor for MutationAdminSession {
+impl SubscriptionGroupConfigPatchExecutor for MutationAdminSession {
     fn current<'a>(
         &'a self,
         address: &'a str,
@@ -86,7 +86,7 @@ impl ConsumerWorkspaceMutationAdmin for MutationAdminSession {
 }
 
 async fn execute_patch(
-    executor: &impl PatchExecutor,
+    executor: &impl SubscriptionGroupConfigPatchExecutor,
     request: &PatchConsumerWorkspaceConfigRequest,
 ) -> AdminResult<ConsumerWorkspaceConfigPatchResult> {
     let request = PatchConsumerWorkspaceConfigRequest::try_new(
@@ -191,7 +191,7 @@ mod tests {
             consume_timeout_minute: 30,
         }
     }
-    impl PatchExecutor for Fake {
+    impl SubscriptionGroupConfigPatchExecutor for Fake {
         fn current<'a>(&'a self, _: &'a str, _: &'a str) -> AdminFuture<'a, MutationSubscriptionGroupConfigState> {
             Box::pin(async {
                 Ok(MutationSubscriptionGroupConfigState {
