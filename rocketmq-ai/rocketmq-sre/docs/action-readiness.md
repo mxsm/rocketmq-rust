@@ -40,6 +40,25 @@ readonly result can report `ready=true`, `logger_level_applied=false`, and
 `ttl_restore_scheduled=false`: the latter two describe current effects, not
 failed preparation conditions. They also do not prove write or rollback support.
 
+## Typed forms and immutable review
+
+The UI models descriptor version `1.0.0` of the nine existing wired handlers:
+Logger TTL, allowlisted Broker/Topic/Group configuration, Proxy scale-one,
+restart-one and image-canary-one, telemetry restart and credential overlap.
+Every field is closed and bounded; patches require explicit selection and a
+credential input accepts only a managed reference. The UI adds no handler,
+permission, qualification source or arbitrary JSON/command input.
+
+Plan review shows the saved target, safe requested fields, CAS assumptions,
+server risk, verification policy and compensation declaration. It does not
+invent missing before-values or interpret a declaration as observed support.
+Sensitive references are masked. Older versions or unrecognized parameters
+retain their metadata and deep links as read-only history, without raw JSON.
+An unexpired human approval record is labelled separately from execution
+authority; actual Plan/record deadlines update the display and close local
+dispatch controls without requesting a replacement grant. The server still
+enforces actor separation, grant verification and final admission.
+
 ## API
 
 ```text

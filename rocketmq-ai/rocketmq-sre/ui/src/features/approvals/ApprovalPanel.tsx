@@ -1,5 +1,5 @@
 import { Check, Clock3, Play, ShieldCheck, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type {
   ActionPlanView,
@@ -7,8 +7,10 @@ import type {
 } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useDeadlineClock } from "@/hooks/useDeadlineClock";
+import { useActionFormMessages } from "@/i18n/actionFormMessages";
 
-import { formatTimestamp, shortDigest } from "../plans/planPresentation";
+import { shortDigest } from "../plans/planPresentation";
 
 export function ApprovalPanel({
   view,
@@ -16,7 +18,9 @@ export function ApprovalPanel({
   approvalReady = true,
   canReject = canApprove,
   canExecute,
+  canCriticReview = false,
   busy,
+  readOnly = false,
   message,
   dispatchBlockedMessage,
   approvalBlockedMessage,
@@ -29,7 +33,9 @@ export function ApprovalPanel({
   approvalReady?: boolean;
   canReject?: boolean;
   canExecute: boolean;
+  canCriticReview?: boolean;
   busy: boolean;
+  readOnly?: boolean;
   message?: string;
   dispatchBlockedMessage?: string;
   approvalBlockedMessage?: string;
@@ -40,34 +46,37 @@ export function ApprovalPanel({
   onExecute: (preconditionHash: string) => Promise<void>;
   onCriticReview: () => Promise<void>;
 }) {
-  const aggregatePrecondition = view.precondition_hash;
+  const { m, formatDateTime } = useActionFormMessages();
+  const preconditionHash = view.precondition_hash;
   const [reason, setReason] = useState("");
-  const [preconditionHash, setPreconditionHash] = useState(
-    aggregatePrecondition,
-  );
   const [validitySeconds, setValiditySeconds] = useState("900");
 
-  useEffect(
-    () => setPreconditionHash(aggregatePrecondition),
-    [aggregatePrecondition],
-  );
-
-  const expired = new Date(view.plan.expires_at).getTime() <= Date.now();
+  const approval = view.latest_approval;
+  const now = useDeadlineClock([view.plan.expires_at, approval?.expires_at]);
+  const planDeadline = Date.parse(view.plan.expires_at);
+  const timeKnown = Number.isFinite(planDeadline);
+  const expired = !timeKnown || planDeadline <= now;
   const criticReady =
     view.risk !== "r2" || view.critic_state === "accepted";
-  const approval = view.latest_approval;
+  const approvalBound = approval?.plan_id === view.plan.id && approval?.plan_hash === view.plan.plan_hash &&
+    approval?.tenant_id === view.plan.tenant_id && approval?.cluster_id === view.plan.cluster_id &&
+    approval?.requester_subject === view.plan.created_by && approval?.approver_subject !== view.plan.created_by;
   const approved =
+    !expired && view.plan.status === "approved" && approvalBound &&
     approval?.decision === "approved" &&
-    new Date(approval.expires_at).getTime() > Date.now();
+    Date.parse(approval.decided_at) <= now && Date.parse(approval.expires_at) > now;
+  const seconds = Number(validitySeconds);
   const validDecision =
-    !expired &&
+    !readOnly && !expired && Number.isSafeInteger(seconds) && seconds >= 60 && seconds <= 3600 &&
     reason.trim().length >= 8 &&
-    preconditionHash.startsWith("sha256:");
+    /^sha256:[a-f0-9]{64}$/u.test(preconditionHash);
   const canDecide = canApprove && validDecision && criticReady && approvalReady;
   const canDecline = canReject && validDecision &&
     ["needs_critic", "ready_for_approval", "in_review"].includes(view.plan.status);
 
   const submit = async (decision: "approve" | "reject") => {
+    if (busy || !validDecision || Date.parse(view.plan.expires_at) <= Date.now() ||
+      (decision === "approve" ? !canDecide : !canDecline)) return;
     await onDecision(decision, {
       plan_hash: view.plan.plan_hash,
       precondition_hash: preconditionHash,
@@ -80,11 +89,12 @@ export function ApprovalPanel({
     <aside className="data-surface approval-panel">
       <header className="surface-heading">
         <div>
-          <h2>审批与执行授权</h2>
-          <p>审批人必须与发起人不同，并拥有当前集群 scope。</p>
+          <h2>{m.title}</h2>
+          <p>{m.intro}</p>
         </div>
         <Badge variant={approved ? "success" : expired ? "destructive" : "warning"}>
-          {approved ? "计划审批有效" : expired ? "计划已过期" : "等待审批"}
+          {!timeKnown ? m.invalidTime : approved ? m.currentApproval : approval?.decision === "approved"
+            ? m.historicalApproval : approval?.decision === "rejected" ? m.rejectedApproval : expired ? m.expired : m.waiting}
         </Badge>
       </header>
 
@@ -95,17 +105,18 @@ export function ApprovalPanel({
             <dd>{shortDigest(view.plan.plan_hash)}</dd>
           </div>
           <div>
-            <dt>请求人</dt>
+            <dt>{m.requester}</dt>
             <dd>{view.plan.created_by}</dd>
           </div>
           <div>
-            <dt>审批角色</dt>
-            <dd>{canApprove ? "approver" : "无审批权限"}</dd>
+            <dt>{m.role}</dt>
+            <dd>{canApprove ? "approver" : m.noRole}</dd>
           </div>
           <div>
-            <dt>过期时间</dt>
-            <dd>{formatTimestamp(view.plan.expires_at)}</dd>
+            <dt>{m.expiry}</dt>
+            <dd>{timeKnown ? formatDateTime(view.plan.expires_at) : m.invalidTime}</dd>
           </div>
+          {approval && <div><dt>{m.approvalUntil}</dt><dd>{Number.isFinite(Date.parse(approval.expires_at)) ? formatDateTime(approval.expires_at) : m.invalidTime}</dd></div>}
         </dl>
 
         {view.risk === "r2" && (
@@ -116,51 +127,57 @@ export function ApprovalPanel({
               <span>{view.critic_state}</span>
             </div>
             <Button
-              disabled={busy || view.critic_state === "accepted"}
-              onClick={() => void onCriticReview()}
+              disabled={readOnly || busy || expired || !canCriticReview || view.plan.status !== "needs_critic" || view.critic_state === "accepted"}
+              onClick={() => {
+                if (!readOnly && !busy && !expired && canCriticReview && view.plan.status === "needs_critic") void onCriticReview();
+              }}
               size="sm"
               variant="outline"
             >
-              运行 Critic
+              {m.critic}
             </Button>
           </div>
         )}
 
         <label className="form-field">
-          <span>Precondition hash</span>
+          <span>{m.boundHash}</span>
           <input
             className="text-input"
-            onChange={(event) => setPreconditionHash(event.target.value)}
+            readOnly
             value={preconditionHash}
           />
         </label>
         <label className="form-field">
-          <span>审批有效期（秒）</span>
+          <span>{m.validity}</span>
           <input
             className="text-input"
             max="3600"
             min="60"
+            readOnly={readOnly}
             onChange={(event) => setValiditySeconds(event.target.value)}
             type="number"
             value={validitySeconds}
           />
         </label>
         <label className="form-field">
-          <span>审批或拒绝原因（至少 8 个字符）</span>
+          <span>{m.reason}</span>
           <textarea
             onChange={(event) => setReason(event.target.value)}
-            placeholder="说明风险判断、观察窗口和回滚依据"
+            placeholder={m.reasonHint}
+            maxLength={512}
+            readOnly={readOnly}
             value={reason}
           />
         </label>
 
         {message && <p className="approval-message">{message}</p>}
         {!canApprove && (
-          <p className="permission-copy">当前身份没有 approver role，审批按钮保持禁用。</p>
+          <p className="permission-copy">{m.roleHint}</p>
         )}
         {!criticReady && (
-              <p className="permission-copy">批准 R2 计划前必须先取得有效异构 Critic 结论。</p>
+              <p className="permission-copy">{m.criticHint}</p>
         )}
+        {readOnly && <p className="permission-copy">{m.historical}</p>}
         {dispatchBlockedMessage && <p className="permission-copy" role="status">{dispatchBlockedMessage}</p>}
         {approvalBlockedMessage && <p className="permission-copy" role="status">{approvalBlockedMessage}</p>}
 
@@ -171,7 +188,7 @@ export function ApprovalPanel({
             variant="destructive"
           >
             <X size={15} />
-            Reject
+            {m.reject}
           </Button>
           <Button
             disabled={busy || !canDecide}
@@ -179,14 +196,17 @@ export function ApprovalPanel({
             variant="outline"
           >
             <Check size={15} />
-            Approve
+            {m.approve}
           </Button>
           <Button
-            disabled={busy || !approved || !canExecute}
-            onClick={() => void onExecute(preconditionHash)}
+            disabled={readOnly || busy || !approved || !canExecute}
+            onClick={() => {
+              if (!readOnly && !busy && approved && canExecute && Date.parse(view.plan.expires_at) > Date.now() &&
+                approval && Date.parse(approval.expires_at) > Date.now()) void onExecute(preconditionHash);
+            }}
           >
             <Play size={15} />
-            提交 Executor
+            {m.submit}
           </Button>
         </div>
         {approval && (
@@ -194,7 +214,7 @@ export function ApprovalPanel({
             <Clock3 size={14} />
             <span>
               {approval.approver_subject} · {approval.decision} ·{" "}
-              {formatTimestamp(approval.decided_at)}
+              {formatDateTime(approval.decided_at)}
             </span>
           </footer>
         )}

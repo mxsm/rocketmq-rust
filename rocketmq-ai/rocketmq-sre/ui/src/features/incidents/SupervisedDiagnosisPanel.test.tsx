@@ -293,18 +293,54 @@ describe("SupervisedDiagnosisPanel", () => {
     const user = userEvent.setup();
     const rendered = render(<Fixture />);
     await user.clear(screen.getByLabelText("Logger"));
-    await user.type(screen.getByLabelText("Logger"), "reviewed.logger");
+    await user.type(screen.getByLabelText("Logger"), "rocketmq_broker::reviewed");
     await user.click(screen.getByRole("button", { name: "读取准备状态" }));
     expect(await screen.findByRole("heading", { name: "目标资格" })).toBeVisible();
     auth.token = "renewed-token";
     rendered.rerender(<Fixture />);
-    expect(screen.getByLabelText("Logger")).toHaveValue("reviewed.logger");
+    expect(screen.getByLabelText("Logger")).toHaveValue("rocketmq_broker::reviewed");
     expect(screen.getByRole("heading", { name: "目标资格" })).toBeVisible();
     expect(fetchMock).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "刷新状态" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get("Authorization")).toBe("Bearer renewed-token");
     await waitFor(() => expect(screen.getByRole("button", { name: "运行只读前置检查" })).toBeEnabled());
+  });
+
+  it("cancels an old action's late readiness response and does not resurrect it on action reselection", async () => {
+    const pending = deferred<Response>();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(pending.promise);
+    const user = userEvent.setup();
+    render(<Fixture />);
+    await user.click(screen.getByRole("button", { name: "读取准备状态" }));
+    await user.selectOptions(screen.getByLabelText("动作类型"), "broker.config.patch_allowlisted.v1");
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(screen.getByLabelText("预期配置代次")).toHaveValue(null);
+    await act(async () => pending.resolve(response(actionReadinessFixture().view)));
+    expect(screen.queryByRole("heading", { name: "目标资格" })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("动作类型"), "observability.logger_level_ttl.v1");
+    expect(screen.getByLabelText("目标 Broker 资源")).toHaveValue("");
+    expect(screen.getByText("尚未读取此候选的准备状态。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "运行只读前置检查" })).toBeDisabled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not attach an old action's late readonly preparation to a new action candidate", async () => {
+    const pending = deferred<Response>();
+    const prepared = actionReadinessFixture({ prepared: true });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((url) =>
+      String(url).endsWith("/action-readiness") ? Promise.resolve(response(actionReadinessFixture().view)) : pending.promise);
+    const user = userEvent.setup();
+    render(<Fixture />);
+    await user.click(screen.getByRole("button", { name: "读取准备状态" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "运行只读前置检查" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "运行只读前置检查" }));
+    await user.selectOptions(screen.getByLabelText("动作类型"), "proxy.restart_one.v1");
+    expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(true);
+    await act(async () => pending.resolve(response({ ...prepared.preparation, readiness: prepared.view })));
+    expect(screen.getByText("尚无适用于此候选的前置证据。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "创建受监督计划" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "打开计划与审批" })).not.toBeInTheDocument();
   });
 
   it("can recover a server-reported newer diagnosis through an explicit authoritative refresh", async () => {
