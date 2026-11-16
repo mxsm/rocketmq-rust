@@ -23,7 +23,7 @@ use rocketmq_dashboard_common::{
     ProducerConnectionQuery, ProducerConnections, ProducerInventory,
 };
 
-use super::{ConsumerBackend, ConsumerRequestScope};
+use super::{ConsumerAndProducerAdmin, ConsumerRequestScope};
 use crate::{
     services::ServiceFuture,
     state::{UiError, UiErrorCode},
@@ -160,7 +160,7 @@ macro_rules! pop_result {
     };
 }
 
-impl ConsumerBackend for FakeConsumerBackend {
+impl ConsumerAndProducerAdmin for FakeConsumerBackend {
     fn inventory(&self, scope: ConsumerRequestScope) -> ServiceFuture<'_, Result<ConsumerInventory, UiError>> {
         self.calls.lock().expect("Consumer fake calls").inventory.push(scope);
         if let Some(started) = self.next_inventory_started.lock().expect("inventory started").take() {

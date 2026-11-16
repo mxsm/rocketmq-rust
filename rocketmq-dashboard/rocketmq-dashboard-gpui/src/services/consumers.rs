@@ -92,7 +92,7 @@ pub enum ConsumerConfigMutationResult {
     },
 }
 
-pub(crate) trait ConsumerBackend: Send + Sync {
+pub(crate) trait ConsumerAndProducerAdmin: Send + Sync {
     fn inventory(&self, scope: ConsumerRequestScope) -> ServiceFuture<'_, Result<ConsumerInventory, UiError>>;
     fn clients(
         &self,
@@ -163,7 +163,7 @@ impl RealConsumerBackend {
     }
 }
 
-impl ConsumerBackend for RealConsumerBackend {
+impl ConsumerAndProducerAdmin for RealConsumerBackend {
     fn inventory(&self, scope: ConsumerRequestScope) -> ServiceFuture<'_, Result<ConsumerInventory, UiError>> {
         Box::pin(async move {
             self.provider()?
@@ -289,7 +289,7 @@ impl ConsumerBackend for RealConsumerBackend {
 
 impl AppServices {
     #[cfg(test)]
-    pub(crate) fn with_consumer_backend(mut self, backend: Arc<dyn ConsumerBackend>) -> Self {
+    pub(crate) fn with_consumer_backend(mut self, backend: Arc<dyn ConsumerAndProducerAdmin>) -> Self {
         self.consumers = backend;
         self
     }
