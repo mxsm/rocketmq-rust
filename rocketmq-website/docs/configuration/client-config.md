@@ -133,6 +133,26 @@ The setting is process-wide and covers the requests a process sends and the resp
 
 With both the Rust client and the Rust Broker on `ROCKETMQ` (1 KiB messages, compared with both on `JSON` on Linux), the Broker ran 4% to 5% fewer instructions and 2% to 4% fewer cycles per message, and each message used about 260 fewer bytes on the wire (requests and responses together, 14% of the total). These checks passed with the client on `ROCKETMQ` against a Java 5.5.0 NameServer and Broker: synchronous, asynchronous, one-way and batch sends, request-reply, transactions, recall, classic pull, LitePull, concurrent, orderly and retried Push consumption, admin offsets and topic creation. A Java 5.5.0 client on `ROCKETMQ` sent to and consumed from a Rust Broker, and `JSON` clients worked against a Rust Broker set to `ROCKETMQ`. ACL, TLS, POP, message trace and Proxy paths were not part of these checks. `JSON` remains the default; test the features your deployment uses before switching.
 
+## In-flight requests per connection
+
+The Rust transport bounds the requests that are in flight at the same time. Each bound is 4,096 requests or 64 MiB of request frames, whichever is reached first:
+
+- Per connection: the Rust Broker admits at most 4,096 requests of one connection at a time, and the Rust client applies the same bound to the requests it queues on one connection.
+- Per client host: on the Broker, all connections from one IP address share a single 4,096 bound, so several producers or client instances on one host do not raise it.
+
+A request beyond the bound is not queued. The Broker answers it at once with `SYSTEM_BUSY` and the remark `transport admission rejected`. Asynchronous sends retry such a response (`retry_times_when_send_async_failed`), so the result is a burst of retries, some failed sends and a sharp drop in throughput. These bounds are fixed defaults; neither the Broker nor the client configuration exposes them.
+
+A deeper window does not raise throughput. On Linux, with one Rust Broker and 1 KiB asynchronous sends from one host (the client benchmark, Broker and client on separate CPUs):
+
+| Requests in flight from the host | Failed sends | Throughput |
+| --- | --- | --- |
+| 3,000 on one connection | none | 64k to 97k msg/s |
+| 4,000 over 2 or 4 connections | none | 85k to 93k msg/s |
+| 6,000 on one connection | 0.7% to 1.1% | 17k to 19k msg/s |
+| 6,000 over 2 or 4 connections | 0.3% to 0.6% | 33k to 76k msg/s |
+
+A few hundred requests in flight per connection already reach the Broker's throughput; a larger window only adds latency (p99 of 85 to 140 ms at 3,000 to 4,000). Bound asynchronous sends with `enable_backpressure_for_async_mode` and `back_pressure_for_async_send_num`, and keep the total from one host to one Broker well below 4,096. To send more concurrently, spread the load over more hosts or more Brokers instead of raising the window.
+
 ## TLS and application-owned settings
 
 See the [TLS and mTLS guide](../deployment/tls.md#clients) for certificate preparation, Secret mounts, server policies, and the Admin/CLI boundaries.
