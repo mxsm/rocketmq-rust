@@ -138,7 +138,7 @@ where
     Ok(TopicBatchDeleteReport { targets, order_config })
 }
 
-trait TopicBatchExecutor {
+trait TopicBatchUpsertExecutor {
     fn upsert_topic_local<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary>;
 
     fn reconcile_order_config<'a>(
@@ -148,7 +148,7 @@ trait TopicBatchExecutor {
     ) -> AdminFuture<'a, ()>;
 }
 
-impl TopicBatchExecutor for AdminSession {
+impl TopicBatchUpsertExecutor for AdminSession {
     fn upsert_topic_local<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move { self.upsert_topic_config(request, false).await })
     }
@@ -170,7 +170,7 @@ async fn run_topic_batch_workflow<E>(
     request: &TopicBatchUpsertRequest,
 ) -> AdminResult<TopicBatchMutationReport>
 where
-    E: TopicBatchExecutor,
+    E: TopicBatchUpsertExecutor,
 {
     let request = request.canonical_for_execution()?;
     let mut targets = Vec::with_capacity(request.broker_names.len());
@@ -257,7 +257,7 @@ mod tests {
     use super::run_topic_batch_delete_workflow;
     use super::run_topic_batch_workflow;
     use super::TopicBatchDeleteExecutor;
-    use super::TopicBatchExecutor;
+    use super::TopicBatchUpsertExecutor;
     use crate::core::topic::CanonicalTopicBatchUpsertRequest;
     use crate::core::topic::DeleteTopicAdminRequest;
     use crate::core::topic::TopicBatchDeleteRequest;
@@ -450,7 +450,7 @@ mod tests {
         fail_all: bool,
     }
 
-    impl TopicBatchExecutor for RecordingBatchExecutor {
+    impl TopicBatchUpsertExecutor for RecordingBatchExecutor {
         fn upsert_topic_local<'a>(
             &'a mut self,
             request: &'a UpsertTopicRequest,
