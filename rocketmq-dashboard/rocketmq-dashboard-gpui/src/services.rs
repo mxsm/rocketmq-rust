@@ -620,7 +620,7 @@ pub struct AppServices {
     sessions: Option<Arc<sessions::SessionService>>,
     monitors: Option<Arc<MonitorStore>>,
     dashboard_broker: Arc<dyn dashboard_broker::DashboardBrokerOperations>,
-    consumers: Arc<dyn consumers::ConsumerBackend>,
+    consumers: Arc<dyn consumers::ConsumerAndProducerAdmin>,
     topics: Arc<dyn topics::TopicBackend>,
     messages: Arc<dyn messages::MessageBackend>,
     acl: Arc<dyn acl::AclOperations>,
