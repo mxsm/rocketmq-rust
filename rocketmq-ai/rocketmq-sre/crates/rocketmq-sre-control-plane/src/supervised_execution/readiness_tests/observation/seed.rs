@@ -301,7 +301,18 @@ pub(super) async fn store_verification(
 }
 
 pub(super) async fn journal_counts(fixture: &Fixture) -> (i64, i64, i64, i64, i64) {
-    sqlx::query_as("SELECT (SELECT count(*) FROM executions),(SELECT count(*) FROM execution_steps),
-        (SELECT count(*) FROM execution_verifications),(SELECT count(*) FROM executor_leases),(SELECT count(*) FROM audit_events)")
-        .fetch_one(&fixture.repository.pool).await.unwrap()
+    // Other fixtures share the database but own distinct tenant/cluster scopes.
+    sqlx::query_as(
+        "WITH owned_executions AS (SELECT id FROM executions WHERE tenant_id=$1 AND cluster_id=$2)
+        SELECT (SELECT count(*) FROM owned_executions),
+            (SELECT count(*) FROM execution_steps WHERE execution_id IN (SELECT id FROM owned_executions)),
+            (SELECT count(*) FROM execution_verifications WHERE execution_id IN (SELECT id FROM owned_executions)),
+            (SELECT count(*) FROM executor_leases WHERE tenant_id=$1 AND cluster_id=$2),
+            (SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND cluster_id=$2)",
+    )
+    .bind(fixture.auth.tenant_id.as_uuid())
+    .bind(fixture.request.cluster_id.as_uuid())
+    .fetch_one(&fixture.repository.pool)
+    .await
+    .unwrap()
 }
