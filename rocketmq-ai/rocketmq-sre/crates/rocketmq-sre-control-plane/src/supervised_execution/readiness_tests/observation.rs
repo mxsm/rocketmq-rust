@@ -244,13 +244,14 @@ async fn postgres_observation_scope_and_bounded_payload_errors_are_safe() {
     let mut corrupt = request.clone();
     corrupt.id = ExecutionId::new();
     corrupt.idempotency_key = "snapshot-key-B".to_owned();
-    store_terminal_with_key(&fixture, &corrupt, "escalated", "outer-column-key-A").await;
+    let outer_key = format!("outer-column-key-{}", corrupt.id);
+    store_terminal_with_key(&fixture, &corrupt, "escalated", &outer_key).await;
     let (status, body) = fixture
         .call(
             "/v1/executions/lookup",
             &fixture.auth,
             json!({"plan_id":plan.id,"plan_hash":plan.plan_hash,
-        "precondition_hash":plan.compute_precondition_hash().unwrap(),"idempotency_key":"outer-column-key-A"}),
+        "precondition_hash":plan.compute_precondition_hash().unwrap(),"idempotency_key":outer_key}),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
