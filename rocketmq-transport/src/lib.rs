@@ -65,6 +65,7 @@ mod security;
 mod server;
 mod session_executor;
 mod session_registry;
+mod session_turn;
 mod session_view;
 #[cfg(feature = "socks")]
 mod socks;

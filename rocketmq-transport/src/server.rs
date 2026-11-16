@@ -82,6 +82,9 @@ use crate::proxy_protocol::ProxyProtocolMetadata;
 use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
 use crate::session_executor::SessionExecutorDrainReport;
+use crate::session_turn::join_shared_task;
+use crate::session_turn::ReadTurn;
+use crate::session_turn::TurnHandoff;
 use crate::session_view::SessionView;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::NegotiatedConnection;
@@ -548,44 +551,6 @@ impl SessionWriterExit {
 
     async fn wait(&self, timeout: Duration) -> bool {
         tokio::time::timeout(timeout, self.0.cancelled()).await.is_ok()
-    }
-}
-
-/// Frames and bytes the reader handles before the writer that shares its task gets a turn.
-struct ReadTurn {
-    shares_task: bool,
-    frames: usize,
-    bytes: usize,
-}
-
-impl ReadTurn {
-    /// As many frames as Netty's `maxMessagesPerRead`, so a response waits at most one turn.
-    const FRAMES: usize = 16;
-    const BYTES: usize = 64 * 1024;
-
-    const fn new(shares_task: bool) -> Self {
-        Self {
-            shares_task,
-            frames: 0,
-            bytes: 0,
-        }
-    }
-
-    fn record(&mut self, frame_bytes: usize) {
-        if self.shares_task {
-            self.frames += 1;
-            self.bytes = self.bytes.saturating_add(frame_bytes);
-        }
-    }
-
-    /// Returns whether the turn is used up, starting the next one if it is.
-    fn take_exhausted(&mut self) -> bool {
-        if self.frames < Self::FRAMES && self.bytes < Self::BYTES {
-            return false;
-        }
-        self.frames = 0;
-        self.bytes = 0;
-        true
     }
 }
 
@@ -1589,6 +1554,8 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
             Err(_) => return,
         }
     };
+    let turn_handoff = shares_task.then(TurnHandoff::default);
+    let reader_handoff = turn_handoff.clone();
     let session_body = async move {
         let session_view = SessionView::network(
             session_id,
@@ -1662,10 +1629,10 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
             return;
         };
         let cancellation = task_group.cancellation_token();
-        let mut read_turn = ReadTurn::new(shares_task);
+        let mut read_turn = ReadTurn::new(reader_handoff);
         loop {
-            if read_turn.take_exhausted() {
-                tokio::task::yield_now().await;
+            if let Some(end_turn) = read_turn.take_exhausted() {
+                end_turn.await;
             }
             let next = tokio::select! {
                 () = cancellation.cancelled() => break,
@@ -1773,13 +1740,9 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
                 session_body.await;
                 writer_stop.cancel();
             };
-            // Both halves are polled on every wake of the session task. The writer writes while
-            // writes are queued and hands over once the queue is empty. It yields only before a
-            // batch of at most two responses while more of the session's requests are running,
-            // so their responses share one `writev`. Measured alternatives were slower: yielding
-            // after every batch put the session behind its own requests, and per-half wakers
-            // (`FuturesUnordered`) cut single-connection throughput.
-            futures::future::join(body, writer).await;
+            // The reader ends turns only when it holds this handoff, which a shared task always
+            // gives it.
+            join_shared_task(turn_handoff.unwrap_or_default(), body, writer).await;
         }
         None => session_body.await,
     }
