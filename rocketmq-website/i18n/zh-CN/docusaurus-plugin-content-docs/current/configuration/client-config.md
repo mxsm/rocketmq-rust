@@ -133,6 +133,26 @@ ROCKETMQ_SERIALIZE_TYPE=ROCKETMQ ./my-producer
 
 Rust 客户端与 Rust Broker 都使用 `ROCKETMQ`（1 KiB 消息，在 Linux 上与两者都用 `JSON` 对比）时，Broker 每条消息的指令数减少 4% 至 5%、周期减少 2% 至 4%，每条消息在网络上少约 260 字节（请求与响应合计，占总量的 14%）。客户端使用 `ROCKETMQ` 连接 Java 5.5.0 NameServer 与 Broker 时，以下检查均通过：同步、异步、单向与批量发送，request-reply，事务，撤回，经典拉取，LitePull，并发、顺序与重试的 Push 消费，管理端偏移量与创建 Topic。使用 `ROCKETMQ` 的 Java 5.5.0 客户端可以向 Rust Broker 发送并消费消息，使用 `JSON` 的客户端也可以连接设置为 `ROCKETMQ` 的 Rust Broker。这些检查未覆盖 ACL、TLS、POP、消息轨迹与 Proxy 路径。默认值仍为 `JSON`；切换前请先测试部署实际使用的功能。
 
+## 每个连接的在途请求
+
+Rust 传输层限制同时在途的请求数。每个上限都是 4,096 个请求或 64 MiB 请求帧，先到者为准：
+
+- 每个连接：Rust Broker 同时最多接受一个连接的 4,096 个请求，Rust 客户端对它在一个连接上排队的请求也采用同样的上限。
+- 每个客户端主机：在 Broker 上，来自同一 IP 地址的所有连接共用一个 4,096 的上限，因此同一主机上的多个 Producer 或客户端实例并不能提高它。
+
+超过上限的请求不会排队，Broker 立即以 `SYSTEM_BUSY` 应答，备注为 `transport admission rejected`。异步发送会重试这种响应（`retry_times_when_send_async_failed`），因此结果是一阵重试、部分发送失败以及吞吐大幅下降。这些上限是固定的默认值，Broker 与客户端配置都没有提供对应的配置项。
+
+更深的窗口不会提高吞吐。在 Linux 上，一个 Rust Broker，同一主机以 1 KiB 消息异步发送（客户端基准程序，Broker 与客户端使用不同的 CPU）：
+
+| 该主机的在途请求 | 发送失败 | 吞吐 |
+| --- | --- | --- |
+| 一个连接 3,000 | 无 | 64k 至 97k msg/s |
+| 2 或 4 个连接共 4,000 | 无 | 85k 至 93k msg/s |
+| 一个连接 6,000 | 0.7% 至 1.1% | 17k 至 19k msg/s |
+| 2 或 4 个连接共 6,000 | 0.3% 至 0.6% | 33k 至 76k msg/s |
+
+每个连接几百个在途请求就已达到 Broker 的吞吐，更大的窗口只会增加延迟（在途 3,000 至 4,000 时 p99 为 85 至 140 ms）。请用 `enable_backpressure_for_async_mode` 与 `back_pressure_for_async_send_num` 限制异步发送，并让同一主机发往同一 Broker 的总在途数远低于 4,096。需要更高并发时，把负载分散到更多主机或更多 Broker，而不是加大窗口。
+
 ## TLS 与应用自定义设置
 
 证书准备、Secret 挂载、服务端策略和 Admin/CLI 边界参阅 [TLS 与 mTLS 指南](../deployment/tls.md#clients)。
