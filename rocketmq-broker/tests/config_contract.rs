@@ -511,7 +511,29 @@ fn dynamic_patch_is_validated_and_static_fields_require_restart() {
         ));
     }
 
-    for (key, value) in [("listenPort", "20911"), ("maxClientEventCount", "101")] {
+    for value in ["1", "101", "10000"] {
+        let event_limit = HashMap::from([(
+            CheetahString::from_static_str("maxClientEventCount"),
+            CheetahString::from_static_str(value),
+        )]);
+        let transaction = ConfigUpdateTransaction::from_broker_patch(ConfigGeneration::INITIAL, &current, &event_limit)
+            .expect("the shared runtime event limit accepts its canonical reviewed range");
+        assert_eq!(transaction.expected_generation(), ConfigGeneration::INITIAL);
+    }
+    for value in ["0", "10001", "-1", "01", "+1", " 1", "2147483648"] {
+        let invalid_limit = HashMap::from([(
+            CheetahString::from_static_str("maxClientEventCount"),
+            CheetahString::from_static_str(value),
+        )]);
+        let error = ConfigUpdateTransaction::from_broker_patch(ConfigGeneration::INITIAL, &current, &invalid_limit)
+            .expect_err("invalid or noncanonical event limits must not build a transaction");
+        assert!(matches!(
+            error,
+            BrokerConfigError::InvalidProperty { key, .. } if key == "maxClientEventCount"
+        ));
+    }
+
+    for (key, value) in [("listenPort", "20911"), ("flushDiskType", "SYNC_FLUSH")] {
         let static_field = HashMap::from([(
             CheetahString::from_static_str(key),
             CheetahString::from_static_str(value),

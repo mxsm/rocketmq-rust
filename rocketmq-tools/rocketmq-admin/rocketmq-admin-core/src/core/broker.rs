@@ -415,6 +415,10 @@ pub struct BrokerAllowlistedConfig {
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
     pub max_client_event_count: Option<i32>,
+    /// A recognized target read capability; absence includes old Brokers and
+    /// unknown/malformed markers. It does not attest a physical product version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_client_event_count_runtime_version: Option<u32>,
 }
 
 /// One address-free Broker instance configuration observation.

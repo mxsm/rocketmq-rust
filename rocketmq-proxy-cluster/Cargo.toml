@@ -27,6 +27,7 @@ rust-version.workspace = true
 
 [features]
 default = []
+tls = ["rocketmq-transport/tls"]
 bench-support = []
 observability = ["rocketmq-client-rust/observability-metrics", "rocketmq-observability/otel-metrics"]
 observability-traces = ["rocketmq-client-rust/observability"]

@@ -526,9 +526,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         }
 
         for (key, expected_wrapper) in remove_candidates {
-            if let Some((_, point_wrapper)) = self.buffer.remove_if(&key, |_, current_wrapper| {
-                Arc::ptr_eq(current_wrapper, &expected_wrapper)
-            }) {
+            if let Some(point_wrapper) = self.retire_checkpoint(&key, &expected_wrapper) {
                 if let Err(error) = self.delete_pop_records_for_checkpoint(point_wrapper.get_ck()) {
                     warn!(
                         "[PopBuffer]delete Pop KV records for removed checkpoint failed: {}",
@@ -573,6 +571,29 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         } else {
             self.scan_times.store(next_scan_times, Ordering::Release);
         }
+    }
+
+    fn retire_checkpoint(
+        &self,
+        key: &CheetahString,
+        expected_wrapper: &Arc<PopCheckPointWrapper>,
+    ) -> Option<Arc<PopCheckPointWrapper>> {
+        self.buffer
+            .remove_if(key, |_, current_wrapper| {
+                // add_ack holds this entry's shared guard while publishing its
+                // bits. Recheck under exclusive removal so a newly received,
+                // unpersisted ACK cannot be lost between scan and retirement.
+                let ready = current_wrapper.is_just_offset() && current_wrapper.is_ck_stored()
+                    || is_ck_done(current_wrapper)
+                    || is_ck_done_for_finish(current_wrapper) && current_wrapper.is_ck_stored();
+                if Arc::ptr_eq(current_wrapper, expected_wrapper) && ready {
+                    current_wrapper.retired.store(true, Ordering::Release);
+                    true
+                } else {
+                    false
+                }
+            })
+            .map(|(_, wrapper)| wrapper)
     }
     fn scan_garbage(&self) {
         let current_millis = current_millis();
@@ -757,7 +778,9 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
                 let point_wrapper = point_wrapper.unwrap();
                 if point_wrapper.is_just_offset() && point_wrapper.is_ck_stored()
                     || is_ck_done(point_wrapper)
-                    || is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored()
+                    || point_wrapper.retired.load(Ordering::Acquire)
+                        && is_ck_done_for_finish(point_wrapper)
+                        && point_wrapper.is_ck_stored()
                 {
                     if self.commit_offset(point_wrapper.as_ref()).await {
                         queue.pop_front();
@@ -966,6 +989,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
             topic: point.topic.clone(),
             queue_id: point.queue_id,
             pop_time: point.pop_time,
+            broker_name: point.broker_name.clone().unwrap_or_default(),
             ..Default::default()
         };
         let mut batch_ack_msg = BatchAckMsg {
@@ -984,7 +1008,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         let store_host = self.context.policy.snapshot().store_host;
         msg.message_ext_inner.born_host = store_host;
         msg.message_ext_inner.store_host = store_host;
-        msg.set_delay_time_ms(point.get_revive_time() as u64);
+        msg.set_deliver_time_ms(point.get_revive_time() as u64);
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from_string(PopMessageProcessor::<MS>::gen_batch_ack_unique_id(&batch_ack_msg)),
@@ -1011,7 +1035,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
             topic: point.topic.clone(),
             queue_id: point.queue_id,
             pop_time: point.pop_time,
-            ..Default::default()
+            broker_name: point.broker_name.clone().unwrap_or_default(),
         };
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(self.revive_topic.clone());
@@ -1022,7 +1046,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         let store_host = self.context.policy.snapshot().store_host;
         msg.message_ext_inner.born_host = store_host;
         msg.message_ext_inner.store_host = store_host;
-        msg.set_delay_time_ms(point.get_revive_time() as u64);
+        msg.set_deliver_time_ms(point.get_revive_time() as u64);
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from_string(PopMessageProcessor::<MS>::gen_ack_unique_id(&ack_msg)),
@@ -1158,9 +1182,10 @@ fn is_ck_done(point_wrapper: &PopCheckPointWrapper) -> bool {
 
 fn is_ck_done_for_finish(point_wrapper: &PopCheckPointWrapper) -> bool {
     let num = point_wrapper.ck.num;
-    let bits = point_wrapper.bits.load(Ordering::Acquire) | point_wrapper.to_store_bits.load(Ordering::Acquire);
+    let received = point_wrapper.bits.load(Ordering::Acquire);
+    let stored = point_wrapper.to_store_bits.load(Ordering::Acquire);
     for i in 0..num {
-        if !DataConverter::get_bit(bits, i as usize) {
+        if DataConverter::get_bit(received, i as usize) && !DataConverter::get_bit(stored, i as usize) {
             return false;
         }
     }
@@ -1202,6 +1227,9 @@ pub struct PopCheckPointWrapper {
     bits: AtomicI32,
     // bit for stored buffer ak
     to_store_bits: AtomicI32,
+    // Published only by exclusive buffer retirement. Queue insertion precedes
+    // buffer insertion, so map absence alone cannot authorize offset progress.
+    retired: AtomicBool,
     next_begin_offset: i64,
     lock_key: CheetahString,
     merge_key: CheetahString,
@@ -1252,6 +1280,7 @@ impl PopCheckPointWrapper {
             ck,
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
+            retired: AtomicBool::new(false),
             next_begin_offset,
             lock_key,
             merge_key,
@@ -1274,6 +1303,7 @@ impl PopCheckPointWrapper {
             ck,
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
+            retired: AtomicBool::new(false),
             next_begin_offset,
             lock_key,
             merge_key,
@@ -1379,6 +1409,9 @@ impl PopCheckPointWrapper {
         self.ck_stored.store(ck_stored, Ordering::SeqCst);
     }
 }
+
+#[cfg(test)]
+pub(crate) mod retirement_tests;
 
 #[cfg(test)]
 mod tests {

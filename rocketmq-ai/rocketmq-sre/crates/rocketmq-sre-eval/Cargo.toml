@@ -43,6 +43,9 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[dev-dependencies]
+tempfile = "3.27.0"
+
 [lints]
 workspace = true
 
@@ -73,3 +76,7 @@ path = "src/bin/diagnostic_pack_qualification.rs"
 [[bin]]
 name = "investigation-replay"
 path = "src/bin/investigation_replay.rs"
+
+[[bin]]
+name = "execution-drill-report"
+path = "src/bin/execution_drill_report.rs"

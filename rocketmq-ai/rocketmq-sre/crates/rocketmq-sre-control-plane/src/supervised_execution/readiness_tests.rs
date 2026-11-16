@@ -23,6 +23,7 @@ use super::service::SupervisedExecutionService;
 use crate::workflow::{WorkflowEventBus, WorkflowService};
 
 mod critic;
+mod d21_drills;
 mod history;
 mod observation;
 mod protocol;

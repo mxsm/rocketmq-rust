@@ -61,6 +61,10 @@ const PULL_THREADS: &str = "pull_message_thread_pool_nums";
 const FLUSH_DELAY: &str = "flush_delay_offset_interval_ms";
 const MAX_CLIENT_EVENTS: &str = "max_client_event_count";
 
+fn client_event_limit_supported(runtime_version: Option<u32>, before: Option<i32>) -> bool {
+    runtime_version == Some(1) && before.is_some_and(|value| (1..=10_000).contains(&value))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 struct BrokerBeforeState {
     broker_addr: String,
@@ -364,7 +368,11 @@ impl ProductionBrokerConfigPatchClient {
         // consumer of the newly published generation are executable. Visible
         // fields that still require restart remain useful for a precise
         // fail-closed precheck but never enter the mutation surface.
-        let supported_fields = [values.max_client_event_count.map(|_| MAX_CLIENT_EVENTS.to_owned())]
+        let runtime_supported = client_event_limit_supported(
+            config.max_client_event_count_runtime_version,
+            values.max_client_event_count,
+        );
+        let supported_fields = [runtime_supported.then(|| MAX_CLIENT_EVENTS.to_owned())]
             .into_iter()
             .flatten()
             .collect::<BTreeSet<_>>();
@@ -372,6 +380,10 @@ impl ProductionBrokerConfigPatchClient {
             values.send_message_thread_pool_nums.map(|_| SEND_THREADS.to_owned()),
             values.pull_message_thread_pool_nums.map(|_| PULL_THREADS.to_owned()),
             values.flush_delay_offset_interval_ms.map(|_| FLUSH_DELAY.to_owned()),
+            values
+                .max_client_event_count
+                .filter(|_| !runtime_supported)
+                .map(|_| MAX_CLIENT_EVENTS.to_owned()),
         ]
         .into_iter()
         .flatten()

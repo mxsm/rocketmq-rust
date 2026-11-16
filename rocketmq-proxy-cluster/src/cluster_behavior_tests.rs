@@ -37,6 +37,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
+#[path = "cluster_behavior_tests/dead_letter.rs"]
+mod dead_letter;
+
 type EventLog = Arc<Mutex<Vec<&'static str>>>;
 type SendScript = Arc<Mutex<VecDeque<Result<Option<SendResult>, CanonicalError>>>>;
 
@@ -134,6 +137,9 @@ struct ScriptedClientIo {
     events: EventLog,
     routes: Mutex<VecDeque<Result<Option<TopicRouteData>, CanonicalError>>>,
     pulls: Mutex<VecDeque<Result<PullResponse<MessageExt>, CanonicalError>>>,
+    pull_requests: Mutex<Vec<(PullMessageRequestHeader, u64)>>,
+    send_backs: Mutex<VecDeque<Result<(), CanonicalError>>>,
+    send_back_messages: Mutex<Vec<(MessageExt, u64)>>,
     pops: Mutex<VecDeque<Result<PopResult, CanonicalError>>>,
     acks: Mutex<VecDeque<Result<AckResult, CanonicalError>>>,
     broker_lookup_misses: AtomicUsize,
@@ -152,6 +158,7 @@ struct ScriptedClientIo {
     start_block: Option<Arc<Notify>>,
     pull_entered: Mutex<Option<oneshot::Sender<()>>>,
     pull_block: Option<Arc<Notify>>,
+    pull_delay: Option<Duration>,
     pull_wait_poll_gate: Option<CancellationToken>,
     shutdown_block: Option<Arc<Notify>>,
 }
@@ -162,6 +169,9 @@ impl ScriptedClientIo {
             events,
             routes: Mutex::new(VecDeque::new()),
             pulls: Mutex::new(VecDeque::new()),
+            pull_requests: Mutex::new(Vec::new()),
+            send_backs: Mutex::new(VecDeque::new()),
+            send_back_messages: Mutex::new(Vec::new()),
             pops: Mutex::new(VecDeque::new()),
             acks: Mutex::new(VecDeque::new()),
             broker_lookup_misses: AtomicUsize::new(0),
@@ -180,6 +190,7 @@ impl ScriptedClientIo {
             start_block: None,
             pull_entered: Mutex::new(None),
             pull_block: None,
+            pull_delay: None,
             pull_wait_poll_gate: None,
             shutdown_block: None,
         }
@@ -426,13 +437,14 @@ impl ClusterClientIo for ScriptedClientIo {
     async fn pull_response_from_broker(
         &self,
         _broker_addr: &str,
-        _request: PullMessageRequestHeader,
-        _timeout_millis: u64,
+        request: PullMessageRequestHeader,
+        timeout_millis: u64,
     ) -> Result<PullResponse<MessageExt>, CanonicalError> {
         // Subscribe before publishing readiness so a broadcast cannot be lost
         // between the call count becoming visible and the wait being polled.
         let released = self.pull_block.as_ref().map(|block| block.notified());
         self.record("client.pull");
+        self.pull_requests.lock().unwrap().push((request, timeout_millis));
         self.pull_calls.fetch_add(1, Ordering::AcqRel);
         if let Some(sender) = self
             .pull_entered
@@ -448,6 +460,9 @@ impl ClusterClientIo for ScriptedClientIo {
         if let Some(released) = released {
             released.await;
         }
+        if let Some(delay) = self.pull_delay {
+            tokio::time::sleep(delay).await;
+        }
         Self::scripted(&self.pulls, "pull_response_from_broker")
     }
 
@@ -455,13 +470,18 @@ impl ClusterClientIo for ScriptedClientIo {
         &self,
         _broker_addr: &str,
         _broker_name: Option<&str>,
-        _message: &MessageExt,
+        message: &MessageExt,
         _consumer_group: &str,
         _delay_level: i32,
-        _timeout_millis: u64,
+        timeout_millis: u64,
         _max_consume_retry_times: i32,
     ) -> Result<(), CanonicalError> {
-        Err(unexpected_client_call("consumer_send_message_back"))
+        self.record("client.send-back");
+        self.send_back_messages
+            .lock()
+            .unwrap()
+            .push((message.clone(), timeout_millis));
+        Self::scripted(&self.send_backs, "consumer_send_message_back")
     }
 
     async fn update_consumer_offset(

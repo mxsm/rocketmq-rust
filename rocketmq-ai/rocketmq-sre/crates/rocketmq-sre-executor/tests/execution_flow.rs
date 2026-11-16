@@ -973,7 +973,12 @@ async fn all_r1_actions_persist_recovery_qualification_matrix() {
     };
     let mut bytes = serde_json::to_vec_pretty(&fragment).expect("serialize R1 recovery qualification fragment");
     bytes.push(b'\n');
-    fs::write(path, bytes).expect("write R1 recovery qualification fragment");
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .expect("a new R1 engineering protocol fragment is required");
+    std::io::Write::write_all(&mut output, &bytes).expect("write R1 engineering protocol fragment");
 }
 
 #[derive(Serialize)]
@@ -1078,7 +1083,12 @@ async fn all_r2_actions_persist_recovery_qualification_matrix() {
     };
     let mut bytes = serde_json::to_vec_pretty(&fragment).expect("serialize R2 recovery qualification fragment");
     bytes.push(b'\n');
-    fs::write(path, bytes).expect("write R2 recovery qualification fragment");
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .expect("a new R2 engineering protocol fragment is required");
+    std::io::Write::write_all(&mut output, &bytes).expect("write R2 engineering protocol fragment");
 }
 
 fn r1_success_signals(action: ExecutionAction) -> Vec<Signal> {
@@ -1392,6 +1402,9 @@ const fn signal(offset_seconds: i64, healthy: bool) -> Signal {
 
 #[path = "execution_flow/d20_faults.rs"]
 mod d20_faults;
+
+#[path = "execution_flow/d21_faults.rs"]
+mod d21_faults;
 
 fn lease_contract(record: &rocketmq_sre_executor::ExecutorLeaseRecord) -> ExecutorLease {
     ExecutorLease {

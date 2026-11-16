@@ -227,6 +227,30 @@ environment settings `ROCKETMQ_SECURITY_TRUST_ANCHOR`, `ROCKETMQ_SECURITY_TLS_CE
 its own configuration under `broker.brokerServerConfig.tlsConfig`; bootstrap environment variables do not enable it.
 With no profile or other bootstrap material, this additional bootstrap check is disabled.
 
+Outbound NameServer/Broker RPC TLS is configured separately from the listener.
+Build with `--features tls` and use the startup-only canonical field:
+
+```toml
+[broker.brokerClientTlsConfig]
+enable = true
+configFile = ""
+testModeEnable = false
+
+[broker.brokerClientTlsConfig.client]
+authServer = true
+trustCertPath = "/run/secrets/backend-ca.pem"
+# Optional mutual TLS: supply both certPath and keyPath.
+```
+
+The peer's actual DNS/IP must match the certificate SAN. If `trustCertPath` is
+absent, the existing native trust store is used. Private inner-client credentials
+still supply RPC authentication. This new field defaults to TLS off; enabling it
+requires direct typed settings with no implicit properties file, no test mode and
+verified server certificates. It is absent from remote GetBrokerConfig properties
+and cannot be changed through runtime or CAS patches. Debug output and validation
+errors do not echo its material paths; existing listener TLS and legacy properties
+contracts remain separate.
+
 Privileged maintenance requests use a dedicated authorization path. Their routes require maintenance configuration,
 an initialized auth runtime, and a validated maintenance policy reference; they are not enabled by the auth flags alone.
 
@@ -315,6 +339,28 @@ This consumer policy does not change the runtime's legacy scheduler defaults.
 Selecting `RocksDB` without its compiled backend fails instead of falling back to local files. Tiered storage is not
 activated merely by compiling `tieredstore`; when configured with an enabled storage level, it requires
 `store.storeType = "LocalFile"`. See [rocketmq-store](../rocketmq-store/README.md) for storage configuration.
+
+## Runtime default Lite event limit
+
+`maxClientEventCount` can change through the existing generation-bound Broker
+configuration transaction. Runtime writes accept canonical integers from 1 to
+10000. Existing startup validation still accepts its previous positive range;
+SRE automation requires the observed before value to be within 1..10000 too,
+so its recorded rollback remains representable by the same runtime contract.
+
+The arrival listener, POP Lite owner and Lite manager share the published
+configuration source. Positive group overrides keep precedence. Lowering the
+default changes subsequent policy selection; it preserves queued/reserved
+payloads and their permits, and does not raise the shared count/byte budgets.
+
+The extensible `GetBrokerConfig` response includes
+`maxClientEventCountRuntimeVersion:1` only after all three consumers are wired.
+Its value and config-generation header refer to the same captured configuration
+snapshot. The marker is a read-only capability, absent from startup properties
+and runtime patch keys. Old or unrecognized markers do not establish runtime
+support merely because the value is visible. The strict `GetBrokerMutationConfig`
+body remains unchanged. This capability does not attest software version, target
+membership, recovery or execution qualification.
 
 ## Validation and Benchmarks
 

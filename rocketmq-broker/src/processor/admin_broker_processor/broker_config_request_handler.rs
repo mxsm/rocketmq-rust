@@ -381,6 +381,9 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         for (key, value) in combine_map {
             body.push_str(&format!("{key}:{value}\n"));
         }
+        if let Some(version) = self.broker_runtime_inner.client_event_limit_runtime_version() {
+            body.push_str(&format!("maxClientEventCountRuntimeVersion:{version}\n"));
+        }
         if !body.is_empty() {
             response.set_body_mut_ref(body);
         }

@@ -63,6 +63,9 @@ use rocketmq_transport::api::ServerConfig;
 use tracing::info;
 use tracing::warn;
 
+#[path = "broker_bootstrap_server/shutdown_diagnostics.rs"]
+mod shutdown_diagnostics;
+
 const LOGO: &str = r#"
   _____            _        _   __  __  ____         _____           _     ____            _
  |  __ \          | |      | | |  \/  |/ __ \       |  __ \         | |   |  _ \          | |
@@ -181,6 +184,12 @@ fn try_main() -> Result<()> {
     let shutdown_result = owner
         .shutdown_runtime_blocking_until(shutdown_request.deadline)
         .context("failed to shutdown broker runtime");
+
+    // A lifecycle failure must not discard the independently observed
+    // owner outcome. The diagnostic projects closed classes, never raw names.
+    if run_result.is_err() {
+        shutdown_diagnostics::record(shutdown_result.as_ref().ok());
+    }
 
     match (run_result, shutdown_result) {
         (Err(error), _) => Err(error),

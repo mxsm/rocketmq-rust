@@ -1,7 +1,7 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { User } from "oidc-client-ts";
 import type * as OidcModule from "oidc-client-ts";
-import { StrictMode } from "react";
+import { Activity, StrictMode } from "react";
 
 import { AuthProvider, useAuth } from "./AuthContext";
 
@@ -13,9 +13,12 @@ const oidc = vi.hoisted(() => {
     loaded,
     unloaded,
     expired,
+    constructed: vi.fn<(settings: OidcModule.UserManagerSettings) => void>(),
     manager: {
       getUser: vi.fn<() => Promise<User | null>>(),
       signinRedirectCallback: vi.fn<() => Promise<User>>(),
+      startSilentRenew: vi.fn<() => void>(),
+      stopSilentRenew: vi.fn<() => void>(),
       events: {
         addUserLoaded: (callback: (user: User) => void) => loaded.add(callback),
         removeUserLoaded: (callback: (user: User) => void) => loaded.delete(callback),
@@ -31,7 +34,8 @@ const oidc = vi.hoisted(() => {
 vi.mock("oidc-client-ts", async (importOriginal) => ({
   ...await importOriginal<typeof OidcModule>(),
   UserManager: class {
-    constructor() {
+    constructor(settings: OidcModule.UserManagerSettings) {
+      oidc.constructed(settings);
       return oidc.manager;
     }
   },
@@ -89,6 +93,9 @@ describe("OIDC session lifecycle", () => {
     window.history.replaceState(null, "", "/");
     oidc.manager.getUser.mockReset().mockResolvedValue(null);
     oidc.manager.signinRedirectCallback.mockReset();
+    oidc.constructed.mockClear();
+    oidc.manager.startSilentRenew.mockReset();
+    oidc.manager.stopSilentRenew.mockReset();
   });
 
   afterEach(() => {
@@ -117,6 +124,166 @@ describe("OIDC session lifecycle", () => {
     expect(screen.getByTestId("context")).toHaveTextContent("next-tenant");
     expect(screen.getByTestId("context")).not.toHaveTextContent("synthetic-cluster-a");
   });
+
+  it.each(["invalid_scope", "access_denied"])(
+    "validates an OIDC %s response through the SDK and never restores a stale stored identity",
+    async (code) => {
+      window.history.replaceState(null, "", `/oidc/callback?error=${code}&error_description=PRIVATE_DESCRIPTION_CANARY&state=PRIVATE_STATE_CANARY`);
+      oidc.manager.getUser.mockResolvedValue(user("stale-stored-subject", "PRIVATE_STORED_TOKEN_CANARY"));
+      // Both a provider rejection and an unrecognized state are SDK failures;
+      // their external descriptions must never become UI error content.
+      oidc.manager.signinRedirectCallback.mockRejectedValue(new Error("PRIVATE_SDK_ERROR_CANARY"));
+      render(<AuthProvider><Probe /></AuthProvider>);
+
+      await screen.findByText("error");
+      expect(oidc.manager.signinRedirectCallback).toHaveBeenCalledTimes(1);
+      expect(oidc.manager.getUser).not.toHaveBeenCalled();
+      expect(screen.getByTestId("context")).toBeEmptyDOMElement();
+      expect(screen.getByTestId("error")).toHaveTextContent("OIDC 登录回调校验失败，请重新登录。");
+      expect(document.body.textContent).not.toContain("PRIVATE_");
+      expect(document.body.textContent).not.toContain(code);
+      expect(window.location.pathname).toBe("/oidc/callback");
+      expect(window.location.search).toBe("");
+    },
+  );
+
+  it("keeps a validated successful callback and clears its response parameters", async () => {
+    window.history.replaceState(null, "", "/oidc/callback?code=PRIVATE_CODE_CANARY&state=PRIVATE_STATE_CANARY");
+    oidc.manager.signinRedirectCallback.mockResolvedValue(user("validated-callback-user"));
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await screen.findByText("authenticated");
+    expect(oidc.manager.signinRedirectCallback).toHaveBeenCalledTimes(1);
+    expect(oidc.manager.getUser).not.toHaveBeenCalled();
+    expect(screen.getByTestId("context")).toHaveTextContent("validated-callback-user");
+    expect(screen.getByTestId("error")).toBeEmptyDOMElement();
+    expect(window.location.search).toBe("");
+    expect(document.body.textContent).not.toContain("PRIVATE_");
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "exchanges a single-use OIDC callback only once across StrictMode replay when it later %s settles",
+    async (outcome) => {
+      window.history.replaceState(null, "", "/oidc/callback?code=PRIVATE_CODE_CANARY&state=PRIVATE_STATE_CANARY");
+      const callback = deferred<User>();
+      oidc.manager.signinRedirectCallback.mockReturnValue(callback.promise);
+      render(<StrictMode><AuthProvider><Probe /></AuthProvider></StrictMode>);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(oidc.manager.signinRedirectCallback).toHaveBeenCalledTimes(1);
+      expect(oidc.manager.signinRedirectCallback).toHaveBeenCalledWith(window.location.href);
+      expect(oidc.manager.getUser).not.toHaveBeenCalled();
+      await act(async () => {
+        if (outcome === "resolve") callback.resolve(user("single-exchange-user"));
+        else callback.reject(new Error("PRIVATE_SDK_CALLBACK_ERROR_CANARY"));
+        await callback.promise.catch(() => undefined);
+      });
+      expect(screen.getByTestId("status")).toHaveTextContent(outcome === "resolve" ? "authenticated" : "error");
+      expect(window.location.search).toBe("");
+      expect(document.body.textContent).not.toContain("PRIVATE_");
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps a replacement provider's identity and URL when an unmounted callback later %s settles",
+    async (outcome) => {
+      window.history.replaceState(null, "", "/oidc/callback?code=PRIVATE_OLD_CODE&state=PRIVATE_OLD_STATE");
+      const callback = deferred<User>();
+      oidc.manager.signinRedirectCallback.mockReturnValue(callback.promise);
+      const old = render(<AuthProvider><Probe /></AuthProvider>);
+      await act(async () => { await Promise.resolve(); });
+      old.unmount();
+      const selected = "/plans/synthetic?cluster=synthetic-cluster-a&resource=broker%2Fbroker-a";
+      window.history.replaceState(null, "", selected);
+      oidc.manager.getUser.mockResolvedValue(user("replacement-principal"));
+      render(<AuthProvider><Probe /></AuthProvider>);
+      await screen.findByText("authenticated");
+      await act(async () => {
+        if (outcome === "resolve") callback.resolve(user("retired-principal", "PRIVATE_OLD_TOKEN"));
+        else callback.reject(new Error("PRIVATE_OLD_ERROR"));
+        await callback.promise.catch(() => undefined);
+      });
+
+      expect(screen.getByTestId("context")).toHaveTextContent("replacement-principal");
+      expect(screen.getByTestId("error")).toBeEmptyDOMElement();
+      expect(window.location.pathname + window.location.search).toBe(selected);
+      expect(document.body.textContent).not.toContain("PRIVATE_");
+      expect(oidc.manager.signinRedirectCallback).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "revalidates a reinserted callback URL through the SDK after the original exchange %s settles",
+    async (outcome) => {
+      const callbackUrl = "/oidc/callback?code=PRIVATE_REINSERTED_CODE&state=PRIVATE_REINSERTED_STATE";
+      window.history.replaceState(null, "", callbackUrl);
+      const callback = deferred<User>();
+      oidc.manager.signinRedirectCallback.mockReturnValueOnce(callback.promise)
+        .mockRejectedValue(new Error("PRIVATE_ALREADY_CONSUMED_STATE"));
+      const content = (visible: boolean) => (
+        <Activity mode={visible ? "visible" : "hidden"}>
+          <AuthProvider><Probe /></AuthProvider>
+        </Activity>
+      );
+      const view = render(content(true));
+      await act(async () => {
+        if (outcome === "resolve") callback.resolve(user("first-exchange-principal"));
+        else callback.reject(new Error("PRIVATE_ORIGINAL_REJECTION"));
+        await callback.promise.catch(() => undefined);
+      });
+      await screen.findByText(outcome === "resolve" ? "authenticated" : "error");
+      view.rerender(content(false));
+      window.history.replaceState(null, "", callbackUrl);
+      view.rerender(content(true));
+
+      await waitFor(() => expect(oidc.manager.signinRedirectCallback).toHaveBeenCalledTimes(2));
+      await screen.findByText("error");
+      expect(oidc.constructed).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("context")).toBeEmptyDOMElement();
+      expect(screen.getByTestId("error")).toHaveTextContent("OIDC 登录回调校验失败，请重新登录。");
+      expect(document.body.textContent).not.toContain("PRIVATE_");
+    },
+  );
+
+  it("does not let a late rejected callback replace a newer lifecycle identity", async () => {
+    window.history.replaceState(null, "", "/oidc/callback?error=access_denied&state=PRIVATE_STATE_CANARY");
+    const callback = deferred<User>();
+    oidc.manager.signinRedirectCallback.mockReturnValue(callback.promise);
+    render(<AuthProvider><Probe /></AuthProvider>);
+    act(() => oidc.loaded.forEach((loaded) => loaded(user("newer-callback-identity"))));
+    await act(async () => {
+      callback.reject(new Error("PRIVATE_ERROR_DESCRIPTION_CANARY"));
+      await callback.promise.catch(() => undefined);
+    });
+
+    expect(screen.getByTestId("status")).toHaveTextContent("authenticated");
+    expect(screen.getByTestId("context")).toHaveTextContent("newer-callback-identity");
+    expect(screen.getByTestId("error")).toBeEmptyDOMElement();
+    expect(window.location.search).toBe("");
+    expect(document.body.textContent).not.toContain("PRIVATE_");
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps a newer deep-link query when a previous callback later %s settles",
+    async (outcome) => {
+      window.history.replaceState(null, "", "/oidc/callback?code=PRIVATE_CODE_CANARY&state=PRIVATE_STATE_CANARY");
+      const callback = deferred<User>();
+      oidc.manager.signinRedirectCallback.mockReturnValue(callback.promise);
+      render(<AuthProvider><Probe /></AuthProvider>);
+      const selected = "/investigations/synthetic?run_id=00000000-0000-4000-8000-000000000004&cluster=synthetic-cluster-a";
+      window.history.replaceState(null, "", selected);
+      await act(async () => {
+        if (outcome === "resolve") callback.resolve(user("validated-user"));
+        else callback.reject(new Error("PRIVATE_CALLBACK_ERROR_CANARY"));
+        await callback.promise.catch(() => undefined);
+      });
+
+      expect(window.location.pathname + window.location.search).toBe(selected);
+      expect(screen.getByTestId("status")).toHaveTextContent(outcome === "resolve" ? "authenticated" : "error");
+      expect(document.body.textContent).not.toContain("PRIVATE_");
+    },
+  );
 
   it.each(["resolve", "reject"] as const)(
     "does not let an initial getUser %s overwrite a newer lifecycle event",
@@ -183,8 +350,13 @@ describe("OIDC session lifecycle", () => {
       </StrictMode>,
     );
     await screen.findByText("anonymous");
+    expect(oidc.constructed).toHaveBeenCalledTimes(1);
+    expect(oidc.constructed.mock.calls[0][0].automaticSilentRenew).toBe(false);
+    expect(oidc.manager.startSilentRenew).toHaveBeenCalled();
     expect([oidc.loaded.size, oidc.unloaded.size, oidc.expired.size]).toEqual([1, 1, 1]);
     view.unmount();
+    expect(oidc.manager.stopSilentRenew).toHaveBeenCalled();
+    expect(oidc.manager.startSilentRenew.mock.calls.length).toBe(oidc.manager.stopSilentRenew.mock.calls.length);
     expect([oidc.loaded.size, oidc.unloaded.size, oidc.expired.size]).toEqual([0, 0, 0]);
   });
 });

@@ -49,6 +49,10 @@ remain unknown, so a configured handler and an approved Plan alone cannot advanc
 a new submission. Exact target-scope rules must also be configured before an
 automatic preparation.
 
+The [execution drill records](docs/execution-drills.md) document bounded
+engineering fault evidence and its offline consistency tool. Drill records do
+not grant execution authority or establish production qualification.
+
 ## Architecture
 
 ```mermaid

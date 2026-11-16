@@ -32,6 +32,8 @@ use rocketmq_model::common::mix_all::NAMESRV_ADDR_PROPERTY;
 use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_transport::api::ServerConfig;
+use rocketmq_transport::api::TlsConfig;
+use rocketmq_transport::api::TransportClientConfig;
 
 pub static NAMESRV_ADDR: std::sync::LazyLock<Option<String>> =
     std::sync::LazyLock::new(|| std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some));
@@ -732,6 +734,11 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::broker_server_config")]
     pub broker_server_config: ServerConfig,
 
+    /// Startup-only outbound TLS for NameServer and Broker RPCs. This private
+    /// configuration is intentionally absent from remote properties and patches.
+    #[serde(default, deserialize_with = "super::client_tls::deserialize")]
+    pub broker_client_tls_config: TlsConfig,
+
     /// Primary advertised IP address of this Broker, used in the broker address
     /// registered with the nameserver.
     #[serde(default = "defaults::broker_ip1")]
@@ -1392,6 +1399,7 @@ impl fmt::Debug for BrokerConfig {
             .field("broker_ip1", &self.broker_ip1)
             .field("broker_ip2", &self.broker_ip2)
             .field("listen_port", &self.listen_port)
+            .field("outbound_tls_enabled", &self.broker_client_tls_config.enable)
             .field("authentication_enabled", &self.authentication_enabled)
             .field("authorization_enabled", &self.authorization_enabled)
             .field("maintenance_enabled", &self.maintenance_enabled)
@@ -1433,6 +1441,7 @@ impl Default for BrokerConfig {
             topic_queue_config: TopicQueueConfig::default(),
             timer_wheel_config: TimerWheelConfig::default(),
             broker_server_config: Default::default(),
+            broker_client_tls_config: TlsConfig::default(),
             broker_ip1,
             broker_ip2,
             listen_port,
@@ -1629,6 +1638,13 @@ impl Default for BrokerConfig {
 }
 
 impl BrokerConfig {
+    pub(crate) fn outbound_transport_config(&self) -> TransportClientConfig {
+        TransportClientConfig {
+            tls: self.broker_client_tls_config.clone(),
+            ..TransportClientConfig::default()
+        }
+    }
+
     /// Builds the narrow, immutable configuration snapshot consumed by Store.
     #[must_use]
     pub fn store_runtime_config(&self) -> rocketmq_store::StoreRuntimeConfig {

@@ -32,6 +32,9 @@ use rocketmq_store::MessageIndexRuntimeSnapshot;
 use rocketmq_store::MessageIndexRuntimeSource;
 use rocketmq_store::MessageStoreConfig;
 
+mod client_event_limit;
+pub(crate) use client_event_limit::BrokerClientEventLimit;
+
 /// An atomically published broker and message-store configuration generation.
 ///
 /// Keeping both configurations in one generation prevents an admin update from
@@ -96,6 +99,7 @@ pub(crate) struct BrokerRuntimeConfigState {
     publication: Arc<parking_lot::Mutex<()>>,
     mutation: Arc<tokio::sync::Mutex<()>>,
     index_incomplete: Arc<AtomicBool>,
+    client_event_limit_wired: Arc<AtomicBool>,
     index_transition: Arc<parking_lot::RwLock<()>>,
     index_gap_marker: Option<Arc<MessageIndexGapMarker>>,
 }
@@ -209,6 +213,7 @@ impl BrokerRuntimeConfigState {
             publication: Arc::new(parking_lot::Mutex::new(())),
             mutation: Arc::new(tokio::sync::Mutex::new(())),
             index_incomplete: Arc::new(AtomicBool::new(false)),
+            client_event_limit_wired: Arc::new(AtomicBool::new(false)),
             index_transition: Arc::new(parking_lot::RwLock::new(())),
             index_gap_marker,
         }
@@ -218,6 +223,14 @@ impl BrokerRuntimeConfigState {
         let owner = Arc::clone(&self.mutation);
         let guard = Arc::clone(&owner).lock_owned().await;
         BrokerRuntimeMutationPermit { owner, _guard: guard }
+    }
+
+    pub(crate) fn mark_client_event_limit_wired(&self) {
+        self.client_event_limit_wired.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn client_event_limit_runtime_version(&self) -> Option<u32> {
+        self.client_event_limit_wired.load(Ordering::Acquire).then_some(1)
     }
 
     pub(crate) async fn initialize_index_completeness(

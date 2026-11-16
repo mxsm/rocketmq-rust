@@ -1037,7 +1037,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         msg.message_ext_inner.born_timestamp = current_millis() as i64;
         msg.message_ext_inner.born_host = store_host;
         msg.message_ext_inner.store_host = store_host;
-        msg.set_delay_time_ms((ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL) as u64);
+        msg.set_deliver_time_ms((ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL) as u64);
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from_string(PopMessageProcessor::<MS>::gen_ck_unique_id(ck)),

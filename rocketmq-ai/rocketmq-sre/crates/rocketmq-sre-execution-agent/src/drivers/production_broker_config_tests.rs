@@ -23,6 +23,19 @@ use sqlx::postgres::PgPoolOptions;
 
 use super::*;
 
+#[test]
+fn broker_live_limit_requires_runtime_capability_and_a_reversible_before_value() {
+    for version in [None, Some(0), Some(2)] {
+        assert!(!client_event_limit_supported(version, Some(100)));
+    }
+    for before in [None, Some(0), Some(-1), Some(10_001), Some(i32::MAX)] {
+        assert!(!client_event_limit_supported(Some(1), before));
+    }
+    for before in [1, 100, 10_000] {
+        assert!(client_event_limit_supported(Some(1), Some(before)));
+    }
+}
+
 #[tokio::test]
 async fn read_admin_startup_failure_retains_its_typed_source() {
     use std::error::Error;

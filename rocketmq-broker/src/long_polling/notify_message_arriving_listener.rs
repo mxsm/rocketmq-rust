@@ -20,6 +20,7 @@ use rocketmq_model::common::message::message_property::MessageProperties;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::MessageArrivingListener;
 
+use crate::broker::broker_runtime_config_state::BrokerClientEventLimit;
 use crate::broker_runtime::deferred_producer::BrokerDeferredProducer;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
@@ -30,7 +31,7 @@ pub struct NotifyMessageArrivingListener<MS: BrokerReadWriteStore> {
     lite_subscription_registry: LiteSubscriptionRegistry,
     lite_event_dispatcher: LiteEventDispatcher,
     lite_group_lookup: SubscriptionGroupConfigLookup,
-    default_max_client_event_count: usize,
+    default_max_client_event_count: BrokerClientEventLimit,
     default_dispatch_delay_millis: u64,
     wildcard_dispatch_delay_millis: u64,
 }
@@ -53,10 +54,15 @@ where
             lite_subscription_registry,
             lite_event_dispatcher,
             lite_group_lookup,
-            default_max_client_event_count,
+            default_max_client_event_count: BrokerClientEventLimit::fixed(default_max_client_event_count),
             default_dispatch_delay_millis,
             wildcard_dispatch_delay_millis,
         }
+    }
+
+    pub(crate) fn with_client_event_limit(mut self, limit: BrokerClientEventLimit) -> Self {
+        self.default_max_client_event_count = limit;
+        self
     }
 }
 
@@ -116,7 +122,7 @@ where
                     .as_ref()
                     .map(|config| config.max_client_event_count())
                     .filter(|count| *count > 0)
-                    .map_or(self.default_max_client_event_count, |count| count as usize)
+                    .map_or_else(|| self.default_max_client_event_count.get(), |count| count as usize)
                     .max(1);
                 let delay = if group_config.is_some_and(|config| config.lite_sub_wildcard()) {
                     self.wildcard_dispatch_delay_millis

@@ -327,6 +327,65 @@ rocketmq-proxy/
   tests/                 gRPC and remoting ingress integration tests
 ```
 
+## Backend and Remoting TLS
+
+Build the Proxy with `--features tls` to enable TLS for its cluster client and
+Remoting listener as well as gRPC. Cluster-only builds use
+`--no-default-features --features cluster-mode,tls`. The three transports are
+configured independently; configuring gRPC does not secure backend connections.
+
+The backend client uses the canonical transport configuration:
+
+```toml
+[cluster.tlsConfig]
+enable = true
+configFile = ""
+testModeEnable = false
+
+[cluster.tlsConfig.client]
+authServer = true
+trustCertPath = "/run/secrets/backend-ca.pem"
+# Optional mutual TLS: configure both certPath and keyPath together.
+```
+
+Both metadata reads and send producers use this configuration. A missing
+`trustCertPath` retains the transport's native trust-store semantics. The peer's
+actual DNS name or IP must match its certificate SAN. Internal RPC authentication
+remains separate: enable `enableAclRpcHookForClusterMode` and provide the existing
+private inner-client credentials on both the signer and receiving auth providers.
+
+Remoting ingress can use its own mounted server identity:
+
+```toml
+[remoting]
+enabled = true
+listenAddr = "0.0.0.0:8080"
+
+[remoting.tlsConfig]
+enable = true
+configFile = ""
+testModeEnable = false
+
+[remoting.tlsConfig.server]
+mode = "enforcing"
+certPath = "/run/secrets/proxy.pem"
+keyPath = "/run/secrets/proxy.key"
+needClientAuth = "none"
+```
+
+To require client certificates, use `needClientAuth = "require"`,
+`authClient = true` and `trustCertPath` under the server table. RPC authentication
+and authorization still apply. Bootstrap security-profile material checks do not
+enable any transport automatically.
+
+These new startup-only fields default to TLS off for existing configurations.
+Enabled fields require direct typed settings (`configFile = ""`); implicit TLS
+properties-file overrides, test mode and unverified backend certificates are
+rejected. Configuration errors and Debug output do not echo their private material
+paths. Certificate parsing and CA/SAN validation remain owned by the transport;
+invalid material never establishes a verified connection. No execution or action
+qualification follows from TLS or readiness.
+
 ## Feature Flags
 
 | Feature | Description |

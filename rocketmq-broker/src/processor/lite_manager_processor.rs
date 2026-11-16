@@ -55,6 +55,7 @@ use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
 use tracing::warn;
 
+use crate::broker::broker_runtime_config_state::BrokerClientEventLimit;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::lite::lite_consumer_lag_calculator::LiteConsumerLagCalculator;
 use crate::lite::lite_consumer_lag_calculator::LiteConsumerLagDataSource;
@@ -73,7 +74,7 @@ pub(crate) struct LiteManagerPolicy {
     store_type: CheetahString,
     max_lmq_num: i32,
     broker_name: CheetahString,
-    max_client_event_count: i32,
+    max_client_event_count: BrokerClientEventLimit,
     dispatch_delay_millis: u64,
     wildcard_dispatch_delay_millis: u64,
 }
@@ -84,10 +85,15 @@ impl LiteManagerPolicy {
             store_type: CheetahString::from_slice(message_store_config.store_type.get_store_type()),
             max_lmq_num: message_store_config.max_lmq_consume_queue_num as i32,
             broker_name: broker_config.broker_name().clone(),
-            max_client_event_count: broker_config.max_client_event_count,
+            max_client_event_count: BrokerClientEventLimit::fixed(broker_config.max_client_event_count.max(1) as usize),
             dispatch_delay_millis: broker_config.lite_event_full_dispatch_delay_time,
             wildcard_dispatch_delay_millis: broker_config.lite_event_full_dispatch_delay_time_for_wildcard_group,
         }
+    }
+
+    pub(crate) fn with_client_event_limit(mut self, limit: BrokerClientEventLimit) -> Self {
+        self.max_client_event_count = limit;
+        self
     }
 }
 
@@ -830,8 +836,11 @@ impl<MS: BrokerAdminStore> LiteManagerProcessor<MS> {
             .as_ref()
             .map(|config| config.max_client_event_count())
             .filter(|count| *count > 0)
-            .unwrap_or(self.context.policy.max_client_event_count)
-            .max(1) as usize;
+            .map_or_else(
+                || self.context.policy.max_client_event_count.get(),
+                |count| count as usize,
+            )
+            .max(1);
         let delay = if group_config.is_some_and(|config| config.lite_sub_wildcard()) {
             self.context.policy.wildcard_dispatch_delay_millis
         } else {
@@ -1103,7 +1112,7 @@ mod tests {
         assert_eq!(policy.store_type, message_store_config.store_type.get_store_type());
         assert_eq!(policy.max_lmq_num, 23);
         assert_eq!(policy.broker_name, *broker_config.broker_name());
-        assert_eq!(policy.max_client_event_count, 17);
+        assert_eq!(policy.max_client_event_count.get(), 17);
         assert_eq!(policy.dispatch_delay_millis, 29);
     }
 

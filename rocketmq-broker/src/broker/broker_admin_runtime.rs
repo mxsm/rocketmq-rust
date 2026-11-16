@@ -270,6 +270,10 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
         self.config.snapshot()
     }
 
+    pub(crate) fn client_event_limit_runtime_version(&self) -> Option<u32> {
+        self.config.client_event_limit_runtime_version()
+    }
+
     pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown.load(std::sync::atomic::Ordering::Acquire)
     }

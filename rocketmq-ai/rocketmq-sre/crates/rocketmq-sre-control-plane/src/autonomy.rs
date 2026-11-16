@@ -23,6 +23,8 @@ mod repository;
 mod service;
 
 #[cfg(test)]
+mod d21_drills;
+#[cfg(test)]
 mod logger_ttl_lifecycle_tests;
 #[cfg(test)]
 mod model_tests;
