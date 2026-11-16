@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::time::Duration;
 
+use rocketmq_transport::api::TlsConfig;
 use serde::Deserialize;
 use serde::Serialize;
+
+mod tls;
 
 /// Low-cardinality runtime state for the bounded Cluster command executor.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -58,11 +62,15 @@ pub struct ClusterExecutionDiagnostics {
 }
 
 /// Configuration owned by the Client-backed cluster adapter.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ClusterConfig {
     /// Semicolon-separated NameServer addresses; `None` leaves client discovery in effect.
     pub namesrv_addr: Option<String>,
+    /// Startup-only backend transport TLS. Enabled configurations use direct
+    /// typed material (`configFile = ""`) and verified server certificates.
+    #[serde(deserialize_with = "tls::deserialize")]
+    pub tls_config: TlsConfig,
     /// Broker cluster used to select a broker for metadata queries.
     pub broker_cluster_name: String,
     /// Instance name assigned to the backing RocketMQ client.
@@ -101,6 +109,7 @@ impl Default for ClusterConfig {
     fn default() -> Self {
         Self {
             namesrv_addr: None,
+            tls_config: TlsConfig::default(),
             broker_cluster_name: "DefaultCluster".to_owned(),
             instance_name: "rocketmq-proxy-cluster".to_owned(),
             mq_client_api_timeout_ms: 3_000,
@@ -122,6 +131,14 @@ impl Default for ClusterConfig {
 }
 
 impl ClusterConfig {
+    /// Validates backend TLS before client runtimes or listeners are admitted.
+    ///
+    /// # Errors
+    /// Returns a configuration error for unsupported TLS or unsafe/incomplete material.
+    pub fn validate_tls(&self) -> rocketmq_proxy_core::ProxyResult<()> {
+        tls::validate(&self.tls_config)
+    }
+
     /// Returns [`Self::route_cache_ttl_ms`] as a [`Duration`].
     pub fn route_cache_ttl(&self) -> Duration {
         Duration::from_millis(self.route_cache_ttl_ms)
@@ -145,5 +162,18 @@ impl ClusterConfig {
     /// Returns [`Self::execution_lane_idle_timeout_ms`] as a [`Duration`].
     pub fn execution_lane_idle_timeout(&self) -> Duration {
         Duration::from_millis(self.execution_lane_idle_timeout_ms)
+    }
+}
+
+impl fmt::Debug for ClusterConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The canonical transport Debug includes private material paths.
+        formatter
+            .debug_struct("ClusterConfig")
+            .field("namesrv_addr", &self.namesrv_addr)
+            .field("broker_cluster_name", &self.broker_cluster_name)
+            .field("instance_name", &self.instance_name)
+            .field("tls_enabled", &self.tls_config.enable)
+            .finish_non_exhaustive()
     }
 }

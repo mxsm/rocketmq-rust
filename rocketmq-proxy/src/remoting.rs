@@ -731,6 +731,11 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
+    config.remoting.validate()?;
+    let server_config = Arc::new(ServerConfig {
+        tls_config: config.remoting.tls_config.clone(),
+        ..ServerConfig::default()
+    });
     let addr = config.remoting.socket_addr()?;
     let listener = TcpListener::bind(addr)
         .await
@@ -753,7 +758,7 @@ where
         command_factory,
         session_binder.as_ref().clone(),
     );
-    let server = TransportServer::new(Arc::new(ServerConfig::default()), service_context, request_processor)
+    let server = TransportServer::new(server_config, service_context, request_processor)
         .with_telemetry(telemetry)
         .try_with_proxy_protocol(proxy_protocol)?
         .with_session_registry(transport_sessions);

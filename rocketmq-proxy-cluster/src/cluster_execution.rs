@@ -221,6 +221,7 @@ impl ClusterTaskExecutor {
         service_context: &ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> ProxyResult<Self> {
+        config.validate_tls()?;
         let worker_context = service_context.component("command-worker");
         let execution_telemetry = telemetry_handle.clone();
         let client_runtime = ClientRuntime::try_new(

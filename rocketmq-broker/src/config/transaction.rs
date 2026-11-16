@@ -38,6 +38,7 @@ pub(crate) struct RuntimeBrokerConfigPatch {
     pub(crate) default_topic_queue_nums: Option<u32>,
     pub(crate) message_index_enable: Option<bool>,
     pub(crate) trace_topic_enable: Option<bool>,
+    pub(crate) max_client_event_count: Option<i32>,
 }
 
 impl ConfigUpdateTransaction {
@@ -66,6 +67,9 @@ impl ConfigUpdateTransaction {
         }
         if let Some(value) = patch.trace_topic_enable {
             broker.trace_topic_enable = value;
+        }
+        if let Some(value) = patch.max_client_event_count {
+            broker.max_client_event_count = value;
         }
 
         let candidate = current.with_candidates(broker, store)?;
@@ -124,6 +128,9 @@ impl RuntimeBrokerConfigPatch {
         if self.trace_topic_enable == Some(broker.trace_topic_enable) {
             self.trace_topic_enable = None;
         }
+        if self.max_client_event_count == Some(broker.max_client_event_count) {
+            self.max_client_event_count = None;
+        }
         self
     }
 
@@ -156,6 +163,7 @@ impl RuntimeBrokerConfigPatch {
                 }
                 "messageIndexEnable" => patch.message_index_enable = Some(parse_bool(key, value)?),
                 "traceTopicEnable" => patch.trace_topic_enable = Some(parse_bool(key, value)?),
+                "maxClientEventCount" => patch.max_client_event_count = Some(parse_client_event_count(key, value)?),
                 key if broker_properties.contains_key(key) || store_properties.contains_key(key) => {
                     restart_required.push(key.to_owned());
                 }
@@ -183,6 +191,23 @@ fn parse_bool(key: &CheetahString, value: &CheetahString) -> Result<bool, Broker
             expected: "the canonical boolean `true` or `false`",
         }),
     }
+}
+
+fn parse_client_event_count(key: &CheetahString, value: &CheetahString) -> Result<i32, BrokerConfigError> {
+    const EXPECTED: &str = "a canonical integer from 1 through 10000";
+    let parsed = parse_canonical_u32(key, value, EXPECTED)?;
+    if !(1..=10_000).contains(&parsed) {
+        return Err(BrokerConfigError::InvalidProperty {
+            key: key.to_string(),
+            value: value.to_string(),
+            expected: EXPECTED,
+        });
+    }
+    i32::try_from(parsed).map_err(|_| BrokerConfigError::InvalidProperty {
+        key: key.to_string(),
+        value: value.to_string(),
+        expected: EXPECTED,
+    })
 }
 
 fn parse_canonical_u32(
@@ -333,7 +358,7 @@ mod tests {
         let restart = ConfigUpdateTransaction::from_broker_patch(
             ConfigGeneration::INITIAL,
             &current,
-            &properties(&[("maxClientEventCount", "101")]),
+            &properties(&[("listenPort", "10912")]),
         )
         .expect_err("a known non-reviewed property must require restart");
         assert!(matches!(restart, BrokerConfigError::RestartRequired { .. }));
@@ -345,5 +370,51 @@ mod tests {
         )
         .expect_err("an unknown property must remain unsupported");
         assert!(matches!(unsupported, BrokerConfigError::UnsupportedKeys { .. }));
+    }
+
+    #[test]
+    fn client_event_limit_patch_is_canonical_bounded_and_only_changes_its_reviewed_field() {
+        let current = ValidatedBrokerConfig::default();
+        for value in ["1", "101", "10000"] {
+            let transaction = ConfigUpdateTransaction::from_broker_patch(
+                ConfigGeneration::INITIAL,
+                &current,
+                &properties(&[("maxClientEventCount", value)]),
+            )
+            .unwrap();
+            assert_eq!(
+                transaction.candidate().broker().max_client_event_count.to_string(),
+                value
+            );
+            assert!(!transaction.patch().unwrap().affects_topic_registration());
+            assert_eq!(
+                transaction.candidate().broker().broker_permission,
+                current.broker().broker_permission
+            );
+        }
+        for value in ["0", "-1", "01", "+1", " 1", "10001", "2147483648"] {
+            assert!(ConfigUpdateTransaction::from_broker_patch(
+                ConfigGeneration::INITIAL,
+                &current,
+                &properties(&[("maxClientEventCount", value)])
+            )
+            .is_err());
+        }
+        let noop = ConfigUpdateTransaction::from_broker_patch(
+            ConfigGeneration::INITIAL,
+            &current,
+            &properties(&[("maxClientEventCount", "100")]),
+        )
+        .unwrap();
+        assert!(noop.patch().unwrap().max_client_event_count.is_none());
+        assert!(
+            ConfigUpdateTransaction::from_broker_patch(
+                ConfigGeneration::INITIAL,
+                &current,
+                &properties(&[("maxClientEventCountRuntimeVersion", "1")])
+            )
+            .is_err(),
+            "read-only capability is not a startup/runtime write property"
+        );
     }
 }

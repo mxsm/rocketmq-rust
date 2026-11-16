@@ -643,6 +643,7 @@ fn validate_storage(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result
 }
 
 fn validate_security(broker: &BrokerConfig) -> Result<SecurityConfig, BrokerConfigError> {
+    super::client_tls::validate(&broker.broker_client_tls_config)?;
     if broker.authorization_enabled && !broker.authentication_enabled {
         return Err(BrokerConfigError::invalid(
             ConfigSection::Security,

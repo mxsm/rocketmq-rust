@@ -1300,7 +1300,19 @@ fn build_receive_message_response(message: &ReceivedMessage) -> v2::ReceiveMessa
 }
 
 fn build_received_message(message: &ReceivedMessage) -> v2::Message {
-    build_message_from_ext(&message.message, Some(message.invisible_duration))
+    let mut response = build_message_from_ext(&message.message, Some(message.invisible_duration));
+    if let Some(properties) = response.system_properties.as_mut() {
+        properties.message_id = received_public_message_id(&message.message).to_owned();
+    }
+    response
+}
+
+/// Receive exposes the producer identity; native offset IDs remain unchanged.
+pub(super) fn received_public_message_id(message: &ProxyMessageExt) -> &str {
+    message
+        .property(PROPERTY_UNIQ_CLIENT_MESSAGE_ID)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| message.msg_id())
 }
 
 fn build_message_from_ext(message: &ProxyMessageExt, invisible_duration: Option<Duration>) -> v2::Message {
@@ -1850,6 +1862,56 @@ mod tests {
         assert_eq!(message.property(PROPERTY_SHARDING_KEY), Some("group-a"));
         assert_eq!(message.property("custom"), Some("value"));
         assert_eq!(message.body_bytes().expect("mapped body").as_ptr(), wire_body_ptr);
+    }
+
+    #[test]
+    fn received_message_keeps_the_send_result_client_identity_when_broker_offset_id_differs() {
+        let wire = send_request(HashMap::new());
+        let mapped = build_send_message_request(&grpc_context(), &wire).expect("typed send request");
+        let request = &mapped.messages[0];
+        let sent = build_send_result_entry(
+            &SendMessageResultEntry {
+                status: ProxyStatusMapper::ok_payload(),
+                send_result: Some(rocketmq_model::result::SendResult {
+                    msg_id: Some(request.client_message_id.clone().into()),
+                    offset_msg_id: Some("broker-offset-identity".to_owned()),
+                    ..Default::default()
+                }),
+            },
+            request,
+        );
+        let received = ProxyMessageExt {
+            message: request.message.clone(),
+            msg_id: "broker-offset-identity".to_owned(),
+            ..Default::default()
+        };
+
+        let delivered = build_received_message(&ReceivedMessage {
+            message: received.clone(),
+            invisible_duration: Duration::from_secs(30),
+        })
+        .system_properties
+        .expect("received system properties");
+        assert_eq!(delivered.message_id, sent.message_id);
+        assert_ne!(delivered.message_id, received.msg_id());
+        assert_eq!(
+            build_message_system_properties(&received, None).message_id,
+            received.msg_id()
+        );
+    }
+
+    #[test]
+    fn receive_without_a_client_identity_keeps_the_legacy_native_identity() {
+        for unique_id in [None, Some(""), Some(" ")] {
+            let mut message = ProxyMessageExt {
+                msg_id: "legacy-broker-identity".to_owned(),
+                ..Default::default()
+            };
+            if let Some(value) = unique_id {
+                message.message.put_property(PROPERTY_UNIQ_CLIENT_MESSAGE_ID, value);
+            }
+            assert_eq!(received_public_message_id(&message), "legacy-broker-identity");
+        }
     }
 
     #[test]

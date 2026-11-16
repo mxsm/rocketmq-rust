@@ -248,6 +248,7 @@ async fn proxy_protocol_source_identity_reaches_remoting_context() {
                     trusted_proxies: vec!["127.0.0.0/8".parse().expect("trusted CIDR")],
                     ..ProxyProtocolConfig::default()
                 },
+                ..RemotingConfig::default()
             },
             ..ProxyConfig::default()
         },

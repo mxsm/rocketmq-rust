@@ -479,6 +479,79 @@ async fn seed_execution(pool: &sqlx::PgPool, fixture: &support::Fixture) {
         .expect("durable execution before Agent effect");
 }
 
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL; exact Agent effect-store fence expiry boundary, no target driver"]
+async fn d21_expired_fence_cannot_create_an_effect_after_a_valid_prepared_control() {
+    let database = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("explicit disposable PostgreSQL");
+    let schema = format!("d21_fence_expiry_{}", Uuid::new_v4().simple());
+    let pool = isolated_pool(&database, &schema).await;
+    sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+    let fixture = seed_fixture(&pool).await;
+    seed_execution(&pool, &fixture).await;
+    let now = Utc::now();
+    let store = AgentEffectStore::new(pool.clone());
+    let lease = activate_lease(
+        &LeaseCoordinator::new(pool.clone()),
+        &store,
+        &fixture,
+        "d21-expiry-owner",
+        now,
+    )
+    .await;
+    let deadline = now + TimeDelta::seconds(30);
+    let intent = step_intent(
+        &fixture,
+        lease.id,
+        lease.epoch,
+        &lease.owner,
+        deadline,
+        "d21-original-fence-expiry",
+        now + TimeDelta::seconds(1),
+    );
+    let request = AgentStepRequest {
+        intent: intent.clone(),
+        action: intent.step.action,
+        descriptor_version: intent.step.descriptor_version.clone(),
+        target: intent.step.resource.clone(),
+        parameters: intent.step.parameters.clone(),
+    };
+    let valid = store
+        .prepare(fixture.tenant_id, &request, deadline - TimeDelta::microseconds(1))
+        .await
+        .unwrap();
+    assert!(valid.created);
+    assert_eq!(valid.effect.state, rocketmq_sre_contracts::EffectState::Prepared);
+    // Compare persisted snapshots on both sides of the rejected retry; PostgreSQL
+    // stores timestamps at microsecond precision, unlike the returned source value.
+    let persisted_before = store.effect(&intent.idempotency_key).await.unwrap();
+    let at = store.prepare(fixture.tenant_id, &request, deadline).await.unwrap_err();
+    let after = store
+        .prepare(fixture.tenant_id, &request, deadline + TimeDelta::microseconds(1))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        at.code(),
+        rocketmq_sre_execution_agent::AgentStoreFailureCode::InvalidInput
+    );
+    assert_eq!(
+        after.code(),
+        rocketmq_sre_execution_agent::AgentStoreFailureCode::InvalidInput
+    );
+    let retained = store.effect(&intent.idempotency_key).await.unwrap();
+    assert_eq!(retained, persisted_before);
+    assert!(retained.dispatched_at.is_none() && retained.confirmed_at.is_none());
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_agent_effects WHERE execution_id=$1")
+        .bind(fixture.request.id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows, 1,
+        "the expired retry must not create another prepared effect or identity"
+    );
+    cleanup_schema(&pool, &schema).await;
+}
+
 fn reconcile_grant(lease: &rocketmq_sre_executor::ExecutorLeaseRecord) -> ReconcileGrant {
     ReconcileGrant {
         lease_id: lease.id,

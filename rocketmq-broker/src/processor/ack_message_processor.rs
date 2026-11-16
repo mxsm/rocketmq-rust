@@ -701,7 +701,7 @@ where
         inner.message_ext_inner.born_timestamp = current_millis() as i64;
         inner.message_ext_inner.store_host = self.context.policy.store_host;
         inner.message_ext_inner.born_host = self.context.policy.store_host;
-        inner.set_delay_time_ms((pop_time + invisible_time) as u64);
+        inner.set_deliver_time_ms((pop_time + invisible_time) as u64);
         inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(ack_msg.as_ref())),
@@ -859,6 +859,9 @@ where
         .await;
     }
 }
+
+#[cfg(test)]
+mod timer_deadline_tests;
 
 #[cfg(test)]
 mod tests {

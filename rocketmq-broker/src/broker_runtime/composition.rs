@@ -435,6 +435,10 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         self.config_state.broker_snapshot()
     }
 
+    pub(crate) fn lite_client_event_limit(&self) -> crate::broker::broker_runtime_config_state::BrokerClientEventLimit {
+        crate::broker::broker_runtime_config_state::BrokerClientEventLimit::from_runtime(self.config_state.clone())
+    }
+
     #[inline]
     pub fn broker_config_arc(&self) -> Arc<BrokerConfig> {
         self.config_state.broker_snapshot()
@@ -957,7 +961,7 @@ impl BrokerRuntime {
             .start(&service_context.component("broker.metadata-io")),
         );
         let broker_outer_api = BrokerOuterAPI::new_with_remoting_command_factory(
-            Arc::new(TransportClientConfig::default()),
+            Arc::new(broker_config.outbound_transport_config()),
             service_context.component("broker.outer-api"),
             transport_telemetry.clone(),
             command_factory,
@@ -1283,7 +1287,7 @@ impl BrokerRuntime {
             Arc::clone(&broker_config_snapshot),
             Arc::clone(&message_store_config_snapshot),
             Arc::downgrade(&escape_bridge),
-            state.service_context.clone(),
+            state.service_context.component("broker.schedule-message"),
         )));
         let client_housekeeping_service = Arc::new(ClientHousekeepingService::new(
             state.producer_manager.connection_housekeeping(),

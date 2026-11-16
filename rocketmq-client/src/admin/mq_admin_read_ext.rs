@@ -56,6 +56,9 @@ pub struct BrokerConfigAllowlisted {
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
     pub max_client_event_count: Option<i32>,
+    /// Versioned live-default support observed from GetBrokerConfig, never inferred
+    /// from a visible value or a Broker software-version string.
+    pub max_client_event_count_runtime_version: Option<u32>,
 }
 
 /// Topic configuration paired with the Broker's monotonic metadata version.
@@ -336,6 +339,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
             pull_message_thread_pool_nums: parse_allowlisted_value(&properties, "pullMessageThreadPoolNums")?,
             flush_delay_offset_interval_ms: parse_allowlisted_value(&properties, "flushDelayOffsetInterval")?,
             max_client_event_count: parse_allowlisted_value(&properties, "maxClientEventCount")?,
+            max_client_event_count_runtime_version: parse_client_event_limit_runtime_version(&properties),
         })
     }
 
@@ -778,6 +782,15 @@ where
     }
 }
 
+fn parse_client_event_limit_runtime_version(
+    properties: &std::collections::HashMap<CheetahString, CheetahString>,
+) -> Option<u32> {
+    properties
+        .get("maxClientEventCountRuntimeVersion")
+        .filter(|value| value.as_str() == "1")
+        .map(|_| 1)
+}
+
 fn parse_allowlisted_value<T>(
     properties: &std::collections::HashMap<CheetahString, CheetahString>,
     key: &str,
@@ -1060,6 +1073,18 @@ mod tests {
 
         let error = parse_allowlisted_value::<u64>(&properties, "flushDelayOffsetInterval").unwrap_err();
         assert_invalid_argument(&error);
+    }
+
+    #[test]
+    fn client_event_runtime_capability_requires_the_exact_observed_marker() {
+        let mut properties = HashMap::from([("maxClientEventCount".into(), "100".into())]);
+        assert_eq!(super::parse_client_event_limit_runtime_version(&properties), None);
+        for value in ["", "0", "2", "01", "+1", " 1", "true"] {
+            properties.insert("maxClientEventCountRuntimeVersion".into(), value.into());
+            assert_eq!(super::parse_client_event_limit_runtime_version(&properties), None);
+        }
+        properties.insert("maxClientEventCountRuntimeVersion".into(), "1".into());
+        assert_eq!(super::parse_client_event_limit_runtime_version(&properties), Some(1));
     }
 
     #[test]

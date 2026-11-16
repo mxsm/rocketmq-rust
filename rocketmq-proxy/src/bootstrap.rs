@@ -286,6 +286,10 @@ impl ProxyRuntimeBuilder {
 
     fn build_inner(self) -> ProxyResult<ProxyRuntime<DefaultMessagingProcessor>> {
         self.config.dependency_health.validate()?;
+        #[cfg(feature = "cluster-mode")]
+        if self.config.mode == ProxyMode::Cluster {
+            self.config.cluster.validate_tls()?;
+        }
         if self.config.remoting.enabled {
             self.config.remoting.validate()?;
         }

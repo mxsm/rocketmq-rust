@@ -1148,6 +1148,9 @@ impl<C> ClientSessionRegistry<C> {
     ) -> Option<TrackedReceiptHandle> {
         let key = self.resolve_receipt_handle_key(client_id, group, topic, message_id, Some(current_receipt_handle))?;
         let mut tracked = self.receipt_handles.get_mut(&key)?;
+        if tracked.receipt_handle != current_receipt_handle {
+            return None;
+        }
         let now = SystemTime::now();
         tracked.cancellation.cancel();
         tracked.receipt_handle = new_receipt_handle.to_owned();
@@ -1197,7 +1200,18 @@ impl<C> ClientSessionRegistry<C> {
         receipt_handle: &str,
     ) -> Option<TrackedReceiptHandle> {
         let key = self.resolve_receipt_handle_key(client_id, group, topic, message_id, Some(receipt_handle))?;
-        self.remove_receipt_handle_by_key(&key)
+        let dashmap::mapref::entry::Entry::Occupied(entry) = self.receipt_handles.entry(key.clone()) else {
+            return None;
+        };
+        if entry.get().receipt_handle != receipt_handle {
+            return None;
+        }
+        // Keep the record locked until its renewal is removed. A replacement
+        // delivery of the same message must retain its own new deadline.
+        let _ = self.receipt_renewals.remove(&key);
+        let tracked = entry.remove();
+        tracked.cancellation.cancel();
+        Some(tracked)
     }
 
     pub fn remove(&self, client_id: &str) -> Option<ClientSession> {
@@ -1887,6 +1901,46 @@ mod tests {
             .expect("receipt handle should be removed");
         assert_eq!(removed.receipt_handle, "handle-2");
         assert_eq!(registry.tracked_handle_count(), 0);
+    }
+
+    #[test]
+    fn stale_receipt_cannot_update_or_remove_a_replacement_with_the_same_message_id() {
+        let registry = ClientSessionRegistry::default();
+        let old = registry.track_receipt_handle(tracked_handle("client-a", "msg-1", "old-handle"));
+        let replacement = registry.track_receipt_handle(tracked_handle("client-a", "msg-1", "new-handle"));
+        let before = registry.receipt_renewal_metrics_snapshot();
+        let group = ResourceIdentity::new("", "GroupA");
+        let topic = ResourceIdentity::new("", "TopicA");
+
+        assert!(registry
+            .update_receipt_handle_matching(
+                "client-a",
+                &group,
+                &topic,
+                "msg-1",
+                "old-handle",
+                "stale-renewal",
+                Duration::from_secs(45),
+            )
+            .is_none());
+        assert!(registry
+            .remove_receipt_handle_matching("client-a", &group, &topic, "msg-1", "old-handle")
+            .is_none());
+        assert!(old.cancellation.is_cancelled());
+        assert!(!replacement.cancellation.is_cancelled());
+        assert_eq!(registry.receipt_renewal_metrics_snapshot(), before);
+        assert_eq!(
+            registry
+                .tracked_receipt_handle("client-a", &group, &topic, "msg-1")
+                .unwrap()
+                .receipt_handle,
+            "new-handle"
+        );
+        let removed = registry
+            .remove_receipt_handle_matching("client-a", &group, &topic, "msg-1", "new-handle")
+            .expect("the current exact receipt remains removable");
+        assert!(removed.cancellation.is_cancelled());
+        assert_eq!(registry.receipt_renewal_metrics_snapshot().live, 0);
     }
 
     #[test]

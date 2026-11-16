@@ -2234,6 +2234,7 @@ mod tests {
 
     #[derive(Default)]
     struct TestConsumerService {
+        receive_client_id: Option<&'static str>,
         dlq_requests: Mutex<Vec<ForwardMessageToDeadLetterQueueRequest>>,
         updated_offsets: Mutex<Vec<UpdateOffsetRequest>>,
         change_invisible_requests: Mutex<Vec<ChangeInvisibleDurationRequest>>,
@@ -2357,11 +2358,14 @@ mod tests {
         fn receive_message<'a>(
             &'a self,
             _context: &'a CoreProxyContext,
-            _request: &'a ReceiveMessageRequest,
+            request: &'a ReceiveMessageRequest,
         ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ReceiveMessagePlan> {
-            Box::pin(async {
-                let mut payload = ProxyMessage::new("TopicA", b"hello".to_vec());
+            Box::pin(async move {
+                let mut payload = ProxyMessage::new(request.target.topic.to_string(), b"hello".to_vec());
                 payload.put_property("POP_CK", "receipt-handle");
+                if let Some(unique_id) = self.receive_client_id {
+                    payload.put_property("UNIQ_KEY", unique_id);
+                }
                 let message = ProxyMessageExt {
                     message: payload,
                     msg_id: "server-msg-id".to_owned(),
@@ -4544,20 +4548,25 @@ mod tests {
 
     #[tokio::test]
     async fn receive_message_with_auto_renew_tracks_receipt_handles() {
+        const PUBLIC_ID: &str = "0123456789ABCDEF0123456789ABCDEF";
+        let consumer = Arc::new(TestConsumerService {
+            receive_client_id: Some(PUBLIC_ID),
+            ..Default::default()
+        });
         let service = test_service_with_services(
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
-            Arc::new(TestConsumerService::default()),
+            consumer.clone(),
         );
         let mut request = Request::new(v2::ReceiveMessageRequest {
             group: Some(v2::Resource {
-                resource_namespace: String::new(),
+                resource_namespace: "ns".to_owned(),
                 name: "GroupA".to_owned(),
             }),
             message_queue: Some(v2::MessageQueue {
                 topic: Some(v2::Resource {
-                    resource_namespace: String::new(),
+                    resource_namespace: "ns".to_owned(),
                     name: "TopicA".to_owned(),
                 }),
                 id: 3,
@@ -4578,20 +4587,106 @@ mod tests {
 
         let mut stream = service.receive_message(request).await.unwrap().into_inner();
         let _ = stream.next().await;
-        let _ = stream.next().await;
+        let delivered = stream.next().await.unwrap().unwrap();
+        let Some(v2::receive_message_response::Content::Message(message)) = delivered.content else {
+            panic!("message response required");
+        };
+        let properties = message.system_properties.unwrap();
+        assert_eq!(properties.message_id, PUBLIC_ID);
         let _ = stream.next().await;
 
         let tracked = service
             .sessions
             .tracked_receipt_handle(
                 "client-a",
-                &ResourceIdentity::new("", "GroupA"),
-                &ResourceIdentity::new("", "TopicA"),
-                "server-msg-id",
+                &ResourceIdentity::new("ns", "GroupA"),
+                &ResourceIdentity::new("ns", "TopicA"),
+                PUBLIC_ID,
             )
             .expect("receipt handle should be tracked");
         assert_eq!(tracked.receipt_handle, "receipt-handle");
-        tracked.cancellation.cancel();
+        assert!(service
+            .sessions
+            .tracked_receipt_handle("client-a", &tracked.group, &tracked.topic, "server-msg-id")
+            .is_none());
+
+        let resource = |name: &str| v2::Resource {
+            resource_namespace: "ns".to_owned(),
+            name: name.to_owned(),
+        };
+        let mut dlq = Request::new(v2::ForwardMessageToDeadLetterQueueRequest {
+            group: Some(resource("GroupA")),
+            topic: Some(resource("TopicA")),
+            message_id: properties.message_id.clone(),
+            receipt_handle: properties.receipt_handle.unwrap(),
+            delivery_attempt: 2,
+            max_delivery_attempts: 3,
+            lite_topic: None,
+        });
+        dlq.metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        assert_eq!(
+            service
+                .forward_message_to_dead_letter_queue(dlq)
+                .await
+                .unwrap()
+                .into_inner()
+                .status
+                .unwrap()
+                .code,
+            v2::Code::Ok as i32
+        );
+        {
+            let requests = consumer.dlq_requests.lock().unwrap();
+            assert_eq!(requests[0].message_id, PUBLIC_ID);
+            assert_eq!(requests[0].topic, tracked.topic);
+            assert_eq!(requests[0].receipt_handle, tracked.receipt_handle);
+        }
+
+        let mut renew = Request::new(v2::ChangeInvisibleDurationRequest {
+            group: Some(resource("GroupA")),
+            topic: Some(resource("TopicA")),
+            message_id: PUBLIC_ID.to_owned(),
+            receipt_handle: "receipt-handle".to_owned(),
+            invisible_duration: Some(prost_types::Duration { seconds: 45, nanos: 0 }),
+            lite_topic: None,
+            suspend: None,
+        });
+        renew
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let renewed = service.change_invisible_duration(renew).await.unwrap().into_inner();
+        assert_eq!(renewed.status.unwrap().code, v2::Code::Ok as i32);
+        let updated = service
+            .sessions
+            .tracked_receipt_handle("client-a", &tracked.group, &tracked.topic, PUBLIC_ID)
+            .unwrap();
+        assert_eq!(updated.receipt_handle, "receipt-handle-renewed");
+        let mut ack = Request::new(v2::AckMessageRequest {
+            group: Some(resource("GroupA")),
+            topic: Some(resource("TopicA")),
+            entries: vec![v2::AckMessageEntry {
+                message_id: PUBLIC_ID.to_owned(),
+                receipt_handle: updated.receipt_handle.clone(),
+                lite_topic: None,
+            }],
+        });
+        ack.metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        assert_eq!(
+            service
+                .ack_message(ack)
+                .await
+                .unwrap()
+                .into_inner()
+                .status
+                .unwrap()
+                .code,
+            v2::Code::Ok as i32
+        );
+        assert!(updated.cancellation.is_cancelled());
+        assert_eq!(service.sessions.tracked_handle_count(), 0);
+        assert_eq!(service.sessions.receipt_renewal_metrics_snapshot().live, 0);
     }
 
     #[tokio::test(start_paused = true)]

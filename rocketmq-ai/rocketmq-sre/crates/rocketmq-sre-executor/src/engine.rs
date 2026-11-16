@@ -136,6 +136,7 @@ pub struct ChangeExecutor {
     lease_ttl_seconds: u32,
     resource_lock_ttl: Duration,
     leases: Arc<Mutex<BTreeMap<ClusterId, ExecutorLease>>>,
+    active_intents: active_intents::ActiveIntents,
     metrics: Arc<ExecutorMetrics>,
     lifecycle: Option<lifecycle::ExecutionLifecycle>,
 }
@@ -167,6 +168,7 @@ impl ChangeExecutor {
             lease_ttl_seconds,
             resource_lock_ttl,
             leases: Arc::new(Mutex::new(BTreeMap::new())),
+            active_intents: active_intents::ActiveIntents::default(),
             metrics: Arc::new(ExecutorMetrics::default()),
             lifecycle: None,
         }
@@ -326,6 +328,7 @@ impl ChangeExecutor {
         if state != ExecutionState::Compensating {
             return Err(ExecutorRequestFailure::ReconcileBlocked);
         }
+        let _intent = self.active_intents.enter(&request)?;
         let forward_intents = self.journal.forward_intents_for_execution(id).await?;
         if forward_intents.is_empty() {
             return Err(ExecutorRequestFailure::ReconcileBlocked);
@@ -335,6 +338,7 @@ impl ChangeExecutor {
         if self.observation_cancelled() {
             return Err(ExecutorRequestFailure::ObservationUnknown);
         }
+        let _takeover = self.active_intents.begin_takeover(&request)?;
         leases.remove(&request.cluster_id);
         let takeover = self
             .authority
@@ -423,6 +427,7 @@ impl ChangeExecutor {
         }
         let verifier = self.verifier.as_ref().ok_or(ExecutorError::Configuration)?;
         let (resource_key, action) = execution_projection(request)?;
+        let _intent = self.active_intents.enter(request)?;
         let creation = self
             .journal
             .create_execution(request, &resource_key, action, Utc::now())
@@ -430,6 +435,19 @@ impl ChangeExecutor {
         if !creation.created {
             self.metrics.replay_total.fetch_add(1, Ordering::Relaxed);
             let state = self.journal.execution_state(creation.id).await?;
+            // Completed receipts are immutable facts. Replaying one must not
+            // advance the cluster fence or reconcile another active writer.
+            if matches!(
+                state,
+                ExecutionState::Succeeded | ExecutionState::RolledBack | ExecutionState::Escalated
+            ) {
+                return Ok(ExecuteOutcome {
+                    execution_id: creation.id,
+                    state,
+                    replayed: true,
+                    accepted_steps: request.plan.steps.len(),
+                });
+            }
             let force_takeover = !matches!(state, ExecutionState::Pending);
             self.ensure_active_lease(request, force_takeover).await?;
             let recovered = self.journal.execution_state(creation.id).await?;
@@ -526,6 +544,7 @@ impl ChangeExecutor {
         {
             return Ok(lease.clone());
         }
+        let _takeover = self.active_intents.begin_takeover(request)?;
         leases.remove(&request.cluster_id);
         let takeover = self
             .authority
@@ -954,6 +973,7 @@ fn execution_projection(
     Ok((resource, first.action))
 }
 
+mod active_intents;
 #[path = "execution_flow.rs"]
 mod execution_flow;
 #[path = "execution_lifecycle.rs"]

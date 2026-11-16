@@ -40,6 +40,9 @@ server DTO，也不复用普通 RocketMQ Dashboard 的 session 和 mutation 接�
 资格与补偿能力证明；当前相应来源仍为未知，配置处理器并批准计划后仍会阻断新的
 执行提交。自动预检还要求事先配置精确的目标范围规则。
 
+[执行演练记录](docs/execution-drills.md)说明有界工程故障证据及其离线一致性工具。
+演练记录不授予执行权限，也不证明生产资格。
+
 ## 架构
 
 ```mermaid

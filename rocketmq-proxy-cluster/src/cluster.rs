@@ -135,6 +135,9 @@ use crate::message::message_from_core;
 #[path = "cluster_admission.rs"]
 mod cluster_admission;
 
+#[path = "cluster_dead_letter.rs"]
+mod cluster_dead_letter;
+
 #[cfg(feature = "bench-support")]
 #[doc(hidden)]
 #[path = "cluster_bench_support.rs"]
@@ -1373,6 +1376,8 @@ impl ClusterWorkerState {
 
 fn cluster_client_config(config: &ClusterConfig) -> RocketmqClientConfig {
     let mut client_config = RocketmqClientConfig::default();
+    client_config.set_use_tls(config.tls_config.enable);
+    client_config.set_tls_config(config.tls_config.clone());
     client_config.set_instance_name(CheetahString::from(config.instance_name.as_str()));
     client_config.set_mq_client_api_timeout(config.mq_client_api_timeout_ms);
     if let Some(namesrv_addr) = config.namesrv_addr.as_deref() {
@@ -2247,6 +2252,7 @@ async fn forward_message_to_dead_letter_queue_inner(
     deadline: Option<Duration>,
 ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
     let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     let client = state.client(config).await?;
     let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
     let group_name = request.group.to_string();
@@ -2260,7 +2266,15 @@ async fn forward_message_to_dead_letter_queue_inner(
     let broker_addr = find_subscribe_broker_addr(client.as_ref(), &actual_broker_name, &parsed.topic)
         .await
         .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
-    let message = build_dead_letter_message(&request, &parsed, &actual_broker_name)?;
+    let message = cluster_dead_letter::read_original_message(
+        client.as_ref(),
+        &broker_addr,
+        &actual_broker_name,
+        &request,
+        &parsed,
+        cluster_dead_letter::remaining_timeout_ms(deadline, timeout_ms)?,
+    )
+    .await?;
 
     client
         .consumer_send_message_back(
@@ -2269,7 +2283,7 @@ async fn forward_message_to_dead_letter_queue_inner(
             &message,
             group_name.as_str(),
             -1,
-            timeout_ms,
+            cluster_dead_letter::remaining_timeout_ms(deadline, timeout_ms)?,
             request.max_delivery_attempts,
         )
         .await?;
@@ -2879,23 +2893,6 @@ fn ack_status_to_payload(ack_result: &AckResult) -> ProxyPayloadStatus {
     }
 }
 
-fn build_dead_letter_message(
-    request: &ForwardMessageToDeadLetterQueueRequest,
-    parsed: &ParsedReceiptHandle,
-    broker_name: &CheetahString,
-) -> ProxyResult<MessageExt> {
-    let broker_message_id = decode_broker_message_id(request.message_id.as_str())?;
-    let mut message = MessageExt::default();
-    message.set_topic(parsed.topic.clone());
-    message.set_msg_id(CheetahString::from(request.message_id.as_str()));
-    message.set_broker_name(broker_name.clone());
-    message.set_queue_id(parsed.queue_id);
-    message.set_queue_offset(parsed.queue_offset);
-    message.set_commit_log_offset(broker_message_id.offset);
-    message.set_reconsume_times(request.delivery_attempt.saturating_sub(1));
-    Ok(message)
-}
-
 fn parse_receipt_handle(receipt_handle: &str, topic: &str, consumer_group: &str) -> ProxyResult<ParsedReceiptHandle> {
     let trimmed = receipt_handle.trim();
     if trimmed.is_empty() {
@@ -3423,6 +3420,36 @@ mod tests {
             producer.client_config_snapshot().build_mq_client_id(),
             other_domain.build_mq_client_id()
         );
+    }
+
+    #[test]
+    fn backend_tls_reaches_both_metadata_and_send_client_configs() {
+        let mut config = ClusterConfig::default();
+        config.tls_config.enable = true;
+        config.tls_config.config_file.clear();
+        config.tls_config.client.trust_cert_path = Some("/private/ca.pem".to_owned());
+        config.tls_config.client.cert_path = Some("/private/client.pem".to_owned());
+        config.tls_config.client.key_path = Some("/private/client.key".to_owned());
+        let metadata = cluster_client_config(&config);
+        let producer = build_send_producer(test_client_runtime(), 71_012, &config, "TlsGroup", 3_000, None);
+        let send = producer.client_config_snapshot();
+        assert!(metadata.is_use_tls() && send.is_use_tls());
+        assert_eq!(metadata.tls_config(), &config.tls_config);
+        assert_eq!(send.tls_config(), &config.tls_config);
+    }
+
+    #[tokio::test]
+    async fn backend_tls_invalid_configuration_admits_no_owned_worker() {
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("proxy-invalid-tls");
+        let service = runtime.service_context("proxy-invalid-tls-service");
+        let mut config = ClusterConfig::default();
+        config.tls_config.enable = true;
+        // The inherited properties-file default is deliberately invalid for this
+        // new direct field, even in builds that contain the actual TLS feature.
+        assert!(ClusterCommandGateway::new(config, None, &service, TelemetryHandle::noop()).is_err());
+        assert_eq!(service.task_group().task_count(), 0);
+        assert_eq!(service.task_group().component_count(), 0);
+        assert!(runtime.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
     }
 
     #[test]

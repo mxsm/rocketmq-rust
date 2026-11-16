@@ -35,6 +35,7 @@ use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::broker::broker_runtime_config_state::BrokerClientEventLimit;
 use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -56,7 +57,7 @@ mod resume;
 pub(crate) struct PopLiteMessagePolicy {
     broker_ip1: CheetahString,
     broker_permission: BrokerPermissionState,
-    max_client_event_count: i32,
+    max_client_event_count: BrokerClientEventLimit,
     lite_event_full_dispatch_delay_time: u64,
     lite_event_full_dispatch_delay_time_for_wildcard_group: u64,
 }
@@ -66,11 +67,16 @@ impl PopLiteMessagePolicy {
         Self {
             broker_ip1: broker_config.broker_ip1.clone(),
             broker_permission,
-            max_client_event_count: broker_config.max_client_event_count,
+            max_client_event_count: BrokerClientEventLimit::fixed(broker_config.max_client_event_count.max(1) as usize),
             lite_event_full_dispatch_delay_time: broker_config.lite_event_full_dispatch_delay_time,
             lite_event_full_dispatch_delay_time_for_wildcard_group: broker_config
                 .lite_event_full_dispatch_delay_time_for_wildcard_group,
         }
+    }
+
+    pub(crate) fn with_client_event_limit(mut self, limit: BrokerClientEventLimit) -> Self {
+        self.max_client_event_count = limit;
+        self
     }
 }
 
@@ -373,8 +379,11 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
             .as_ref()
             .map(|config| config.max_client_event_count())
             .filter(|count| *count > 0)
-            .unwrap_or(self.context.policy.max_client_event_count)
-            .max(1) as usize;
+            .map_or_else(
+                || self.context.policy.max_client_event_count.get(),
+                |count| count as usize,
+            )
+            .max(1);
         let delay = if group_config.is_some_and(|config| config.lite_sub_wildcard()) {
             self.context
                 .policy

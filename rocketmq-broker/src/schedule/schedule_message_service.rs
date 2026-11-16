@@ -73,6 +73,11 @@ use tokio::sync::watch;
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
 use tokio_util::sync::CancellationToken;
+
+mod shutdown_diagnostics;
+
+use shutdown_diagnostics::schedule_shutdown_failure;
+use shutdown_diagnostics::ScheduleShutdownStage;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -762,13 +767,27 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
                     .operation
                     .cancel_and_wait_until(&run.task_group, deadline)
                     .await
-                    .map_err(schedule_message_service_shutdown_failed)?;
+                    .map_err(|error| {
+                        schedule_shutdown_failure(
+                            ScheduleShutdownStage::GenerationDrain,
+                            generation,
+                            &run.task_group,
+                            Some(run.operation.active_task_count()),
+                            error,
+                        )
+                    })?;
                 if !joined {
                     return Ok(timed_out(ScheduleStopStage::Drain));
                 }
-                run.scheduled_tasks
-                    .clear_completed()
-                    .map_err(schedule_message_service_shutdown_failed)?;
+                run.scheduled_tasks.clear_completed().map_err(|error| {
+                    schedule_shutdown_failure(
+                        ScheduleShutdownStage::ScheduleRegistry,
+                        generation,
+                        &run.task_group,
+                        Some(run.operation.active_task_count()),
+                        error,
+                    )
+                })?;
             }
             if deadline.is_expired() {
                 return Ok(timed_out(ScheduleStopStage::FinalPersist));
@@ -776,7 +795,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
             let Ok(guard) = tokio::time::timeout_at(at, Arc::clone(&self.persistence_gate).lock_owned()).await else {
                 return Ok(timed_out(ScheduleStopStage::FinalPersist));
             };
-            lifecycle.final_persist = Some(self.persistence_future(guard));
+            lifecycle.final_persist = Some(self.persistence_future(guard, generation));
         }
 
         // Keep the future inside the stopping owner. Dropping this caller or
@@ -848,11 +867,12 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         if !self.is_generation_active(run_context.generation) || run_context.cancellation.is_cancelled() {
             return Ok(());
         }
-        self.persistence_future(guard).await
+        self.persistence_future(guard, run_context.generation).await
     }
 
-    fn persistence_future(&self, guard: OwnedMutexGuard<()>) -> SchedulePersistFuture {
+    fn persistence_future(&self, guard: OwnedMutexGuard<()>, generation: u64) -> SchedulePersistFuture {
         let blocking = self.runtime_capabilities().blocking.clone();
+        let task_group = self.runtime_capabilities().task_group.clone();
         let json = self.encode_pretty(true);
         let file_name = self.config_file_path();
         #[cfg(test)]
@@ -868,8 +888,24 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
                     file_utils::string_to_file(json.as_str(), file_name.as_str())
                 })
                 .await
-                .map_err(schedule_message_service_shutdown_failed)?
-                .map_err(schedule_message_service_shutdown_failed)?;
+                .map_err(|error| {
+                    schedule_shutdown_failure(
+                        ScheduleShutdownStage::PersistAdmission,
+                        generation,
+                        &task_group,
+                        None,
+                        error,
+                    )
+                })?
+                .map_err(|error| {
+                    schedule_shutdown_failure(
+                        ScheduleShutdownStage::PersistWrite,
+                        generation,
+                        &task_group,
+                        None,
+                        error,
+                    )
+                })?;
             Ok(())
         })
     }
@@ -2110,6 +2146,9 @@ pub fn queue_id_to_delay_level(queue_id: i32) -> i32 {
 pub fn delay_level_to_queue_id(delay_level: i32) -> i32 {
     delay_level - 1
 }
+
+#[cfg(test)]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod tests {

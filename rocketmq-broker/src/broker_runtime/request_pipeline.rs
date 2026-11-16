@@ -323,7 +323,8 @@ impl BrokerRuntime {
                 PopLiteMessagePolicy::from_config(
                     &self.composition.state.broker_config(),
                     self.composition.state.broker_permission_state(),
-                ),
+                )
+                .with_client_event_limit(self.composition.state.lite_client_event_limit()),
                 pop_lite_topic_config_manager,
                 pop_lite_subscription_group_lookup,
                 PopLiteOffsetCapability::new(&pop_lite_offset_manager),
@@ -483,7 +484,8 @@ impl BrokerRuntime {
                 .state
                 .broker_config()
                 .lite_event_full_dispatch_delay_time_for_wildcard_group,
-        );
+        )
+        .with_client_event_limit(self.composition.state.lite_client_event_limit());
         let listener_installed = match self.composition.state.message_store_exclusive_mut() {
             Some(message_store) => {
                 message_store.set_message_arriving_listener(Some(Arc::new(Box::new(message_arriving_listener))));
@@ -808,7 +810,8 @@ impl BrokerRuntime {
                 LiteManagerPolicy::from_configs(
                     &self.composition.state.broker_config(),
                     &self.composition.state.message_store_config(),
-                ),
+                )
+                .with_client_event_limit(self.composition.state.lite_client_event_limit()),
                 self.composition.state.topic_config_manager_handle(),
                 self.composition.state.subscription_group_manager().clone(),
                 self.composition.state.lite_subscription_registry().clone(),
@@ -824,6 +827,11 @@ impl BrokerRuntime {
             )
             .with_command_factory(self.composition.state.command_factory())
         }));
+        // All three Lite default consumers now share the published generation.
+        // This records wiring capability, not service readiness or target version.
+        if listener_installed {
+            self.composition.state.config_state.mark_client_event_limit_wired();
+        }
         broker_request_processor.register_processor(
             RequestCode::GetBrokerLiteInfo as i32,
             BrokerProcessorType::LiteManager(Arc::clone(&lite_manager_processor)),

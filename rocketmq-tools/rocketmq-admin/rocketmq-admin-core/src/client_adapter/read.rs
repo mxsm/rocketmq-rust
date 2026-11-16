@@ -2612,6 +2612,7 @@ fn project_allowlisted_config(config: rocketmq_client_rust::BrokerConfigAllowlis
         pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
         flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
         max_client_event_count: config.max_client_event_count,
+        max_client_event_count_runtime_version: config.max_client_event_count_runtime_version,
     }
 }
 
@@ -2874,6 +2875,7 @@ mod tests {
             pull_message_thread_pool_nums: Some(16),
             flush_delay_offset_interval_ms: Some(10_000),
             max_client_event_count: Some(100),
+            max_client_event_count_runtime_version: None,
         });
 
         assert_eq!(
@@ -2884,9 +2886,30 @@ mod tests {
                 pull_message_thread_pool_nums: Some(16),
                 flush_delay_offset_interval_ms: Some(10_000),
                 max_client_event_count: Some(100),
+                max_client_event_count_runtime_version: None,
             }
         );
         assert_eq!(serde_json::to_value(projected).unwrap().as_object().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn allowlisted_config_runtime_capability_is_optional_and_old_serialized_shape_is_preserved() {
+        let old = project_allowlisted_config(rocketmq_client_rust::BrokerConfigAllowlisted::default());
+        let encoded = serde_json::to_value(&old).unwrap();
+        assert!(!encoded
+            .as_object()
+            .unwrap()
+            .contains_key("max_client_event_count_runtime_version"));
+        let decoded: BrokerAllowlistedConfig = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.max_client_event_count_runtime_version, None);
+        let current = project_allowlisted_config(rocketmq_client_rust::BrokerConfigAllowlisted {
+            generation: 3,
+            max_client_event_count: Some(100),
+            max_client_event_count_runtime_version: Some(1),
+            ..Default::default()
+        });
+        assert_eq!(current.generation, 3);
+        assert_eq!(current.max_client_event_count_runtime_version, Some(1));
     }
 
     fn protocol_connection(client_id: &str, client_addr: &str, language: LanguageCode, version: i32) -> Connection {

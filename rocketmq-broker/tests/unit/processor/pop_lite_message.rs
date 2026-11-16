@@ -40,7 +40,8 @@ pub(super) fn pop_lite_processor_for_test(
     let escape_bridge = inner.escape_bridge();
 
     PopLiteMessageProcessor::new(PopLiteMessageProcessorContext::new(
-        PopLiteMessagePolicy::from_config(&inner.broker_config(), inner.broker_permission_state()),
+        PopLiteMessagePolicy::from_config(&inner.broker_config(), inner.broker_permission_state())
+            .with_client_event_limit(inner.lite_client_event_limit()),
         topic_config_manager,
         subscription_group_lookup,
         PopLiteOffsetCapability::new(&consumer_offset_manager),
@@ -72,7 +73,7 @@ fn pop_lite_message_policy_observes_live_permission_and_keeps_other_startup_valu
 
     assert_eq!(policy.broker_ip1, "192.0.2.10");
     assert_eq!(policy.broker_permission.get(), 4);
-    assert_eq!(policy.max_client_event_count, 17);
+    assert_eq!(policy.max_client_event_count.get(), 17);
     assert_eq!(policy.lite_event_full_dispatch_delay_time, 29);
     broker_permission.update(6);
     assert_eq!(policy.broker_permission.get(), 6);
@@ -157,4 +158,81 @@ async fn cancelled_store_read_releases_queue_lock_for_competing_pop_lite_request
         .await
         .expect("cancellation releases the queue lock for a competing request");
     drop(competing);
+}
+
+#[tokio::test]
+async fn d21_held_pop_lite_requeue_uses_published_limit_and_preserves_reserved_payloads() {
+    let mut runtime = BrokerRuntime::new(
+        Arc::new(BrokerConfig {
+            max_client_event_count: 3,
+            lite_event_full_dispatch_delay_time: 0,
+            ..Default::default()
+        }),
+        Arc::new(MessageStoreConfig::default()),
+    );
+    let processor = pop_lite_processor_for_test(&mut runtime);
+    let dispatcher = processor.context.lite_event_dispatcher.clone();
+    let client = CheetahString::from_static_str("d21-pop-client");
+    let group = CheetahString::from_static_str("d21-pop-group");
+    let events: HashSet<_> = (0..3)
+        .map(|i| CheetahString::from_string(format!("%LMQ%$parent${i}")))
+        .collect();
+    assert_eq!(
+        dispatcher.do_full_dispatch_with_limit(&client, &group, &events, 3, 0),
+        3
+    );
+    let batch = dispatcher.reserve_pending_events(&client).unwrap().commit();
+    let mut locks = Vec::new();
+    for event in &events {
+        locks.push(
+            processor
+                .context
+                .queue_lock_manager
+                .try_acquire_with_key(QueueLockManager::build_lock_key(event, &group, 0).into())
+                .await
+                .unwrap(),
+        );
+    }
+    let mut next = (*runtime.runtime_state_mut().broker_config()).clone();
+    next.max_client_event_count = 1;
+    runtime.runtime_state_mut().set_broker_config(next).unwrap();
+    let selected_limit = processor.lite_dispatch_policy(&group).0;
+    let header = PopLiteMessageRequestHeader {
+        client_id: client.clone(),
+        consumer_group: group,
+        topic: "parent".into(),
+        max_msg_num: 1,
+        invisible_time: 30_000,
+        poll_time: 0,
+        born_time: 0,
+        attempt_id: None,
+        rpc: None,
+    };
+    let result = processor.execute_pop_lite_batch(&header, batch).await;
+    assert_eq!(result.fetched_count, 0);
+    let pending = dispatcher.pending_events(&client);
+    let retained_count = dispatcher.budget_snapshot().current_count;
+    let all = dispatcher.take_pending_events(&client);
+    drop(locks);
+    assert_eq!(
+        selected_limit, 1,
+        "the held POP owner must select the current published default"
+    );
+    assert_eq!(
+        pending.len(),
+        3,
+        "previously reserved permits retain all original payloads on requeue"
+    );
+    assert_eq!(retained_count, 3, "in-place requeue must not acquire duplicate permits");
+    assert_eq!(
+        dispatcher.budget_snapshot().current_count,
+        0,
+        "consuming all events returns their permits"
+    );
+    assert!(pending.iter().all(|event| events.contains(event)));
+    assert_eq!(
+        all.into_iter().collect::<HashSet<_>>(),
+        events,
+        "no reserved/deferred event is discarded by a decrease"
+    );
 }

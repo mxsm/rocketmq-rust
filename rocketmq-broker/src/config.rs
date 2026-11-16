@@ -26,6 +26,7 @@
 /// The aggregate [`BrokerConfig`](broker_config::BrokerConfig) type and its
 /// defaults — the configuration read by every Broker subsystem.
 pub mod broker_config;
+mod client_tls;
 /// Persistence and lifecycle management for Broker configuration state
 /// (topics, consumer offsets, subscription groups).
 pub mod config_manager;

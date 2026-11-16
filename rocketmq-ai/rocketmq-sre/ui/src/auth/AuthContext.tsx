@@ -11,6 +11,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -126,7 +127,7 @@ function oidcSettings(): UserManagerSettings | undefined {
   return {
     ...settings,
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
-    automaticSilentRenew: true,
+    automaticSilentRenew: false,
     monitorSession: true,
   };
 }
@@ -170,18 +171,17 @@ function sessionFromOidc(user: User): AuthSession {
 
 function isOidcCallback() {
   const params = new URLSearchParams(window.location.search);
-  return params.has("code") && params.has("state");
+  return params.has("state") && (params.has("code") || params.has("error"));
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const mode = useMemo(authMode, []);
-  const manager = useMemo(() => {
-    if (mode !== "oidc") {
-      return undefined;
-    }
-    const settings = oidcSettings();
-    return settings ? new UserManager(settings) : undefined;
-  }, [mode]);
+  const managerRef = useRef<UserManager | undefined>(undefined);
+  const callbackRef = useRef<{
+    manager: UserManager;
+    url: string;
+    promise: Promise<User>;
+  } | undefined>(undefined);
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [session, setSession] = useState<AuthSession>();
   const [error, setError] = useState<string>();
@@ -196,6 +196,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
         active = false;
       };
     }
+    // SDK construction starts services. Keep it out of render and retain the
+    // same instance when React replays effect setup/cleanup in StrictMode.
+    if (!managerRef.current) {
+      const settings = oidcSettings();
+      if (settings) managerRef.current = new UserManager(settings);
+    }
+    const manager = managerRef.current;
     if (!manager) {
       setError(
         "OIDC 模式缺少 VITE_SRE_OIDC_AUTHORITY 或 VITE_SRE_OIDC_CLIENT_ID。",
@@ -238,15 +245,33 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     const load = async () => {
       const requestedGeneration = generation;
+      const callback = isOidcCallback();
+      const callbackUrl = window.location.href;
       try {
-        const user = isOidcCallback()
-          ? await manager.signinRedirectCallback()
-          : await manager.getUser();
+        let user: User | null;
+        if (callback) {
+          // Authorization codes are single-use. The replayed effect must await
+          // the original SDK state validation and exchange, including failures.
+          if (callbackRef.current?.manager !== manager || callbackRef.current.url !== callbackUrl) {
+            const pending = {
+              manager,
+              url: callbackUrl,
+              promise: Promise.resolve().then(() => manager.signinRedirectCallback(callbackUrl)),
+            };
+            callbackRef.current = pending;
+            const settled = () => {
+              if (callbackRef.current === pending) callbackRef.current = undefined;
+            };
+            // Share only an in-flight exchange. A later visit must let the SDK
+            // reject consumed state rather than reuse a previously loaded user.
+            void pending.promise.then(settled, settled);
+          }
+          user = await callbackRef.current.promise;
+        } else {
+          user = await manager.getUser();
+        }
         if (!active) {
           return;
-        }
-        if (isOidcCallback()) {
-          window.history.replaceState({}, "", window.location.pathname);
         }
         // A renewal or revocation event wins over an earlier storage/callback read.
         if (generation === requestedGeneration) applyUser(user);
@@ -256,28 +281,30 @@ export function AuthProvider({ children }: PropsWithChildren) {
           setError("OIDC 登录回调校验失败，请重新登录。");
           setStatus("error");
         }
+      } finally {
+        if (active && callback && window.location.href === callbackUrl) {
+          window.history.replaceState({}, "", window.location.pathname);
+        }
       }
     };
+    manager.startSilentRenew();
     void load();
     return () => {
       active = false;
       manager.events.removeUserLoaded(loaded);
       manager.events.removeUserUnloaded(unloaded);
       manager.events.removeAccessTokenExpired(unloaded);
+      manager.stopSilentRenew();
     };
-  }, [manager, mode]);
+  }, [mode]);
 
   const signIn = useCallback(async () => {
-    if (manager) {
-      await manager.signinRedirect();
-    }
-  }, [manager]);
+    await managerRef.current?.signinRedirect();
+  }, []);
 
   const signOut = useCallback(async () => {
-    if (manager) {
-      await manager.signoutRedirect();
-    }
-  }, [manager]);
+    await managerRef.current?.signoutRedirect();
+  }, []);
 
   const value = useMemo<AuthValue>(
     () => ({

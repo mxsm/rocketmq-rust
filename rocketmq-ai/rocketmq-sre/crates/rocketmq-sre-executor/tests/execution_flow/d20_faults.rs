@@ -49,7 +49,7 @@ impl ExecutionAgentClient for LostResponseAgent {
     }
 }
 
-async fn serve(harness: &ExecutionHarness, owner: &TaskGroup) -> (String, TaskGroup) {
+pub(super) async fn serve(harness: &ExecutionHarness, owner: &TaskGroup) -> (String, TaskGroup) {
     let context = RuntimeContext::from_current("d20-http-regression");
     let server_owner = context.service_context("http").task_group().clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

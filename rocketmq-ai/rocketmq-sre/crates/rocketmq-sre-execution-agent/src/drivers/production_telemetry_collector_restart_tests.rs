@@ -25,6 +25,9 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 use super::*;
 
+#[path = "production_telemetry_collector_restart_tests/live.rs"]
+mod live;
+
 #[tokio::test]
 async fn kubernetes_transport_failure_retains_source_and_is_not_a_refusal() {
     use std::error::Error;

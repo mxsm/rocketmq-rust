@@ -386,6 +386,7 @@ impl BrokerAdmin for AdminSession {
                 pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
                 flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
                 max_client_event_count: config.max_client_event_count,
+                max_client_event_count_runtime_version: config.max_client_event_count_runtime_version,
             })
         })
     }
@@ -421,6 +422,7 @@ impl BrokerAdmin for AdminSession {
                                 pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
                                 flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
                                 max_client_event_count: config.max_client_event_count,
+                                max_client_event_count_runtime_version: config.max_client_event_count_runtime_version,
                             },
                         });
                     }

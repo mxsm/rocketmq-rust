@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::*;
+
+#[cfg(test)]
+mod pop_response_tests;
 use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::RequestDeadline;
 
@@ -599,11 +602,11 @@ impl MQClientAPIImpl {
             msg_found_list: Some(msg_found_list),
             ..Default::default()
         };
-        let response_header = response.decode_command_custom_header::<PopMessageResponseHeader>()?;
-        pop_result.rest_num = response_header.rest_num;
         if pop_result.pop_status != PopStatus::Found {
             return Ok(pop_result);
         }
+        let response_header = response.decode_command_custom_header::<PopMessageResponseHeader>()?;
+        pop_result.rest_num = response_header.rest_num;
         // it is a pop command if pop time greater than 0, we should set the check point info to
         // extraInfo field
         pop_result.invisible_time = response_header.invisible_time;

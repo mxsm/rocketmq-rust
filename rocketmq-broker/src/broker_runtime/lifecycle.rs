@@ -114,6 +114,19 @@ impl BrokerRuntime {
                 report
             }
             Err(elapsed) => {
+                // The timed-out inner drain has been dropped without a final
+                // report. Observe its scope before final RuntimeOwner shutdown.
+                let observation = self.composition.state.service_context.diagnostics_view_v2(
+                    rocketmq_runtime::RuntimeComponent::Broker,
+                    rocketmq_runtime::RuntimeDiagnosticsInputs::default(),
+                );
+                let observation = serde_json::to_string(&observation)
+                    .unwrap_or_else(|_| "{\"observation_unavailable\":true}".to_owned());
+                warn!(
+                    observation = %observation,
+                    unfinished_components = ?progress.unfinished(),
+                    "Broker shutdown deadline observation"
+                );
                 self.record_business_drain(
                     &progress,
                     rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::DeadlineExceeded,

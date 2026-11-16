@@ -32,6 +32,9 @@ use rocketmq_sre_contracts::TenantId;
 
 use super::*;
 
+#[path = "production_proxy_restart_tests/live_unknown.rs"]
+mod live_unknown;
+
 #[test]
 fn drain_acceptance_requires_open_ingress_and_consistent_zero_state() {
     let mut state = ProxyDrainState {
@@ -188,6 +191,15 @@ async fn real_proxy_drain_reaches_exact_zero_and_restores_ingress() {
     let access_key = std::env::var("ROCKETMQ_SRE_TEST_PROXY_ACCESS_KEY").expect("test access key must be explicit");
     let secret_key = std::env::var("ROCKETMQ_SRE_TEST_PROXY_SECRET_KEY").expect("test secret key must be explicit");
     let credentials = AdminCredentials::try_new(access_key, secret_key, None).expect("test credentials");
+    let use_tls = proxy_drain_tls_opt_in(std::env::var("ROCKETMQ_SRE_TEST_PROXY_TLS").ok().as_deref())
+        .expect("ROCKETMQ_SRE_TEST_PROXY_TLS must be true or false");
+    if use_tls {
+        let trust_path = std::env::var_os("SSL_CERT_FILE").expect("explicit task CA is required for TLS drain tests");
+        assert!(
+            std::path::Path::new(&trust_path).is_file(),
+            "task CA must be a regular private file"
+        );
+    }
     let runtime = RuntimeContext::from_current("phase3-proxy-drain-smoke");
     let client_runtime = ClientRuntime::try_new(
         runtime.service_context("proxy-drain-client"),
@@ -203,7 +215,7 @@ async fn real_proxy_drain_reaches_exact_zero_and_restores_ingress() {
         .admin_group("rocketmq-sre-proxy-drain-smoke-read")
         .instance_name(format!("proxy-drain-read-{}", uuid::Uuid::new_v4()))
         .timeout_millis(10_000)
-        .use_tls(false)
+        .use_tls(use_tls)
         .credentials(credentials.clone())
         .build_and_start()
         .await
@@ -213,7 +225,7 @@ async fn real_proxy_drain_reaches_exact_zero_and_restores_ingress() {
         .admin_group("rocketmq-sre-proxy-drain-smoke-mutation")
         .instance_name(format!("proxy-drain-mutation-{}", uuid::Uuid::new_v4()))
         .timeout_millis(10_000)
-        .use_tls(false)
+        .use_tls(use_tls)
         .credentials(credentials)
         .build_and_start()
         .await
@@ -249,6 +261,24 @@ async fn real_proxy_drain_reaches_exact_zero_and_restores_ingress() {
     mutation.shutdown().await;
     let shutdown = runtime.shutdown_tasks(Duration::from_secs(10)).await;
     assert!(shutdown.is_healthy(), "runtime shutdown report: {shutdown:?}");
+}
+
+fn proxy_drain_tls_opt_in(value: Option<&str>) -> Result<bool, ()> {
+    match value {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => Err(()),
+    }
+}
+
+#[test]
+fn real_drain_tls_opt_in_preserves_legacy_default_and_rejects_ambiguous_values() {
+    assert_eq!(proxy_drain_tls_opt_in(None), Ok(false));
+    assert_eq!(proxy_drain_tls_opt_in(Some("false")), Ok(false));
+    assert_eq!(proxy_drain_tls_opt_in(Some("true")), Ok(true));
+    for invalid in ["", "1", "TRUE", " true "] {
+        assert_eq!(proxy_drain_tls_opt_in(Some(invalid)), Err(()));
+    }
 }
 
 async fn run_real_restart_fixture(

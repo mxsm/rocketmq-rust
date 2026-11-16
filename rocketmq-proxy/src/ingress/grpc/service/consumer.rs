@@ -27,7 +27,6 @@ use rocketmq_proxy_core::ProxyResult;
 use rocketmq_proxy_core::ReceiptHandleRegistration;
 use rocketmq_proxy_core::ReceiveMessagePlan;
 use rocketmq_proxy_core::ReceiveMessageRequest;
-use rocketmq_proxy_core::ResourceIdentity;
 use rocketmq_proxy_core::SessionConfig;
 
 const POP_RECEIPT_HANDLE_PROPERTY: &str = "POP_CK";
@@ -90,11 +89,8 @@ pub fn track_received_receipt_handles<C, P>(
         sessions.track_receipt_handle(ReceiptHandleRegistration {
             client_id: client_id.to_owned(),
             group: request.group.clone(),
-            topic: ResourceIdentity::new(
-                request.target.topic.namespace().to_owned(),
-                message.message.topic().to_owned(),
-            ),
-            message_id: message.message.msg_id().to_owned(),
+            topic: request.target.topic.clone(),
+            message_id: super::super::adapter::received_public_message_id(&message.message).to_owned(),
             receipt_handle,
             invisible_duration: message.invisible_duration,
             delivery_attempt: message.message.reconsume_times().saturating_add(1),
