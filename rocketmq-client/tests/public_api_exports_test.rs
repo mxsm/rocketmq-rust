@@ -43,6 +43,7 @@ use rocketmq_client_rust::AsyncTraceDispatcher;
 use rocketmq_client_rust::AuthAdmin;
 #[cfg(feature = "admin-full")]
 use rocketmq_client_rust::BrokerAdmin;
+use rocketmq_client_rust::BrokerEndpointResolver;
 use rocketmq_client_rust::BrokerReachabilityProbe;
 use rocketmq_client_rust::ClientError;
 use rocketmq_client_rust::ClientInstanceHandle;
@@ -93,6 +94,7 @@ use rocketmq_client_rust::PullResult;
 use rocketmq_client_rust::PullStatus;
 use rocketmq_client_rust::ReadOffsetType;
 use rocketmq_client_rust::RequestReply;
+use rocketmq_client_rust::Resolver;
 #[cfg(feature = "admin-full")]
 use rocketmq_client_rust::RouteAdmin;
 use rocketmq_client_rust::RouteClient;
@@ -205,6 +207,18 @@ impl ServiceDetector for RootServiceDetector {
     }
 }
 
+struct RootResolver;
+
+impl Resolver for RootResolver {
+    async fn resolve(&self, name: &CheetahString) -> Option<CheetahString> {
+        if name.as_str() == "broker-a" {
+            Some(CheetahString::from_static_str("broker-a:10911"))
+        } else {
+            None
+        }
+    }
+}
+
 #[track_caller]
 fn assert_not_initialized(error: &ClientError, component: &str) {
     assert!(error.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
@@ -235,6 +249,19 @@ async fn crate_root_service_detector_alias_implements_broker_reachability_probe(
 
     assert!(probe(&RootServiceDetector, "broker-a:10911").await);
     assert!(!probe(&RootServiceDetector, "broker-b:10911").await);
+}
+
+#[tokio::test]
+async fn crate_root_resolver_alias_implements_broker_endpoint_resolver() {
+    async fn resolve<R: BrokerEndpointResolver>(resolver: &R, name: &str) -> Option<CheetahString> {
+        resolver.resolve(&CheetahString::from(name)).await
+    }
+
+    assert_eq!(
+        resolve(&RootResolver, "broker-a").await,
+        Some(CheetahString::from_static_str("broker-a:10911"))
+    );
+    assert_eq!(resolve(&RootResolver, "broker-b").await, None);
 }
 
 #[test]

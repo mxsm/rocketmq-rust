@@ -20,5 +20,5 @@ pub(crate) mod service_detector;
 
 pub use mq_fault_strategy::BrokerFilter;
 pub use mq_fault_strategy::MQFaultStrategy;
-pub use resolver::Resolver;
+pub use resolver::BrokerEndpointResolver;
 pub use service_detector::BrokerReachabilityProbe;

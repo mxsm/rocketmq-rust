@@ -28,7 +28,7 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
 
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
-use crate::latency::resolver::Resolver;
+use crate::latency::resolver::BrokerEndpointResolver;
 use crate::latency::service_detector::BrokerReachabilityProbe;
 use crate::runtime::schedule_client_fixed_delay_task_with_context;
 use crate::runtime::ClientScheduledTaskHandle;
@@ -239,7 +239,7 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
 
 impl<R, S> LatencyFaultTolerance<CheetahString> for LatencyFaultToleranceImpl<R, S>
 where
-    R: Resolver,
+    R: BrokerEndpointResolver,
     S: BrokerReachabilityProbe,
 {
     async fn update_fault_item(
@@ -431,7 +431,7 @@ fn spawn_detector_loop<R, S>(
     scan_interval: Duration,
 ) -> Option<FaultDetectorTaskHandle>
 where
-    R: Resolver,
+    R: BrokerEndpointResolver,
     S: BrokerReachabilityProbe,
 {
     match schedule_client_fixed_delay_task_with_context(
@@ -518,7 +518,7 @@ pub async fn run_latency_fault_detector_lifecycle_probe(
 
 struct ProbeResolver;
 
-impl Resolver for ProbeResolver {
+impl BrokerEndpointResolver for ProbeResolver {
     async fn resolve(&self, _name: &CheetahString) -> Option<CheetahString> {
         None
     }
@@ -713,7 +713,7 @@ mod tests {
 
     struct NoopResolver;
 
-    impl Resolver for NoopResolver {
+    impl BrokerEndpointResolver for NoopResolver {
         async fn resolve(&self, _name: &CheetahString) -> Option<CheetahString> {
             None
         }
@@ -729,7 +729,7 @@ mod tests {
 
     struct StaticResolver;
 
-    impl Resolver for StaticResolver {
+    impl BrokerEndpointResolver for StaticResolver {
         async fn resolve(&self, _name: &CheetahString) -> Option<CheetahString> {
             Some(CheetahString::from_static_str("127.0.0.1:10911"))
         }
@@ -740,7 +740,7 @@ mod tests {
         release: Arc<tokio::sync::Notify>,
     }
 
-    impl Resolver for BlockingResolver {
+    impl BrokerEndpointResolver for BlockingResolver {
         async fn resolve(&self, _name: &CheetahString) -> Option<CheetahString> {
             self.entered.notify_one();
             self.release.notified().await;
