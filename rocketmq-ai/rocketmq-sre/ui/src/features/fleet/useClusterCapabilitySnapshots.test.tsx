@@ -2,10 +2,15 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 
 import type { SreApi } from "@/api/client";
 import type { CapabilitySnapshot } from "@/api/types";
+import { ClusterCapabilityCache } from "@/data/clusterCapabilityCache";
 import { useClusterCapabilitySnapshots } from "./useClusterCapabilitySnapshots";
 
-const state = vi.hoisted(() => ({ api: undefined as unknown as SreApi }));
-vi.mock("@/data/SreDataContext", () => ({ useSreData: () => ({ api: state.api }) }));
+const state = vi.hoisted(() => ({ capabilityCache: undefined as unknown as ClusterCapabilityCache }));
+vi.mock("@/data/SreDataContext", () => ({ useSreData: () => state }));
+
+function install(get: SreApi["getClusterCapabilities"], ids: string[]) {
+  state.capabilityCache = new ClusterCapabilityCache({ getClusterCapabilities: get } as SreApi, ids);
+}
 
 function snapshot(id: string, digest = "current"): CapabilitySnapshot {
   return {
@@ -30,7 +35,7 @@ describe("Fleet capability reads", () => {
       return new Promise<CapabilitySnapshot>((finish) => pending.push({ id, finish }))
         .finally(() => { active -= 1; });
     });
-    state.api = { getClusterCapabilities: get } as unknown as SreApi;
+    install(get, [...ids, "new-cluster"]);
     const resource = renderHook(({ selected }) => useClusterCapabilitySnapshots(selected), {
       initialProps: { selected: ids },
     });
@@ -57,15 +62,15 @@ describe("Fleet capability reads", () => {
 
   it("isolates API identities and admits no queued reads after cancellation", async () => {
     const pending: Array<{ signal: AbortSignal; finish: (value: CapabilitySnapshot) => void }> = [];
-    const old = vi.fn((_id: string, signal: AbortSignal) =>
-      new Promise<CapabilitySnapshot>((finish) => pending.push({ signal, finish })),
+    const old = vi.fn((_id: string, signal?: AbortSignal) =>
+      new Promise<CapabilitySnapshot>((finish) => pending.push({ signal: signal!, finish })),
     );
-    state.api = { getClusterCapabilities: old } as unknown as SreApi;
     const ids = ["a", "b", "c", "d", "e", "f"];
+    install(old, ids);
     const resource = renderHook(() => useClusterCapabilitySnapshots(ids));
     expect(old).toHaveBeenCalledTimes(4);
     const next = vi.fn((id: string) => Promise.resolve(snapshot(id, "new-owner")));
-    state.api = { getClusterCapabilities: next } as unknown as SreApi;
+    install(next, ids);
     resource.rerender();
     expect(resource.result.current.data).toBeUndefined();
     expect(pending.every((request) => request.signal.aborted)).toBe(true);
@@ -81,7 +86,7 @@ describe("Fleet capability reads", () => {
       .mockRejectedValueOnce(new Error("source unavailable"))
       .mockResolvedValueOnce(snapshot("foreign-cluster", "must-not-display"))
       .mockResolvedValueOnce(snapshot("a", "recovered"));
-    state.api = { getClusterCapabilities: get } as unknown as SreApi;
+    install(get, ["a"]);
     const resource = renderHook(() => useClusterCapabilitySnapshots(["a"]));
     await waitFor(() => expect(resource.result.current.data?.unavailable).toBe(true));
     let completion!: Promise<void>;
@@ -93,5 +98,108 @@ describe("Fleet capability reads", () => {
     await act(async () => { await completion; });
     expect(resource.result.current.data?.snapshots.a.digest).toBe("recovered");
     expect(resource.result.current.data?.unavailable).toBe(false);
+  });
+
+  it("reuses the provider cache across unmounts, but never extends its lifetime on a hit", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    try {
+      const get = vi.fn((id: string) => Promise.resolve({
+        ...snapshot(id),
+        data_sources: [
+          { id: "source", availability: "queryable" as const, freshness_ms: 60_000 },
+          { id: "missing", availability: "missing_instrumentation" as const, detail: "not collected" },
+        ],
+      }));
+      install(get, ["a"]);
+      const first = renderHook(() => useClusterCapabilitySnapshots(["a"]));
+      await act(async () => {});
+      first.unmount();
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      const warm = renderHook(() => useClusterCapabilitySnapshots(["a"]));
+      await act(async () => {});
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(warm.result.current.data?.snapshots.a.data_sources[0].freshness_ms).toBe(80_000);
+      expect(warm.result.current.data?.snapshots.a.observed_at).toBe("2026-11-12T10:00:00Z");
+      expect(warm.result.current.data?.snapshots.a.data_sources[1]).toEqual({
+        id: "missing", availability: "missing_instrumentation", detail: "not collected",
+      });
+      warm.unmount();
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      const expired = renderHook(() => useClusterCapabilitySnapshots(["a"]));
+      await act(async () => {});
+      expect(get).toHaveBeenCalledTimes(2);
+      expired.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires mounted results and hides old evidence while an unavailable source is retried", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    try {
+      let fail!: (error: Error) => void;
+      const get = vi.fn().mockResolvedValueOnce(snapshot("a", "old"))
+        .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+      install(get, ["a"]);
+      const resource = renderHook(() => useClusterCapabilitySnapshots(["a"]));
+      await act(async () => {});
+      expect(resource.result.current.data?.snapshots.a.digest).toBe("old");
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(resource.result.current.data).toBeUndefined();
+      expect(resource.result.current.loading).toBe(true);
+      await act(async () => fail(new Error("offline")));
+      expect(resource.result.current.data?.snapshots).toEqual({});
+      expect(resource.result.current.data?.unavailable).toBe(true);
+      resource.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an invalidated in-flight read repopulate the cache", async () => {
+    let finish!: (value: CapabilitySnapshot) => void;
+    const get = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+      .mockResolvedValue(snapshot("a", "refreshed"));
+    install(get, ["a"]);
+    const resource = renderHook(() => useClusterCapabilitySnapshots(["a"]));
+    let completion!: Promise<void>;
+    act(() => { completion = resource.result.current.reload(); });
+    await act(async () => { await completion; });
+    expect(resource.result.current.data?.snapshots.a.digest).toBe("refreshed");
+    await act(async () => finish(snapshot("a", "obsolete")));
+    resource.unmount();
+    const returned = renderHook(() => useClusterCapabilitySnapshots(["a"]));
+    await waitFor(() => expect(returned.result.current.data?.snapshots.a.digest).toBe("refreshed"));
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("never reads clusters outside the provider roster", async () => {
+    const get = vi.fn((id: string) => Promise.resolve(snapshot(id)));
+    install(get, ["a"]);
+    const resource = renderHook(() => useClusterCapabilitySnapshots(["a", "forbidden"]));
+    await waitFor(() => expect(resource.result.current.loading).toBe(false));
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(resource.result.current.data?.snapshots).not.toHaveProperty("forbidden");
+    expect(resource.result.current.data?.unavailable).toBe(true);
+  });
+
+  it("cancels queued work on navigation and ignores late replies from the departed page", async () => {
+    const pending: Array<{ id: string; signal?: AbortSignal; finish: (value: CapabilitySnapshot) => void }> = [];
+    const get = vi.fn((id: string, signal?: AbortSignal) =>
+      new Promise<CapabilitySnapshot>((finish) => pending.push({ id, signal, finish })),
+    );
+    install(get, ["a", "b", "c", "d", "e"]);
+    const first = renderHook(() => useClusterCapabilitySnapshots(["a", "b", "c", "d", "e"]));
+    first.unmount();
+    expect(pending.every((item) => item.signal?.aborted)).toBe(true);
+    get.mockImplementation((id) => Promise.resolve(snapshot(id, "returned")));
+    const returned = renderHook(() => useClusterCapabilitySnapshots(["a", "e"]));
+    await waitFor(() => expect(returned.result.current.data?.snapshots.a.digest).toBe("returned"));
+    await act(async () => pending.forEach(({ id, finish }) => finish(snapshot(id, "departed"))));
+    expect(get).toHaveBeenCalledTimes(6);
+    returned.unmount();
+    const again = renderHook(() => useClusterCapabilitySnapshots(["a", "e"]));
+    await waitFor(() => expect(again.result.current.data?.snapshots.a.digest).toBe("returned"));
+    expect(get).toHaveBeenCalledTimes(6);
   });
 });

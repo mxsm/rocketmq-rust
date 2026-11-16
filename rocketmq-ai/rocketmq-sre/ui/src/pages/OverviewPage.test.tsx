@@ -5,15 +5,20 @@ import type { SreApi } from "@/api/client";
 import type { FleetHealthReport } from "@/api/types";
 import { demoClusters } from "@/data/demo";
 import { demoFleetHealth } from "@/data/phase2HealthDemo";
+import { ClusterCapabilityCache } from "@/data/clusterCapabilityCache";
 import { OverviewPage } from "./OverviewPage";
 
-const state = vi.hoisted(() => ({ api: undefined as unknown as SreApi }));
+const state = vi.hoisted(() => ({
+  api: undefined as unknown as SreApi,
+  capabilityCache: undefined as unknown as ClusterCapabilityCache,
+}));
 vi.mock("@/data/SreDataContext", () => ({
   useSreData: () => ({
     api: state.api,
+    capabilityCache: state.capabilityCache,
     clusters: demoClusters.slice(0, 2),
     loading: false,
-    refresh: vi.fn(),
+    refresh: () => state.capabilityCache.invalidate(),
   }),
 }));
 vi.mock("@/features/investigations/DutyQueue", () => ({ DutyQueue: () => null }));
@@ -58,6 +63,7 @@ describe("Overview Fleet reads", () => {
       })),
       getFleetHealth: vi.fn(),
     } as unknown as SreApi;
+    state.capabilityCache = new ClusterCapabilityCache(state.api, demoClusters.map((cluster) => cluster.id));
   });
 
   it("does not refetch cluster capabilities when the Fleet response reorders rows", async () => {
@@ -69,6 +75,18 @@ describe("Overview Fleet reads", () => {
     await act(async () => health.resolve(demoFleetHealth()));
     expect(screen.getByTestId("fleet")).toBeVisible();
     expect(state.api.getClusterCapabilities).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows observation times and unavailable states without retaining old rows after refresh", async () => {
+    vi.mocked(state.api.getFleetHealth).mockResolvedValue(demoFleetHealth());
+    render(<OverviewPage />);
+    await waitFor(() => expect(screen.getAllByText("fixture-protocol")).toHaveLength(3));
+    expect(screen.getAllByText("观测于 2026-11-12T10:00:00Z")).toHaveLength(2);
+    vi.mocked(state.api.getClusterCapabilities).mockRejectedValue(new Error("offline"));
+    await userEvent.setup().click(screen.getByRole("button", { name: "刷新证据" }));
+    await screen.findByText("部分集群尚无能力快照；对应字段保持“未采集”。");
+    expect(screen.queryByText("fixture-protocol")).not.toBeInTheDocument();
+    expect(screen.queryByText("观测于 2026-11-12T10:00:00Z")).not.toBeInTheDocument();
   });
 
   it("hides the old region during loading and ignores a late response even when the source ignores abort", async () => {
