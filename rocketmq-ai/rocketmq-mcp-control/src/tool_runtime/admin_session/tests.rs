@@ -355,7 +355,7 @@ impl MutationAdmin for ProductionPathBackend {
 }
 
 /// The operation-bound part only records which endpoint a drain was resolved to.
-impl OperationBackend for ProductionPathBackend {
+impl OperationBoundMutationAdmin for ProductionPathBackend {
     type ProxyDrainPlan = ();
     type LogFilterPlan = ();
 

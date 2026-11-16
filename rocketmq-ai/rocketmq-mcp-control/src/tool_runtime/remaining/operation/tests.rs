@@ -196,7 +196,7 @@ fn written<A: OperationAction>(
     }
 }
 
-impl OperationBackend for Targets {
+impl OperationBoundMutationAdmin for Targets {
     type ProxyDrainPlan = DrainPlan;
     type LogFilterPlan = FilterPlan;
 

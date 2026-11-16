@@ -663,7 +663,7 @@ use idempotency::execute_admitted;
 use idempotency::IdempotencyIdentity;
 use idempotency::IdempotencyState;
 #[cfg(test)]
-pub(crate) use remaining::OperationBackend;
+pub(crate) use remaining::OperationBoundMutationAdmin;
 #[cfg(test)]
 pub(crate) use remaining::Planned;
 pub(crate) use result_lookup::ResultLookup;
