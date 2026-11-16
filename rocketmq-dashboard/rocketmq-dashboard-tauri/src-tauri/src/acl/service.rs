@@ -98,14 +98,14 @@ impl AclManager {
     }
 }
 
-pub(super) trait AclAccess {
+pub(super) trait AclUserAdmin {
     async fn brokers(&self) -> DashboardResult<Vec<DashboardBrokerInfo>>;
     async fn users(&self, query: &DashboardAclQuery) -> DashboardResult<Vec<DashboardAclUser>>;
     async fn create_user(&self, request: &DashboardAclUserMutationRequest) -> DashboardResult<()>;
     async fn update_user(&self, request: &DashboardAclUserMutationRequest) -> DashboardResult<()>;
     async fn delete_user(&self, selector: &TargetSelector, username: &str) -> DashboardResult<()>;
 }
-impl AclAccess for AdminSession {
+impl AclUserAdmin for AdminSession {
     async fn brokers(&self) -> DashboardResult<Vec<DashboardBrokerInfo>> {
         Ok(self.dashboard_list_brokers().await?.items)
     }
@@ -125,7 +125,7 @@ impl AclAccess for AdminSession {
         Ok(())
     }
 }
-pub(super) async fn validate_scope(admin: &impl AclAccess, scope: &AclScope) -> DashboardResult<()> {
+pub(super) async fn validate_scope(admin: &impl AclUserAdmin, scope: &AclScope) -> DashboardResult<()> {
     scope.validate()?;
     if !admin.brokers().await?.iter().any(|broker| {
         broker.broker_id == 0
@@ -139,7 +139,7 @@ pub(super) async fn validate_scope(admin: &impl AclAccess, scope: &AclScope) -> 
     }
     Ok(())
 }
-pub(super) async fn list_users(admin: &impl AclAccess, scope: &AclScope) -> DashboardResult<Vec<AclUser>> {
+pub(super) async fn list_users(admin: &impl AclUserAdmin, scope: &AclScope) -> DashboardResult<Vec<AclUser>> {
     let users = admin
         .users(&DashboardAclQuery {
             selector: scope.selector(),
@@ -164,7 +164,7 @@ pub(super) async fn list_users(admin: &impl AclAccess, scope: &AclScope) -> Dash
         .collect())
 }
 pub(super) async fn change_user(
-    admin: &impl AclAccess,
+    admin: &impl AclUserAdmin,
     request: AclUserChange,
     operation: AclUserOperation,
 ) -> DashboardResult<AclUserResult> {
@@ -178,7 +178,7 @@ pub(super) async fn change_user(
     Ok(read_user_result(admin, request.scope, request.username, operation).await)
 }
 async fn read_user_result(
-    admin: &impl AclAccess,
+    admin: &impl AclUserAdmin,
     scope: AclScope,
     username: String,
     operation: AclUserOperation,

@@ -23,7 +23,7 @@ struct Fake {
     reject: bool,
     read_fails: bool,
 }
-impl AclAccess for Fake {
+impl AclUserAdmin for Fake {
     async fn brokers(&self) -> DashboardResult<Vec<DashboardBrokerInfo>> {
         self.calls.borrow_mut().push("brokers");
         Ok(vec![DashboardBrokerInfo {
