@@ -1838,7 +1838,7 @@ pub(crate) struct DefaultResolver {
     pub(super) client_instance: Weak<MQClientInstance>,
 }
 
-impl Resolver for DefaultResolver {
+impl BrokerEndpointResolver for DefaultResolver {
     async fn resolve(&self, name: &CheetahString) -> Option<CheetahString> {
         self.client_instance
             .upgrade()

@@ -859,6 +859,24 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::latency::BrokerEndpointResolver",
+          "identity": "rocketmq-client/src/lib.rs:pub use crate::latency::BrokerEndpointResolver",
+          "owner": "client",
+          "path": "rocketmq-client/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::latency::BrokerEndpointResolver as Resolver",
+          "identity": "rocketmq-client/src/lib.rs:pub use crate::latency::BrokerEndpointResolver as Resolver",
+          "owner": "client",
+          "path": "rocketmq-client/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::latency::BrokerFilter",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::latency::BrokerFilter",
           "owner": "client",
@@ -888,15 +906,6 @@
           "category": "stable",
           "declaration": "pub use crate::latency::MQFaultStrategy",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::latency::MQFaultStrategy",
-          "owner": "client",
-          "path": "rocketmq-client/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::latency::Resolver",
-          "identity": "rocketmq-client/src/lib.rs:pub use crate::latency::Resolver",
           "owner": "client",
           "path": "rocketmq-client/src/lib.rs",
           "rationale": "deliberate root entry point",
@@ -2325,7 +2334,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 258
+      "maximum_exports": 259
     },
     "rocketmq-model": {
       "entries": [

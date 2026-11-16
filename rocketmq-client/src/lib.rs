@@ -958,11 +958,12 @@ pub use crate::implementation::mq_client_api_impl::ProducerClient;
 pub use crate::implementation::mq_client_api_impl::RouteClient;
 pub use crate::implementation::mq_client_api_impl::TransactionClient;
 pub use crate::implementation::mq_client_manager::ClientPool;
+pub use crate::latency::BrokerEndpointResolver;
+pub use crate::latency::BrokerEndpointResolver as Resolver;
 pub use crate::latency::BrokerFilter;
 pub use crate::latency::BrokerReachabilityProbe;
 pub use crate::latency::BrokerReachabilityProbe as ServiceDetector;
 pub use crate::latency::MQFaultStrategy;
-pub use crate::latency::Resolver;
 #[allow(deprecated)]
 pub use crate::legacy::DefaultMQPullConsumerImpl;
 #[allow(deprecated)]

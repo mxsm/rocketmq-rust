@@ -20,7 +20,7 @@ use cheetah_string::CheetahString;
 /// `Send` future. The `'static` bound applies to the implementation type, while the
 /// returned future may borrow `self` and `name`.
 #[trait_variant::make(Send)]
-pub trait Resolver: Sync + 'static {
+pub trait BrokerEndpointResolver: Sync + 'static {
     /// Resolves the given logical Broker name to its network endpoint.
     async fn resolve(&self, name: &CheetahString) -> Option<CheetahString>;
 }
