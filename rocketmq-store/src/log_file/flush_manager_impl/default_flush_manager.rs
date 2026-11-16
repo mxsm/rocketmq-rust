@@ -67,25 +67,23 @@ pub struct DefaultFlushManager {
 pub(crate) struct CommitLogFlushWakeup {
     flush_disk_type: FlushDiskType,
     transient_store_pool_enable: bool,
-    group_commit_notified: Option<Arc<Notify>>,
     flush_real_time_notified: Option<Arc<Notify>>,
     commit_real_time_notified: Option<Arc<Notify>>,
 }
 
 impl CommitLogFlushWakeup {
     /// Wakes the owning flush service once after a sequencer batch commits one or more requests.
+    ///
+    /// Synchronous flush is driven by the appended messages themselves: each one that waits for
+    /// the flush queues a group-commit request, and the others wake the group-commit service in
+    /// `handle_disk_flush`. A wake-up here as well made the service flush without completing the
+    /// requests that were waiting, so they waited for another flush.
     pub(crate) fn wakeup_after_append_batch(&self, committed_requests: usize) {
         if committed_requests == 0 {
             return;
         }
         match self.flush_disk_type {
-            FlushDiskType::SyncFlush => {
-                if let Some(notified) = &self.group_commit_notified {
-                    notified.notify_one();
-                } else {
-                    warn!("sync flush wake-up is unavailable after CommitLog append");
-                }
-            }
+            FlushDiskType::SyncFlush => {}
             FlushDiskType::AsyncFlush if self.transient_store_pool_enable => {
                 if let Some(notified) = &self.commit_real_time_notified {
                     notified.notify_one();
@@ -226,10 +224,6 @@ impl DefaultFlushManager {
         CommitLogFlushWakeup {
             flush_disk_type: self.message_store_config.flush_disk_type,
             transient_store_pool_enable: self.message_store_config.transient_store_pool_enable,
-            group_commit_notified: self
-                .group_commit_service
-                .as_ref()
-                .map(|service| Arc::clone(&service.notified)),
             flush_real_time_notified: self
                 .flush_real_time_service
                 .as_ref()
@@ -927,6 +921,53 @@ mod tests {
             commit_mapped_file_queue(runtime_scope, mapped_file_queue, 0).await,
             Some(CommitWorkerProgress::new(true, 0))
         );
+    }
+
+    fn flush_manager_with(
+        flush_disk_type: FlushDiskType,
+        name: &'static str,
+    ) -> (DefaultFlushManager, tempfile::TempDir) {
+        let temp_dir = tempdir().unwrap();
+        let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
+        let manager = DefaultFlushManager::new(
+            crate::runtime::test_scope(name),
+            Arc::new(MessageStoreConfig {
+                flush_disk_type,
+                ..MessageStoreConfig::default()
+            }),
+            MappedFileQueue::default().flush_handle(),
+            store_checkpoint,
+        );
+        (manager, temp_dir)
+    }
+
+    #[test]
+    fn an_append_batch_leaves_sync_flush_to_its_flush_requests() {
+        let (manager, _temp_dir) = flush_manager_with(FlushDiskType::SyncFlush, "sync-flush-append-wakeup-test");
+
+        manager.commit_log_flush_wakeup().wakeup_after_append_batch(3);
+
+        let group_commit = manager
+            .group_commit_service
+            .as_ref()
+            .expect("sync flush has a group-commit service");
+        assert!(
+            group_commit.notified.notified().now_or_never().is_none(),
+            "an append batch must not make the group-commit service flush without its waiting requests"
+        );
+    }
+
+    #[test]
+    fn an_append_batch_wakes_the_async_flush_service() {
+        let (manager, _temp_dir) = flush_manager_with(FlushDiskType::AsyncFlush, "async-flush-append-wakeup-test");
+
+        manager.commit_log_flush_wakeup().wakeup_after_append_batch(3);
+
+        let flush_real_time = manager
+            .flush_real_time_service
+            .as_ref()
+            .expect("async flush has a flush service");
+        assert!(flush_real_time.notified.notified().now_or_never().is_some());
     }
 
     #[test]
