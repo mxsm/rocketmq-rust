@@ -22,6 +22,7 @@ import type {
 import { useAuth } from "@/auth/AuthContext";
 import { createMockSreApi } from "@/data/mockApi";
 import { createApiRelay } from "./apiRelay";
+import { ClusterCapabilityCache } from "./clusterCapabilityCache";
 
 interface SreData {
   clusters: ClusterSummary[];
@@ -31,6 +32,7 @@ interface SreData {
   error?: string;
   demoMode: boolean;
   api: SreApi;
+  capabilityCache: ClusterCapabilityCache;
   refresh: () => Promise<void>;
   capability: (
     clusterId: string,
@@ -166,6 +168,22 @@ export function SreDataProvider({ children }: PropsWithChildren) {
   const loading = current?.loading ?? true;
   const error = current?.error;
 
+  // Sorting prevents a harmless roster reorder from discarding usable reads.
+  // updated_at and the remaining metadata invalidate observed source changes.
+  const rosterKey = JSON.stringify([...clusters].sort((a, b) => a.id.localeCompare(b.id)));
+  const capabilityCache = useMemo(
+    () => new ClusterCapabilityCache(
+      api,
+      (JSON.parse(rosterKey) as ClusterSummary[]).map((cluster) => cluster.id),
+    ),
+    [api, rosterKey],
+  );
+  useEffect(() => () => capabilityCache.invalidate(), [capabilityCache]);
+  const refreshData = useCallback(() => {
+    capabilityCache.invalidate();
+    return refresh();
+  }, [capabilityCache, refresh]);
+
   const value = useMemo<SreData>(
     () => ({
       clusters,
@@ -175,13 +193,14 @@ export function SreDataProvider({ children }: PropsWithChildren) {
       error,
       demoMode,
       api,
-      refresh,
+      capabilityCache,
+      refresh: refreshData,
       capability: (clusterId, signal) =>
         api.getClusterCapabilities(clusterId, signal),
       coverage: (signal, clusterId, binding) => api.getCoverage(signal, clusterId, binding),
       catalog: (signal) => api.getCapabilities(signal),
     }),
-    [clusters, api, demoMode, error, health, loading, readiness, refresh],
+    [clusters, api, capabilityCache, demoMode, error, health, loading, readiness, refreshData],
   );
 
   return (
