@@ -440,7 +440,7 @@ mod tests {
                 &EncodingKey::from_rsa_pem(include_bytes!("../tests/fixtures/oauth-private-key.pem")).unwrap(),
             )
             .unwrap(),
-            Algorithm::HS256 => encode(&header, &claims, &EncodingKey::from_secret(b"not-accepted")).unwrap(),
+            Algorithm::HS256 => encode(&header, &claims, &EncodingKey::from_secret(b"not-accepted").unwrap()).unwrap(),
             _ => unreachable!(),
         }
     }
