@@ -219,9 +219,11 @@ mod tests {
     use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_protocol::protocol::heartbeat::producer_data::ProducerData;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_protocol::protocol::RemotingSerializable;
+    use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::FlushDiskType;
     use rocketmq_store::MessageStoreConfig;
@@ -235,6 +237,33 @@ mod tests {
     use crate::processor::processor_test_support::start_processor_server_with_session_registry;
 
     use super::*;
+
+    #[tokio::test]
+    async fn subscription_expiry_uses_its_own_configured_timeout() {
+        for (channel_timeout, subscription_timeout, retained) in [(60_000, 1_000, false), (1_000, 60_000, true)] {
+            let config = Arc::new(BrokerConfig {
+                channel_expired_timeout: channel_timeout,
+                subscription_expired_timeout: subscription_timeout,
+                ..BrokerConfig::default()
+            });
+            let mut runtime = BrokerRuntime::new(config, Arc::new(MessageStoreConfig::default()));
+            let consumers = runtime.runtime_state_mut().consumer_manager();
+            let group = CheetahString::from_static_str("expiry-group");
+            let topic = CheetahString::from_static_str("expiry-topic");
+            let subscription = SubscriptionData {
+                topic: topic.clone(),
+                sub_string: CheetahString::from_static_str("*"),
+                sub_version: current_millis().saturating_sub(10_000) as i64,
+                ..Default::default()
+            };
+            consumers.compensate_subscribe_data(&group, &topic, &subscription);
+            assert!(consumers.find_subscription_data(&group, &topic).is_some());
+
+            consumers.remove_expire_consumer_group_info();
+
+            assert_eq!(consumers.find_subscription_data(&group, &topic).is_some(), retained);
+        }
+    }
 
     #[tokio::test]
     async fn start_is_idempotent_and_shutdown_stops_background_task() {
