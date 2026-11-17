@@ -1868,15 +1868,15 @@ dependencies = [
 
 [[package]]
 name = "jsonwebtoken"
-version = "11.1.0"
+version = "12.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e75fe14a82d81e5f5af639997db37d8b96045938a7ac6ab18cdbe1c7467e05e1"
+checksum = "f347a975eb5fa8f5c4eadce6c1152c11c326cf32cf839fb64ff12d5cb8f4ce8b"
 dependencies = [
  "aws-lc-rs",
- "base64 0.22.1",
- "getrandom 0.2.17",
+ "base64 0.23.1",
+ "getrandom 0.4.3",
  "js-sys",
- "pem 3.0.6",
+ "pem",
  "serde",
  "serde_json",
  "signature",
@@ -2496,16 +2496,6 @@ dependencies = [
 
 [[package]]
 name = "pem"
-version = "3.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
-dependencies = [
- "base64 0.22.1",
- "serde_core",
-]
-
-[[package]]
-name = "pem"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
@@ -2859,15 +2849,6 @@ dependencies = [
 
 [[package]]
 name = "rand_core"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
-dependencies = [
- "getrandom 0.2.17",
-]
-
-[[package]]
-name = "rand_core"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
@@ -2896,7 +2877,7 @@ version = "0.14.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
 dependencies = [
- "pem 4.0.0",
+ "pem",
  "ring",
  "rustls-pki-types",
  "time",
@@ -3044,9 +3025,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.5.1"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab5023804cbe0304cbe06197ac16e645a0a0d0ffa2953bf735c15c2fa0213350"
+checksum = "b5949e504d5ab9944a168259afc0c39ac0230627b6ec5367ace194c59bcbe163"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3057,6 +3038,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "indexmap",
+ "libc",
  "pastey",
  "pin-project-lite",
  "rand 0.10.3",
@@ -3064,6 +3046,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "sse-stream",
  "thiserror",
  "tokio",
@@ -3076,9 +3059,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.5.1"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1da498700030856ba63114bceefa30ba21f5e278cb975e5b9de3529fe842b40"
+checksum = "b98a686693ee91b665c6f89f182fca6e141c8a63dc113b11b38c1bf3491606b7"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -3815,11 +3798,11 @@ dependencies = [
 
 [[package]]
 name = "signature"
-version = "2.2.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
+checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 dependencies = [
- "rand_core 0.6.4",
+ "rand_core 0.10.1",
 ]
 
 [[package]]

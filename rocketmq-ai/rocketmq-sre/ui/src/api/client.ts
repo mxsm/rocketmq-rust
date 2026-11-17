@@ -1,4 +1,5 @@
 import type { ApiRequestContext } from "@/auth/AuthContext";
+import { createKnowledgeClient, type KnowledgeSreApi } from "./knowledgeClient";
 
 import type {
   AssetSnapshot,
@@ -389,7 +390,7 @@ function collection<T>(
     : value;
 }
 
-export interface SreApi {
+export interface SreApi extends KnowledgeSreApi {
   listClusters: (signal?: AbortSignal) => Promise<ClusterSummary[]>;
   getCluster: (
     clusterId: string,
@@ -712,6 +713,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     apiRequest<T>(path, { auth, body, method: "PATCH", signal });
 
   return {
+    ...createKnowledgeClient(auth),
     listClusters: (signal) => get<ClusterSummary[]>("/v1/clusters", signal),
     getCluster: (clusterId, signal) =>
       get<ClusterSummary>(

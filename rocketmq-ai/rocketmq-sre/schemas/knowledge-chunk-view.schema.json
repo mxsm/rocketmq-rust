@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "KnowledgeChunkId": {
+      "description": "Stable identifier for a retrievable knowledge chunk.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "KnowledgeItemId": {
+      "description": "Stable identifier for a knowledge item.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "KnowledgeReviewStatus": {
+      "description": "Knowledge review lifecycle.",
+      "enum": [
+        "draft",
+        "in_review",
+        "validated",
+        "deprecated",
+        "expired"
+      ],
+      "type": "string"
+    },
+    "KnowledgeValidity": {
+      "enum": [
+        "current",
+        "not_yet_valid",
+        "review_overdue",
+        "validity_ended",
+        "status_expired"
+      ],
+      "type": "string"
+    },
+    "Sensitivity": {
+      "description": "Data handling classification applied before evidence leaves its source.",
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "chunk_hash": {
+      "type": "string"
+    },
+    "component": {
+      "type": "string"
+    },
+    "conflict": {
+      "type": "boolean"
+    },
+    "content": {
+      "type": "string"
+    },
+    "content_truncated": {
+      "type": "boolean"
+    },
+    "eligible_for_diagnosis": {
+      "type": "boolean"
+    },
+    "exclusion_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "expired": {
+      "description": "Legacy aggregate also includes a future validity start; consult validity for detail.",
+      "type": "boolean"
+    },
+    "heading": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "$ref": "#/$defs/KnowledgeChunkId"
+    },
+    "item_hash": {
+      "type": "string"
+    },
+    "knowledge_item_id": {
+      "$ref": "#/$defs/KnowledgeItemId"
+    },
+    "metadata_truncated": {
+      "type": "boolean"
+    },
+    "review_due_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "review_status": {
+      "$ref": "#/$defs/KnowledgeReviewStatus"
+    },
+    "rocketmq_version_range": {
+      "type": "string"
+    },
+    "sensitivity": {
+      "$ref": "#/$defs/Sensitivity"
+    },
+    "source_uri": {
+      "description": "Original declared URI, retained for compatibility. Use source_uri_display in UI.",
+      "type": "string"
+    },
+    "source_uri_display": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_version": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "valid_from": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "valid_until": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "validity": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeValidity"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "knowledge_item_id",
+    "title",
+    "component",
+    "content",
+    "source_uri",
+    "source_version",
+    "rocketmq_version_range",
+    "review_due_at",
+    "validity",
+    "sensitivity",
+    "item_hash",
+    "chunk_hash",
+    "review_status",
+    "conflict",
+    "expired",
+    "content_truncated",
+    "metadata_truncated",
+    "eligible_for_diagnosis",
+    "exclusion_reasons"
+  ],
+  "title": "KnowledgeChunkView",
+  "type": "object"
+}

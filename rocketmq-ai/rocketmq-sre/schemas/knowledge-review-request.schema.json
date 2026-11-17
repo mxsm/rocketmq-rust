@@ -1,0 +1,34 @@
+{
+  "$defs": {
+    "KnowledgeReviewStatus": {
+      "description": "Knowledge review lifecycle.",
+      "enum": [
+        "draft",
+        "in_review",
+        "validated",
+        "deprecated",
+        "expired"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "human_confirmed": {
+      "default": false,
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/KnowledgeReviewStatus"
+    }
+  },
+  "required": [
+    "status",
+    "reason"
+  ],
+  "title": "KnowledgeReviewRequest",
+  "type": "object"
+}

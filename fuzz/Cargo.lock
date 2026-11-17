@@ -1794,9 +1794,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-rt"
-version = "0.10.0-alpha.38"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1afd0e306e2d564b303f1b0a97510f1998182110fe1b003ecefa92359739199f"
+checksum = "1089aaaeca4e4e3a1381492d7d0e2fddff5a25120f692c6398376070ae7746f9"
 dependencies = [
  "futures-channel",
  "futures-util",

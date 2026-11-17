@@ -13,9 +13,18 @@
 // limitations under the License.
 
 mod chunk;
+mod history;
 mod model;
 mod repository;
+mod search;
 mod service;
+mod source;
+
+pub(crate) use source::lock_knowledge_source;
+pub(crate) use source::record_source_conflict;
+
+#[cfg(test)]
+pub(crate) mod retrieval_tests;
 
 pub(crate) use model::ImportKnowledgeRequest;
 pub(crate) use model::KnowledgeFeedbackRequest;

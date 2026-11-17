@@ -658,7 +658,7 @@ mod tests {
                 client_id: "mcp-test-client",
                 rocketmq_clusters: vec!["local-dev"],
             },
-            &EncodingKey::from_secret(b"symmetric-keys-are-rejected"),
+            &EncodingKey::from_secret(b"symmetric-keys-are-rejected").unwrap(),
         )
         .unwrap();
 

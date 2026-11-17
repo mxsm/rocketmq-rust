@@ -57,7 +57,9 @@ expression: contract
         },
         "required": [
           "username",
-          "broker_name"
+          "broker_name",
+          "user_type",
+          "user_status"
         ],
         "type": "object"
       },

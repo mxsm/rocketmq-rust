@@ -29,6 +29,12 @@ pub(super) fn chunk_markdown(markdown: &str) -> Result<Vec<KnowledgeChunkDraft>,
 
     for line in markdown.lines() {
         if let Some(next_heading) = markdown_heading(line) {
+            if next_heading.len() > 1024 {
+                return Err(ControlPlaneRequestFailure::validation(
+                    "output_too_large",
+                    "knowledge heading exceeds 1024 bytes",
+                ));
+            }
             flush(&mut chunks, &heading, &mut content)?;
             heading = Some(next_heading.to_owned());
             continue;

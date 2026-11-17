@@ -261,10 +261,12 @@ expression: catalog.list_tools().tools
             "target",
             "before",
             "requested",
+            "after",
             "applied",
             "changed",
             "persistence",
             "verification",
+            "failure",
             "retryable"
           ],
           "type": "object"
@@ -892,10 +894,12 @@ expression: catalog.list_tools().tools
             "target",
             "before",
             "requested",
+            "after",
             "applied",
             "changed",
             "persistence",
             "verification",
+            "failure",
             "retryable"
           ],
           "type": "object"
@@ -1729,6 +1733,14 @@ expression: catalog.list_tools().tools
               ]
             }
           },
+          "required": [
+            "autoCreateTopicEnable",
+            "autoCreateSubscriptionGroup",
+            "brokerPermission",
+            "defaultTopicQueueNums",
+            "messageIndexEnable",
+            "traceTopicEnable"
+          ],
           "type": "object"
         },
         "BrokerConfigPatchOperation": {

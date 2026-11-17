@@ -123,6 +123,7 @@ const SCHEMA_REPAIR_PURPOSE: &str = "schema_repair";
 mod conversation;
 mod critic;
 mod investigation;
+mod knowledge;
 mod lifecycle;
 #[cfg(test)]
 mod live_deepseek;
@@ -389,7 +390,7 @@ impl ModelGatewayService {
             return Ok(ModelDiagnosisDecision::rules_only());
         }
         let (evidence_prompt, evidence_class) = summarize_evidence(evidence);
-        let (knowledge_prompt, knowledge_class) = self
+        let (knowledge_prompt, knowledge_class, knowledge_retrieval) = self
             .validated_knowledge(auth, cluster_id, incident_title, pack_id)
             .await;
         let data_class = evidence_class.max(knowledge_class);
@@ -404,6 +405,7 @@ impl ModelGatewayService {
             "deterministic_report": rules_report,
             "evidence": evidence_prompt,
             "validated_knowledge": knowledge_prompt,
+            "knowledge_retrieval": knowledge_retrieval,
             "output_example": diagnosis_output_example(&evidence_ids),
         });
         let prompt_text = serde_json::to_string(&prompt).map_err(ControlPlaneError::configuration_source)?;
@@ -1236,58 +1238,6 @@ impl ModelGatewayService {
                 "model provider failure health could not be persisted"
             );
         }
-    }
-
-    async fn validated_knowledge(
-        &self,
-        auth: &AuthContext,
-        cluster_id: rocketmq_sre_contracts::ClusterId,
-        incident_title: &str,
-        pack_id: &str,
-    ) -> (Vec<Value>, DataClass) {
-        let cluster = match self.repository.get(cluster_id).await {
-            Ok(cluster) if cluster.tenant_id == auth.tenant_id.to_string() => cluster,
-            Ok(_) | Err(_) => return (Vec::new(), DataClass::Public),
-        };
-        let query = KnowledgeSearchQuery {
-            q: format!(
-                "{} {}",
-                pack_id.replace(['.', '-'], " "),
-                bounded_text(incident_title, 200)
-            ),
-            cluster_id,
-            component: pack_component(pack_id).map(ToOwned::to_owned),
-            rocketmq_version: cluster.rocketmq_version,
-            limit: Some(MAX_KNOWLEDGE_CHUNKS),
-            include_unvalidated: false,
-        };
-        let page = match self.knowledge.search(auth, &query).await {
-            Ok(page) => page,
-            Err(error) => {
-                tracing::debug!(error = %error, "validated diagnosis knowledge was unavailable");
-                return (Vec::new(), DataClass::Public);
-            }
-        };
-        let mut data_class = DataClass::Public;
-        let items = page
-            .items
-            .into_iter()
-            .filter(|item| item.eligible_for_diagnosis)
-            .take(MAX_KNOWLEDGE_CHUNKS as usize)
-            .map(|item| {
-                data_class = data_class.max(data_class_for_sensitivity(item.sensitivity));
-                json!({
-                    "knowledge_item_id": item.knowledge_item_id,
-                    "chunk_id": item.id,
-                    "title": bounded_text(&item.title, 300),
-                    "heading": item.heading.as_deref().map(|value| bounded_text(value, 300)),
-                    "source_version": bounded_text(&item.source_version, 200),
-                    "content": bounded_text(&item.content, MAX_KNOWLEDGE_CHARS),
-                    "content_hash": item.chunk_hash,
-                })
-            })
-            .collect();
-        (items, data_class)
     }
 }
 

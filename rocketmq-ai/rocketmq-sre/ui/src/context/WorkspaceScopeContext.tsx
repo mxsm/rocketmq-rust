@@ -3,7 +3,9 @@ import {
   type PropsWithChildren,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -22,9 +24,10 @@ interface WorkspaceScopeValue extends WorkspaceScope {
   invalid: boolean;
   hasExplicitCluster: boolean;
   identityKey: string;
+  knowledgeFocus: string;
   scopeKey: string;
   setClusterId: (clusterId: string) => void;
-  setScope: (scope: WorkspaceScope) => void;
+  setScope: (scope: WorkspaceScope, intent?: { knowledgeFocus: string }) => void;
   setWindow: (window: AbsoluteWindow) => void;
   reset: () => void;
   searchFor: (search?: string) => string;
@@ -85,11 +88,44 @@ export function WorkspaceScopeProvider({ children }: PropsWithChildren) {
     [...(auth.session?.clusterIds ?? [])].sort(),
     [...(auth.session?.roles ?? [])].sort(),
   ]);
+  const focusValues = new URLSearchParams(location.search).getAll("focus");
+  const rawFocus = focusValues.length === 1 ? focusValues[0] : focusValues.length ? "invalid" : "";
+  const focusIdentity = auth.session ? identityKey : undefined;
+  // This owner outlives the outlet's loading/scope remounts. It retains only an
+  // entry identity, never item data; a new explicit navigation is a new intent.
+  const focusEntry = useRef({ location, identity: focusIdentity, active: true });
+  if (focusEntry.current.location !== location) {
+    focusEntry.current = { location, identity: focusIdentity, active: true };
+  } else if (focusEntry.current.identity !== focusIdentity) {
+    const initialIdentity = focusEntry.current.identity === undefined && focusEntry.current.active;
+    focusEntry.current = { location, identity: focusIdentity, active: initialIdentity };
+  }
+  const knowledgeFocus = location.pathname === "/knowledge" && focusEntry.current.active ? rawFocus : "";
+  const currentNavigation = useRef({ location, identityKey });
+  currentNavigation.current = { location, identityKey };
+  useEffect(() => {
+    const entry = focusEntry.current;
+    if (entry.location !== location || entry.active || location.pathname !== "/knowledge") return;
+    const params = new URLSearchParams(location.search);
+    if (!params.has("focus")) return;
+    params.delete("focus");
+    const encoded = params.toString();
+    navigate({ pathname: location.pathname, search: encoded ? `?${encoded}` : "", hash: location.hash }, { replace: true });
+  }, [focusIdentity, location, navigate]);
   const setScope = useCallback(
-    (next: WorkspaceScope) => {
+    (next: WorkspaceScope, intent?: { knowledgeFocus: string }) => {
       if (!allowedClusters.some((cluster) => cluster.id === next.clusterId))
         return;
+      if (intent && (location.pathname !== "/knowledge" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(intent.knowledgeFocus) ||
+        currentNavigation.current.location !== location || currentNavigation.current.identityKey !== identityKey)) return;
       const projected = new URLSearchParams(projectWorkspaceSearch(location.search, next));
+      // Ordinary scope changes consume the old detail link. Only the explicit,
+      // authorized knowledge switch carries that item into the same navigation.
+      if (location.pathname === "/knowledge") {
+        projected.delete("focus");
+        if (intent) projected.set("focus", intent.knowledgeFocus);
+      }
       // Evidence and revision bindings belong to the previous scope selection.
       for (const key of [
         "evidence_id",
@@ -114,9 +150,8 @@ export function WorkspaceScopeProvider({ children }: PropsWithChildren) {
     },
     [
       allowedClusters,
-      location.hash,
-      location.pathname,
-      location.search,
+      identityKey,
+      location,
       navigate,
     ],
   );
@@ -129,6 +164,7 @@ export function WorkspaceScopeProvider({ children }: PropsWithChildren) {
       ...scope,
       invalid,
       identityKey,
+      knowledgeFocus,
       hasExplicitCluster: new URLSearchParams(location.search).has(
         "cluster_id",
       ),
@@ -154,6 +190,7 @@ export function WorkspaceScopeProvider({ children }: PropsWithChildren) {
       clusterId,
       defaultWindow,
       identityKey,
+      knowledgeFocus,
       invalid,
       location.search,
       resourceKey,

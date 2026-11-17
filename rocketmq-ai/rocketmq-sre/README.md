@@ -37,6 +37,10 @@ Rules and typed contracts remain authoritative for safety decisions. A model
 can explain evidence and propose a plan, but it cannot bypass capability,
 policy, approval, credential, lease, fencing, or verification boundaries.
 
+The [reviewed knowledge contract](docs/knowledge-retrieval.md) describes lexical
+retrieval bounds, version applicability, curation scope and historical review
+provenance. Retrieved knowledge grants no execution authority.
+
 Execution is enabled by deployment configuration: every Execution Agent action switch defaults to false, and only fully configured drivers are registered. Control Plane planning, approval and execution coordination are implemented; MCP, Connector and Rust/TypeScript SDK query boundaries remain read-only. Individual crate READMEs describe the current implementation and enablement conditions.
 
 The [execution observation contract](docs/execution-observation.md) separates
