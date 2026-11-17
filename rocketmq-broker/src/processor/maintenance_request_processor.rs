@@ -546,6 +546,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::EmbeddedDispatchResult;
+    use rocketmq_transport::api::EmbeddedResponseBody;
     use rocketmq_transport::api::RPCHook;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportSecurity;
@@ -946,6 +947,17 @@ mod tests {
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);
         assert!(plan.body_len() > 0);
+
+        let (_, EmbeddedResponseBody::Bytes(body)) = plan.into_embedded_response().into_parts() else {
+            panic!("maintenance capabilities must return JSON bytes");
+        };
+        let value: serde_json::Value = serde_json::from_slice(body.as_ref()).expect("decode capabilities JSON");
+
+        assert_eq!(
+            value.pointer("/store/storeKind").and_then(serde_json::Value::as_str),
+            Some("local")
+        );
+        assert!(value.pointer("/store/backend").is_none());
     }
 
     #[test]

@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(protocol)!:** Change the optional Store discriminator in `MaintenanceGetCapabilities` responses from `store.backend` to `store.storeKind` without an alias. Previously saved responses and older readers require coordinated Broker and consumer upgrades. `schemaVersion` remains `1`; responses without `store` and checkpoint manifest `backend` fields are unchanged ([#12710](https://github.com/mxsm/rocketmq-rust/issues/12710)).
 - **refactor(broker):** Consolidate ConsumerManager initialization and remove its unused configuration-only constructor, preserving distinct expiry timeouts and shared session locks ([#12711](https://github.com/mxsm/rocketmq-rust/issues/12711)).
 - **refactor(client):** Rename the public `ServiceDetector` trait to `BrokerReachabilityProbe`; `ServiceDetector` stays as a crate-root alias, so existing implementations still compile, and `detect` keeps its timeout and reachability result ([#12622](https://github.com/mxsm/rocketmq-rust/issues/12622)).
 - **docs(proxy-core):** Clarify that ingress captures request metadata before dispatch, including Proxy-handled requests ([#12444](https://github.com/mxsm/rocketmq-rust/issues/12444)).
