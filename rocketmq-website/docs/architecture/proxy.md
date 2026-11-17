@@ -30,7 +30,7 @@ Local mode uses an embedded Broker facade through a bounded command queue. Queue
 
 The gRPC service includes route/assignment queries, heartbeats, send, receive, pull, ACK, invisible-duration changes, offset operations, transactions, recall, telemetry, client termination, and lite subscriptions. Streaming Receive/Pull responses have their own lifetime and retained-result budgets.
 
-Remoting is disabled by default. When enabled, it adapts selected client request codes to the processor/backend model. It is not a universal Broker administration tunnel: auth administration codes are rejected at this ingress and belong at the Broker administration endpoint. Local-mode lock/unlock passthrough is a separate supported path.
+Remoting is disabled by default. When enabled, it adapts selected client request codes to the processor/backend model. It is not a universal Broker administration tunnel: auth administration codes are rejected at this ingress and belong at the Broker administration endpoint. Local-mode lock/unlock passthrough is a separate supported path. As in Java Proxy, Remoting route responses list the Proxy's own Remoting address (`remoting.accessAddr`) for every Broker, so Remoting clients that use the Proxy as their NameServer send, pull, and commit offsets through it.
 
 gRPC defaults to port 8081 and optional remoting to 8080; these are Proxy ingress ports, distinct from embedded or remote Broker endpoints. Generated protobuf bindings require `protoc` at build time, even though the core crate alone does not start a server.
 

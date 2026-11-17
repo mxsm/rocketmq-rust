@@ -536,6 +536,7 @@ struct Args {
     mode: Option<ProxyMode>,
     grpc_listen_addr: Option<String>,
     remoting_listen_addr: Option<String>,
+    remoting_access_addr: Option<String>,
     enable_remoting: bool,
     namesrv_addr: Option<String>,
     print_config: bool,
@@ -558,6 +559,7 @@ impl Args {
             mode: None,
             grpc_listen_addr: None,
             remoting_listen_addr: None,
+            remoting_access_addr: None,
             enable_remoting: false,
             namesrv_addr: None,
             print_config: false,
@@ -570,6 +572,7 @@ impl Args {
                 "--mode" => parsed.mode = Some(parse_mode(next_value(&mut args, arg.as_str())?.as_str())?),
                 "--grpcListenAddr" => parsed.grpc_listen_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--remotingListenAddr" => parsed.remoting_listen_addr = Some(next_value(&mut args, arg.as_str())?),
+                "--remotingAccessAddr" => parsed.remoting_access_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--enableRemoting" => parsed.enable_remoting = true,
                 "--namesrvAddr" | "-n" => parsed.namesrv_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--printConfig" => parsed.print_config = true,
@@ -630,6 +633,9 @@ fn apply_overrides(config: &mut ProxyConfig, args: &Args) -> ProxyResult<()> {
     if let Some(addr) = &args.remoting_listen_addr {
         config.remoting.listen_addr = addr.clone();
     }
+    if let Some(addr) = &args.remoting_access_addr {
+        config.remoting.access_addr = Some(addr.clone());
+    }
     if args.enable_remoting {
         config.remoting.enabled = true;
     }
@@ -684,6 +690,8 @@ Options:
       --enableRemoting               Enable the remoting ingress
       --remotingListenAddr <HOST:PORT>
                                      Remoting listen address, overrides remoting.listenAddr
+      --remotingAccessAddr <HOST[:PORT]>
+                                     Address Remoting routes advertise, overrides remoting.accessAddr
   -n, --namesrvAddr <HOST:PORT>      NameServer address for cluster mode (requires 'cluster-mode')
       --log-filter <DIRECTIVE>       Override the process log filter for this startup
       --printConfig                  Print the effective configuration and exit
@@ -706,6 +714,7 @@ fn print_config(config: &ProxyConfig) {
     println!("grpc.listenAddr = {}", config.grpc.listen_addr);
     println!("remoting.enabled = {}", config.remoting.enabled);
     println!("remoting.listenAddr = {}", config.remoting.listen_addr);
+    println!("remoting.accessAddr = {:?}", config.remoting.access_addr);
     #[cfg(feature = "cluster-mode")]
     println!("cluster.namesrvAddr = {:?}", config.cluster.namesrv_addr);
 }
@@ -853,6 +862,29 @@ mod tests {
             .expect("log filter should parse");
 
         assert_eq!(args.log_filter.as_deref(), Some("info,rocketmq_proxy=debug"));
+    }
+
+    #[test]
+    fn proxy_cli_remoting_access_addr_overrides_and_is_validated() {
+        let args = Args::parse_from([
+            "rocketmq-proxy-rust",
+            "--enableRemoting",
+            "--remotingAccessAddr",
+            "proxy.example.com:18080",
+        ])
+        .expect("access address should parse");
+        let mut config = ProxyConfig::default();
+        apply_overrides(&mut config, &args).expect("valid access address should apply");
+        assert_eq!(config.remoting.access_addr.as_deref(), Some("proxy.example.com:18080"));
+
+        let args = Args::parse_from([
+            "rocketmq-proxy-rust",
+            "--enableRemoting",
+            "--remotingAccessAddr",
+            "proxy:0",
+        ])
+        .expect("access address should parse");
+        assert!(apply_overrides(&mut ProxyConfig::default(), &args).is_err());
     }
 
     #[test]

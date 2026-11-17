@@ -99,7 +99,7 @@ Controller's administrative update path checks its blacklist, parses known prope
 
 The root `mode` is `"cluster"` or `"local"`. A build with `cluster-mode` defaults to Cluster; a Local-only build defaults to Local. The selected mode requires its corresponding compiled feature. Cluster forwards through client infrastructure to external Brokers, while Local owns an embedded Broker path; the local configuration is not a full Broker TOML schema.
 
-After reading the file or defaults, Proxy applies explicit `--mode`, `--grpcListenAddr`, `--remotingListenAddr`, `--enableRemoting`, and `-n` / `--namesrvAddr`. `--enableRemoting` only enables the listener; use the file to disable it. `--namesrvAddr` updates the Cluster configuration and requires `cluster-mode`. There is no universal environment-to-every-field mapping; use explicit file values, with the separately documented telemetry and security environment inputs.
+After reading the file or defaults, Proxy applies explicit `--mode`, `--grpcListenAddr`, `--remotingListenAddr`, `--remotingAccessAddr`, `--enableRemoting`, and `-n` / `--namesrvAddr`. `--enableRemoting` only enables the listener; use the file to disable it. `--namesrvAddr` updates the Cluster configuration and requires `cluster-mode`. There is no universal environment-to-every-field mapping; use explicit file values, with the separately documented telemetry and security environment inputs.
 
 ```toml
 mode = "cluster"
@@ -124,6 +124,7 @@ brokerClusterName = "DocsCluster"
 | `grpc.timerMaxDelayMs` / `grpc.timerPrecisionMs` | u64 / `86400000` / `1000` ms | Proxy delay admission horizon and precision; Broker timer support remains independently necessary. |
 | `remoting.enabled` | bool / `false` | Enables optional remoting ingress. |
 | `remoting.listenAddr` | string / `0.0.0.0:8080` | Remoting ingress address, separate from gRPC. |
+| `remoting.accessAddr` | optional string / unset | `host` or `host:port` that Remoting route responses return for every Broker, so Remoting clients send and pull through Proxy; a bare host keeps the listen port. Unset uses `listenAddr`, or this host's address when it binds all interfaces. |
 | `cluster.namesrvAddr` | optional string / unset | External NameServer selection in Cluster mode. |
 | `cluster.brokerClusterName` | string / `DefaultCluster` | Target Broker cluster. |
 | `cluster.mqClientApiTimeoutMs` / `cluster.sendMessageTimeoutMs` | u64 / `3000` each | Cluster client API and send timeouts in milliseconds. |
