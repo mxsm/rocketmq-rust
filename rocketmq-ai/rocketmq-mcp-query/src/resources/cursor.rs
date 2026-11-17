@@ -80,14 +80,14 @@ impl DiscoveryCursorCodec {
         fill_random(&mut material).map_err(crate::McpError::from_source)?;
         let (key, generation) = material.split_at(KEY_BYTES);
         let generation = u64::from_be_bytes(generation.try_into().map_err(crate::McpError::from_source)?);
-        Ok(Self::from_material(key, generation))
+        Self::from_material(key, generation)
     }
 
-    fn from_material(key: &[u8], generation: u64) -> Self {
-        Self {
-            signing_key: EncodingKey::from_secret(key),
+    fn from_material(key: &[u8], generation: u64) -> crate::McpResult<Self> {
+        Ok(Self {
+            signing_key: EncodingKey::from_secret(key).map_err(crate::McpError::from_source)?,
             generation,
-        }
+        })
     }
 
     pub(crate) fn seal(
@@ -152,13 +152,13 @@ impl DiscoveryCursorCodec {
     fn principal_key(&self, canonical_auth_claims: &[u8]) -> crate::McpResult<EncodingKey> {
         let derived = jsonwebtoken::crypto::sign(canonical_auth_claims, &self.signing_key, Algorithm::HS256)
             .map_err(crate::McpError::from_source)?;
-        Ok(EncodingKey::from_secret(derived.as_bytes()))
+        EncodingKey::from_secret(derived.as_bytes()).map_err(crate::McpError::from_source)
     }
 
     fn principal_verification_key(&self, canonical_auth_claims: &[u8]) -> crate::McpResult<DecodingKey> {
         let derived = jsonwebtoken::crypto::sign(canonical_auth_claims, &self.signing_key, Algorithm::HS256)
             .map_err(crate::McpError::from_source)?;
-        Ok(DecodingKey::from_secret(derived.as_bytes()))
+        DecodingKey::from_secret(derived.as_bytes()).map_err(crate::McpError::from_source)
     }
 }
 
@@ -219,6 +219,9 @@ mod tests {
     #[test]
     fn cursor_server_signing_failures_preserve_operational_sources() {
         use std::error::Error;
+        let Err(creation_error) = DiscoveryCursorCodec::from_material(&[], 7) else {
+            panic!("empty signing keys must be rejected");
+        };
         let healthy = codec(7);
         let token = healthy.seal(DiscoverySurface::Resources, 1, b"principal").unwrap();
         assert!(matches!(
@@ -235,7 +238,7 @@ mod tests {
         else {
             panic!("server key failure must not reject the client cursor");
         };
-        for error in [seal_error, open_error] {
+        for error in [creation_error, seal_error, open_error] {
             assert!(error.source().unwrap().is::<jsonwebtoken::errors::Error>());
             assert_eq!(error.to_string(), "MCP operation failed");
             assert!(!format!("{error:?}").contains("private-key-sentinel"));
@@ -243,7 +246,7 @@ mod tests {
     }
 
     fn codec(generation: u64) -> DiscoveryCursorCodec {
-        DiscoveryCursorCodec::from_material(&[0x5a; KEY_BYTES], generation)
+        DiscoveryCursorCodec::from_material(&[0x5a; KEY_BYTES], generation).unwrap()
     }
 
     #[test]
@@ -267,7 +270,7 @@ mod tests {
         assert!(codec(8)
             .open(DiscoverySurface::Resources, &token, b"principal-a-standard")
             .is_err());
-        let replacement = DiscoveryCursorCodec::from_material(&[0xa5; KEY_BYTES], 7);
+        let replacement = DiscoveryCursorCodec::from_material(&[0xa5; KEY_BYTES], 7).unwrap();
         assert!(replacement
             .open(DiscoverySurface::Resources, &token, b"principal-a-standard")
             .is_err());
