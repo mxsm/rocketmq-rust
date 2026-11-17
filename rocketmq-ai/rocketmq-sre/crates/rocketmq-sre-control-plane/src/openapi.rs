@@ -172,6 +172,7 @@ mod tests {
         "/v1/knowledge/search",
         "/v1/knowledge/{id}",
         "/v1/knowledge/{id}/feedback",
+        "/v1/knowledge/{id}/history",
         "/v1/knowledge/{id}/review",
         "/v1/message-journeys",
         "/v1/models/capabilities",
