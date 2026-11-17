@@ -174,16 +174,49 @@ mod tests {
     async fn postgres_model_knowledge_timeout_is_unavailable_instead_of_complete_empty() {
         use crate::knowledge::retrieval_tests::support::Fixture;
         let fixture = Fixture::new().await;
-        let service = ModelGatewayService::disabled(fixture.repository.clone());
-        let mut gate = fixture.repository.pool.begin().await.unwrap();
+        let schema = format!("model_knowledge_timeout_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&fixture.repository.pool)
+            .await
+            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE TABLE {schema}.knowledge_chunks (LIKE knowledge_chunks INCLUDING ALL)"
+        )))
+        .execute(&fixture.repository.pool)
+        .await
+        .unwrap();
+        let options = fixture
+            .repository
+            .pool
+            .connect_options()
+            .as_ref()
+            .clone()
+            .options([("search_path", format!("{schema},public"))]);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let service = ModelGatewayService::disabled(PostgresRepository::from_pool(pool.clone()));
+        let mut gate = pool.begin().await.unwrap();
         sqlx::query("LOCK TABLE knowledge_chunks IN ACCESS EXCLUSIVE MODE")
             .execute(&mut *gate)
             .await
             .unwrap();
+        let shared_service = ModelGatewayService::disabled(fixture.repository.clone());
+        let (_, _, shared_metadata) = shared_service
+            .validated_knowledge(&fixture.operator, fixture.cluster, "needle", "consumer-lag")
+            .await;
+        assert!(matches!(shared_metadata, KnowledgeRetrievalMetadata::Observed { .. }));
         let (items, class, metadata) = service
             .validated_knowledge(&fixture.operator, fixture.cluster, "needle", "consumer-lag")
             .await;
         gate.rollback().await.unwrap();
+        pool.close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&fixture.repository.pool)
+            .await
+            .unwrap();
         assert!(items.is_empty());
         assert_eq!(class, DataClass::Public);
         let json = serde_json::to_value(metadata).unwrap();
