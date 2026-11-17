@@ -31,7 +31,6 @@ use rocketmq_transport::api::SessionRegistry;
 /// disconnected generation without affecting a reconnect using the same client id.
 #[derive(Clone)]
 pub(crate) struct ClientSessionTransport {
-    session_id: SessionId,
     push: ServerPushSender,
     requests: ServerRequestSender,
     close: SessionCloseHandle,
@@ -44,16 +43,11 @@ impl ClientSessionTransport {
         debug_assert_eq!(push.session_id(), session_id);
         debug_assert_eq!(requests.session_id(), session_id);
         debug_assert_eq!(close.session_id(), session_id);
-        Some(Self {
-            session_id,
-            push,
-            requests,
-            close,
-        })
+        Some(Self { push, requests, close })
     }
 
-    pub(crate) const fn session_id(&self) -> SessionId {
-        self.session_id
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.close.session_id()
     }
 
     pub(crate) fn push_sender(&self) -> ServerPushSender {
