@@ -243,7 +243,26 @@ Proxy 扩一个副本/单实例重启/单副本金丝雀、遥测采集器重启
 更新后续 HTTP 凭据并保留工作区；身份或授权声明变化立即隔离旧页，首次会话读取的
 晚到结果不会覆盖更新的认证事件。
 
-Compose 与 Kind 开发 profile 会显式构建
+UI 的身份和角色提示读取 OIDC SDK 返回的 ID token / UserInfo `profile`：
+`rocketmq_tenant` 为字符串，`rocketmq_clusters` 为字符串数组，操作角色由顶层
+`roles` 字符串数组提供。IdP 应向该 profile 签发与 API access token 权限一致的
+租户、集群和角色声明。只在 access token 的 `realm_access` 或 `resource_access`
+中提供角色不能满足当前 UI 的角色提示契约；UI 不自行解码 access token 补造角色，
+也不扫描其他客户端的角色。缺少租户或集群声明时登录失败；缺少所需角色声明时，
+相应控件保持关闭。例如，知识审阅需要 `operator`，租户全局知识审阅还需要
+`sre-admin`。UI 中显示控件不授予权限，API 始终独立验证 access token 并重新检查
+角色、范围和对象状态。
+
+Keycloak 浏览器客户端可使用标准 **User Realm Role** mapper，将用户已分配的
+realm roles 映射到 `roles`：启用 `multivalued`，并启用 ID token、access token
+和 UserInfo claim。随仓
+[`enterprise-realm.json`](../deploy/dev/enterprise-realm.json) 的
+`rocketmq-sre-ui` 客户端提供此映射；它不硬编码角色，也不改变用户的角色分配。
+若部署仅使用 API 客户端角色，应显式配置目标 API 的角色映射到该 profile，
+不能借用其他客户端的角色。修改 IdP mapper 后通过正常登录取得新会话，再检查
+角色控件和对应 API 的授权结果。
+
+默认 Compose 与 Kind 开发 profile 会显式构建
 `VITE_SRE_AUTH_MODE=development` 的 UI，并注入固定的 Phase 00
 开发租户、集群和一次性 bearer fixture。该值不是生产密钥，且只有
 Control Plane 以 `ROCKETMQ_SRE_DEV_AUTH=true` 启动时才有效，禁止用于

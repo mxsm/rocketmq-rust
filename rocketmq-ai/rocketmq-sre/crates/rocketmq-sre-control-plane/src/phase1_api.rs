@@ -194,6 +194,7 @@ pub(crate) fn public_routes() -> Router<AppState> {
         .route("/v1/knowledge", get(list_knowledge))
         .route("/v1/knowledge/search", get(search_knowledge))
         .route("/v1/knowledge/{id}", get(get_knowledge))
+        .route("/v1/knowledge/{id}/history", get(get_knowledge_history))
         .route("/v1/knowledge/{id}/review", post(review_knowledge))
         .route("/v1/knowledge/{id}/feedback", post(feedback_knowledge))
         .route("/v1/events/stream", get(event_stream))
@@ -465,6 +466,15 @@ async fn review_knowledge(
         .review(&auth, parse_knowledge_id(&id)?, &request)
         .await
         .map(Json)
+}
+
+async fn get_knowledge_history(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<rocketmq_sre_contracts::KnowledgeHistoryPage>, ControlPlaneRequestFailure> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state.knowledge.history(&auth, parse_knowledge_id(&id)?).await.map(Json)
 }
 
 async fn feedback_knowledge(

@@ -728,31 +728,16 @@ export type EvidenceRecord = ApiSchemas["EvidenceSnapshot"];
 export type MessageJourneyHop = ApiSchemas["MessageJourneyHop"];
 export type MessageJourney = ApiSchemas["MessageJourney"];
 
-export type KnowledgeReviewStatus =
-  | "draft"
-  | "in_review"
-  | "validated"
-  | "deprecated"
-  | "expired";
-
-export interface KnowledgeItem {
-  id: string;
-  tenant_id: string;
-  cluster_id?: string;
-  title: string;
-  component: string;
-  rocketmq_version_range: string;
-  source_uri: string;
-  source_version: string;
-  owner: string;
-  review_status: KnowledgeReviewStatus;
-  review_due_at: string;
-  sensitivity: string;
-  content_hash: string;
-  conflict: boolean;
-  summary: string;
-  updated_at: string;
-}
+export type KnowledgeReviewStatus = ApiSchemas["KnowledgeReviewStatus"];
+export type KnowledgeItem = ApiSchemas["KnowledgeItem"];
+export type KnowledgePage = ApiSchemas["KnowledgePage"];
+export type KnowledgeSearchPage = ApiSchemas["KnowledgeSearchPage"];
+export type KnowledgeChunkView = ApiSchemas["KnowledgeChunkView"];
+export type KnowledgeHistoryPage = ApiSchemas["KnowledgeHistoryPage"];
+export type ImportKnowledgeRequest = ApiSchemas["ImportKnowledgeRequest"];
+export type KnowledgeImportResult = ApiSchemas["KnowledgeImportResult"];
+export type KnowledgeReviewRequest = ApiSchemas["KnowledgeReviewRequest"];
+export type KnowledgeFeedbackRequest = ApiSchemas["KnowledgeFeedbackRequest"];
 
 export type ModelProfile = ApiSchemas["ModelProfileStatus"];
 export type ModelCapabilitiesResponse =

@@ -37,6 +37,19 @@
       ],
       "protocolMappers": [
         {
+          "name": "rocketmq-ui-realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
           "name": "rocketmq-tenant",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-hardcoded-claim-mapper",

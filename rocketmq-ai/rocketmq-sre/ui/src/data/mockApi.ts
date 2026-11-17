@@ -65,6 +65,7 @@ import {
 } from "./phase4AutonomyDemo";
 import { phase4AutonomyScopes } from "./phase4AutonomySettingsDemo";
 import { createModelLifecycleMock } from "./modelLifecycleMock";
+import { createKnowledgeMock } from "./knowledgeMock";
 import { createEvidenceQualityDemo, demoCapabilityQuality } from "./evidenceQualityDemo";
 import { phase4ModelCapabilities } from "./phase4ModelDemo";
 import {
@@ -279,6 +280,7 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
   };
 
   return {
+    ...createKnowledgeMock(clone(phase1Knowledge.items), auth, wait),
     listClusters: async (signal) => {
       await wait(signal);
       return clone(

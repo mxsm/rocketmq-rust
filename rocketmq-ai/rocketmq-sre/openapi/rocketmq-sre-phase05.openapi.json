@@ -1410,7 +1410,14 @@
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonObject"
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgePage"
+                }
+              }
+            }
           }
         }
       }
@@ -1430,7 +1437,14 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonObject"
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeImportResult"
+                }
+              }
+            }
           }
         }
       }
@@ -1491,9 +1505,17 @@
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonObject"
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeSearchPage"
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "Bounded lexical retrieval. partial retains its legacy included-ineligible meaning; bounds separately state candidate exhaustion and result truncation. Target version is supplied knowledge context."
       }
     },
     "/v1/knowledge/{id}": {
@@ -1506,7 +1528,14 @@
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonObject"
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeItem"
+                }
+              }
+            }
           }
         }
       }
@@ -1531,7 +1560,14 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonObject"
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeItem"
+                }
+              }
+            }
           }
         }
       }
@@ -1556,7 +1592,14 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonObject"
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeItem"
+                }
+              }
+            }
           }
         }
       }
@@ -15431,6 +15474,85 @@
           }
         }
       }
+    },
+    "/v1/knowledge/{id}/history": {
+      "get": {
+        "operationId": "getKnowledgeHistory",
+        "summary": "Read bounded review, nonauthoritative feedback and stored publication lineage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeHistoryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Scoped server facts; no target operation or physical-version qualification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -15862,143 +15984,6 @@
               "investigation",
               "incident"
             ]
-          }
-        }
-      },
-      "ImportKnowledgeRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "title",
-          "component",
-          "rocketmq_version_range",
-          "source_uri",
-          "source_version",
-          "owner",
-          "review_due_at",
-          "sensitivity",
-          "markdown"
-        ],
-        "properties": {
-          "cluster_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1
-          },
-          "component": {
-            "type": "string",
-            "minLength": 1
-          },
-          "rocketmq_version_range": {
-            "type": "string",
-            "minLength": 1
-          },
-          "source_uri": {
-            "type": "string",
-            "minLength": 1
-          },
-          "source_version": {
-            "type": "string",
-            "minLength": 1
-          },
-          "valid_from": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "valid_until": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "owner": {
-            "type": "string",
-            "minLength": 1
-          },
-          "review_due_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "sensitivity": {
-            "type": "string",
-            "enum": [
-              "public",
-              "internal",
-              "confidential",
-              "restricted"
-            ]
-          },
-          "review_status": {
-            "type": "string",
-            "enum": [
-              "draft",
-              "in_review",
-              "validated",
-              "deprecated",
-              "expired"
-            ],
-            "default": "draft"
-          },
-          "human_validated": {
-            "type": "boolean",
-            "default": false
-          },
-          "ai_generated": {
-            "type": "boolean",
-            "default": false
-          },
-          "markdown": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      },
-      "KnowledgeReviewRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "status",
-          "reason"
-        ],
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "draft",
-              "in_review",
-              "validated",
-              "deprecated",
-              "expired"
-            ]
-          },
-          "human_confirmed": {
-            "type": "boolean",
-            "default": false
-          },
-          "reason": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      },
-      "KnowledgeFeedbackRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "kind"
-        ],
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "useful",
-              "incorrect",
-              "outdated"
-            ]
-          },
-          "comment": {
-            "type": "string"
           }
         }
       },
@@ -21914,119 +21899,6 @@
             "type": "string"
           },
           "matched_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "KnowledgeItem": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "tenant_id",
-          "title",
-          "component",
-          "rocketmq_version_range",
-          "source_uri",
-          "source_version",
-          "owner",
-          "review_status",
-          "review_due_at",
-          "sensitivity",
-          "content_hash",
-          "conflict",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "tenant_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "cluster_id": {
-            "oneOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "title": {
-            "type": "string"
-          },
-          "component": {
-            "type": "string"
-          },
-          "rocketmq_version_range": {
-            "type": "string"
-          },
-          "source_uri": {
-            "type": "string"
-          },
-          "source_version": {
-            "type": "string"
-          },
-          "valid_from": {
-            "oneOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "valid_until": {
-            "oneOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "owner": {
-            "type": "string"
-          },
-          "review_status": {
-            "type": "string",
-            "enum": [
-              "draft",
-              "in_review",
-              "validated",
-              "deprecated",
-              "expired"
-            ]
-          },
-          "review_due_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "sensitivity": {
-            "type": "string"
-          },
-          "content_hash": {
-            "type": "string"
-          },
-          "conflict": {
-            "type": "boolean"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_at": {
             "type": "string",
             "format": "date-time"
           }
@@ -43142,6 +43014,1345 @@
       "PlanExecutionPage__TenantId": {
         "description": "Stable tenant boundary identifier.",
         "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeItem": {
+        "description": "Searchable, source-backed knowledge item.",
+        "properties": {
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeItem__ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "conflict": {
+            "type": "boolean"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/KnowledgeItem__KnowledgeItemId"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "review_due_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/KnowledgeItem__KnowledgeReviewStatus"
+          },
+          "rocketmq_version_range": {
+            "type": "string"
+          },
+          "sensitivity": {
+            "type": "string"
+          },
+          "source_uri": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/KnowledgeItem__TenantId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "valid_from": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "title",
+          "component",
+          "rocketmq_version_range",
+          "source_uri",
+          "source_version",
+          "owner",
+          "review_status",
+          "review_due_at",
+          "sensitivity",
+          "content_hash",
+          "conflict",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "KnowledgeItem",
+        "type": "object"
+      },
+      "KnowledgeItem__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeItem__KnowledgeItemId": {
+        "description": "Stable identifier for a knowledge item.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeItem__KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgeItem__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "title": "KnowledgeReviewStatus",
+        "type": "string"
+      },
+      "KnowledgePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgePage__KnowledgeItem"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "partial",
+          "warnings",
+          "observed_at"
+        ],
+        "title": "KnowledgePage",
+        "type": "object"
+      },
+      "KnowledgePage__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgePage__KnowledgeItem": {
+        "description": "Searchable, source-backed knowledge item.",
+        "properties": {
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgePage__ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "conflict": {
+            "type": "boolean"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/KnowledgePage__KnowledgeItemId"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "review_due_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/KnowledgePage__KnowledgeReviewStatus"
+          },
+          "rocketmq_version_range": {
+            "type": "string"
+          },
+          "sensitivity": {
+            "type": "string"
+          },
+          "source_uri": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/KnowledgePage__TenantId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "valid_from": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "title",
+          "component",
+          "rocketmq_version_range",
+          "source_uri",
+          "source_version",
+          "owner",
+          "review_status",
+          "review_due_at",
+          "sensitivity",
+          "content_hash",
+          "conflict",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "KnowledgePage__KnowledgeItemId": {
+        "description": "Stable identifier for a knowledge item.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgePage__KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgePage__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeChunkView": {
+        "properties": {
+          "chunk_hash": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "conflict": {
+            "type": "boolean"
+          },
+          "content": {
+            "type": "string"
+          },
+          "content_truncated": {
+            "type": "boolean"
+          },
+          "eligible_for_diagnosis": {
+            "type": "boolean"
+          },
+          "exclusion_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expired": {
+            "description": "Legacy aggregate also includes a future validity start; consult validity for detail.",
+            "type": "boolean"
+          },
+          "heading": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/KnowledgeChunkView__KnowledgeChunkId"
+          },
+          "item_hash": {
+            "type": "string"
+          },
+          "knowledge_item_id": {
+            "$ref": "#/components/schemas/KnowledgeChunkView__KnowledgeItemId"
+          },
+          "metadata_truncated": {
+            "type": "boolean"
+          },
+          "review_due_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/KnowledgeChunkView__KnowledgeReviewStatus"
+          },
+          "rocketmq_version_range": {
+            "type": "string"
+          },
+          "sensitivity": {
+            "$ref": "#/components/schemas/KnowledgeChunkView__Sensitivity"
+          },
+          "source_uri": {
+            "description": "Original declared URI, retained for compatibility. Use source_uri_display in UI.",
+            "type": "string"
+          },
+          "source_uri_display": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_version": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "valid_from": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "validity": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeChunkView__KnowledgeValidity"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "knowledge_item_id",
+          "title",
+          "component",
+          "content",
+          "source_uri",
+          "source_version",
+          "rocketmq_version_range",
+          "review_due_at",
+          "validity",
+          "sensitivity",
+          "item_hash",
+          "chunk_hash",
+          "review_status",
+          "conflict",
+          "expired",
+          "content_truncated",
+          "metadata_truncated",
+          "eligible_for_diagnosis",
+          "exclusion_reasons"
+        ],
+        "title": "KnowledgeChunkView",
+        "type": "object"
+      },
+      "KnowledgeChunkView__KnowledgeChunkId": {
+        "description": "Stable identifier for a retrievable knowledge chunk.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeChunkView__KnowledgeItemId": {
+        "description": "Stable identifier for a knowledge item.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeChunkView__KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgeChunkView__KnowledgeValidity": {
+        "enum": [
+          "current",
+          "not_yet_valid",
+          "review_overdue",
+          "validity_ended",
+          "status_expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgeChunkView__Sensitivity": {
+        "description": "Data handling classification applied before evidence leaves its source.",
+        "enum": [
+          "public",
+          "internal",
+          "confidential",
+          "restricted"
+        ],
+        "type": "string"
+      },
+      "KnowledgeSearchPage": {
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/KnowledgeSearchPage__KnowledgeSearchBinding"
+          },
+          "bounds": {
+            "$ref": "#/components/schemas/KnowledgeSearchPage__KnowledgeSearchBounds"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeSearchPage__KnowledgeChunkView"
+            },
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "partial": {
+            "description": "Compatibility: one or more returned rows are ineligible, not a completeness claim.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "partial",
+          "observed_at",
+          "binding",
+          "bounds"
+        ],
+        "title": "KnowledgeSearchPage",
+        "type": "object"
+      },
+      "KnowledgeSearchPage__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeSearchPage__KnowledgeChunkId": {
+        "description": "Stable identifier for a retrievable knowledge chunk.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeSearchPage__KnowledgeChunkView": {
+        "properties": {
+          "chunk_hash": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "conflict": {
+            "type": "boolean"
+          },
+          "content": {
+            "type": "string"
+          },
+          "content_truncated": {
+            "type": "boolean"
+          },
+          "eligible_for_diagnosis": {
+            "type": "boolean"
+          },
+          "exclusion_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expired": {
+            "description": "Legacy aggregate also includes a future validity start; consult validity for detail.",
+            "type": "boolean"
+          },
+          "heading": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/KnowledgeSearchPage__KnowledgeChunkId"
+          },
+          "item_hash": {
+            "type": "string"
+          },
+          "knowledge_item_id": {
+            "$ref": "#/components/schemas/KnowledgeSearchPage__KnowledgeItemId"
+          },
+          "metadata_truncated": {
+            "type": "boolean"
+          },
+          "review_due_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/KnowledgeSearchPage__KnowledgeReviewStatus"
+          },
+          "rocketmq_version_range": {
+            "type": "string"
+          },
+          "sensitivity": {
+            "$ref": "#/components/schemas/KnowledgeSearchPage__Sensitivity"
+          },
+          "source_uri": {
+            "description": "Original declared URI, retained for compatibility. Use source_uri_display in UI.",
+            "type": "string"
+          },
+          "source_uri_display": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_version": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "valid_from": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "validity": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeSearchPage__KnowledgeValidity"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "knowledge_item_id",
+          "title",
+          "component",
+          "content",
+          "source_uri",
+          "source_version",
+          "rocketmq_version_range",
+          "review_due_at",
+          "validity",
+          "sensitivity",
+          "item_hash",
+          "chunk_hash",
+          "review_status",
+          "conflict",
+          "expired",
+          "content_truncated",
+          "metadata_truncated",
+          "eligible_for_diagnosis",
+          "exclusion_reasons"
+        ],
+        "type": "object"
+      },
+      "KnowledgeSearchPage__KnowledgeItemId": {
+        "description": "Stable identifier for a knowledge item.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeSearchPage__KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgeSearchPage__KnowledgeSearchBinding": {
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/KnowledgeSearchPage__ClusterId"
+          },
+          "component": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "include_unvalidated": {
+            "type": "boolean"
+          },
+          "limit": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "q": {
+            "type": "string"
+          },
+          "rocketmq_version": {
+            "description": "Explicit knowledge applicability context; not an observed physical version.",
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/KnowledgeSearchPage__TenantId"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "q",
+          "rocketmq_version",
+          "limit",
+          "include_unvalidated"
+        ],
+        "type": "object"
+      },
+      "KnowledgeSearchPage__KnowledgeSearchBounds": {
+        "properties": {
+          "candidate_limit": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "candidate_limit_reached": {
+            "type": "boolean"
+          },
+          "results_truncated": {
+            "description": "Additional matching rows existed inside the materialized candidate set.",
+            "type": "boolean"
+          },
+          "scanned_candidates": {
+            "description": "Materialized candidates evaluated; does not bound PostgreSQL's underlying scan.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "candidate_limit",
+          "scanned_candidates",
+          "candidate_limit_reached",
+          "results_truncated"
+        ],
+        "type": "object"
+      },
+      "KnowledgeSearchPage__KnowledgeValidity": {
+        "enum": [
+          "current",
+          "not_yet_valid",
+          "review_overdue",
+          "validity_ended",
+          "status_expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgeSearchPage__Sensitivity": {
+        "description": "Data handling classification applied before evidence leaves its source.",
+        "enum": [
+          "public",
+          "internal",
+          "confidential",
+          "restricted"
+        ],
+        "type": "string"
+      },
+      "KnowledgeSearchPage__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeHistoryPage": {
+        "properties": {
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeHistoryPage__ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "feedback": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeHistoryPage__KnowledgeFeedbackRecord"
+            },
+            "type": "array"
+          },
+          "feedback_truncated": {
+            "type": "boolean"
+          },
+          "item_content_hash": {
+            "type": "string"
+          },
+          "knowledge_item_id": {
+            "$ref": "#/components/schemas/KnowledgeHistoryPage__KnowledgeItemId"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "postmortem": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeHistoryPage__KnowledgePostmortemLineage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeHistoryPage__KnowledgeReviewRecord"
+            },
+            "type": "array"
+          },
+          "reviews_truncated": {
+            "type": "boolean"
+          },
+          "source_uri_display": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/KnowledgeHistoryPage__TenantId"
+          }
+        },
+        "required": [
+          "knowledge_item_id",
+          "tenant_id",
+          "item_content_hash",
+          "observed_at",
+          "reviews",
+          "feedback",
+          "reviews_truncated",
+          "feedback_truncated"
+        ],
+        "title": "KnowledgeHistoryPage",
+        "type": "object"
+      },
+      "KnowledgeHistoryPage__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeHistoryPage__IncidentId": {
+        "description": "Stable identifier for an SRE incident.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeHistoryPage__KnowledgeFeedbackKind": {
+        "description": "Feedback classifications that create a knowledge review task.",
+        "enum": [
+          "useful",
+          "incorrect",
+          "outdated"
+        ],
+        "type": "string"
+      },
+      "KnowledgeHistoryPage__KnowledgeFeedbackRecord": {
+        "properties": {
+          "actor_subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeHistoryPage__ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "details_truncated": {
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KnowledgeHistoryPage__KnowledgeFeedbackKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "created_at",
+          "details_truncated"
+        ],
+        "type": "object"
+      },
+      "KnowledgeHistoryPage__KnowledgeItemId": {
+        "description": "Stable identifier for a knowledge item.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeHistoryPage__KnowledgePostmortemLineage": {
+        "description": "Stored publication relation and immutable confirmed revision, not URI inference.",
+        "properties": {
+          "confirmed_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "confirmed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/KnowledgeHistoryPage__IncidentId"
+          },
+          "postmortem_id": {
+            "$ref": "#/components/schemas/KnowledgeHistoryPage__PostmortemId"
+          },
+          "revision": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "postmortem_id",
+          "incident_id",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "KnowledgeHistoryPage__KnowledgeReviewEventKind": {
+        "enum": [
+          "import",
+          "review",
+          "feedback"
+        ],
+        "type": "string"
+      },
+      "KnowledgeHistoryPage__KnowledgeReviewRecord": {
+        "description": "Null typed provenance is explicitly unknown on legacy rows.",
+        "properties": {
+          "actor_subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ai_generated": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "completed_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "details_truncated": {
+            "type": "boolean"
+          },
+          "event_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeHistoryPage__KnowledgeReviewEventKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeHistoryPage__KnowledgeReviewStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "human_confirmed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "item_content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "task_status": {
+            "type": "string"
+          },
+          "to_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeHistoryPage__KnowledgeReviewStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "reason",
+          "task_status",
+          "created_at",
+          "details_truncated"
+        ],
+        "type": "object"
+      },
+      "KnowledgeHistoryPage__KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgeHistoryPage__PostmortemId": {
+        "description": "Stable identifier for a postmortem.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeHistoryPage__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ImportKnowledgeRequest": {
+        "description": "Direct import declaration; human/AI flags are caller declarations, not identity proof.",
+        "properties": {
+          "ai_generated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportKnowledgeRequest__ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "human_validated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "markdown": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "review_due_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/ImportKnowledgeRequest__KnowledgeReviewStatus",
+            "default": "draft"
+          },
+          "rocketmq_version_range": {
+            "type": "string"
+          },
+          "sensitivity": {
+            "$ref": "#/components/schemas/ImportKnowledgeRequest__Sensitivity"
+          },
+          "source_uri": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "valid_from": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "component",
+          "rocketmq_version_range",
+          "source_uri",
+          "source_version",
+          "owner",
+          "review_due_at",
+          "sensitivity",
+          "markdown"
+        ],
+        "title": "ImportKnowledgeRequest",
+        "type": "object"
+      },
+      "ImportKnowledgeRequest__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ImportKnowledgeRequest__KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "ImportKnowledgeRequest__Sensitivity": {
+        "description": "Data handling classification applied before evidence leaves its source.",
+        "enum": [
+          "public",
+          "internal",
+          "confidential",
+          "restricted"
+        ],
+        "type": "string"
+      },
+      "KnowledgeImportResult": {
+        "properties": {
+          "chunk_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deduplicated": {
+            "type": "boolean"
+          },
+          "item": {
+            "$ref": "#/components/schemas/KnowledgeImportResult__KnowledgeItem"
+          }
+        },
+        "required": [
+          "item",
+          "chunk_count",
+          "deduplicated"
+        ],
+        "title": "KnowledgeImportResult",
+        "type": "object"
+      },
+      "KnowledgeImportResult__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeImportResult__KnowledgeItem": {
+        "description": "Searchable, source-backed knowledge item.",
+        "properties": {
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeImportResult__ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "conflict": {
+            "type": "boolean"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/KnowledgeImportResult__KnowledgeItemId"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "review_due_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/KnowledgeImportResult__KnowledgeReviewStatus"
+          },
+          "rocketmq_version_range": {
+            "type": "string"
+          },
+          "sensitivity": {
+            "type": "string"
+          },
+          "source_uri": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/KnowledgeImportResult__TenantId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "valid_from": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "title",
+          "component",
+          "rocketmq_version_range",
+          "source_uri",
+          "source_version",
+          "owner",
+          "review_status",
+          "review_due_at",
+          "sensitivity",
+          "content_hash",
+          "conflict",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "KnowledgeImportResult__KnowledgeItemId": {
+        "description": "Stable identifier for a knowledge item.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeImportResult__KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgeImportResult__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "KnowledgeReviewRequest": {
+        "properties": {
+          "human_confirmed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/KnowledgeReviewRequest__KnowledgeReviewStatus"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "KnowledgeReviewRequest",
+        "type": "object"
+      },
+      "KnowledgeReviewRequest__KnowledgeReviewStatus": {
+        "description": "Knowledge review lifecycle.",
+        "enum": [
+          "draft",
+          "in_review",
+          "validated",
+          "deprecated",
+          "expired"
+        ],
+        "type": "string"
+      },
+      "KnowledgeFeedbackRequest": {
+        "properties": {
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KnowledgeFeedbackRequest__KnowledgeFeedbackKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "KnowledgeFeedbackRequest",
+        "type": "object"
+      },
+      "KnowledgeFeedbackRequest__KnowledgeFeedbackKind": {
+        "description": "Feedback classifications that create a knowledge review task.",
+        "enum": [
+          "useful",
+          "incorrect",
+          "outdated"
+        ],
         "type": "string"
       }
     }

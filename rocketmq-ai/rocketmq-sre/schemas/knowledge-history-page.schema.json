@@ -1,0 +1,302 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "KnowledgeFeedbackKind": {
+      "description": "Feedback classifications that create a knowledge review task.",
+      "enum": [
+        "useful",
+        "incorrect",
+        "outdated"
+      ],
+      "type": "string"
+    },
+    "KnowledgeFeedbackRecord": {
+      "properties": {
+        "actor_subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cluster_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClusterId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "comment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "details_truncated": {
+          "type": "boolean"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/KnowledgeFeedbackKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "created_at",
+        "details_truncated"
+      ],
+      "type": "object"
+    },
+    "KnowledgeItemId": {
+      "description": "Stable identifier for a knowledge item.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "KnowledgePostmortemLineage": {
+      "description": "Stored publication relation and immutable confirmed revision, not URI inference.",
+      "properties": {
+        "confirmed_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confirmed_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "incident_id": {
+          "$ref": "#/$defs/IncidentId"
+        },
+        "postmortem_id": {
+          "$ref": "#/$defs/PostmortemId"
+        },
+        "revision": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "postmortem_id",
+        "incident_id",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "KnowledgeReviewEventKind": {
+      "enum": [
+        "import",
+        "review",
+        "feedback"
+      ],
+      "type": "string"
+    },
+    "KnowledgeReviewRecord": {
+      "description": "Null typed provenance is explicitly unknown on legacy rows.",
+      "properties": {
+        "actor_subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ai_generated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "completed_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "details_truncated": {
+          "type": "boolean"
+        },
+        "event_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeReviewEventKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeReviewStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "human_confirmed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "item_content_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "task_status": {
+          "type": "string"
+        },
+        "to_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeReviewStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "reason",
+        "task_status",
+        "created_at",
+        "details_truncated"
+      ],
+      "type": "object"
+    },
+    "KnowledgeReviewStatus": {
+      "description": "Knowledge review lifecycle.",
+      "enum": [
+        "draft",
+        "in_review",
+        "validated",
+        "deprecated",
+        "expired"
+      ],
+      "type": "string"
+    },
+    "PostmortemId": {
+      "description": "Stable identifier for a postmortem.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "cluster_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClusterId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "feedback": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeFeedbackRecord"
+      },
+      "type": "array"
+    },
+    "feedback_truncated": {
+      "type": "boolean"
+    },
+    "item_content_hash": {
+      "type": "string"
+    },
+    "knowledge_item_id": {
+      "$ref": "#/$defs/KnowledgeItemId"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "postmortem": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KnowledgePostmortemLineage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reviews": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeReviewRecord"
+      },
+      "type": "array"
+    },
+    "reviews_truncated": {
+      "type": "boolean"
+    },
+    "source_uri_display": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "knowledge_item_id",
+    "tenant_id",
+    "item_content_hash",
+    "observed_at",
+    "reviews",
+    "feedback",
+    "reviews_truncated",
+    "feedback_truncated"
+  ],
+  "title": "KnowledgeHistoryPage",
+  "type": "object"
+}

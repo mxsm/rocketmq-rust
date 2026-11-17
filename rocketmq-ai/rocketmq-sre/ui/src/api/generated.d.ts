@@ -688,6 +688,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Bounded lexical retrieval. partial retains its legacy included-ineligible meaning; bounds separately state candidate exhaustion and result truncation. Target version is supplied knowledge context. */
         get: operations["searchKnowledge"];
         put?: never;
         post?: never;
@@ -3025,6 +3026,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/knowledge/{id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded review, nonauthoritative feedback and stored publication lineage */
+        get: operations["getKnowledgeHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3129,46 +3147,6 @@ export interface components {
             reason: string;
             /** @enum {string} */
             promote_to?: "investigation" | "incident";
-        };
-        ImportKnowledgeRequest: {
-            /** Format: uuid */
-            cluster_id?: string;
-            title: string;
-            component: string;
-            rocketmq_version_range: string;
-            source_uri: string;
-            source_version: string;
-            /** Format: date-time */
-            valid_from?: string;
-            /** Format: date-time */
-            valid_until?: string;
-            owner: string;
-            /** Format: date-time */
-            review_due_at: string;
-            /** @enum {string} */
-            sensitivity: "public" | "internal" | "confidential" | "restricted";
-            /**
-             * @default draft
-             * @enum {string}
-             */
-            review_status: "draft" | "in_review" | "validated" | "deprecated" | "expired";
-            /** @default false */
-            human_validated: boolean;
-            /** @default false */
-            ai_generated: boolean;
-            markdown: string;
-        };
-        KnowledgeReviewRequest: {
-            /** @enum {string} */
-            status: "draft" | "in_review" | "validated" | "deprecated" | "expired";
-            /** @default false */
-            human_confirmed: boolean;
-            reason: string;
-        };
-        KnowledgeFeedbackRequest: {
-            /** @enum {string} */
-            kind: "useful" | "incorrect" | "outdated";
-            comment?: string;
         };
         Recommendation: {
             /** Format: uuid */
@@ -5206,32 +5184,6 @@ export interface components {
             affected_component: string;
             /** Format: date-time */
             matched_at: string;
-        };
-        KnowledgeItem: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            tenant_id: string;
-            cluster_id?: string | null;
-            title: string;
-            component: string;
-            rocketmq_version_range: string;
-            source_uri: string;
-            source_version: string;
-            valid_from?: string | null;
-            valid_until?: string | null;
-            owner: string;
-            /** @enum {string} */
-            review_status: "draft" | "in_review" | "validated" | "deprecated" | "expired";
-            /** Format: date-time */
-            review_due_at: string;
-            sensitivity: string;
-            content_hash: string;
-            conflict: boolean;
-            /** Format: date-time */
-            created_at: string;
-            /** Format: date-time */
-            updated_at: string;
         };
         PostmortemView: {
             postmortem: components["schemas"]["PostmortemDraft"];
@@ -11404,6 +11356,475 @@ export interface components {
          * @description Stable tenant boundary identifier.
          */
         PlanExecutionPage__TenantId: string;
+        /**
+         * KnowledgeItem
+         * @description Searchable, source-backed knowledge item.
+         */
+        KnowledgeItem: {
+            cluster_id?: components["schemas"]["KnowledgeItem__ClusterId"] | null;
+            component: string;
+            conflict: boolean;
+            content_hash: string;
+            /** Format: date-time */
+            created_at: string;
+            id: components["schemas"]["KnowledgeItem__KnowledgeItemId"];
+            owner: string;
+            /** Format: date-time */
+            review_due_at: string;
+            review_status: components["schemas"]["KnowledgeItem__KnowledgeReviewStatus"];
+            rocketmq_version_range: string;
+            sensitivity: string;
+            source_uri: string;
+            source_version: string;
+            tenant_id: components["schemas"]["KnowledgeItem__TenantId"];
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            valid_from?: string | null;
+            /** Format: date-time */
+            valid_until?: string | null;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        KnowledgeItem__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a knowledge item.
+         */
+        KnowledgeItem__KnowledgeItemId: string;
+        /**
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        KnowledgeItem__KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        KnowledgeItem__TenantId: string;
+        /**
+         * KnowledgeReviewStatus
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        /** KnowledgePage */
+        KnowledgePage: {
+            items: components["schemas"]["KnowledgePage__KnowledgeItem"][];
+            next_cursor?: string | null;
+            /** Format: date-time */
+            observed_at: string;
+            partial: boolean;
+            warnings: string[];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        KnowledgePage__ClusterId: string;
+        /** @description Searchable, source-backed knowledge item. */
+        KnowledgePage__KnowledgeItem: {
+            cluster_id?: components["schemas"]["KnowledgePage__ClusterId"] | null;
+            component: string;
+            conflict: boolean;
+            content_hash: string;
+            /** Format: date-time */
+            created_at: string;
+            id: components["schemas"]["KnowledgePage__KnowledgeItemId"];
+            owner: string;
+            /** Format: date-time */
+            review_due_at: string;
+            review_status: components["schemas"]["KnowledgePage__KnowledgeReviewStatus"];
+            rocketmq_version_range: string;
+            sensitivity: string;
+            source_uri: string;
+            source_version: string;
+            tenant_id: components["schemas"]["KnowledgePage__TenantId"];
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            valid_from?: string | null;
+            /** Format: date-time */
+            valid_until?: string | null;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a knowledge item.
+         */
+        KnowledgePage__KnowledgeItemId: string;
+        /**
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        KnowledgePage__KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        KnowledgePage__TenantId: string;
+        /** KnowledgeChunkView */
+        KnowledgeChunkView: {
+            chunk_hash: string;
+            component: string;
+            conflict: boolean;
+            content: string;
+            content_truncated: boolean;
+            eligible_for_diagnosis: boolean;
+            exclusion_reasons: string[];
+            /** @description Legacy aggregate also includes a future validity start; consult validity for detail. */
+            expired: boolean;
+            heading?: string | null;
+            id: components["schemas"]["KnowledgeChunkView__KnowledgeChunkId"];
+            item_hash: string;
+            knowledge_item_id: components["schemas"]["KnowledgeChunkView__KnowledgeItemId"];
+            metadata_truncated: boolean;
+            /** Format: date-time */
+            review_due_at: string;
+            review_status: components["schemas"]["KnowledgeChunkView__KnowledgeReviewStatus"];
+            rocketmq_version_range: string;
+            sensitivity: components["schemas"]["KnowledgeChunkView__Sensitivity"];
+            /** @description Original declared URI, retained for compatibility. Use source_uri_display in UI. */
+            source_uri: string;
+            source_uri_display?: string | null;
+            source_version: string;
+            title: string;
+            /** Format: date-time */
+            valid_from?: string | null;
+            /** Format: date-time */
+            valid_until?: string | null;
+            validity: components["schemas"]["KnowledgeChunkView__KnowledgeValidity"][];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a retrievable knowledge chunk.
+         */
+        KnowledgeChunkView__KnowledgeChunkId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a knowledge item.
+         */
+        KnowledgeChunkView__KnowledgeItemId: string;
+        /**
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        KnowledgeChunkView__KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        /** @enum {string} */
+        KnowledgeChunkView__KnowledgeValidity: "current" | "not_yet_valid" | "review_overdue" | "validity_ended" | "status_expired";
+        /**
+         * @description Data handling classification applied before evidence leaves its source.
+         * @enum {string}
+         */
+        KnowledgeChunkView__Sensitivity: "public" | "internal" | "confidential" | "restricted";
+        /** KnowledgeSearchPage */
+        KnowledgeSearchPage: {
+            binding: components["schemas"]["KnowledgeSearchPage__KnowledgeSearchBinding"];
+            bounds: components["schemas"]["KnowledgeSearchPage__KnowledgeSearchBounds"];
+            items: components["schemas"]["KnowledgeSearchPage__KnowledgeChunkView"][];
+            /** Format: date-time */
+            observed_at: string;
+            /** @description Compatibility: one or more returned rows are ineligible, not a completeness claim. */
+            partial: boolean;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        KnowledgeSearchPage__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a retrievable knowledge chunk.
+         */
+        KnowledgeSearchPage__KnowledgeChunkId: string;
+        KnowledgeSearchPage__KnowledgeChunkView: {
+            chunk_hash: string;
+            component: string;
+            conflict: boolean;
+            content: string;
+            content_truncated: boolean;
+            eligible_for_diagnosis: boolean;
+            exclusion_reasons: string[];
+            /** @description Legacy aggregate also includes a future validity start; consult validity for detail. */
+            expired: boolean;
+            heading?: string | null;
+            id: components["schemas"]["KnowledgeSearchPage__KnowledgeChunkId"];
+            item_hash: string;
+            knowledge_item_id: components["schemas"]["KnowledgeSearchPage__KnowledgeItemId"];
+            metadata_truncated: boolean;
+            /** Format: date-time */
+            review_due_at: string;
+            review_status: components["schemas"]["KnowledgeSearchPage__KnowledgeReviewStatus"];
+            rocketmq_version_range: string;
+            sensitivity: components["schemas"]["KnowledgeSearchPage__Sensitivity"];
+            /** @description Original declared URI, retained for compatibility. Use source_uri_display in UI. */
+            source_uri: string;
+            source_uri_display?: string | null;
+            source_version: string;
+            title: string;
+            /** Format: date-time */
+            valid_from?: string | null;
+            /** Format: date-time */
+            valid_until?: string | null;
+            validity: components["schemas"]["KnowledgeSearchPage__KnowledgeValidity"][];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a knowledge item.
+         */
+        KnowledgeSearchPage__KnowledgeItemId: string;
+        /**
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        KnowledgeSearchPage__KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        KnowledgeSearchPage__KnowledgeSearchBinding: {
+            cluster_id: components["schemas"]["KnowledgeSearchPage__ClusterId"];
+            component?: string | null;
+            include_unvalidated: boolean;
+            /** Format: uint32 */
+            limit: number;
+            q: string;
+            /** @description Explicit knowledge applicability context; not an observed physical version. */
+            rocketmq_version: string;
+            tenant_id: components["schemas"]["KnowledgeSearchPage__TenantId"];
+        };
+        KnowledgeSearchPage__KnowledgeSearchBounds: {
+            /** Format: uint32 */
+            candidate_limit: number;
+            candidate_limit_reached: boolean;
+            /** @description Additional matching rows existed inside the materialized candidate set. */
+            results_truncated: boolean;
+            /**
+             * Format: uint32
+             * @description Materialized candidates evaluated; does not bound PostgreSQL's underlying scan.
+             */
+            scanned_candidates: number;
+        };
+        /** @enum {string} */
+        KnowledgeSearchPage__KnowledgeValidity: "current" | "not_yet_valid" | "review_overdue" | "validity_ended" | "status_expired";
+        /**
+         * @description Data handling classification applied before evidence leaves its source.
+         * @enum {string}
+         */
+        KnowledgeSearchPage__Sensitivity: "public" | "internal" | "confidential" | "restricted";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        KnowledgeSearchPage__TenantId: string;
+        /** KnowledgeHistoryPage */
+        KnowledgeHistoryPage: {
+            cluster_id?: components["schemas"]["KnowledgeHistoryPage__ClusterId"] | null;
+            feedback: components["schemas"]["KnowledgeHistoryPage__KnowledgeFeedbackRecord"][];
+            feedback_truncated: boolean;
+            item_content_hash: string;
+            knowledge_item_id: components["schemas"]["KnowledgeHistoryPage__KnowledgeItemId"];
+            /** Format: date-time */
+            observed_at: string;
+            postmortem?: components["schemas"]["KnowledgeHistoryPage__KnowledgePostmortemLineage"] | null;
+            reviews: components["schemas"]["KnowledgeHistoryPage__KnowledgeReviewRecord"][];
+            reviews_truncated: boolean;
+            source_uri_display?: string | null;
+            tenant_id: components["schemas"]["KnowledgeHistoryPage__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        KnowledgeHistoryPage__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        KnowledgeHistoryPage__IncidentId: string;
+        /**
+         * @description Feedback classifications that create a knowledge review task.
+         * @enum {string}
+         */
+        KnowledgeHistoryPage__KnowledgeFeedbackKind: "useful" | "incorrect" | "outdated";
+        KnowledgeHistoryPage__KnowledgeFeedbackRecord: {
+            actor_subject?: string | null;
+            cluster_id?: components["schemas"]["KnowledgeHistoryPage__ClusterId"] | null;
+            comment?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            details_truncated: boolean;
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["KnowledgeHistoryPage__KnowledgeFeedbackKind"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a knowledge item.
+         */
+        KnowledgeHistoryPage__KnowledgeItemId: string;
+        /** @description Stored publication relation and immutable confirmed revision, not URI inference. */
+        KnowledgeHistoryPage__KnowledgePostmortemLineage: {
+            /** Format: date-time */
+            confirmed_at?: string | null;
+            confirmed_by?: string | null;
+            incident_id: components["schemas"]["KnowledgeHistoryPage__IncidentId"];
+            postmortem_id: components["schemas"]["KnowledgeHistoryPage__PostmortemId"];
+            /** Format: uint32 */
+            revision: number;
+        };
+        /** @enum {string} */
+        KnowledgeHistoryPage__KnowledgeReviewEventKind: "import" | "review" | "feedback";
+        /** @description Null typed provenance is explicitly unknown on legacy rows. */
+        KnowledgeHistoryPage__KnowledgeReviewRecord: {
+            actor_subject?: string | null;
+            ai_generated?: boolean | null;
+            /** Format: date-time */
+            completed_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            details_truncated: boolean;
+            event_kind?: components["schemas"]["KnowledgeHistoryPage__KnowledgeReviewEventKind"] | null;
+            from_status?: components["schemas"]["KnowledgeHistoryPage__KnowledgeReviewStatus"] | null;
+            human_confirmed?: boolean | null;
+            /** Format: uuid */
+            id: string;
+            item_content_hash?: string | null;
+            reason: string;
+            task_status: string;
+            to_status?: components["schemas"]["KnowledgeHistoryPage__KnowledgeReviewStatus"] | null;
+        };
+        /**
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        KnowledgeHistoryPage__KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        /**
+         * Format: uuid
+         * @description Stable identifier for a postmortem.
+         */
+        KnowledgeHistoryPage__PostmortemId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        KnowledgeHistoryPage__TenantId: string;
+        /**
+         * ImportKnowledgeRequest
+         * @description Direct import declaration; human/AI flags are caller declarations, not identity proof.
+         */
+        ImportKnowledgeRequest: {
+            /** @default false */
+            ai_generated: boolean;
+            cluster_id?: components["schemas"]["ImportKnowledgeRequest__ClusterId"] | null;
+            component: string;
+            /** @default false */
+            human_validated: boolean;
+            markdown: string;
+            owner: string;
+            /** Format: date-time */
+            review_due_at: string;
+            /** @default draft */
+            review_status: components["schemas"]["ImportKnowledgeRequest__KnowledgeReviewStatus"];
+            rocketmq_version_range: string;
+            sensitivity: components["schemas"]["ImportKnowledgeRequest__Sensitivity"];
+            source_uri: string;
+            source_version: string;
+            title: string;
+            /** Format: date-time */
+            valid_from?: string | null;
+            /** Format: date-time */
+            valid_until?: string | null;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ImportKnowledgeRequest__ClusterId: string;
+        /**
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        ImportKnowledgeRequest__KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        /**
+         * @description Data handling classification applied before evidence leaves its source.
+         * @enum {string}
+         */
+        ImportKnowledgeRequest__Sensitivity: "public" | "internal" | "confidential" | "restricted";
+        /** KnowledgeImportResult */
+        KnowledgeImportResult: {
+            /** Format: uint */
+            chunk_count: number;
+            deduplicated: boolean;
+            item: components["schemas"]["KnowledgeImportResult__KnowledgeItem"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        KnowledgeImportResult__ClusterId: string;
+        /** @description Searchable, source-backed knowledge item. */
+        KnowledgeImportResult__KnowledgeItem: {
+            cluster_id?: components["schemas"]["KnowledgeImportResult__ClusterId"] | null;
+            component: string;
+            conflict: boolean;
+            content_hash: string;
+            /** Format: date-time */
+            created_at: string;
+            id: components["schemas"]["KnowledgeImportResult__KnowledgeItemId"];
+            owner: string;
+            /** Format: date-time */
+            review_due_at: string;
+            review_status: components["schemas"]["KnowledgeImportResult__KnowledgeReviewStatus"];
+            rocketmq_version_range: string;
+            sensitivity: string;
+            source_uri: string;
+            source_version: string;
+            tenant_id: components["schemas"]["KnowledgeImportResult__TenantId"];
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            valid_from?: string | null;
+            /** Format: date-time */
+            valid_until?: string | null;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a knowledge item.
+         */
+        KnowledgeImportResult__KnowledgeItemId: string;
+        /**
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        KnowledgeImportResult__KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        KnowledgeImportResult__TenantId: string;
+        /** KnowledgeReviewRequest */
+        KnowledgeReviewRequest: {
+            /** @default false */
+            human_confirmed: boolean;
+            reason: string;
+            status: components["schemas"]["KnowledgeReviewRequest__KnowledgeReviewStatus"];
+        };
+        /**
+         * @description Knowledge review lifecycle.
+         * @enum {string}
+         */
+        KnowledgeReviewRequest__KnowledgeReviewStatus: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+        /** KnowledgeFeedbackRequest */
+        KnowledgeFeedbackRequest: {
+            comment?: string | null;
+            kind: components["schemas"]["KnowledgeFeedbackRequest__KnowledgeFeedbackKind"];
+        };
+        /**
+         * @description Feedback classifications that create a knowledge review task.
+         * @enum {string}
+         */
+        KnowledgeFeedbackRequest__KnowledgeFeedbackKind: "useful" | "incorrect" | "outdated";
     };
     responses: {
         /** @description Successful scoped response */
@@ -12532,7 +12953,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgePage"];
+                };
+            };
         };
     };
     importKnowledge: {
@@ -12548,7 +12977,15 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeImportResult"];
+                };
+            };
         };
     };
     searchKnowledge: {
@@ -12567,7 +13004,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeSearchPage"];
+                };
+            };
         };
     };
     getKnowledgeItem: {
@@ -12581,7 +13026,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeItem"];
+                };
+            };
         };
     };
     reviewKnowledgeItem: {
@@ -12599,7 +13052,15 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeItem"];
+                };
+            };
         };
     };
     recordKnowledgeFeedback: {
@@ -12617,7 +13078,15 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeItem"];
+                };
+            };
         };
     };
     getModelCapabilities: {
@@ -23030,6 +23499,73 @@ export interface operations {
                 };
             };
             /** @description Sanitized read refusal or unavailable retained state */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getKnowledgeHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeHistoryPage"];
+                };
+            };
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Scoped server facts; no target operation or physical-version qualification */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Scoped server facts; no target operation or physical-version qualification */
             503: {
                 headers: {
                     [name: string]: unknown;

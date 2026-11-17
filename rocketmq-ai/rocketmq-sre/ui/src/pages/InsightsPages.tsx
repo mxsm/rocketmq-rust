@@ -1,6 +1,5 @@
 import {
   ArrowRight,
-  BookOpenCheck,
   CheckCircle2,
   Fingerprint,
   Search,
@@ -9,20 +8,14 @@ import {
 import {
   type FormEvent,
   useCallback,
-  useMemo,
   useState,
 } from "react";
 
-import type {
-  KnowledgeReviewStatus,
-} from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
 import {
   ClusterScopeSelect,
   DataState,
   DataSurface,
-  DefinitionGrid,
-  PartialNotice,
   formatTime,
 } from "@/components/Phase1Primitives";
 import { ReadOnlyBoundary } from "@/components/ReadOnlyBoundary";
@@ -32,18 +25,8 @@ import { useSreData } from "@/data/SreDataContext";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useClusterScope } from "@/hooks/useClusterScope";
 
-const knowledgeVariants: Record<
-  KnowledgeReviewStatus,
-  "success" | "warning" | "secondary" | "destructive"
-> = {
-  validated: "success",
-  in_review: "warning",
-  draft: "secondary",
-  deprecated: "secondary",
-  expired: "destructive",
-};
-
 export { EvidenceExplorerPage } from "./EvidenceExplorerPage";
+export { KnowledgePage } from "./KnowledgePage";
 
 export function MessageJourneyPage() {
   const { api } = useSreData();
@@ -178,114 +161,6 @@ export function MessageJourneyPage() {
           </DataSurface>
         </>
       )}
-    </div>
-  );
-}
-
-export function KnowledgePage() {
-  const { api } = useSreData();
-  const scope = useClusterScope();
-  const [search, setSearch] = useState("");
-  const load = useCallback(
-    (signal: AbortSignal) =>
-      scope.clusterId
-        ? api.listKnowledge(scope.clusterId, signal)
-        : Promise.resolve({
-            items: [],
-            partial: false,
-            warnings: [],
-            observed_at: new Date().toISOString(),
-          }),
-    [api, scope.clusterId],
-  );
-  const resource = useAsyncResource(load);
-  const filtered = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase();
-    return (resource.data?.items ?? []).filter(
-      (item) =>
-        !query ||
-        item.title.toLocaleLowerCase().includes(query) ||
-        item.component.toLocaleLowerCase().includes(query) ||
-        item.summary.toLocaleLowerCase().includes(query),
-    );
-  }, [resource.data?.items, search]);
-
-  return (
-    <div className="page">
-      <PageHeader
-        eyebrow="CURATED KNOWLEDGE"
-        title="知识库"
-        description="展示带来源、版本、Owner、审阅状态和冲突标记的可检索知识；模型不能把未验证内容当作事实。"
-        actions={
-          <ClusterScopeSelect
-            clusters={scope.clusters}
-            value={scope.clusterId}
-            onChange={scope.setClusterId}
-          />
-        }
-      />
-      <PartialNotice envelope={resource.data} />
-      <DataSurface
-        title="知识条目"
-        description="搜索结果按当前 tenant/cluster 范围过滤。"
-        meta={<span>{filtered.length} 条</span>}
-      >
-        <div className="filter-bar">
-          <label className="search-field">
-            <Search size={14} />
-            <span className="sr-only">搜索知识</span>
-            <input
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索标题、组件或摘要"
-              type="search"
-              value={search}
-            />
-          </label>
-        </div>
-        <DataState
-          loading={resource.loading}
-          error={resource.error}
-          empty={!resource.loading && filtered.length === 0}
-          onRetry={resource.reload}
-          emptyTitle="没有匹配的知识条目"
-        />
-        {!resource.loading && !resource.error && filtered.length > 0 && (
-          <div className="knowledge-grid">
-            {filtered.map((item) => (
-              <article key={item.id}>
-                <header>
-                  <BookOpenCheck size={17} />
-                  <Badge variant={knowledgeVariants[item.review_status]}>
-                    {item.review_status}
-                  </Badge>
-                  {item.conflict && (
-                    <Badge variant="destructive">conflict</Badge>
-                  )}
-                </header>
-                <h3>{item.title}</h3>
-                <p>{item.summary}</p>
-                <DefinitionGrid
-                  items={[
-                    { label: "组件", value: item.component },
-                    { label: "版本范围", value: item.rocketmq_version_range },
-                    { label: "Owner", value: item.owner },
-                    { label: "来源版本", value: item.source_version },
-                    {
-                      label: "Review due",
-                      value: formatTime(item.review_due_at),
-                    },
-                    { label: "敏感级别", value: item.sensitivity },
-                  ]}
-                />
-                <footer>
-                  <code>{item.source_uri}</code>
-                  <span>{formatTime(item.updated_at)}</span>
-                </footer>
-              </article>
-            ))}
-          </div>
-        )}
-      </DataSurface>
     </div>
   );
 }

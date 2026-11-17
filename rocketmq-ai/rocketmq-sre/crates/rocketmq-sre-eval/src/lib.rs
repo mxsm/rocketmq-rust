@@ -714,6 +714,46 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
 fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalError> {
     Ok(vec![
         (
+            "knowledge-item.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgeItem))?,
+        ),
+        (
+            "knowledge-review-status.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgeReviewStatus))?,
+        ),
+        (
+            "knowledge-page.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgePage))?,
+        ),
+        (
+            "knowledge-chunk-view.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgeChunkView))?,
+        ),
+        (
+            "knowledge-search-page.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgeSearchPage))?,
+        ),
+        (
+            "knowledge-history-page.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgeHistoryPage))?,
+        ),
+        (
+            "import-knowledge-request.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::ImportKnowledgeRequest))?,
+        ),
+        (
+            "knowledge-import-result.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgeImportResult))?,
+        ),
+        (
+            "knowledge-review-request.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgeReviewRequest))?,
+        ),
+        (
+            "knowledge-feedback-request.schema.json",
+            serde_json::to_value(schema_for!(rocketmq_sre_contracts::KnowledgeFeedbackRequest))?,
+        ),
+        (
             "execution-observation-view.schema.json",
             serde_json::to_value(schema_for!(rocketmq_sre_contracts::ExecutionObservationView))?,
         ),
