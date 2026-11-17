@@ -1232,6 +1232,46 @@ signals:
     fn committed_schema_fixtures_match_public_contracts() {
         let committed = [
             (
+                "knowledge-item.schema.json",
+                include_str!("../../../schemas/knowledge-item.schema.json"),
+            ),
+            (
+                "knowledge-review-status.schema.json",
+                include_str!("../../../schemas/knowledge-review-status.schema.json"),
+            ),
+            (
+                "knowledge-page.schema.json",
+                include_str!("../../../schemas/knowledge-page.schema.json"),
+            ),
+            (
+                "knowledge-chunk-view.schema.json",
+                include_str!("../../../schemas/knowledge-chunk-view.schema.json"),
+            ),
+            (
+                "knowledge-search-page.schema.json",
+                include_str!("../../../schemas/knowledge-search-page.schema.json"),
+            ),
+            (
+                "knowledge-history-page.schema.json",
+                include_str!("../../../schemas/knowledge-history-page.schema.json"),
+            ),
+            (
+                "import-knowledge-request.schema.json",
+                include_str!("../../../schemas/import-knowledge-request.schema.json"),
+            ),
+            (
+                "knowledge-import-result.schema.json",
+                include_str!("../../../schemas/knowledge-import-result.schema.json"),
+            ),
+            (
+                "knowledge-review-request.schema.json",
+                include_str!("../../../schemas/knowledge-review-request.schema.json"),
+            ),
+            (
+                "knowledge-feedback-request.schema.json",
+                include_str!("../../../schemas/knowledge-feedback-request.schema.json"),
+            ),
+            (
                 "execution-observation-view.schema.json",
                 include_str!("../../../schemas/execution-observation-view.schema.json"),
             ),
