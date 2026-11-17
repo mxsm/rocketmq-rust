@@ -25,7 +25,7 @@ export function KnowledgePage() {
   const identity = JSON.stringify([session?.tenantId, session?.subject, [...(session?.clusterIds ?? [])].sort(), [...(session?.roles ?? [])].sort()]);
   const owner = JSON.stringify([identity, scope.clusterId, workspace?.scopeKey]);
   const values = new URLSearchParams(location.search).getAll("focus");
-  const rawFocus = values.length === 1 ? values[0] : values.length ? "invalid" : "";
+  const rawFocus = workspace ? workspace.knowledgeFocus : values.length === 1 ? values[0] : values.length ? "invalid" : "";
   // A focus belongs to the identity/scope in which that URL was selected. Keeping
   // the same query across a scope switch must not reopen the previous item.
   const focusOwner = useRef({ value: rawFocus, owner, active: true });
@@ -44,6 +44,10 @@ export function KnowledgePage() {
     } />
     {!authorized ? <p role="status">{t("noScope")}</p> : <KnowledgeWorkspace key={`${owner}:${focus}`} api={api} cluster={scope.clusterId} tenant={session.tenantId} roles={session.roles} allowedClusters={session.clusterIds} focus={focus} onSwitchCluster={(cluster) => {
       if (!session.clusterIds.includes(cluster)) return;
+      if (workspace) {
+        workspace.setScope({ clusterId: cluster, window: workspace.window }, { knowledgeFocus: rawFocus });
+        return;
+      }
       switchIntent.current = { focus: rawFocus, cluster, identity };
       scope.setClusterId(cluster);
     }} />}
