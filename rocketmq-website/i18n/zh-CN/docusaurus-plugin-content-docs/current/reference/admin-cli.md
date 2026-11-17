@@ -116,6 +116,8 @@ cargo run -p rocketmq-admin-cli -- broker updateBrokerConfig -b 127.0.0.1:10911 
 
 ## 检查点与导出边界
 
+`release-checkpoint create-set` 接收的独立 Store 清单（包括 `.rocketmq-release-checkpoint.json` 旁车文件）使用 V1 JSON 键 `backend`，取值为 `local` 或 `rocks_db`。它写入的组合清单，以及 `verify-set`、`restore-verify` 读取的组合清单，都保留 `stores[].backend`。现有 V1 检查点文件应保持原样，不要将此键改为 `storeKind`。`capabilities` 命令读取的是独立的能力响应，其 Store 类型字段的变化不影响检查点清单。
+
 `release-checkpoint capabilities` 读取能力响应 JSON 文件，不调用服务。`create-set` 组合提供的 Controller、Store 清单并写入新文件。`verify-set`、`restore-verify` 检查提供的清单和证明材料。这些命令不会停止写入、复制存储、启动替代节点，也不能证明运行中的应用已恢复。周边步骤见[维护](../operations/maintenance.md)和[备份与恢复](../operations/backup-recovery.md)。
 
 `release-checkpoint capabilities --input FILE` 要求可选的 `store` 对象使用 `storeKind`，JSON 输出也使用该键。它表示 Broker 报告的 Store 实现，取值为 `local` 或 `rocks_db`。`memberId` 和 `storageIdentity` 的名称保持不变。

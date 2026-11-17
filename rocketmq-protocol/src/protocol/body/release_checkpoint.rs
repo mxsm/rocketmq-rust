@@ -312,7 +312,8 @@ pub struct StoreReleaseCheckpointManifest {
     pub artifact: ReleaseCheckpointArtifact,
     /// Store member bound by the checkpoint set.
     pub member_id: String,
-    /// Store implementation that created the artifact.
+    /// Store implementation, encoded as `backend` in V1 JSON for compatibility
+    /// with existing checkpoint files and the rollback runner's exact-field validation.
     #[serde(rename = "backend")]
     pub store_kind: ReleaseCheckpointStoreKind,
     /// Offsets observed after all required flushes completed.

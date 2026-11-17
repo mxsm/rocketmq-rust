@@ -116,6 +116,8 @@ Capture the actual CLI process status; PowerShell exposes it as `$LASTEXITCODE`.
 
 ## Checkpoint and export boundaries
 
+`release-checkpoint create-set` expects standalone Store manifests, including `.rocketmq-release-checkpoint.json` sidecars, to use the V1 JSON key `backend` with value `local` or `rocks_db`. The combined set it writes and the sets consumed by `verify-set` and `restore-verify` retain `stores[].backend`. Keep existing V1 checkpoint files as written; do not rename this key to `storeKind`. The `capabilities` command reads a separate response, so changes to its Store-kind field do not change checkpoint manifests.
+
 `release-checkpoint capabilities` reads a capabilities-response JSON file; it does not call the service. `create-set` combines supplied Controller and Store manifests and writes a new output file. `verify-set` and `restore-verify` inspect supplied manifests/proofs. They do not stop writers, copy the store, start a replacement node or prove a live application recovered. Follow [maintenance](../operations/maintenance.md) and [backup/recovery](../operations/backup-recovery.md) for the surrounding procedure.
 
 `release-checkpoint capabilities --input FILE` expects `storeKind` in the optional `store` object and prints the same key in its JSON output. It identifies the Store implementation reported by the Broker: `local` or `rocks_db`. `memberId` and `storageIdentity` retain their names.
