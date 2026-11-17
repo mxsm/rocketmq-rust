@@ -15,12 +15,89 @@
 use chrono::{Duration, Utc};
 use rocketmq_sre_contracts::{IncidentId, KnowledgeReviewStatus, PostmortemStatus};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use super::support::*;
 use crate::{
     api::capability_verification_test_state,
     postmortem::{CreatePostmortemRequest, PostmortemPatchRequest, PostmortemPublishRequest},
 };
+
+#[tokio::test]
+#[ignore = "requires explicit task-owned PostgreSQL"]
+async fn postgres_postmortem_publication_preserves_valid_user_markdown_and_original_hash() {
+    let fixture = Fixture::new().await;
+    let state = capability_verification_test_state(fixture.repository.clone()).unwrap();
+    let mut failures = Vec::new();
+    for (label, summary) in [
+        ("long_embedded_heading", format!("# {}", "x".repeat(1025))),
+        ("many_embedded_headings", "# h\nx\n".repeat(257)),
+    ] {
+        let incident = IncidentId::new();
+        sqlx::query("INSERT INTO sre_incidents(id,tenant_id,cluster_id,title,resource,symptom_family,fingerprint,status,created_by_subject,created_at,updated_at)
+            VALUES($1,$2,$3,'Synthetic compatibility experience','consumer:synthetic','consumer_lag',$4,'resolved','d22-engineering',NOW(),NOW())")
+            .bind(incident.as_uuid()).bind(fixture.operator.tenant_id.as_uuid()).bind(fixture.cluster.as_uuid())
+            .bind(format!("d22-compatibility-{incident}")).execute(&fixture.repository.pool).await.unwrap();
+        let draft = state
+            .postmortems
+            .create(
+                &fixture.operator,
+                incident,
+                &CreatePostmortemRequest {
+                    operator_notes: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let patch: PostmortemPatchRequest =
+            serde_json::from_value(json!({"summary":summary,"human_confirmed":true})).unwrap();
+        let confirmed = state
+            .postmortems
+            .patch(&fixture.operator, draft.postmortem.id, &patch)
+            .await
+            .unwrap();
+        assert_eq!(confirmed.postmortem.status, PostmortemStatus::Confirmed);
+        let request = PostmortemPublishRequest {
+            human_confirmed: true,
+            owner: "synthetic-source-owner".to_owned(),
+            component: "consumer".to_owned(),
+            rocketmq_version_range: "*".to_owned(),
+            review_due_at: Utc::now() + Duration::days(7),
+        };
+        let published = match state
+            .postmortems
+            .publish(&fixture.operator, draft.postmortem.id, &request)
+            .await
+        {
+            Ok(published) => published,
+            Err(error) => {
+                failures.push((label, error.code().to_owned()));
+                continue;
+            }
+        };
+        let item = published.knowledge_item.unwrap();
+        let chunks: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT heading,content,content_hash FROM knowledge_chunks WHERE knowledge_item_id=$1 ORDER BY ordinal",
+        )
+        .bind(item.id.as_uuid())
+        .fetch_all(&fixture.repository.pool)
+        .await
+        .unwrap();
+        assert_eq!(chunks.len(), 1, "legacy publisher stores one literal Markdown chunk");
+        assert_eq!(chunks[0].0, "Postmortem");
+        assert!(chunks[0].1.starts_with(&format!("## 摘要\n\n{}\n\n", summary.trim())));
+        let hash = format!(
+            "sha256:{}",
+            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(chunks[0].1.as_bytes()))
+        );
+        assert_eq!(chunks[0].2, hash);
+        assert_eq!(item.content_hash, hash);
+    }
+    assert!(
+        failures.is_empty(),
+        "valid manually confirmed publication rejected: {failures:?}"
+    );
+}
 
 #[tokio::test]
 #[ignore = "requires explicit task-owned PostgreSQL"]

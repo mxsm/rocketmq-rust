@@ -22,7 +22,7 @@ use crate::ControlPlaneRequestFailure;
 const MAX_CHUNK_BYTES: usize = 8 * 1024;
 const MAX_CHUNKS: usize = 256;
 
-pub(crate) fn chunk_markdown(markdown: &str) -> Result<Vec<KnowledgeChunkDraft>, ControlPlaneRequestFailure> {
+pub(super) fn chunk_markdown(markdown: &str) -> Result<Vec<KnowledgeChunkDraft>, ControlPlaneRequestFailure> {
     let mut chunks = Vec::new();
     let mut heading = None;
     let mut content = String::new();

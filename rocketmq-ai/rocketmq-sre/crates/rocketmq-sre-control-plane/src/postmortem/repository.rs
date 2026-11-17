@@ -19,6 +19,7 @@ use rocketmq_sre_contracts::ActionItemId;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::IncidentId;
+use rocketmq_sre_contracts::KnowledgeChunkId;
 use rocketmq_sre_contracts::KnowledgeItem;
 use rocketmq_sre_contracts::KnowledgeItemId;
 use rocketmq_sre_contracts::KnowledgeReviewStatus;
@@ -29,7 +30,6 @@ use rocketmq_sre_contracts::PostmortemStatus;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-#[cfg(test)]
 use sha2::{Digest, Sha256};
 use sqlx::Postgres;
 use sqlx::Row;
@@ -695,21 +695,25 @@ async fn insert_knowledge(
             "publication source already exists; review the existing record",
         ));
     }
-    for chunk in crate::knowledge::chunk_markdown(markdown)? {
-        sqlx::query(
-            "INSERT INTO knowledge_chunks (
+    // Publication preserves its existing literal Markdown layout and hash.
+    // Importer heading and chunk-count limits must not narrow the acceptance
+    // domain of an already validated immutable Postmortem revision. Reads bound
+    // oversized historical or new publications and mark them ineligible.
+    sqlx::query(
+        "INSERT INTO knowledge_chunks (
             id, knowledge_item_id, ordinal, heading, content, content_hash
-         ) VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(chunk.id.as_uuid())
-        .bind(item.id.as_uuid())
-        .bind(chunk.ordinal)
-        .bind(chunk.heading)
-        .bind(chunk.content)
-        .bind(chunk.content_hash)
-        .execute(&mut **transaction)
-        .await?;
-    }
+         ) VALUES ($1, $2, 0, $3, $4, $5)",
+    )
+    .bind(KnowledgeChunkId::new().as_uuid())
+    .bind(item.id.as_uuid())
+    .bind("Postmortem")
+    .bind(markdown)
+    .bind(format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(markdown.as_bytes()))
+    ))
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 
@@ -1007,12 +1011,34 @@ mod tests {
             sensitivity: "internal".to_owned(),
             content_hash: format!(
                 "sha256:{}",
-                rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(b"postmortem"))
+                rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(b"# Postmortem"))
             ),
             conflict: false,
             created_at: now,
             updated_at: now,
         };
+        let stale = repository
+            .publish_postmortem(
+                &auth,
+                &confirmed_draft,
+                &revision,
+                &knowledge,
+                "# Postmortem",
+                Some("consumer_lag_growth"),
+                "consumer",
+            )
+            .await
+            .expect_err("stale immutable revision must not publish");
+        assert_eq!(stale.code(), "conflict");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM knowledge_items WHERE id=$1")
+                .bind(knowledge.id.as_uuid())
+                .fetch_one(&repository.pool)
+                .await
+                .unwrap(),
+            0,
+            "the failed publication transaction must roll back its inserted item and chunks"
+        );
         repository
             .publish_postmortem(
                 &auth,

@@ -45,8 +45,13 @@ export function createKnowledgeMock(items: KnowledgeItem[], auth: ApiRequestCont
     feedbackKnowledge: async (id, input, signal) => {
       await wait(signal);
       const value = item(id);
-      history(value).feedback.unshift({ id: crypto.randomUUID(), cluster_id: value.cluster_id, kind: input.kind, comment: input.comment,
+      const records = history(value);
+      records.feedback.unshift({ id: crypto.randomUUID(), cluster_id: value.cluster_id, kind: input.kind, comment: input.comment,
         actor_subject: auth?.subject ?? "synthetic-demo-reader", created_at: new Date().toISOString(), details_truncated: false });
+      if (records.feedback.length > 32) {
+        records.feedback.length = 32;
+        records.feedback_truncated = true;
+      }
       return structuredClone(value);
     },
     reviewKnowledge: async (_id, _input, signal) => {

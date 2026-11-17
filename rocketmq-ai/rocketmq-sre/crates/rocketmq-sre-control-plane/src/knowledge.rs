@@ -20,7 +20,6 @@ mod search;
 mod service;
 mod source;
 
-pub(crate) use chunk::chunk_markdown;
 pub(crate) use source::lock_knowledge_source;
 pub(crate) use source::record_source_conflict;
 

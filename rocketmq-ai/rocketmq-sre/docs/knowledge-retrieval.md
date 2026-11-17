@@ -2,8 +2,8 @@
 
 Knowledge is read-only diagnostic context. A reviewed item, a caller's human
 confirmation declaration, and a matching version requirement do not authorize
-execution or attest to a physical target's version. AI imports remain drafts
-until the existing explicit review lifecycle is completed.
+execution or attest to a physical target's version. AI material cannot be
+imported as Validated; promotion requires the existing explicit review lifecycle.
 
 ## Search and completeness
 
@@ -59,6 +59,12 @@ The existing manually confirmed Postmortem publication path preserves its prior
 role aliases, confirmation, immutable revisions and transactional revision CAS.
 This compatibility exception does not grant direct Knowledge curation or
 automatic publication of AI output.
+
+Publication also keeps its literal single-chunk Markdown layout and full-content
+hash. User text inside a valid confirmed revision is not reinterpreted through
+the direct importer's heading or chunk-count restrictions. Oversized publication
+chunks remain readable as bounded, explicitly ineligible context; their stored
+content is not truncated or rewritten to satisfy the display bound.
 
 Readers may append useful, incorrect or outdated feedback. Feedback does not
 promote an item, change its review state or establish shared eligibility.
