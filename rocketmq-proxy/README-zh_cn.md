@@ -247,6 +247,7 @@ aclFileWatchEnabled = false
 | `remoting.enabled` | `false` | 启用 remoting 兼容入口。 |
 | `remoting.listenAddr` | `0.0.0.0:8080` | remoting 启用时的绑定地址。 |
 | `cluster.namesrvAddr` | 未设置 | Cluster 模式使用的 NameServer 地址。 |
+| `cluster.brokerClusterName` | `DefaultCluster` | Cluster 模式服务的 Broker 集群；未设置 `auth.clusterName` 时也作为 ACL `Cluster` 资源。 |
 | `cluster.routeCacheTtlMs` | `5000` | Cluster client 使用的路由缓存 TTL。 |
 | `runtime.consumerResponsePermits` | `1024` | 最多允许同时保留 Broker 结果的 Receive/Pull 响应流数量。 |
 | `runtime.consumerResponseBytes` | `67108864` | Receive/Pull 响应流共享的保留字节硬上限。 |
@@ -258,6 +259,7 @@ aclFileWatchEnabled = false
 | `session.receiptHandleTtlMs` | `300000` | Receipt handle 跟踪 TTL。 |
 | `auth.authenticationEnabled` | `false` | 启用请求认证。 |
 | `auth.authorizationEnabled` | `false` | 启用 ACL 授权。 |
+| `auth.clusterName` | 空 | 覆盖当前模式的 `brokerClusterName`，用于 Cluster 模式的 Broker 选择和 ACL `Cluster` 资源；为空时跟随当前模式。 |
 
 ## 认证
 

@@ -35,10 +35,7 @@ use crate::status::ProxyPayloadStatus;
 fn proxy_up_attributes(config: &ProxyConfig) -> rocketmq_observability::metrics::proxy::ProxyUpAttributes {
     let (cluster, node_id) = match config.mode {
         #[cfg(feature = "cluster-mode")]
-        ProxyMode::Cluster => (
-            config.cluster.broker_cluster_name.as_str(),
-            config.cluster.instance_name.as_str(),
-        ),
+        ProxyMode::Cluster => (config.effective_cluster_name(), config.cluster.instance_name.as_str()),
         #[cfg(not(feature = "cluster-mode"))]
         ProxyMode::Cluster => ("unavailable", "unavailable"),
         #[cfg(feature = "local-mode")]
@@ -286,6 +283,17 @@ mod tests {
         assert_eq!(
             proxy_up_attributes(&cluster_config),
             rocketmq_observability::metrics::proxy::ProxyUpAttributes::new("proxy", "ClusterA", "proxy-a", "cluster")
+        );
+
+        cluster_config.auth.cluster_name = "AuthCluster".to_owned();
+        assert_eq!(
+            proxy_up_attributes(&cluster_config),
+            rocketmq_observability::metrics::proxy::ProxyUpAttributes::new(
+                "proxy",
+                "AuthCluster",
+                "proxy-a",
+                "cluster"
+            )
         );
 
         let mut local_config = ProxyConfig {
