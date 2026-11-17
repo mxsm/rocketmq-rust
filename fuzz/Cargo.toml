@@ -36,7 +36,7 @@ libfuzzer-sys = "0.4.12"
 # OpenRaft uses compatible transitive ranges. Match the production Controller's exact
 # macro and runtime pins; these crates do not necessarily share a release version.
 openraft-macros = { version = "=0.10.0", optional = true }
-openraft-rt = { version = "=0.10.0-alpha.38", optional = true }
+openraft-rt = { version = "=0.10.0", optional = true }
 openraft-rt-tokio = { version = "=0.10.0-alpha.38", optional = true }
 rocketmq-broker = { path = "../rocketmq-broker", optional = true }
 rocketmq-controller = { path = "../rocketmq-controller", default-features = false, features = ["storage-file"], optional = true }
