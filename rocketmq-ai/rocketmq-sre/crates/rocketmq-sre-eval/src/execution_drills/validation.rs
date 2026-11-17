@@ -118,39 +118,37 @@ fn validate_case(case: &Case) -> Result<(), Rejection> {
     if case.execution_path != expected_path {
         return Err(Rejection::InvalidRecord);
     }
-    if let Some(artifact) = &case.target_artifact_identity {
-        if !literal(&artifact.opaque_id, 64)
+    if let Some(artifact) = &case.target_artifact_identity
+        && (!literal(&artifact.opaque_id, 64)
             || (case.evidence_class == EvidenceClass::IsolatedDriver
-                && artifact.kind == ArtifactKind::DeterministicFixture)
-        {
-            return Err(Rejection::InvalidRecord);
-        }
+                && artifact.kind == ArtifactKind::DeterministicFixture))
+    {
+        return Err(Rejection::InvalidRecord);
     }
     match &case.observed_software_version {
-        Some(version) => {
+        Some(version)
             if case.evidence_class != EvidenceClass::IsolatedDriver
                 || !version_label(&version.value)
                 || !case.artifact_references.contains(&version.observation_reference)
                 || case.limitations.contains(&Limitation::SoftwareVersionUnknown)
                 || case.limitations.contains(&Limitation::GenericKubernetesMechanicsOnly)
                 || (version.source == VersionSource::ControlledBinarySelfReport
-                    && !case
+                    && case
                         .target_artifact_identity
                         .as_ref()
-                        .is_some_and(|artifact| artifact.kind == ArtifactKind::ControlledChildBinary))
+                        .is_none_or(|artifact| artifact.kind != ArtifactKind::ControlledChildBinary))
                 || (version.source == VersionSource::DeployedBinarySelfReport
-                    && !case
+                    && case
                         .target_artifact_identity
                         .as_ref()
-                        .is_some_and(|artifact| artifact.kind == ArtifactKind::DeployedImage))
-            {
-                return Err(Rejection::InvalidRecord);
-            }
+                        .is_none_or(|artifact| artifact.kind != ArtifactKind::DeployedImage)) =>
+        {
+            return Err(Rejection::InvalidRecord);
         }
         None if !case.limitations.contains(&Limitation::SoftwareVersionUnknown) => {
             return Err(Rejection::InvalidRecord);
         }
-        None => {}
+        Some(_) | None => {}
     }
     if !case.limitations.contains(&Limitation::PhysicalAttestationUnavailable)
         || !case
@@ -244,15 +242,14 @@ fn validate_passed_scenario(case: &Case) -> Result<(), Rejection> {
         | Scenario::CompensationFailed
         | Scenario::OwnerCancelled => None,
     };
-    if let Some(guard) = rejection_guard {
-        if case.guard != Some(guard)
+    if let Some(guard) = rejection_guard
+        && (case.guard != Some(guard)
             || case.guard_reached != Some(true)
             || case.counters.forward_effects != Some(0)
             || case.counters.compensation_effects != Some(0)
-            || case.observed_state != ObservedState::Rejected
-        {
-            return Err(Rejection::InvalidRecord);
-        }
+            || case.observed_state != ObservedState::Rejected)
+    {
+        return Err(Rejection::InvalidRecord);
     }
     match case.scenario {
         Scenario::AcceptedDuplicate => {
