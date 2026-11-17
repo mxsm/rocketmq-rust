@@ -618,6 +618,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -889,6 +890,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -969,6 +971,7 @@ expression: surface
             "required": [
               "cluster",
               "broker_name",
+              "zone_name",
               "enable_acting_master"
             ],
             "type": "object"
@@ -1210,6 +1213,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -1270,6 +1274,7 @@ expression: surface
             "required": [
               "cluster",
               "broker_name",
+              "zone_name",
               "enable_acting_master"
             ],
             "type": "object"
@@ -1514,6 +1519,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -1765,6 +1771,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -1831,7 +1838,8 @@ expression: surface
               "broker_offset",
               "consumer_offset",
               "lag",
-              "inflight"
+              "inflight",
+              "last_observed_at"
             ],
             "type": "object"
           },
@@ -2265,6 +2273,14 @@ expression: surface
             },
             "required": [
               "supported",
+              "authentication_enabled",
+              "authorization_enabled",
+              "acl_file_watch_enabled",
+              "acl_generation",
+              "acl_reload_attempts",
+              "acl_reload_successes",
+              "acl_reload_failures",
+              "acl_reload_skipped",
               "credential_rotation_supported"
             ],
             "type": "object"
@@ -2489,8 +2505,14 @@ expression: surface
             "required": [
               "broker_name",
               "broker_id",
+              "observed_at_millis",
               "coverage",
+              "readiness",
+              "config",
+              "store_health",
               "ha",
+              "recovery",
+              "background_index_rebuild",
               "rocksdb",
               "tiered",
               "auth",
@@ -2673,7 +2695,15 @@ expression: surface
               }
             },
             "required": [
-              "supported"
+              "supported",
+              "role",
+              "master_epoch",
+              "sync_state_set_epoch",
+              "sync_state_set_size",
+              "max_replica_lag_bytes",
+              "ack_policy",
+              "required_ack_count",
+              "decision_code"
             ],
             "type": "object"
           },
@@ -2797,7 +2827,18 @@ expression: surface
               }
             },
             "required": [
-              "available"
+              "available",
+              "total_duration_millis",
+              "phase_count",
+              "failed_phase_count",
+              "fallback_phase_count",
+              "fallback_reason_present",
+              "scanned_bytes",
+              "recovered_messages",
+              "invalid_messages",
+              "truncated_files",
+              "index_files_removed",
+              "index_files_rebuilt"
             ],
             "type": "object"
           },
@@ -2820,7 +2861,9 @@ expression: surface
               }
             },
             "required": [
-              "supported"
+              "supported",
+              "maintenance_running",
+              "message_maintenance_running"
             ],
             "type": "object"
           },
@@ -2911,9 +2954,13 @@ expression: surface
               }
             },
             "required": [
+              "commit_log_max_used_ratio",
+              "commit_log_legacy_min_used_ratio",
+              "commit_log_expected_paths",
               "commit_log_observed_paths",
               "commit_log_unknown_paths",
-              "commit_log_samples_complete"
+              "commit_log_samples_complete",
+              "consume_queue_used_ratio"
             ],
             "type": "object"
           },
@@ -3012,10 +3059,13 @@ expression: surface
             "required": [
               "schema_version",
               "source",
+              "observed_at_millis",
+              "configuration_generation",
               "generation_status",
               "runtime",
               "disk",
-              "policy"
+              "policy",
+              "tiered_configured"
             ],
             "type": "object"
           },
@@ -3100,6 +3150,16 @@ expression: surface
                 ]
               }
             },
+            "required": [
+              "disk_warning_used_ratio",
+              "disk_clean_forcibly_used_ratio",
+              "disk_max_used_ratio",
+              "clean_file_forcibly_enabled",
+              "sync_flush_backlog_reject_depth",
+              "sync_flush_backlog_reject_wait_millis",
+              "dispatch_backlog_reject_bytes",
+              "page_cache_busy_timeout_millis"
+            ],
             "type": "object"
           },
           "StorePressureRuntimeDiagnostics": {
@@ -3167,6 +3227,17 @@ expression: surface
                 ]
               }
             },
+            "required": [
+              "writeable",
+              "last_flush_error",
+              "os_page_cache_busy",
+              "transient_store_pool_deficient",
+              "dispatch_behind_bytes",
+              "shutdown",
+              "sync_flush_queue_depth",
+              "sync_flush_timeout_total",
+              "sync_flush_oldest_wait_millis"
+            ],
             "type": "object"
           },
           "SyncFlushDiagnostics": {
@@ -3215,7 +3286,9 @@ expression: surface
               }
             },
             "required": [
-              "configured"
+              "configured",
+              "dispatch_ready",
+              "minimum_pinned_wal_segment"
             ],
             "type": "object"
           }
@@ -3383,7 +3456,11 @@ expression: surface
             "required": [
               "broker_name",
               "broker_id",
-              "generation"
+              "generation",
+              "send_message_thread_pool_nums",
+              "pull_message_thread_pool_nums",
+              "flush_delay_offset_interval_ms",
+              "max_client_event_count"
             ],
             "type": "object"
           },
@@ -3628,7 +3705,11 @@ expression: surface
               "broker_id",
               "state_schema_version",
               "supported",
-              "logger"
+              "logger",
+              "level",
+              "active_operation_id",
+              "last_completed_operation_id",
+              "expires_at_millis"
             ],
             "type": "object"
           },
@@ -3906,6 +3987,7 @@ expression: surface
               "proxy_name",
               "state_schema_version",
               "phase",
+              "operation_id",
               "admission_open",
               "routing_open",
               "readiness_published",
@@ -4243,6 +4325,8 @@ expression: surface
               "freshness_ms",
               "status",
               "query_hash",
+              "payload",
+              "error_code",
               "summary"
             ],
             "type": "object"
@@ -4848,6 +4932,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -5122,6 +5207,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -5342,7 +5428,10 @@ expression: surface
             "required": [
               "cluster",
               "message_alias",
+              "unique_message_alias",
               "topic",
+              "born_at",
+              "stored_at",
               "queue_id",
               "queue_offset",
               "store_size",
@@ -6062,6 +6151,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -6155,7 +6245,8 @@ expression: surface
               "queue_id",
               "min_offset",
               "max_offset",
-              "message_count"
+              "message_count",
+              "last_update_at"
             ],
             "type": "object"
           }
@@ -6651,7 +6742,20 @@ expression: surface
             "required": [
               "broker_name",
               "config_state",
-              "connection_count"
+              "config_version",
+              "consume_enable",
+              "consume_from_min_enable",
+              "consume_broadcast_enable",
+              "consume_message_orderly",
+              "retry_queue_nums",
+              "retry_max_times",
+              "notify_consumer_ids_changed_enable",
+              "consume_timeout_minutes",
+              "connection_state",
+              "connection_count",
+              "consume_type",
+              "message_model",
+              "consume_from_where"
             ],
             "type": "object"
           },
@@ -6918,7 +7022,8 @@ expression: surface
               "consumer_offset",
               "pull_offset",
               "lag",
-              "inflight"
+              "inflight",
+              "last_observed_at"
             ],
             "type": "object"
           },
@@ -7016,6 +7121,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -7608,7 +7714,14 @@ expression: surface
               }
             },
             "required": [
-              "controller_name"
+              "controller_name",
+              "group",
+              "leader_id",
+              "is_leader",
+              "peer_count",
+              "last_log_index",
+              "committed_log_index",
+              "applied_log_index"
             ],
             "type": "object"
           },
@@ -7900,6 +8013,16 @@ expression: surface
                 ]
               }
             },
+            "required": [
+              "cluster_test",
+              "order_message_enable",
+              "return_order_topic_config_to_broker",
+              "client_request_thread_pool_nums",
+              "client_request_thread_pool_queue_capacity",
+              "scan_not_active_broker_interval_ms",
+              "unregister_broker_queue_capacity",
+              "support_acting_master"
+            ],
             "type": "object"
           },
           "QuerySource": {
@@ -8574,6 +8697,8 @@ expression: surface
               "freshness_ms",
               "status",
               "query_hash",
+              "payload",
+              "error_code",
               "summary"
             ],
             "type": "object"
@@ -9242,6 +9367,8 @@ expression: surface
               "freshness_ms",
               "status",
               "query_hash",
+              "payload",
+              "error_code",
               "summary"
             ],
             "type": "object"
@@ -9905,6 +10032,8 @@ expression: surface
               "freshness_ms",
               "status",
               "query_hash",
+              "payload",
+              "error_code",
               "summary"
             ],
             "type": "object"
@@ -10586,6 +10715,8 @@ expression: surface
               "freshness_ms",
               "status",
               "query_hash",
+              "payload",
+              "error_code",
               "summary"
             ],
             "type": "object"
@@ -11153,6 +11284,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -11451,7 +11583,16 @@ expression: surface
               "broker_name",
               "queue_id",
               "mode",
-              "dropped"
+              "dropped",
+              "last_pull_at",
+              "commit_offset",
+              "cached_message_count",
+              "cached_message_size_mib",
+              "locked",
+              "try_unlock_times",
+              "last_lock_at",
+              "last_consume_at",
+              "wait_ack_count"
             ],
             "type": "object"
           },
@@ -11479,6 +11620,7 @@ expression: surface
             "required": [
               "topic",
               "expression_type",
+              "expression",
               "sub_version"
             ],
             "type": "object"
@@ -11632,6 +11774,11 @@ expression: surface
               "consumer_group",
               "client_alias",
               "broker_name",
+              "consume_type",
+              "consume_orderly",
+              "thread_pool_core_size",
+              "client_version",
+              "started_at",
               "subscriptions",
               "topic_status",
               "queue_count",
@@ -11640,6 +11787,7 @@ expression: surface
               "count",
               "total_count",
               "has_more",
+              "next_cursor",
               "generated_at"
             ],
             "type": "object"
@@ -11826,7 +11974,8 @@ expression: surface
             "required": [
               "broker_name",
               "queue_count",
-              "message_count"
+              "message_count",
+              "last_message_at"
             ],
             "type": "object"
           },
@@ -11895,6 +12044,8 @@ expression: surface
               "exists",
               "queue_count",
               "message_count",
+              "last_message_at",
+              "last_message_age_ms",
               "brokers",
               "truncated",
               "generated_at"
@@ -12146,11 +12297,17 @@ expression: surface
             },
             "required": [
               "step",
+              "at",
+              "group",
               "cost_time_ms",
               "success",
+              "topic",
               "retry_times",
               "body_length",
               "from_transaction_check",
+              "store_broker_name",
+              "client_host_alias",
+              "tags",
               "key_aliases"
             ],
             "type": "object"
@@ -12242,6 +12399,7 @@ expression: surface
             "required": [
               "cluster",
               "unique_message_alias",
+              "message_alias",
               "trace_topic",
               "trace_topic_found",
               "redacted",
@@ -12548,7 +12706,10 @@ expression: surface
             },
             "required": [
               "message_alias",
+              "unique_message_alias",
               "broker_name",
+              "born_at",
+              "stored_at",
               "queue_id",
               "queue_offset",
               "store_size",
@@ -12783,6 +12944,7 @@ expression: surface
             "required": [
               "cluster",
               "broker_name",
+              "store_type",
               "max_lmq_count",
               "current_lmq_count",
               "lite_subscription_count",
