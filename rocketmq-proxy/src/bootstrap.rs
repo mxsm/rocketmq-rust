@@ -616,7 +616,7 @@ where
                 Some(auth_runtime) => Some(auth_runtime),
                 None => {
                     ProxyAuthRuntime::from_proxy_config_with_metadata_service(
-                        &config.auth,
+                        &config.effective_auth_config(),
                         auth_metadata_service.clone(),
                         &auth_context,
                     )
@@ -824,6 +824,13 @@ async fn shutdown_proxy_components(
     }
 }
 
+#[cfg(feature = "cluster-mode")]
+fn cluster_backend_config(config: &ProxyConfig) -> crate::config::ClusterConfig {
+    let mut cluster_config = config.cluster.clone();
+    cluster_config.broker_cluster_name = config.effective_cluster_name().to_owned();
+    cluster_config
+}
+
 fn build_proxy_runtime_dependencies(
     config: &ProxyConfig,
     service_context: &ChildServiceContext,
@@ -832,10 +839,7 @@ fn build_proxy_runtime_dependencies(
     match config.mode {
         #[cfg(feature = "cluster-mode")]
         ProxyMode::Cluster => {
-            let mut cluster_config = config.cluster.clone();
-            if !config.auth.cluster_name.trim().is_empty() {
-                cluster_config.broker_cluster_name = config.auth.cluster_name.clone();
-            }
+            let cluster_config = cluster_backend_config(config);
             let signer = build_cluster_acl_signer(config)?.map(|signer| signer.into_outbound_signer());
             let dependency_service_context = service_context.component("cluster-backend");
             let client = Arc::new(ClusterCommandGateway::new(
@@ -1087,5 +1091,57 @@ mod tests {
         drop(runtime);
         let report = runtime_context.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[cfg(feature = "cluster-mode")]
+    fn proxy_config_from_toml(source: &str) -> ProxyConfig {
+        ::config::Config::builder()
+            .add_source(::config::File::from_str(source, ::config::FileFormat::Toml))
+            .build()
+            .expect("proxy TOML should build")
+            .try_deserialize()
+            .expect("proxy TOML should deserialize")
+    }
+
+    #[cfg(feature = "cluster-mode")]
+    #[test]
+    fn cluster_backend_uses_configured_broker_cluster_name() {
+        let config = proxy_config_from_toml(
+            r#"
+mode = "cluster"
+
+[cluster]
+namesrvAddr = "127.0.0.1:9876"
+brokerClusterName = "AbCluster"
+"#,
+        );
+
+        assert_eq!(super::cluster_backend_config(&config).broker_cluster_name, "AbCluster");
+        assert_eq!(config.effective_auth_config().cluster_name, "AbCluster");
+    }
+
+    #[cfg(feature = "cluster-mode")]
+    #[test]
+    fn cluster_backend_keeps_explicit_auth_cluster_name() {
+        let auth_only = proxy_config_from_toml(
+            r#"
+mode = "cluster"
+
+[auth]
+clusterName = "AuthCluster"
+"#,
+        );
+        assert_eq!(
+            super::cluster_backend_config(&auth_only).broker_cluster_name,
+            "AuthCluster"
+        );
+        assert_eq!(auth_only.effective_auth_config().cluster_name, "AuthCluster");
+
+        let defaults = proxy_config_from_toml("mode = \"cluster\"\n");
+        assert_eq!(
+            super::cluster_backend_config(&defaults).broker_cluster_name,
+            "DefaultCluster"
+        );
+        assert_eq!(defaults.effective_auth_config().cluster_name, "DefaultCluster");
     }
 }

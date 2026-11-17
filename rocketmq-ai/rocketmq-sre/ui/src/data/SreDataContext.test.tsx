@@ -1,8 +1,10 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 
 import type { SreApi } from "@/api/client";
 import type { ClusterSummary } from "@/api/types";
+import { useClusterCapabilitySnapshots } from "@/features/fleet/useClusterCapabilitySnapshots";
 import { SreDataProvider, useSreData } from "./SreDataContext";
 
 const A = "10000000-0000-4000-8000-000000000001";
@@ -53,11 +55,20 @@ function cluster(id: string, tenantId = TENANT) {
     external_cluster_key: id,
   } as ClusterSummary;
 }
-function apiFor(items: ClusterSummary[] | Promise<ClusterSummary[]>) {
+function apiFor(items: ClusterSummary[] | Promise<ClusterSummary[]>, digest = "first") {
   return {
     listClusters: vi.fn(() => Promise.resolve(items)),
     getHealth: vi.fn().mockResolvedValue({ status: "healthy" }),
     getReadiness: vi.fn().mockResolvedValue({ status: "ready" }),
+    getClusterCapabilities: vi.fn((id: string) => Promise.resolve({
+      cluster_id: id,
+      digest,
+      protocol_version: "fixture",
+      schema_version: "fixture",
+      mutation_supported: false,
+      observed_at: "2026-11-16T10:00:00Z",
+      data_sources: [],
+    })),
   } as unknown as SreApi;
 }
 function deferred<T>() {
@@ -88,6 +99,21 @@ function Fixture() {
   return (
     <SreDataProvider>
       <Probe />
+    </SreDataProvider>
+  );
+}
+
+function CapabilityProbe() {
+  const { clusters } = useSreData();
+  const resource = useClusterCapabilitySnapshots(clusters.map((item) => item.id));
+  return <output data-testid="capabilities">{JSON.stringify(resource.data?.snapshots ?? {})}</output>;
+}
+
+function CachedFixture({ visible = true }: { visible?: boolean }) {
+  return (
+    <SreDataProvider>
+      <Probe />
+      {visible && <CapabilityProbe />}
     </SreDataProvider>
   );
 }
@@ -161,5 +187,84 @@ describe("SRE data principal ownership", () => {
     expect(screen.getByTestId("clusters")).not.toHaveTextContent(A);
     await act(async () => old.resolve([cluster(A)]));
     expect(screen.getByTestId("clusters")).not.toHaveTextContent(A);
+  });
+
+  it("retains capability reads across navigation and token renewal, then refreshes explicitly", async () => {
+    const initial = apiFor([cluster(A)]);
+    const renewed = apiFor([cluster(A)], "renewed");
+    state.apis.set("first", initial);
+    state.apis.set("renewed", renewed);
+    const view = render(<CachedFixture />);
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("first"));
+    view.rerender(<CachedFixture visible={false} />);
+    authorize("renewed");
+    view.rerender(<CachedFixture visible={false} />);
+    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    view.rerender(<CachedFixture />);
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("first"));
+    expect(initial.getClusterCapabilities).toHaveBeenCalledTimes(1);
+    expect(renewed.getClusterCapabilities).not.toHaveBeenCalled();
+    await userEvent.setup().click(screen.getByRole("button", { name: "refresh" }));
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("renewed"));
+    expect(renewed.getClusterCapabilities).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["principal", "tenant", "claims", "clusters"])("discards cached snapshots when %s changes", async (change) => {
+    state.apis.set("first", apiFor([cluster(A), cluster(B)]));
+    const view = render(<CachedFixture />);
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("first"));
+    const tenantId = change === "tenant" ? "other-tenant" : TENANT;
+    const items = change === "clusters" ? [cluster(B)] : [cluster(A, tenantId)];
+    const pending = deferred<ClusterSummary[]>();
+    const changed = apiFor(pending.promise, "changed");
+    state.apis.set("changed", changed);
+    authorize("changed", change === "clusters" ? [B] : [A, B], tenantId,
+      change === "principal" ? "other-operator" : "operator");
+    if (change === "claims") {
+      state.auth.session.roles = ["reader", "diagnose"];
+      state.auth.requestContext.roles = state.auth.session.roles;
+    }
+    view.rerender(<CachedFixture />);
+    expect(screen.getByTestId("capabilities")).not.toHaveTextContent("first");
+    await act(async () => pending.resolve(items));
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("changed"));
+    expect(changed.getClusterCapabilities).toHaveBeenCalledTimes(1);
+    if (change === "clusters") expect(screen.getByTestId("capabilities")).not.toHaveTextContent(A);
+  });
+
+  it.each(["configuration", "revocation"])("invalidates server-side %s changes on renewal", async (change) => {
+    state.apis.set("first", apiFor([cluster(A), cluster(B)]));
+    const items = change === "configuration"
+      ? [{ ...cluster(A), updated_at: "2026-11-16T12:00:00Z" }, cluster(B)]
+      : [cluster(A)];
+    const changed = apiFor(items, "reconfigured");
+    state.apis.set("renewed", changed);
+    const view = render(<CachedFixture />);
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent(B));
+    authorize("renewed");
+    view.rerender(<CachedFixture />);
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("reconfigured"));
+    if (change === "revocation") expect(screen.getByTestId("capabilities")).not.toHaveTextContent(B);
+    expect(changed.getClusterCapabilities).toHaveBeenCalledTimes(items.length);
+  });
+
+  it("retains the current owner after StrictMode replays provider cleanup", async () => {
+    const api = apiFor([cluster(A)]);
+    state.apis.set("first", api);
+    render(<StrictMode><CachedFixture /></StrictMode>);
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("first"));
+    expect(api.getClusterCapabilities).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the cache with the authenticated provider on logout", async () => {
+    const api = apiFor([cluster(A)]);
+    state.apis.set("first", api);
+    const view = render(<CachedFixture />);
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("first"));
+    // AuthGate removes this entire provider when the session is revoked/expired.
+    view.rerender(<div>signed out</div>);
+    view.rerender(<CachedFixture />);
+    await waitFor(() => expect(screen.getByTestId("capabilities")).toHaveTextContent("first"));
+    expect(api.getClusterCapabilities).toHaveBeenCalledTimes(2);
   });
 });

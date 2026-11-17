@@ -74,7 +74,7 @@ config             = "0.15.23"
 hmac               = "0.13"
 jsonschema         = { version = "0.61", default-features = false }
 # Keep RS256 on AWS-LC: the RustCrypto backend pulls rsa 0.9, which has no fix for RUSTSEC-2023-0071.
-jsonwebtoken       = { version = "11.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+jsonwebtoken       = { version = "12.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 percent-encoding   = "2.3"
 rand               = "0.10"
 regex              = "1.12.4"

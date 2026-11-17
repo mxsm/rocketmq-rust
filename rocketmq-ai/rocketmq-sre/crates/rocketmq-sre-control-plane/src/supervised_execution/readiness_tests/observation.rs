@@ -23,6 +23,32 @@ mod seed;
 use seed::*;
 
 #[tokio::test]
+#[ignore = "requires explicit disposable PostgreSQL and independent journal owners"]
+async fn postgres_observation_journal_counts_ignore_unrelated_fixtures() {
+    async fn write_journals(fixture: &mut Fixture) {
+        fixture.confirm().await;
+        fixture.prepare().await;
+        let plan = fixture.draft().await;
+        let request = terminal(fixture, &plan, "succeeded").await;
+        let intent = attempt(fixture, &request, false).await;
+        let (result, evidence) = verification(fixture, &request, &intent, "valid");
+        store_verification(fixture, &request, &intent, result, evidence).await;
+    }
+
+    let mut fixture = Fixture::new().await;
+    let mut other = Fixture::new().await;
+    let before = journal_counts(&fixture).await;
+    write_journals(&mut other).await;
+    assert_eq!(journal_counts(&fixture).await, before);
+
+    write_journals(&mut fixture).await;
+    let after = journal_counts(&fixture).await;
+    assert!(after.0 > before.0 && after.1 > before.1 && after.2 > before.2 && after.3 > before.3 && after.4 > before.4);
+    other.close().await;
+    fixture.close().await;
+}
+
+#[tokio::test]
 #[ignore = "requires explicit disposable Docker PostgreSQL; terminal SyntheticFixture only"]
 async fn postgres_observation_exact_readonly_lookup_and_receipts_do_not_dispatch_or_infer_results() {
     let mut fixture = Fixture::new().await;
@@ -244,13 +270,14 @@ async fn postgres_observation_scope_and_bounded_payload_errors_are_safe() {
     let mut corrupt = request.clone();
     corrupt.id = ExecutionId::new();
     corrupt.idempotency_key = "snapshot-key-B".to_owned();
-    store_terminal_with_key(&fixture, &corrupt, "escalated", "outer-column-key-A").await;
+    let outer_key = format!("outer-column-key-{}", corrupt.id);
+    store_terminal_with_key(&fixture, &corrupt, "escalated", &outer_key).await;
     let (status, body) = fixture
         .call(
             "/v1/executions/lookup",
             &fixture.auth,
             json!({"plan_id":plan.id,"plan_hash":plan.plan_hash,
-        "precondition_hash":plan.compute_precondition_hash().unwrap(),"idempotency_key":"outer-column-key-A"}),
+        "precondition_hash":plan.compute_precondition_hash().unwrap(),"idempotency_key":outer_key}),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

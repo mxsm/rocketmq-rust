@@ -89,6 +89,10 @@ async fn postgres_readiness_critic_consumes_exact_confirmed_lineage_and_checks_p
         .await
         .unwrap();
     let mut lock = fixture.repository.pool.begin().await.unwrap();
+    let blocker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
     sqlx::query("SELECT id FROM sre_incidents WHERE id=$1 FOR UPDATE")
         .bind(fixture.incident_id.as_uuid())
         .fetch_one(&mut *lock)
@@ -113,7 +117,7 @@ async fn postgres_readiness_critic_consumes_exact_confirmed_lineage_and_checks_p
         .repository
         .persist_critic_review(&plan, &review, &audit, true, &admission);
     let expire = async {
-        super::races::wait_for_incident_locks(&fixture.repository, 1).await;
+        super::races::wait_for_incident_locks(&fixture.repository, blocker_pid, 1).await;
         *fixture.clock.lock().unwrap() += Duration::seconds(121);
         lock.commit().await.unwrap();
     };

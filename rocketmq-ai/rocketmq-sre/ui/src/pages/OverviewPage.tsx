@@ -133,7 +133,6 @@ export function OverviewPage() {
             disabled={loading || capabilities.loading || fleet.loading}
             onClick={() => {
               void refresh();
-              void capabilities.reload();
               void fleet.reload();
             }}
           >
@@ -234,10 +233,15 @@ export function OverviewPage() {
         <div className="surface-heading">
           <div>
             <h2>只读集群</h2>
-            <p>选择一行查看最新 capability snapshot 和数据源状态。</p>
+            <p>能力快照最多复用 30 秒；源观测时间和数据缺口保持可见。</p>
           </div>
           <span>{filteredClusters.length} 个结果</span>
         </div>
+        {(capabilities.loading || capabilityError) && (
+          <div className="state-message" role="status">
+            {capabilities.loading ? "正在读取能力快照；过期数据不作为当前证据。" : capabilityError}
+          </div>
+        )}
         {loading && clusters.length === 0 ? (
           <div className="state-message">正在读取集群状态…</div>
         ) : filteredClusters.length === 0 ? (
@@ -357,7 +361,10 @@ export function OverviewPage() {
                           "—"
                         )}
                       </td>
-                      <td>{rowSummary.freshness}</td>
+                      <td>
+                        {rowSummary.freshness}
+                        {current && <small>观测于 {current.observed_at}</small>}
+                      </td>
                       <td>{rowSummary.coverage}</td>
                       <td>{rowSummary.gap}</td>
                       <td>

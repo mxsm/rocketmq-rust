@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(ci):** Use a unique outer idempotency key in the SRE malformed execution-receipt fixture so repeated database tests do not collide ([#12717](https://github.com/mxsm/rocketmq-rust/issues/12717)).
 - **fix(mcp-query):** Refresh catalog and protocol snapshots for the optional Store pressure diagnostics schema, restoring query and control contract checks ([#12668](https://github.com/mxsm/rocketmq-rust/issues/12668)).
 - **fix(ci):** Synchronize late replies in the Transport `GO_AWAY` deadline tests and verify typed deadline rejections without replaying the request ([#12465](https://github.com/mxsm/rocketmq-rust/issues/12465)).
 - **fix(ci):** Avoid animated hit targets when preparing the retained payload in the GPUI message logout test ([#12413](https://github.com/mxsm/rocketmq-rust/issues/12413)).
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(broker):** Consolidate ConsumerManager initialization and remove its unused configuration-only constructor, preserving distinct expiry timeouts and shared session locks ([#12711](https://github.com/mxsm/rocketmq-rust/issues/12711)).
 - **refactor(client):** Rename the public `ServiceDetector` trait to `BrokerReachabilityProbe`; `ServiceDetector` stays as a crate-root alias, so existing implementations still compile, and `detect` keeps its timeout and reachability result ([#12622](https://github.com/mxsm/rocketmq-rust/issues/12622)).
 - **docs(proxy-core):** Clarify that ingress captures request metadata before dispatch, including Proxy-handled requests ([#12444](https://github.com/mxsm/rocketmq-rust/issues/12444)).
 - **refactor(store-local):** Rename the advisory compaction threshold evaluation to `evaluate_compaction_pressure` and its result to `CompactionPressure`; thresholds and compaction authority remain unchanged ([#12425](https://github.com/mxsm/rocketmq-rust/issues/12425)).
@@ -118,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove duplicate session identity storage from ClientSessionTransport and derive its identity from the close capability, preserving identity checks and retirement behavior ([#12712](https://github.com/mxsm/rocketmq-rust/issues/12712)).
 - **refactor(client):** Remove the unused one-way egress snapshot and duplicate counters; runtime metrics and bounded admission are unchanged ([#12374](https://github.com/mxsm/rocketmq-rust/issues/12374)).
 - **refactor(client):** Remove unused initial delayed consume admission and exercise the shared retry task through worker retries ([#12407](https://github.com/mxsm/rocketmq-rust/issues/12407)).
 - **refactor(broker):** Remove unused BrokerOuterAPI minimum and maximum offset RPC wrappers; active offset handlers and client APIs are unchanged ([#12651](https://github.com/mxsm/rocketmq-rust/issues/12651)).

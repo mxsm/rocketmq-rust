@@ -500,51 +500,19 @@ impl ConsumerManager {
         }
     }
 
-    /// Creates a new ConsumerManager with broker configuration.
-    ///
-    /// # Arguments
-    /// * `consumer_ids_change_listener` - Listener for consumer change events
-    /// * `broker_config` - Broker configuration containing timeout settings
-    pub fn new_with_broker_stats(
-        consumer_ids_change_listener: ConsumerListener,
-        broker_config: Arc<BrokerConfig>,
-    ) -> Self {
-        Self::new_with_broker_stats_and_session_transition_locks(
-            consumer_ids_change_listener,
-            broker_config,
-            Arc::new(ClientSessionTransitionLocks::default()),
-        )
-    }
-
     pub(crate) fn new_with_broker_stats_and_session_transition_locks(
         consumer_ids_change_listener: ConsumerListener,
         broker_config: Arc<BrokerConfig>,
         session_transition_locks: Arc<ClientSessionTransitionLocks>,
     ) -> Self {
-        let consumer_ids_change_listener_list = Arc::new(RwLock::new(vec![consumer_ids_change_listener]));
         ConsumerManager {
-            // Uses 64 shards for improved concurrency under high load
-            consumer_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            consumer_compensation_table: Arc::new(DashMap::with_capacity_and_shard_amount(256, 16)),
-            // Topic-Group reverse index for fast topic-to-group lookup
-            topic_group_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            session_to_groups: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            client_session_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            session_client_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            session_transport_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            session_registry: Arc::new(OnceLock::new()),
-            session_notify_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            session_callback_queues: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
-            #[cfg(test)]
-            empty_group_barriers: Arc::new(RwLock::new(None)),
-            #[cfg(test)]
-            topic_empty_entry_barriers: Arc::new(RwLock::new(None)),
-            session_transition_locks,
-            consumer_ids_change_listener_list,
-            broker_stats_manager: None,
             broker_config: Some(broker_config.clone()),
-            channel_expired_timeout: broker_config.channel_expired_timeout,
             subscription_expired_timeout: broker_config.subscription_expired_timeout,
+            ..Self::new_with_session_transition_locks(
+                consumer_ids_change_listener,
+                broker_config.channel_expired_timeout,
+                session_transition_locks,
+            )
         }
     }
 }
