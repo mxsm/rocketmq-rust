@@ -118,6 +118,10 @@ cargo run -p rocketmq-admin-cli -- broker updateBrokerConfig -b 127.0.0.1:10911 
 
 `release-checkpoint capabilities` 读取能力响应 JSON 文件，不调用服务。`create-set` 组合提供的 Controller、Store 清单并写入新文件。`verify-set`、`restore-verify` 检查提供的清单和证明材料。这些命令不会停止写入、复制存储、启动替代节点，也不能证明运行中的应用已恢复。周边步骤见[维护](../operations/maintenance.md)和[备份与恢复](../operations/backup-recovery.md)。
 
+`release-checkpoint capabilities --input FILE` 要求可选的 `store` 对象使用 `storeKind`，JSON 输出也使用该键。它表示 Broker 报告的 Store 实现，取值为 `local` 或 `rocks_db`。`memberId` 和 `storageIdentity` 的名称保持不变。
+
+以前保存的 `store.backend` 响应必须先更新才能使用。新版读取器拒绝 `backend`，包括两个键同时出现的响应；使用旧 DTO 的读取器会拒绝 `storeKind`。应协调 Broker 与消费方的升级。不含 `store` 的响应（包括 Controller 响应）保持原有格式。`schemaVersion` 仍为 `1`，检查点清单继续使用 `backend`。
+
 本文检查了现有二进制的根级、领域帮助和代表性末级帮助，并核对当前解析器及执行边界。没有执行破坏性命令、偏移量重置或远程变更。
 
 来源：[注册与公共参数](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands.rs)、[CLI 解析与凭据](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/rocketmq_cli.rs)、[入口](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/main.rs)、[检查点命令](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/release_checkpoint.rs)。

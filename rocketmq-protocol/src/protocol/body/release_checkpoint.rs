@@ -46,7 +46,7 @@ pub struct MaintenanceCapabilitiesResponse {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MaintenanceStoreCapabilities {
     pub member_id: String,
-    #[serde(rename = "backend")]
+    /// Store implementation kind reported by the Broker.
     pub store_kind: ReleaseCheckpointStoreKind,
     pub storage_identity: ReleaseCheckpointStorageIdentity,
 }
@@ -514,6 +514,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn maintenance_capabilities_json_rejects_legacy_backend() {
+        for name in ["local", "rocks_db"] {
+            let value = serde_json::json!({
+                "memberId": "broker-a",
+                "backend": name,
+                "storageIdentity": { "volumeId": "pvc-a", "walGeneration": 7 }
+            });
+            serde_json::from_value::<MaintenanceStoreCapabilities>(value)
+                .expect_err("legacy backend-only capabilities must be rejected");
+        }
+    }
+
+    #[test]
     fn maintenance_capabilities_json_preserves_store_kind() {
         for (store_kind, name) in [
             (ReleaseCheckpointStoreKind::Local, "local"),
@@ -521,13 +534,53 @@ mod tests {
         ] {
             let value = serde_json::json!({
                 "memberId": "broker-a",
+                "storeKind": name,
+                "storageIdentity": { "volumeId": "pvc-a", "walGeneration": 7 }
+            });
+            let capabilities: MaintenanceStoreCapabilities =
+                serde_json::from_value(value.clone()).expect("storeKind must decode");
+            assert_eq!(capabilities.store_kind, store_kind);
+            let encoded = serde_json::to_value(capabilities).unwrap();
+            assert_eq!(encoded["storeKind"], name);
+            assert!(encoded.get("backend").is_none());
+            assert_eq!(encoded, value);
+        }
+    }
+
+    #[test]
+    fn maintenance_capabilities_json_rejects_backend_with_store_kind() {
+        for name in ["local", "rocks_db"] {
+            let value = serde_json::json!({
+                "memberId": "broker-a",
+                "storeKind": name,
                 "backend": name,
                 "storageIdentity": { "volumeId": "pvc-a", "walGeneration": 7 }
             });
-            let capabilities: MaintenanceStoreCapabilities = serde_json::from_value(value.clone()).unwrap();
-            assert_eq!(capabilities.store_kind, store_kind);
-            assert_eq!(serde_json::to_value(capabilities).unwrap(), value);
+            serde_json::from_value::<MaintenanceStoreCapabilities>(value)
+                .expect_err("backend must be rejected even with a valid storeKind");
         }
+    }
+
+    #[test]
+    fn maintenance_capabilities_json_allows_omitted_store() {
+        let value = serde_json::json!({
+            "schemaVersion": 1,
+            "policyId": "release-policy",
+            "policyVersion": 7,
+            "operations": [
+                "capabilities",
+                "create_controller_snapshot",
+                "verify_checkpoint",
+                "restore_verify"
+            ],
+            "maxCheckpointBytes": 4096,
+            "maxStoreMembers": 1,
+            "maxConcurrentOperations": 1
+        });
+        let response: MaintenanceCapabilitiesResponse =
+            serde_json::from_value(value.clone()).expect("store may be omitted");
+        assert!(response.store.is_none());
+        assert_eq!(serde_json::to_value(response).unwrap(), value);
     }
 
     fn artifact(id: &str) -> ReleaseCheckpointArtifact {

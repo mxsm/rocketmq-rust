@@ -118,6 +118,10 @@ Capture the actual CLI process status; PowerShell exposes it as `$LASTEXITCODE`.
 
 `release-checkpoint capabilities` reads a capabilities-response JSON file; it does not call the service. `create-set` combines supplied Controller and Store manifests and writes a new output file. `verify-set` and `restore-verify` inspect supplied manifests/proofs. They do not stop writers, copy the store, start a replacement node or prove a live application recovered. Follow [maintenance](../operations/maintenance.md) and [backup/recovery](../operations/backup-recovery.md) for the surrounding procedure.
 
+`release-checkpoint capabilities --input FILE` expects `storeKind` in the optional `store` object and prints the same key in its JSON output. It identifies the Store implementation reported by the Broker: `local` or `rocks_db`. `memberId` and `storageIdentity` retain their names.
+
+Previously saved responses using `store.backend` must be updated before use. Updated readers reject `backend`, including responses containing both keys; older readers using the previous DTO reject `storeKind`. Coordinate the Broker and consumer upgrade for this operation. Responses without `store`, including Controller responses, retain their shape. `schemaVersion` remains `1`, and checkpoint manifests continue to use `backend`.
+
 Validation for this page inspected the existing binary's root/domain help and representative leaf help, plus the current parser and execution boundaries. It did not execute destructive commands, offset resets or remote mutations.
 
 Sources: [registration and common arguments](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands.rs), [CLI parsing and credentials](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/rocketmq_cli.rs), [entry point](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/main.rs), [checkpoint commands](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/release_checkpoint.rs).
