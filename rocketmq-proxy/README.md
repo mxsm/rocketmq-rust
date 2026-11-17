@@ -254,6 +254,7 @@ aclFileWatchEnabled = false
 | `remoting.enabled` | `false` | Enables the remoting compatibility ingress. |
 | `remoting.listenAddr` | `0.0.0.0:8080` | Remoting bind address when enabled. |
 | `cluster.namesrvAddr` | unset | NameServer address used by cluster mode. |
+| `cluster.brokerClusterName` | `DefaultCluster` | Broker cluster that cluster mode serves; also the ACL `Cluster` resource unless `auth.clusterName` is set. |
 | `cluster.routeCacheTtlMs` | `5000` | Route cache TTL used by cluster clients. |
 | `runtime.consumerResponsePermits` | `1024` | Maximum concurrent Receive/Pull response streams retaining broker results. |
 | `runtime.consumerResponseBytes` | `67108864` | Hard retained-byte budget shared by Receive/Pull response streams. |
@@ -265,6 +266,7 @@ aclFileWatchEnabled = false
 | `session.receiptHandleTtlMs` | `300000` | Receipt handle tracking TTL. |
 | `auth.authenticationEnabled` | `false` | Enables request authentication. |
 | `auth.authorizationEnabled` | `false` | Enables ACL authorization. |
+| `auth.clusterName` | blank | Overrides the mode's `brokerClusterName` for Broker selection in cluster mode and for the ACL `Cluster` resource. Blank follows the mode. |
 
 ## Authentication
 

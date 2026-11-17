@@ -38,10 +38,17 @@ pub use rocketmq_proxy_core::SettingsConfig;
 #[cfg(feature = "local-mode")]
 pub use rocketmq_proxy_local::LocalConfig;
 
+/// Cluster name used when neither the Proxy mode nor `[auth]` names one.
+const DEFAULT_CLUSTER_NAME: &str = "DefaultCluster";
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyAuthConfig {
     pub config_name: String,
+    /// RocketMQ cluster name used as the authorization `Cluster` resource.
+    ///
+    /// Blank by default, which follows the Proxy's broker cluster name. A non-blank value also
+    /// selects the cluster-mode Brokers; see [`ProxyConfig::effective_cluster_name`].
     pub cluster_name: String,
     pub auth_config_path: String,
     pub acl_file: String,
@@ -153,7 +160,7 @@ impl Default for ProxyAuthConfig {
     fn default() -> Self {
         Self {
             config_name: "rocketmq-proxy".to_owned(),
-            cluster_name: "DefaultCluster".to_owned(),
+            cluster_name: String::new(),
             auth_config_path: "store/proxy/auth".to_owned(),
             acl_file: String::new(),
             acl_file_watch_enabled: false,
@@ -193,10 +200,19 @@ impl ProxyAuthConfig {
         self.authentication_enabled || self.authorization_enabled
     }
 
+    /// Builds the authorization runtime configuration.
+    ///
+    /// A blank `cluster_name` maps to `DefaultCluster`. Proxy startup resolves it from the Proxy
+    /// mode first through [`ProxyConfig::effective_auth_config`].
     pub fn to_auth_config(&self) -> RocketmqAuthConfig {
+        let cluster_name = if self.cluster_name.trim().is_empty() {
+            DEFAULT_CLUSTER_NAME
+        } else {
+            self.cluster_name.as_str()
+        };
         RocketmqAuthConfig {
             config_name: CheetahString::from(self.config_name.as_str()),
-            cluster_name: CheetahString::from(self.cluster_name.as_str()),
+            cluster_name: CheetahString::from(cluster_name),
             auth_config_path: CheetahString::from(self.auth_config_path.as_str()),
             acl_file: CheetahString::from(self.acl_file.as_str()),
             acl_file_watch_enabled: self.acl_file_watch_enabled,
@@ -303,6 +319,36 @@ impl ProxyConfig {
         config
             .try_deserialize()
             .map_err(|error| proxy_config_parse_failed("deserialize", error).into())
+    }
+
+    /// Returns the RocketMQ cluster name this Proxy serves.
+    ///
+    /// A non-blank `[auth] clusterName` wins, so configurations that set only that key keep
+    /// working. Otherwise the active mode's `brokerClusterName` applies: `[cluster]` in cluster
+    /// mode and `[local]` in local mode. Cluster mode selects Brokers by this name, and
+    /// authorization uses it as the `Cluster` resource.
+    pub fn effective_cluster_name(&self) -> &str {
+        if !self.auth.cluster_name.trim().is_empty() {
+            return self.auth.cluster_name.as_str();
+        }
+        match self.mode {
+            #[cfg(feature = "cluster-mode")]
+            ProxyMode::Cluster => self.cluster.broker_cluster_name.as_str(),
+            #[cfg(not(feature = "cluster-mode"))]
+            ProxyMode::Cluster => DEFAULT_CLUSTER_NAME,
+            #[cfg(feature = "local-mode")]
+            ProxyMode::Local => self.local.broker_cluster_name.as_str(),
+            #[cfg(not(feature = "local-mode"))]
+            ProxyMode::Local => DEFAULT_CLUSTER_NAME,
+        }
+    }
+
+    /// Returns `[auth]` with its cluster name resolved by [`Self::effective_cluster_name`].
+    pub fn effective_auth_config(&self) -> ProxyAuthConfig {
+        ProxyAuthConfig {
+            cluster_name: self.effective_cluster_name().to_owned(),
+            ..self.auth.clone()
+        }
     }
 }
 
@@ -554,6 +600,33 @@ observability:
                 );
             }
         }
+    }
+
+    #[test]
+    fn proxy_auth_config_maps_blank_cluster_name_to_default_cluster() {
+        let config = ProxyAuthConfig::default();
+
+        assert!(config.cluster_name.is_empty());
+        assert_eq!(config.to_auth_config().cluster_name.as_str(), "DefaultCluster");
+    }
+
+    #[cfg(feature = "local-mode")]
+    #[test]
+    fn effective_cluster_name_follows_local_broker_cluster_unless_auth_sets_one() {
+        let mut config = ProxyConfig {
+            mode: ProxyMode::Local,
+            ..ProxyConfig::default()
+        };
+        config.local.broker_cluster_name = "LocalCluster".to_owned();
+
+        assert_eq!(config.effective_cluster_name(), "LocalCluster");
+        assert_eq!(
+            config.effective_auth_config().to_auth_config().cluster_name.as_str(),
+            "LocalCluster"
+        );
+
+        config.auth.cluster_name = "AuthCluster".to_owned();
+        assert_eq!(config.effective_cluster_name(), "AuthCluster");
     }
 
     #[test]
