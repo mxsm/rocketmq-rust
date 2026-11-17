@@ -1,0 +1,83 @@
+import { useOperatorPreferences } from "@/preferences/OperatorPreferences";
+
+type Pair = readonly [string, string];
+const copy = {
+  title: ["知识库", "Reviewed knowledge"],
+  description: ["在明确的 RocketMQ 版本与集群范围中检索知识。审阅、有效期和反例决定材料的适用性，不代表目标版本或执行资格已验证。", "Retrieve knowledge for an explicit RocketMQ version and cluster. Review, validity and counterevidence determine applicability; they do not attest a target version or execution eligibility."],
+  metadata: ["知识条目", "Knowledge items"], filter: ["搜索知识", "Filter knowledge metadata"],
+  filterHint: ["仅过滤标题和组件", "Filter title and component only"],
+  empty: ["没有匹配的知识条目", "No matching knowledge items"],
+  listBound: ["当前仅加载一页；筛选只作用于已加载条目。请使用正文检索查找更多材料。", "Only one page is loaded. This filter covers loaded items only; use content search to find more material."],
+  listUnknown: ["列表来源没有提供完整分页信息；不能据此判断全库是否有匹配材料。", "The list source has no complete pagination metadata; it cannot establish whether the full corpus has matching material."],
+  searchTitle: ["版本化正文检索", "Versioned content search"],
+  query: ["检索内容", "Search text"], component: ["组件", "Component"],
+  version: ["RocketMQ 语义版本", "RocketMQ semantic version"],
+  versionHint: ["手动输入，如 5.3.0；不从集群或 Rust 软件版本推断。", "Enter a version such as 5.3.0; it is not inferred from cluster or Rust software versions."],
+  include: ["同时查看未审材料（仅作上下文）", "Include unreviewed material as context"],
+  search: ["检索", "Search"], invalidSearch: ["输入 1–500 UTF-8 字节的内容及明确的语义版本；组件最多 100 字节。", "Enter 1–500 UTF-8 bytes of text and an explicit semantic version; component is limited to 100 bytes."],
+  results: ["检索结果", "Search results"], noResults: ["当前有界检索未返回结果。", "This bounded search returned no results."],
+  bounded: ["候选集达到上限，可能仍有未评估材料。", "The candidate limit was reached; additional material may remain unevaluated."],
+  truncated: ["当前候选集中还有匹配结果未显示。", "Additional matches in the evaluated candidate set are not displayed."],
+  candidates: ["已评估候选 / 候选上限", "Evaluated candidates / candidate limit"],
+  asOf: ["服务端判定时间", "Server assessment time"],
+  eligible: ["可作为诊断知识上下文", "Eligible diagnostic knowledge context"],
+  ineligible: ["不可作为诊断事实", "Ineligible as diagnostic fact"],
+  partial: ["返回材料包含不适用内容；不表示检索完整。", "Returned material includes ineligible context; this does not describe search completeness."],
+  source: ["声明来源", "Declared source"], sourceVersion: ["来源版本", "Source version"],
+  range: ["适用版本范围", "Applicable version range"], owner: ["材料负责人（非审阅人）", "Declared owner, not reviewer"],
+  due: ["审阅截止", "Review due"], validFrom: ["有效起始", "Valid from"], validUntil: ["有效截止", "Valid until"],
+  sensitivity: ["敏感级别", "Sensitivity"], conflict: ["来源内容冲突", "Source-content conflict"],
+  hash: ["条目内容哈希", "Item content hash"], chunkHash: ["片段内容哈希", "Chunk content hash"],
+  unknown: ["未知 / 未提供", "Unknown / not supplied"], omittedSource: ["来源地址不可安全显示", "Source address is not safe to display"],
+  detail: ["查看条目与审阅记录", "View item and review history"], detailTitle: ["条目详情", "Item details"],
+  close: ["关闭详情", "Close details"], loading: ["正在读取…", "Loading…"], retry: ["重新读取", "Read again"],
+  unavailable: ["读取失败；不能将此状态解释为空结果。", "The read failed; this is not an empty result."],
+  mismatch: ["响应与当前身份、范围或检索条件不匹配，内容已隐藏。", "The response does not match the current identity, scope or search; content is hidden."],
+  focusInvalid: ["详情链接无效。", "The item link is invalid."],
+  noScope: ["请选择已授权集群。", "Select an authorized cluster."],
+  history: ["审阅与反馈记录", "Review and feedback history"],
+  scope: ["反馈所属范围", "Feedback scope"], tenantWide: ["租户全局", "Tenant-wide"],
+  itemScope: ["条目范围", "Item scope"],
+  noCuration: ["当前身份对这份材料没有人工审阅权限；反馈仍是非权威记录。", "The current identity cannot curate this material; feedback remains non-authoritative."],
+  otherScope: ["链接指向另一个已授权集群。请显式切换范围后查看；当前未显示其内容。", "This link refers to another authorized cluster. Switch scope explicitly to view it; its content is currently hidden."],
+  switchScope: ["切换到该集群并打开条目", "Switch to this cluster and open item"],
+  historyScope: ["反馈包含当前身份有权读取的各范围记录；每条记录单独标明范围。", "Feedback includes records readable by the current identity; each record is labeled with its own scope."],
+  noReviews: ["尚无可读取的审阅记录；负责人不能代替审阅人。", "No review records are available; the owner is not evidence of a reviewer."],
+  noFeedback: ["尚无可读取的反馈记录。", "No feedback records are available."],
+  historyBound: ["记录达到返回上限；更早历史未全部显示。", "The history limit was reached; older records are not fully displayed."],
+  legacy: ["旧记录的类型化来源信息未知。", "Typed provenance is unknown for this legacy record."],
+  actor: ["实际记录操作者", "Recorded actor"], reason: ["审阅理由 / 反例", "Review reason / counterevidence"],
+  declaredHuman: ["人工确认声明", "Human-confirmation declaration"], declaredAi: ["AI 生成声明", "AI-generation declaration"],
+  yes: ["是", "Yes"], no: ["否", "No"],
+  publication: ["已存储的复盘发布关系", "Stored postmortem publication relation"],
+  revision: ["复盘修订", "Postmortem revision"],
+  feedbackTitle: ["提交非权威反馈", "Submit non-authoritative feedback"],
+  feedbackHint: ["反馈仅追加记录，不自动验证、共享或提升材料资格。", "Feedback appends a record; it does not automatically validate, share or promote material."],
+  comment: ["反馈说明（可选，最多 2000 字节）", "Comment (optional, at most 2000 bytes)"],
+  sendFeedback: ["提交反馈", "Submit feedback"],
+  reviewTitle: ["人工审阅", "Human review"], reviewHint: ["集群材料需要 Operator；租户全局材料还需要 sre-admin。服务端重新检查权限与状态。", "Cluster material requires Operator; tenant-wide material also requires sre-admin. The server rechecks permission and state."],
+  nextStatus: ["新审阅状态", "New review status"], confirm: ["我已审阅并人工确认这份材料", "I have reviewed and explicitly confirm this material"],
+  submitReview: ["提交审阅", "Submit review"], submitting: ["正在提交…", "Submitting…"],
+  saved: ["提交已确认；请重新读取服务端记录。", "Submission acknowledged; read the server records again."],
+  uncertain: ["未能确认提交结果；不会自动重试。请重新读取记录核对，避免重复提交。", "The submission outcome is unconfirmed and will not be retried automatically. Read the records before considering another submission."],
+  shortened: ["显示内容已受限，原始内容哈希保持不变。", "Displayed content is bounded; the original content hash is retained."],
+} satisfies Record<string, Pair>;
+
+const labels: Record<string, Pair> = {
+  validated: ["已验证", "Validated"], in_review: ["审阅中", "In review"], draft: ["草稿", "Draft"], deprecated: ["已弃用", "Deprecated"], expired: ["已过期", "Expired"],
+  useful: ["有帮助", "Useful"], incorrect: ["不正确 / 存在反例", "Incorrect / counterevidence"], outdated: ["已过时", "Outdated"],
+  current: ["有效期内", "Within validity period"], not_yet_valid: ["尚未生效", "Not yet valid"], review_overdue: ["已超过审阅期限", "Review overdue"], validity_ended: ["有效期已结束", "Validity ended"], status_expired: ["状态标记已过期", "Status marked expired"],
+  not_validated: ["尚未人工验证", "Not validated"], knowledge_conflict: ["来源内容冲突", "Source-content conflict"], knowledge_expired: ["当前有效性不满足要求", "Current validity requirements are not met"],
+  knowledge_content_truncated: ["片段显示已截断", "Chunk display is truncated"], knowledge_metadata_truncated: ["元数据显示已截断", "Metadata display is truncated"],
+  import: ["导入声明", "Import declaration"], review: ["审阅", "Review"], feedback: ["读者反馈", "Reader feedback"], synthetic_fixture: ["合成演示材料", "Synthetic demonstration material"],
+};
+
+export function useKnowledgeMessages() {
+  const { locale, formatDateTime } = useOperatorPreferences();
+  const index = locale === "zh-CN" ? 0 : 1;
+  return {
+    t: (key: keyof typeof copy) => copy[key][index],
+    label: (code: string | null | undefined) => code && Object.hasOwn(labels, code) ? labels[code][index] : copy.unknown[index],
+    time: (value: string | null | undefined) => value && Number.isFinite(Date.parse(value)) ? formatDateTime(value) : copy.unknown[index],
+  };
+}

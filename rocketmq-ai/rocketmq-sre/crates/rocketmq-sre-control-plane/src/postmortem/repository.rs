@@ -19,7 +19,6 @@ use rocketmq_sre_contracts::ActionItemId;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::IncidentId;
-use rocketmq_sre_contracts::KnowledgeChunkId;
 use rocketmq_sre_contracts::KnowledgeItem;
 use rocketmq_sre_contracts::KnowledgeItemId;
 use rocketmq_sre_contracts::KnowledgeReviewStatus;
@@ -30,8 +29,8 @@ use rocketmq_sre_contracts::PostmortemStatus;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use sha2::Digest;
-use sha2::Sha256;
+#[cfg(test)]
+use sha2::{Digest, Sha256};
 use sqlx::Postgres;
 use sqlx::Row;
 use sqlx::Transaction;
@@ -379,7 +378,9 @@ impl PostgresRepository {
         affected_component: &str,
     ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
+        crate::knowledge::lock_knowledge_source(&mut transaction, item).await?;
         insert_knowledge(&mut transaction, item, markdown).await?;
+        let conflict = crate::knowledge::record_source_conflict(&mut transaction, item).await?;
         let result = sqlx::query(
             "UPDATE postmortems
              SET status = 'published', published_knowledge_item_id = $1,
@@ -405,7 +406,10 @@ impl PostgresRepository {
             ));
         }
         transaction.commit().await?;
-        Ok(item.clone())
+        Ok(KnowledgeItem {
+            conflict,
+            ..item.clone()
+        })
     }
 
     pub(super) async fn knowledge_for_postmortem(
@@ -656,7 +660,7 @@ async fn insert_knowledge(
     item: &KnowledgeItem,
     markdown: &str,
 ) -> Result<(), ControlPlaneRequestFailure> {
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO knowledge_items (
             id, tenant_id, cluster_id, title, component, rocketmq_version_range,
             source_uri, source_version, valid_from, valid_until, owner_name,
@@ -665,7 +669,7 @@ async fn insert_knowledge(
          ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
             $13, $14, $15, FALSE, $16, $16
-         )",
+         ) ON CONFLICT DO NOTHING",
     )
     .bind(item.id.as_uuid())
     .bind(item.tenant_id.as_uuid())
@@ -685,21 +689,27 @@ async fn insert_knowledge(
     .bind(item.created_at)
     .execute(&mut **transaction)
     .await?;
-    sqlx::query(
-        "INSERT INTO knowledge_chunks (
+    if inserted.rows_affected() != 1 {
+        return Err(ControlPlaneRequestFailure::conflict_code(
+            "knowledge_source_conflict",
+            "publication source already exists; review the existing record",
+        ));
+    }
+    for chunk in crate::knowledge::chunk_markdown(markdown)? {
+        sqlx::query(
+            "INSERT INTO knowledge_chunks (
             id, knowledge_item_id, ordinal, heading, content, content_hash
-         ) VALUES ($1, $2, 0, $3, $4, $5)",
-    )
-    .bind(KnowledgeChunkId::new().as_uuid())
-    .bind(item.id.as_uuid())
-    .bind("Postmortem")
-    .bind(markdown)
-    .bind(format!(
-        "sha256:{}",
-        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(markdown.as_bytes()))
-    ))
-    .execute(&mut **transaction)
-    .await?;
+         ) VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(chunk.id.as_uuid())
+        .bind(item.id.as_uuid())
+        .bind(chunk.ordinal)
+        .bind(chunk.heading)
+        .bind(chunk.content)
+        .bind(chunk.content_hash)
+        .execute(&mut **transaction)
+        .await?;
+    }
     Ok(())
 }
 

@@ -54,6 +54,7 @@ mod investigation_run;
 mod investigation_run_error;
 mod investigation_run_view;
 mod investigation_step;
+mod knowledge;
 mod notification;
 mod operations;
 mod operator_workbench;
@@ -451,6 +452,12 @@ pub use investigation_step::{
     InvestigationResultAcceptance, InvestigationResultDisposition, InvestigationStep, InvestigationStepAdmission,
     InvestigationStepAttempt, InvestigationStepFailure, InvestigationStepInterruption, InvestigationStepKind,
     InvestigationStepOutcome, InvestigationStepResult, InvestigationStepSpec,
+};
+pub use knowledge::{
+    ImportKnowledgeRequest, KnowledgeChunkView, KnowledgeFeedbackRecord, KnowledgeFeedbackRequest,
+    KnowledgeHistoryPage, KnowledgeImportResult, KnowledgePage, KnowledgePostmortemLineage, KnowledgeReviewEventKind,
+    KnowledgeReviewRecord, KnowledgeReviewRequest, KnowledgeSearchBinding, KnowledgeSearchBounds, KnowledgeSearchPage,
+    KnowledgeValidity,
 };
 pub use notification::NotificationChannel;
 pub use notification::NotificationDelivery;

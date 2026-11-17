@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Knowledge review lifecycle.",
+  "enum": [
+    "draft",
+    "in_review",
+    "validated",
+    "deprecated",
+    "expired"
+  ],
+  "title": "KnowledgeReviewStatus",
+  "type": "string"
+}

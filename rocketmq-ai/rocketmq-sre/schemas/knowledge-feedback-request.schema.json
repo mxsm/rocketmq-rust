@@ -1,0 +1,30 @@
+{
+  "$defs": {
+    "KnowledgeFeedbackKind": {
+      "description": "Feedback classifications that create a knowledge review task.",
+      "enum": [
+        "useful",
+        "incorrect",
+        "outdated"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "comment": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "$ref": "#/$defs/KnowledgeFeedbackKind"
+    }
+  },
+  "required": [
+    "kind"
+  ],
+  "title": "KnowledgeFeedbackRequest",
+  "type": "object"
+}

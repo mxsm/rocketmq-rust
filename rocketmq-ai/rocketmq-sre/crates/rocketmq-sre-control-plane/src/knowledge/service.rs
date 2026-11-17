@@ -46,11 +46,20 @@ impl KnowledgeService {
         Self { repository }
     }
 
+    pub(crate) async fn history(
+        &self,
+        auth: &AuthContext,
+        id: KnowledgeItemId,
+    ) -> Result<rocketmq_sre_contracts::KnowledgeHistoryPage, ControlPlaneRequestFailure> {
+        self.repository.knowledge_history(auth, id).await
+    }
+
     pub(crate) async fn import(
         &self,
         auth: &AuthContext,
         request: ImportKnowledgeRequest,
     ) -> Result<KnowledgeImportResult, ControlPlaneRequestFailure> {
+        super::repository::authorize_curation(auth, request.cluster_id)?;
         validate_import(&request)?;
         let chunks = chunk_markdown(&request.markdown)?;
         let now = Utc::now();
@@ -78,7 +87,15 @@ impl KnowledgeService {
             updated_at: now,
         };
         self.repository
-            .import_knowledge(auth, KnowledgeImport { item, chunks })
+            .import_knowledge(
+                auth,
+                KnowledgeImport {
+                    item,
+                    chunks,
+                    human_validated: request.human_validated,
+                    ai_generated: request.ai_generated,
+                },
+            )
             .await
     }
 
@@ -109,6 +126,17 @@ impl KnowledgeService {
                 "knowledge query must contain between 1 and 500 bytes",
             ));
         }
+        if query
+            .component
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > 100)
+            || query.rocketmq_version.len() > 128
+        {
+            return Err(ControlPlaneRequestFailure::validation(
+                "invalid_request",
+                "knowledge selectors exceed their bounds",
+            ));
+        }
         self.repository.search_knowledge(auth, query).await
     }
 
@@ -118,6 +146,12 @@ impl KnowledgeService {
         id: KnowledgeItemId,
         request: &KnowledgeReviewRequest,
     ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
+        if !auth.roles.contains("operator") {
+            return Err(ControlPlaneRequestFailure::forbidden(
+                "operator_required",
+                "knowledge curation requires the operator role",
+            ));
+        }
         if request.reason.trim().is_empty() || request.reason.len() > 2_000 {
             return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
@@ -125,9 +159,16 @@ impl KnowledgeService {
             ));
         }
         let current = self.repository.knowledge_item(auth, id).await?;
+        super::repository::authorize_curation(auth, current.cluster_id)?;
         validate_transition(current.review_status, request.status, request.human_confirmed)?;
         self.repository
-            .transition_knowledge(auth, current, request.status, request.reason.trim())
+            .transition_knowledge(
+                auth,
+                current,
+                request.status,
+                request.reason.trim(),
+                request.human_confirmed,
+            )
             .await
     }
 
@@ -151,6 +192,7 @@ fn validate_import(request: &ImportKnowledgeRequest) -> Result<(), ControlPlaneR
     for (name, value, max) in [
         ("title", request.title.as_str(), 300),
         ("component", request.component.as_str(), 100),
+        ("RocketMQ version range", request.rocketmq_version_range.as_str(), 512),
         ("source URI", request.source_uri.as_str(), 2_000),
         ("source version", request.source_version.as_str(), 200),
         ("owner", request.owner.as_str(), 200),

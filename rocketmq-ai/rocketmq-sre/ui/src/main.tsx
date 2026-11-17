@@ -20,6 +20,7 @@ import "./styles/evidence-quality.css";
 import "./styles/action-readiness.css";
 import "./styles/action-forms.css";
 import "./styles/execution-observation.css";
+import "./styles/knowledge.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

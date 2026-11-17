@@ -14,25 +14,19 @@
 
 use chrono::Utc;
 use rocketmq_sre_contracts::ClusterId;
-use rocketmq_sre_contracts::KnowledgeChunkId;
 use rocketmq_sre_contracts::KnowledgeFeedbackKind;
 use rocketmq_sre_contracts::KnowledgeItem;
 use rocketmq_sre_contracts::KnowledgeItemId;
 use rocketmq_sre_contracts::KnowledgeReviewStatus;
-use semver::Version;
-use semver::VersionReq;
 use sqlx::Row;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use super::model::KnowledgeChunkView;
 use super::model::KnowledgeFeedbackRequest;
 use super::model::KnowledgeImport;
 use super::model::KnowledgeImportResult;
 use super::model::KnowledgeListQuery;
 use super::model::KnowledgePage;
-use super::model::KnowledgeSearchPage;
-use super::model::KnowledgeSearchQuery;
 use crate::ControlPlaneError;
 use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
@@ -94,26 +88,34 @@ impl PostgresRepository {
         auth: &AuthContext,
         import: KnowledgeImport,
     ) -> Result<KnowledgeImportResult, ControlPlaneRequestFailure> {
-        enforce_optional_cluster(auth, import.item.cluster_id)?;
+        authorize_curation(auth, import.item.cluster_id)?;
         let mut transaction = self.pool.begin().await?;
+        super::source::lock_knowledge_source(&mut transaction, &import.item).await?;
         let existing = sqlx::query(
             "SELECT id
              FROM knowledge_items
-             WHERE tenant_id = $1 AND source_uri = $2 AND source_version = $3 AND content_hash = $4",
+             WHERE tenant_id = $1 AND source_uri = $2 AND source_version = $3 AND content_hash = $4
+               AND cluster_id IS NOT DISTINCT FROM $5",
         )
         .bind(auth.tenant_id.as_uuid())
         .bind(&import.item.source_uri)
         .bind(&import.item.source_version)
         .bind(&import.item.content_hash)
+        .bind(import.item.cluster_id.map(ClusterId::as_uuid))
         .fetch_optional(&mut *transaction)
         .await?;
         if let Some(row) = existing {
             let id = KnowledgeItemId::from_uuid(row.try_get("id")?);
+            let chunk_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM knowledge_chunks WHERE knowledge_item_id=$1")
+                    .bind(id.as_uuid())
+                    .fetch_one(&mut *transaction)
+                    .await?;
             transaction.rollback().await?;
             let item = self.knowledge_item(auth, id).await?;
             return Ok(KnowledgeImportResult {
                 item,
-                chunk_count: import.chunks.len(),
+                chunk_count: usize::try_from(chunk_count).map_err(ControlPlaneError::configuration_source)?,
                 deduplicated: true,
             });
         }
@@ -166,40 +168,23 @@ impl PostgresRepository {
             .await?;
         }
 
-        let conflicting = sqlx::query(
-            "SELECT id
-             FROM knowledge_items
-             WHERE tenant_id = $1 AND component = $2 AND rocketmq_version_range = $3
-               AND cluster_id IS NOT DISTINCT FROM $4
-               AND id <> $5 AND content_hash <> $6
-               AND review_status NOT IN ('deprecated', 'expired')",
+        sqlx::query(
+            "INSERT INTO knowledge_review_tasks (id, knowledge_item_id, reason, status, created_at, completed_at,
+                event_kind, actor_subject, to_review_status, item_content_hash, human_confirmed, ai_generated)
+             VALUES ($1,$2,'knowledge_import','completed',$3,$3,'import',$4,$5,$6,$7,$8)",
         )
-        .bind(auth.tenant_id.as_uuid())
-        .bind(&import.item.component)
-        .bind(&import.item.rocketmq_version_range)
-        .bind(import.item.cluster_id.map(ClusterId::as_uuid))
+        .bind(Uuid::new_v4())
         .bind(import.item.id.as_uuid())
+        .bind(import.item.created_at)
+        .bind(&auth.subject)
+        .bind(review_status_name(import.item.review_status))
         .bind(&import.item.content_hash)
-        .fetch_all(&mut *transaction)
+        .bind(import.human_validated)
+        .bind(import.ai_generated)
+        .execute(&mut *transaction)
         .await?;
-        let conflict = !conflicting.is_empty();
-        if conflict {
-            let ids = conflicting
-                .iter()
-                .map(|row| row.try_get::<Uuid, _>("id"))
-                .collect::<Result<Vec<_>, _>>()?;
-            sqlx::query(
-                "UPDATE knowledge_items
-                 SET conflict = TRUE, updated_at = $1
-                 WHERE tenant_id = $2 AND (id = $3 OR id = ANY($4))",
-            )
-            .bind(Utc::now())
-            .bind(auth.tenant_id.as_uuid())
-            .bind(import.item.id.as_uuid())
-            .bind(ids)
-            .execute(&mut *transaction)
-            .await?;
-        }
+
+        let conflict = super::source::record_source_conflict(&mut transaction, &import.item).await?;
         transaction.commit().await?;
         let mut item = import.item;
         item.conflict = conflict;
@@ -239,7 +224,9 @@ impl PostgresRepository {
         mut item: KnowledgeItem,
         status: KnowledgeReviewStatus,
         reason: &str,
+        human_confirmed: bool,
     ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
+        authorize_curation(auth, item.cluster_id)?;
         let now = Utc::now();
         let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
@@ -267,112 +254,27 @@ impl PostgresRepository {
         };
         sqlx::query(
             "INSERT INTO knowledge_review_tasks (
-                id, knowledge_item_id, reason, status, created_at, completed_at
-             ) VALUES ($1, $2, $3, $4, $5, $6)",
+                id, knowledge_item_id, reason, status, created_at, completed_at,
+                event_kind, actor_subject, from_review_status, to_review_status, item_content_hash, human_confirmed
+             ) VALUES ($1, $2, $3, $4, $5, $6, 'review', $7, $8, $9, $10, $11)",
         )
         .bind(Uuid::new_v4())
         .bind(item.id.as_uuid())
-        .bind(format!("{}: {reason}", auth.subject))
+        .bind(reason)
         .bind(task_status)
         .bind(now)
         .bind((task_status == "completed").then_some(now))
+        .bind(&auth.subject)
+        .bind(review_status_name(item.review_status))
+        .bind(review_status_name(status))
+        .bind(&item.content_hash)
+        .bind(human_confirmed)
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
         item.review_status = status;
         item.updated_at = now;
         Ok(item)
-    }
-
-    pub(super) async fn search_knowledge(
-        &self,
-        auth: &AuthContext,
-        query: &KnowledgeSearchQuery,
-    ) -> Result<KnowledgeSearchPage, ControlPlaneRequestFailure> {
-        enforce_optional_cluster(auth, Some(query.cluster_id))?;
-        let version = Version::parse(&query.rocketmq_version)
-            .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "RocketMQ version is invalid"))?;
-        let candidate_limit = i64::from(query.bounded_limit()) * 4;
-        let rows = sqlx::query(
-            "SELECT c.id AS chunk_id, c.heading, c.content, c.content_hash AS chunk_hash,
-                    k.id AS item_id, k.title, k.component, k.rocketmq_version_range,
-                    k.source_uri, k.source_version, k.sensitivity, k.review_status, k.review_due_at,
-                    k.valid_from, k.valid_until, k.content_hash AS item_hash, k.conflict
-             FROM knowledge_chunks c
-             JOIN knowledge_items k ON k.id = c.knowledge_item_id
-             WHERE k.tenant_id = $1
-               AND (k.cluster_id IS NULL OR k.cluster_id = $2)
-               AND ($3::TEXT IS NULL OR k.component = $3)
-               AND ($4 OR k.review_status = 'validated')
-               AND c.search_document @@ plainto_tsquery('simple', $5)
-             ORDER BY ts_rank(c.search_document, plainto_tsquery('simple', $5)) DESC,
-                      k.updated_at DESC, c.ordinal
-             LIMIT $6",
-        )
-        .bind(auth.tenant_id.as_uuid())
-        .bind(query.cluster_id.as_uuid())
-        .bind(query.component.as_deref())
-        .bind(query.include_unvalidated)
-        .bind(query.q.trim())
-        .bind(candidate_limit)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let now = Utc::now();
-        let mut items = Vec::new();
-        let mut partial = false;
-        for row in rows {
-            let requirement: String = row.try_get("rocketmq_version_range")?;
-            let version_matches = VersionReq::parse(&requirement)
-                .map(|requirement| requirement.matches(&version))
-                .unwrap_or(false);
-            if !version_matches {
-                continue;
-            }
-            let review_status = parse_review_status(row.try_get("review_status")?)?;
-            let review_due_at: chrono::DateTime<Utc> = row.try_get("review_due_at")?;
-            let valid_from: Option<chrono::DateTime<Utc>> = row.try_get("valid_from")?;
-            let valid_until: Option<chrono::DateTime<Utc>> = row.try_get("valid_until")?;
-            let conflict = row.try_get("conflict")?;
-            let expired = review_due_at <= now
-                || valid_from.is_some_and(|from| from > now)
-                || valid_until.is_some_and(|until| until <= now)
-                || review_status == KnowledgeReviewStatus::Expired;
-            let mut exclusion_reasons = Vec::new();
-            if review_status != KnowledgeReviewStatus::Validated {
-                exclusion_reasons.push("not_validated".to_owned());
-            }
-            if conflict {
-                exclusion_reasons.push("knowledge_conflict".to_owned());
-            }
-            if expired {
-                exclusion_reasons.push("knowledge_expired".to_owned());
-            }
-            let eligible_for_diagnosis = exclusion_reasons.is_empty();
-            partial |= !eligible_for_diagnosis;
-            items.push(KnowledgeChunkView {
-                id: KnowledgeChunkId::from_uuid(row.try_get("chunk_id")?),
-                knowledge_item_id: KnowledgeItemId::from_uuid(row.try_get("item_id")?),
-                title: row.try_get("title")?,
-                component: row.try_get("component")?,
-                heading: row.try_get("heading")?,
-                content: row.try_get("content")?,
-                source_uri: row.try_get("source_uri")?,
-                source_version: row.try_get("source_version")?,
-                sensitivity: parse_sensitivity(row.try_get("sensitivity")?)?,
-                item_hash: row.try_get("item_hash")?,
-                chunk_hash: row.try_get("chunk_hash")?,
-                review_status,
-                conflict,
-                expired,
-                eligible_for_diagnosis,
-                exclusion_reasons,
-            });
-            if items.len() >= query.bounded_limit() as usize {
-                break;
-            }
-        }
-        Ok(KnowledgeSearchPage { items, partial })
     }
 
     pub(super) async fn record_knowledge_feedback(
@@ -402,13 +304,16 @@ impl PostgresRepository {
         .await?;
         sqlx::query(
             "INSERT INTO knowledge_review_tasks (
-                id, knowledge_item_id, reason, status, created_at
-             ) VALUES ($1, $2, $3, 'open', $4)",
+                id, knowledge_item_id, reason, status, created_at,
+                event_kind, actor_subject, item_content_hash
+             ) VALUES ($1, $2, $3, 'open', $4, 'feedback', $5, $6)",
         )
         .bind(Uuid::new_v4())
         .bind(id.as_uuid())
         .bind(format!("operator_feedback:{}", feedback_kind_name(request.kind)))
         .bind(now)
+        .bind(&auth.subject)
+        .bind(&item.content_hash)
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
@@ -416,7 +321,7 @@ impl PostgresRepository {
     }
 }
 
-fn knowledge_item_from_row(row: &PgRow) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
+pub(super) fn knowledge_item_from_row(row: &PgRow) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
     Ok(KnowledgeItem {
         id: KnowledgeItemId::from_uuid(row.try_get("id")?),
         tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -439,7 +344,9 @@ fn knowledge_item_from_row(row: &PgRow) -> Result<KnowledgeItem, ControlPlaneReq
     })
 }
 
-fn parse_sensitivity(value: &str) -> Result<rocketmq_sre_contracts::Sensitivity, ControlPlaneRequestFailure> {
+pub(super) fn parse_sensitivity(
+    value: &str,
+) -> Result<rocketmq_sre_contracts::Sensitivity, ControlPlaneRequestFailure> {
     match value {
         "public" => Ok(rocketmq_sre_contracts::Sensitivity::Public),
         "internal" => Ok(rocketmq_sre_contracts::Sensitivity::Internal),
@@ -449,7 +356,7 @@ fn parse_sensitivity(value: &str) -> Result<rocketmq_sre_contracts::Sensitivity,
     }
 }
 
-fn enforce_optional_cluster(
+pub(super) fn enforce_optional_cluster(
     auth: &AuthContext,
     cluster_id: Option<ClusterId>,
 ) -> Result<(), ControlPlaneRequestFailure> {
@@ -457,6 +364,26 @@ fn enforce_optional_cluster(
         return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "knowledge cluster is outside the authenticated scope",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn authorize_curation(
+    auth: &AuthContext,
+    cluster_id: Option<ClusterId>,
+) -> Result<(), ControlPlaneRequestFailure> {
+    enforce_optional_cluster(auth, cluster_id)?;
+    if !auth.roles.contains("operator") {
+        return Err(ControlPlaneRequestFailure::forbidden(
+            "operator_required",
+            "knowledge curation requires the operator role",
+        ));
+    }
+    if cluster_id.is_none() && !auth.roles.contains("sre-admin") {
+        return Err(ControlPlaneRequestFailure::forbidden(
+            "tenant_curation_required",
+            "tenant-wide knowledge curation requires operator and sre-admin roles",
         ));
     }
     Ok(())
@@ -472,7 +399,7 @@ pub(super) fn review_status_name(status: KnowledgeReviewStatus) -> &'static str 
     }
 }
 
-fn parse_review_status(value: &str) -> Result<KnowledgeReviewStatus, ControlPlaneRequestFailure> {
+pub(super) fn parse_review_status(value: &str) -> Result<KnowledgeReviewStatus, ControlPlaneRequestFailure> {
     match value {
         "draft" => Ok(KnowledgeReviewStatus::Draft),
         "in_review" => Ok(KnowledgeReviewStatus::InReview),

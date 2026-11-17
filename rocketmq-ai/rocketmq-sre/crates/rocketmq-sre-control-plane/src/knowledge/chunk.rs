@@ -22,13 +22,19 @@ use crate::ControlPlaneRequestFailure;
 const MAX_CHUNK_BYTES: usize = 8 * 1024;
 const MAX_CHUNKS: usize = 256;
 
-pub(super) fn chunk_markdown(markdown: &str) -> Result<Vec<KnowledgeChunkDraft>, ControlPlaneRequestFailure> {
+pub(crate) fn chunk_markdown(markdown: &str) -> Result<Vec<KnowledgeChunkDraft>, ControlPlaneRequestFailure> {
     let mut chunks = Vec::new();
     let mut heading = None;
     let mut content = String::new();
 
     for line in markdown.lines() {
         if let Some(next_heading) = markdown_heading(line) {
+            if next_heading.len() > 1024 {
+                return Err(ControlPlaneRequestFailure::validation(
+                    "output_too_large",
+                    "knowledge heading exceeds 1024 bytes",
+                ));
+            }
             flush(&mut chunks, &heading, &mut content)?;
             heading = Some(next_heading.to_owned());
             continue;
