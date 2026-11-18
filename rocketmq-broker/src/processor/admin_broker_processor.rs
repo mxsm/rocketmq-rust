@@ -186,6 +186,7 @@ impl AdminRequestMetadata {
             RequestOrigin::Network { peer } => AdminOriginFact::Network(peer.address()),
             RequestOrigin::Embedded {
                 caller: EmbeddedCaller::BrokerProxy,
+                ..
             } => AdminOriginFact::BrokerProxy,
             _ => AdminOriginFact::Unsupported,
         };

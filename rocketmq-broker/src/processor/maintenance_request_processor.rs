@@ -154,6 +154,7 @@ impl MaintenanceRequestProcessor {
             }
             RequestOrigin::Embedded {
                 caller: EmbeddedCaller::BrokerProxy,
+                ..
             } => request
                 .authentication()
                 .principal()

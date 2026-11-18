@@ -14,6 +14,7 @@
 
 //! Channel-free embedded dispatch through the explicit processor contract.
 
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,7 +89,7 @@ where
         command: RemotingCommand,
     ) -> Result<EmbeddedDispatchResult, TransportError> {
         converge_embedded_result(
-            self.dispatch_embedded_inner(task_group, principal, deadline, command, false)
+            self.dispatch_embedded_inner(task_group, principal, None, deadline, command, false)
                 .await,
         )
     }
@@ -113,8 +114,36 @@ where
         deadline: Option<RequestDeadline>,
         command: RemotingCommand,
     ) -> Result<EmbeddedDispatchResult, TransportError> {
+        self.dispatch_embedded_wait_response_for_client(task_group, principal, None, deadline, command)
+            .await
+    }
+
+    /// Dispatches one embedded command on behalf of an end client and
+    /// resolves an accepted deferred response, like
+    /// [`Self::dispatch_embedded_wait_response`].
+    ///
+    /// `client_addr` is the end-client address that the trusted caller
+    /// observed at its own network ingress. It is recorded as the `client_addr`
+    /// of [`RequestOrigin::Embedded`](crate::dispatch::RequestOrigin::Embedded),
+    /// where processors may persist it (for example as a message born host).
+    /// Like the principal it is authoritative: command headers cannot replace
+    /// it, and it never becomes a network peer for authentication or
+    /// authorization. Pass `None` when the command is not issued for a client.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed, redacted errors as
+    /// [`Self::dispatch_embedded_wait_response`].
+    pub async fn dispatch_embedded_wait_response_for_client(
+        &self,
+        task_group: &TaskGroup,
+        principal: Principal,
+        client_addr: Option<SocketAddr>,
+        deadline: Option<RequestDeadline>,
+        command: RemotingCommand,
+    ) -> Result<EmbeddedDispatchResult, TransportError> {
         converge_embedded_result(
-            self.dispatch_embedded_inner(task_group, principal, deadline, command, true)
+            self.dispatch_embedded_inner(task_group, principal, client_addr, deadline, command, true)
                 .await,
         )
     }
@@ -123,6 +152,7 @@ where
         &self,
         task_group: &TaskGroup,
         principal: Principal,
+        client_addr: Option<SocketAddr>,
         deadline: Option<RequestDeadline>,
         mut command: RemotingCommand,
         wait_for_deferred_response: bool,
@@ -141,17 +171,21 @@ where
         let deferred_cleanup =
             wait_for_deferred_response.then(|| DeferredSessionCleanupOwner::new(embedded_session_view.id()));
         let principal_for_security = principal.clone();
-        let context =
-            match RequestContext::try_embedded_with_caller(EmbeddedCaller::BrokerProxy, Some(principal), deadline) {
-                Ok(context) => context,
-                Err(_) => {
-                    let error = EmbeddedDispatchError::request_construction(
-                        crate::contract::TransportContractViolation::MissingEmbeddedAuthentication,
-                    );
-                    let _ = terminal_sender.complete(Err(error));
-                    return terminal_receiver.receive().await;
-                }
-            };
+        let context = match RequestContext::try_embedded_for_client(
+            EmbeddedCaller::BrokerProxy,
+            Some(principal),
+            client_addr,
+            deadline,
+        ) {
+            Ok(context) => context,
+            Err(_) => {
+                let error = EmbeddedDispatchError::request_construction(
+                    crate::contract::TransportContractViolation::MissingEmbeddedAuthentication,
+                );
+                let _ = terminal_sender.complete(Err(error));
+                return terminal_receiver.receive().await;
+            }
+        };
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut command);
         let lifecycle = RequestLifecycleProvenance::from_embedded_session(&session_record, task_group);
         let mut session_record = Some(session_record);

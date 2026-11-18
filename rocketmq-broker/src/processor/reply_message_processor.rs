@@ -46,7 +46,6 @@ use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestControlView;
-use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerRequestCommand;
@@ -299,18 +298,6 @@ where
     }
 }
 
-fn reply_request_peer(origin: &RequestOrigin) -> crate::broker_error::BrokerResult<SocketAddr> {
-    match origin {
-        RequestOrigin::Network { peer } => Ok(peer.address()),
-        RequestOrigin::Embedded { .. } => Err(crate::broker_error::invalid_argument(
-            "ReplyMessage requires a trusted network origin for the persisted born host",
-        )),
-        _ => Err(crate::broker_error::invariant_violated(
-            "ReplyMessage received an unrecognized request origin",
-        )),
-    }
-}
-
 impl<MS, TS> ReplyMessageProcessor<MS, TS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
@@ -321,7 +308,7 @@ where
         request: &mut RemotingRequest,
     ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original = request.original_identity();
-        let inbound_peer = reply_request_peer(request.origin())?;
+        let inbound_peer = crate::processor::born_host::trusted_born_host(request.origin())?;
         let result = self
             .process_request(
                 inbound_peer,

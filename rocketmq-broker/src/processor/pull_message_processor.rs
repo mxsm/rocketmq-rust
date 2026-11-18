@@ -1359,8 +1359,17 @@ fn trusted_pull_peer(request: &RemotingRequest) -> crate::broker_error::BrokerRe
                 ..
             },
         ) if peer.address() == *remote_addr => Ok(*remote_addr),
+        // A local-mode Proxy pulls on behalf of the client it observed at its
+        // own network ingress; see `RequestOrigin::Embedded::client_addr`.
+        (
+            RequestOrigin::Embedded {
+                client_addr: Some(client_addr),
+                ..
+            },
+            SessionView::Embedded { .. },
+        ) => Ok(*client_addr),
         _ => Err(crate::broker_error::invariant_violated(
-            "Pull request origin does not match its network session view",
+            "Pull request origin does not match its session view",
         )),
     }
 }

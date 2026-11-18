@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::net::SocketAddr;
+
 use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::SecurityBootstrapProfile;
@@ -31,7 +33,8 @@ pub enum EmbeddedCaller {
 ///
 /// Network requests carry the peer observed by the transport. Embedded
 /// requests identify their in-process caller and intentionally have no
-/// network peer.
+/// network peer; they may carry the end-client address that the caller
+/// observed at its own network ingress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RequestOrigin {
@@ -44,6 +47,16 @@ pub enum RequestOrigin {
     Embedded {
         /// The trusted adapter that submitted the request.
         caller: EmbeddedCaller,
+        /// The address of the end client on whose behalf `caller` submitted
+        /// the request, as observed by `caller`'s own network ingress.
+        ///
+        /// Only the embedded dispatch entry point records it, from an argument
+        /// of the trusted composition root; command headers, extensions, and
+        /// processors cannot set it. It is not a transport peer: request
+        /// authentication and authorization never read it. `None` means the
+        /// caller supplied no client, for example for a request the adapter
+        /// issues on its own behalf.
+        client_addr: Option<SocketAddr>,
     },
 }
 
