@@ -3780,6 +3780,7 @@ mod tests {
                     client_message_id: format!("client-message-{index}"),
                     message,
                     queue_id: Some(0),
+                    broker_name: None,
                 })
                 .collect(),
             timeout: Some(Duration::from_secs(3)),
@@ -3833,17 +3834,26 @@ mod tests {
             },
             long_polling_timeout: Duration::ZERO,
         };
-        // The store dispatches appended messages to the consume queue asynchronously.
+        // The store dispatches appended messages to the consume queue
+        // asynchronously, and a non-suspended local pull has only a short
+        // budget, which the group's first pull can exceed while the Broker
+        // creates the group; retry both within one deadline.
         let dispatch_deadline = Instant::now() + Duration::from_secs(10);
         let pulled = loop {
-            let plan = consumer
+            let pulled = consumer
                 .pull_message(&client_context("PullMessage", Some(client)), &pull)
-                .await
-                .expect("embedded pull for a client completes");
-            if !plan.messages.is_empty() || Instant::now() >= dispatch_deadline {
-                break plan;
+                .await;
+            match pulled {
+                Ok(plan) if !plan.messages.is_empty() => break plan,
+                Ok(plan) if Instant::now() >= dispatch_deadline => break plan,
+                Err(error) if Instant::now() >= dispatch_deadline => {
+                    panic!("embedded pull for a client must complete: {error}")
+                }
+                Err(error) if error.descriptor() != &rocketmq_error::CORE_OPERATION_TIMED_OUT => {
+                    panic!("embedded pull for a client must not fail: {error}")
+                }
+                Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
         };
         assert_eq!(pulled.messages.len(), 1, "pull status: {:?}", pulled.status);
         assert_eq!(pulled.messages[0].message.body(), Some(&b"single"[..]));
