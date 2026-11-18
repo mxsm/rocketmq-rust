@@ -27,6 +27,19 @@ use tokio_util::sync::CancellationToken;
 // Variable gzip header copies are charged to the retained input reservation.
 const DECODER_WORKSPACE: usize = 256 * 1024;
 
+// Tonic's default codec decodes each unary request into its own buffer, allocated with
+// 8 KiB and grown to fit the length-prefixed message. Zero-copy message bodies keep that
+// buffer alive. `BytesMut` growth at most doubles the capacity it needs, so twice the
+// framed message, and never less than the initial buffer, bounds the allocation.
+const TONIC_DECODE_BUFFER: usize = 8 * 1024;
+const GRPC_MESSAGE_PREFIX: usize = 5;
+
+fn decode_buffer_bound(wire: usize) -> Option<usize> {
+    wire.checked_add(GRPC_MESSAGE_PREFIX)?
+        .checked_mul(2)
+        .map(|bytes| bytes.max(TONIC_DECODE_BUFFER))
+}
+
 struct Slot {
     arena: Vec<u8>,
     _resident: ResourcePermit,
@@ -286,15 +299,17 @@ pub(super) fn validate_request(request: &v2::SendMessageRequest, config: &GrpcCo
 }
 
 pub(super) fn retained_input_bytes(request: &v2::SendMessageRequest, config: &GrpcConfig) -> ProxyResult<usize> {
-    // Include the shared Tonic backing allocation, gzip header copies, protobuf
+    // Include the request's Tonic backing allocation, gzip header copies, protobuf
     // containers and allocator slack. This bounds retained input, not allocator RSS.
     let wire = crate::ingress::grpc::service::admission::estimated_protobuf_retained_bytes(request)
         .saturating_sub(std::mem::size_of_val(request));
     if wire > config.max_decoding_message_size {
         return Err(canonical::argument("send request exceeds the decoding limit").into());
     }
-    let mut bytes = config
-        .max_decoding_message_size
+    // The decoding limit was the former reservation and still caps it.
+    let mut bytes = decode_buffer_bound(wire)
+        .ok_or_else(|| ProxyError::from(canonical::argument("input size overflow")))?
+        .min(config.max_decoding_message_size)
         .checked_add(
             wire.checked_mul(2)
                 .ok_or_else(|| ProxyError::from(canonical::argument("input size overflow")))?,
@@ -432,6 +447,26 @@ mod tests {
             .unwrap();
         let lease = pool.lease_for(&request)?;
         pool.decode(request, config, input, &CancellationToken::new(), lease)
+    }
+
+    #[test]
+    fn send_reservation_follows_the_request_not_the_decoding_limit() {
+        let config = GrpcConfig {
+            max_decoding_message_size: 8 * 1024 * 1024,
+            ..Default::default()
+        };
+        let small = v2::SendMessageRequest {
+            messages: vec![message(&[7_u8; 1024], false)],
+        };
+        let reserved = retained_input_bytes(&small, &config).unwrap();
+        assert!(reserved >= TONIC_DECODE_BUFFER, "{reserved}");
+        assert!(reserved < 64 * 1024, "{reserved}");
+
+        let large = v2::SendMessageRequest {
+            messages: vec![message(&vec![7_u8; 1024 * 1024], false)],
+        };
+        let reserved = retained_input_bytes(&large, &config).unwrap();
+        assert!(reserved >= 4 * 1024 * 1024, "{reserved}");
     }
 
     #[test]

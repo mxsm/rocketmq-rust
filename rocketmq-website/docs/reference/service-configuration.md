@@ -129,7 +129,7 @@ brokerClusterName = "DocsCluster"
 | `cluster.brokerClusterName` | string / `DefaultCluster` | Target Broker cluster. |
 | `cluster.mqClientApiTimeoutMs` / `cluster.sendMessageTimeoutMs` | u64 / `3000` each | Cluster client API and send timeouts in milliseconds. |
 | `cluster.commandQueueCapacity` / `cluster.commandQueueMaxBytes` | usize / `1024` / `67108864` | Independent request count and byte budgets. |
-| `cluster.ioMaxInflight` / `cluster.longPollMaxInflight` | usize / `16` / `256` | Ordinary I/O and long-poll concurrency budgets. |
+| `cluster.ioMaxInflight` / `cluster.longPollMaxInflight` | usize / `1024` / `256` | Ordinary I/O and long-poll concurrency budgets. Normal sends of one client run concurrently within `ioMaxInflight`; FIFO and transactional sends keep their order. |
 | `local.brokerName` | string / `rocketmq-proxy-local` | Embedded Broker name in Local mode. |
 | `local.brokerListenPort` | u16 / `10911` | Embedded Broker port, independent of Proxy ingress. |
 | `local.storeRootDir` | string / `store/proxy/local-broker` | Local storage root relative to the working directory unless absolute. |
