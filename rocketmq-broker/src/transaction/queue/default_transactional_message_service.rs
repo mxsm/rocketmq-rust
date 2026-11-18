@@ -66,7 +66,6 @@ use tracing::warn;
 
 use crate::broker_path_config_helper::get_transaction_metrics_path;
 use crate::transaction::operation_result::OperationResult;
-use crate::transaction::queue::get_result::GetResult;
 use crate::transaction::queue::message_queue_op_context::MessageQueueOpContext;
 use crate::transaction::queue::message_queue_op_context::OperationBatch;
 use crate::transaction::queue::transactional_message_bridge::TransactionalMessageBridge;
@@ -646,8 +645,15 @@ where
                     }
                 }
             } else {
-                let get_result = self.get_half_msg(message_queue, consume_half_offset).await?;
-                let mut msg_ext = match get_result.msg {
+                let half_result = self
+                    .pull_half_msg(message_queue, consume_half_offset, PULL_MSG_RETRY_NUMBER)
+                    .await?;
+                let mut msg_ext = match half_result
+                    .as_ref()
+                    .and_then(|result| result.records())
+                    .and_then(|messages| messages.first())
+                    .cloned()
+                {
                     Some(msg) => msg,
                     None => {
                         if get_message_null_count > MAX_RETRY_COUNT_WHEN_HALF_NULL {
@@ -655,7 +661,7 @@ where
                         }
                         get_message_null_count += 1;
 
-                        if let Some(pr) = get_result.pull_result {
+                        if let Some(pr) = half_result {
                             if is_no_new_message(pr.status()) {
                                 debug!(
                                     "No new msg, the miss offset={} in={:?}, continue check={}, pull result={:?}",
@@ -838,7 +844,9 @@ where
 
         let new_op_offset = self.calculate_op_offset(done_op_offset, recovered_op_offset);
         // Log final statistics
-        let get_result = self.get_half_msg(message_queue, new_offset).await?;
+        let half_result = self
+            .pull_half_msg(message_queue, new_offset, PULL_MSG_RETRY_NUMBER)
+            .await?;
         let pull_result = self.pull_op_msg(op_queue, new_op_offset, 1).await?;
 
         // Publish checkpoints only after all reads in this queue's scan succeed.
@@ -851,7 +859,7 @@ where
                 .update_consume_offset(op_queue, new_op_offset);
         }
 
-        let max_msg_offset = if let Some(ref pr) = get_result.pull_result {
+        let max_msg_offset = if let Some(ref pr) = half_result {
             pr.max_offset()
         } else {
             new_offset
@@ -861,8 +869,10 @@ where
         } else {
             new_op_offset
         };
-        let msg_time = get_result
-            .get_msg()
+        let msg_time = half_result
+            .as_ref()
+            .and_then(|result| result.records())
+            .and_then(|messages| messages.first())
             .map(|msg| msg.store_timestamp())
             .unwrap_or_else(|| current_millis() as i64);
 
@@ -1065,22 +1075,6 @@ where
 
     async fn should_escape_message(&self) -> bool {
         self.broker_config.enable_slave_acting_master && self.transactional_message_bridge.is_message_store_slave()
-    }
-
-    /// Get half message
-    async fn get_half_msg(&self, message_queue: &MessageQueue, offset: i64) -> Result<GetResult> {
-        let mut get_result = GetResult::new();
-
-        if let Some(result) = self.pull_half_msg(message_queue, offset, PULL_MSG_RETRY_NUMBER).await? {
-            if let Some(message_exts) = result.records() {
-                if !message_exts.is_empty() {
-                    get_result.set_msg(Some(message_exts[0].clone()));
-                }
-            }
-            get_result.set_pull_result(Some(result));
-        }
-
-        Ok(get_result)
     }
 
     /// Pull half message
@@ -1830,7 +1824,6 @@ mod tests {
         let source = include_str!("default_transactional_message_service.rs");
 
         assert!(source.contains(") -> Result<()>"));
-        assert!(source.contains(") -> Result<GetResult>"));
         assert!(source.contains(") -> Result<Option<TransactionMessageReadResult>>"));
         assert!(!source.contains(concat!("Box<dyn std::error::", "SharedError")));
     }
