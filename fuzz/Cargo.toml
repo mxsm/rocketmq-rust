@@ -25,19 +25,13 @@ cargo-fuzz = true
 [features]
 default = []
 protocol_decode = ["dep:bytes", "dep:rocketmq-protocol"]
-raw_broker_config = ["dep:rocketmq-broker", "dep:serde_json", "pinned_openraft_runtime"]
-controller_snapshot = ["dep:rocketmq-controller", "pinned_openraft_runtime"]
+raw_broker_config = ["dep:rocketmq-broker", "dep:serde_json"]
+controller_snapshot = ["dep:rocketmq-controller"]
 store_recovery_record = ["dep:bytes", "dep:rocketmq-store-local"]
-pinned_openraft_runtime = ["dep:openraft-macros", "dep:openraft-rt", "dep:openraft-rt-tokio"]
 
 [dependencies]
 bytes = { version = "1.12.1", optional = true }
 libfuzzer-sys = "0.4.12"
-# OpenRaft uses compatible transitive ranges. Match the production Controller's exact
-# macro and runtime pins; these crates do not necessarily share a release version.
-openraft-macros = { version = "=0.10.0", optional = true }
-openraft-rt = { version = "=0.10.0", optional = true }
-openraft-rt-tokio = { version = "=0.10.0-alpha.38", optional = true }
 rocketmq-broker = { path = "../rocketmq-broker", optional = true }
 rocketmq-controller = { path = "../rocketmq-controller", default-features = false, features = ["storage-file"], optional = true }
 rocketmq-protocol = { path = "../rocketmq-protocol", optional = true }
