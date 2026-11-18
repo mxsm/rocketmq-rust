@@ -2941,6 +2941,7 @@ mod tests {
             client_message_id: id.to_owned(),
             message: ProxyMessage::new("TopicA", id.as_bytes().to_vec()),
             queue_id: None,
+            broker_name: None,
         }
     }
 
@@ -3183,6 +3184,7 @@ mod tests {
             client_message_id: "client-message-id".to_owned(),
             message,
             queue_id: Some(2),
+            broker_name: None,
         };
 
         let command = build_send_message_request(&CheetahString::from("broker-a"), "producer-a", &entry)

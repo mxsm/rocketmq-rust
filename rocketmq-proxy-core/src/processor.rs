@@ -77,6 +77,11 @@ pub struct SendMessageEntry {
     pub client_message_id: String,
     pub message: ProxyMessage,
     pub queue_id: Option<i32>,
+    /// Broker that owns `queue_id`, as chosen by the client.
+    ///
+    /// Queue ids repeat across Brokers, so backends that serve several Brokers must match both
+    /// fields. `None` keeps the queue-id-only lookup; it is ignored when `queue_id` is `None`.
+    pub broker_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -908,6 +913,7 @@ mod tests {
                 client_message_id: "message-id".to_owned(),
                 message,
                 queue_id: None,
+                broker_name: None,
             };
             assert_eq!(should_validate_message_type(&entry), expected, "{topic}");
         }

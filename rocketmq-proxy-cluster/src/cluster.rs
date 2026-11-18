@@ -1901,6 +1901,7 @@ fn compatible_batch_entries(entries: &[SendMessageEntry]) -> bool {
         && entries.iter().all(|entry| {
             entry.topic == first.topic
                 && entry.queue_id == first.queue_id
+                && entry.broker_name == first.broker_name
                 && !entry.message.properties().keys().any(|key| {
                     matches!(
                         key.as_str(),
@@ -3012,9 +3013,19 @@ async fn resolve_target_queue(
     let queues = producer
         .fetch_publish_message_queues(entry.topic.to_string().as_str())
         .await?;
-    let max_queue_id = queues.iter().map(MessageQueue::queue_id).max().unwrap_or(-1);
+    // Queue ids repeat across Brokers: a client that picked a Broker must get that Broker's queue.
+    let broker_name = entry.broker_name.as_deref();
+    let has_queues = !queues.is_empty();
+    let broker_queues = queues
+        .into_iter()
+        .filter(|queue| broker_name.is_none_or(|name| queue.broker_name().as_str() == name))
+        .collect::<Vec<_>>();
+    if let Some(broker_name) = broker_name.filter(|_| has_queues && broker_queues.is_empty()) {
+        return Err(canonical::broker_not_found(broker_name).into());
+    }
+    let max_queue_id = broker_queues.iter().map(MessageQueue::queue_id).max().unwrap_or(-1);
 
-    queues
+    broker_queues
         .into_iter()
         .find(|queue| queue.queue_id() == queue_id)
         .map(Some)
@@ -3236,6 +3247,7 @@ mod tests {
             client_message_id: id.to_owned(),
             message: ProxyMessage::new("TopicA", id.as_bytes().to_vec()),
             queue_id: None,
+            broker_name: None,
         }
     }
 
@@ -3627,6 +3639,7 @@ mod tests {
                             client_message_id: "message-a".to_owned(),
                             message: ProxyMessage::new("TopicA", vec![7_u8; 32]),
                             queue_id: None,
+                            broker_name: None,
                         }],
                         timeout: None,
                         validate_message_type: true,
