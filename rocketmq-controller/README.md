@@ -67,7 +67,7 @@ Before upgrading, replace `storageBackend` with `storageEngineType` in standalon
 - Build this crate with the pinned repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - `ROCKETMQ_HOME` or `rocketmqHome` must be set before starting the controller binary.
 - The default feature set enables RocksDB and the default configuration uses `storageEngineType = "RocksDB"`.
-- Use `storageEngineType = "File"` only when building with the opt-in `storage-file` feature.
+- Use `storageEngineType = "File"` only with the opt-in `dev-single` feature. Enabling `storage-file` alone compiles the file-store implementation but does not permit Controller startup with it.
 
 ## Build
 
@@ -235,14 +235,15 @@ The application supplies its owned `ChildServiceContext` and closes the RuntimeO
 
 | Feature | Default | Purpose |
 |---------|---------|---------|
-| `storage-file` | No | Enables the file-based controller storage backend for `storageEngineType = "File"`. |
+| `dev-single` | No | Allows `storageEngineType = "File"` for development and enables `storage-file`. |
+| `storage-file` | No | Compiles the file-store implementation; Controller startup with `File` also requires `dev-single`. |
 | `storage-rocksdb` | Yes | Enables the default RocksDB backend for `storageEngineType = "RocksDB"`. |
 | `metrics` | No | Enables controller metrics integration through `rocketmq-observability`. |
 | `metrics-otlp` | No | Enables OTLP metrics export support. |
 | `metrics-prometheus` | No | Enables Prometheus metrics export support. |
 | `debug` | No | Reserved debug feature flag for controller builds. |
 
-Additional flags include `dev-single` (enables `storage-file`), `otel-traces`, `otel-logs`,
+Additional flags include `otel-traces`, `otel-logs`,
 `otlp-traces` and `otlp-logs`. Exporter features still require matching runtime configuration.
 
 ## Examples
