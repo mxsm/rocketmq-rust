@@ -744,6 +744,7 @@ impl ClusterCommand {
                         .map(|entry| {
                             resource_identity_bytes(&entry.topic)
                                 + entry.client_message_id.len()
+                                + option_string_bytes(entry.broker_name.as_ref())
                                 + entry.message.topic().len()
                                 + entry.message.body().map_or(0, <[u8]>::len)
                                 + entry

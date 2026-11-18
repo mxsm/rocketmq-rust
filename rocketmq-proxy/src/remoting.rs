@@ -2308,6 +2308,11 @@ fn build_send_message_request(
         )
     })?;
     let queue_id = (header.queue_id >= 0).then_some(header.queue_id);
+    // Clients address a queue by Broker name and queue id (`bname`, or `n` in V2 headers).
+    let broker_name = header
+        .broker_name()
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string);
 
     if header.is_batch() {
         let mut batch_body = body;
@@ -2339,6 +2344,7 @@ fn build_send_message_request(
                     client_message_id,
                     message: message_to_core(&message),
                     queue_id,
+                    broker_name: broker_name.clone(),
                 }
             })
             .collect();
@@ -2373,6 +2379,7 @@ fn build_send_message_request(
             client_message_id,
             message: message_to_core(&message),
             queue_id,
+            broker_name,
         }],
         timeout: None,
         validate_message_type: true,
@@ -3300,12 +3307,19 @@ mod tests {
     fn test_dispatcher_with_factory(
         command_factory: RemotingCommandFactory,
     ) -> ProxyRemotingDispatcher<DefaultMessagingProcessor> {
+        test_dispatcher_with_services(command_factory, Arc::new(TestMessageService))
+    }
+
+    fn test_dispatcher_with_services(
+        command_factory: RemotingCommandFactory,
+        message_service: Arc<dyn MessageService>,
+    ) -> ProxyRemotingDispatcher<DefaultMessagingProcessor> {
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
             LocalServiceManager::with_services(
                 Arc::new(StaticRouteService::default()),
                 Arc::new(StaticMetadataService::default()),
                 Arc::new(DefaultAssignmentService),
-                Arc::new(TestMessageService),
+                message_service,
                 Arc::new(TestConsumerService),
                 Arc::new(DefaultTransactionService),
             ),
@@ -4081,6 +4095,131 @@ mod tests {
             .expect("sendBatchMessage response header should decode");
         assert_eq!(header.msg_id(), "batch-msg-id-1");
         assert_eq!(header.queue_id(), 2);
+    }
+
+    /// Records the Broker and queue each send entry asks for.
+    #[derive(Default)]
+    struct SendTargetCapturingService {
+        targets: Mutex<Vec<(Option<String>, Option<i32>)>>,
+    }
+
+    impl MessageService for SendTargetCapturingService {
+        fn send_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a SendMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Vec<SendMessageResultEntry>> {
+            self.targets.lock().expect("send target lock poisoned").extend(
+                request
+                    .messages
+                    .iter()
+                    .map(|entry| (entry.broker_name.clone(), entry.queue_id)),
+            );
+            Box::pin(async move {
+                Ok(request
+                    .messages
+                    .iter()
+                    .map(|entry| SendMessageResultEntry {
+                        status: ProxyStatusMapper::ok_payload(),
+                        send_result: Some(SendResult::new(
+                            SendStatus::SendOk,
+                            Some(CheetahString::from(entry.client_message_id.as_str())),
+                            None,
+                            Some(MessageQueue::from_parts(
+                                entry.topic.to_string(),
+                                entry.broker_name.clone().unwrap_or_default(),
+                                entry.queue_id.unwrap_or_default(),
+                            )),
+                            7,
+                        )),
+                    })
+                    .collect())
+            })
+        }
+
+        fn recall_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a RecallMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, RecallMessagePlan> {
+            Box::pin(async { Err(crate::error::ProxyError::not_implemented("test recall")) })
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_send_message_forwards_the_broker_the_client_picked() {
+        use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
+        use rocketmq_transport::api::RpcRequestHeader;
+        use rocketmq_transport::api::TopicRequestHeader;
+
+        let service = Arc::new(SendTargetCapturingService::default());
+        let dispatcher = test_dispatcher_with_services(super::application_remoting_command_factory(), service.clone());
+        let header = |broker_name: Option<&str>, queue_id: i32, batch: bool| SendMessageRequestHeader {
+            producer_group: CheetahString::from("ProducerA"),
+            topic: CheetahString::from("TopicA"),
+            default_topic: CheetahString::from("TBW102"),
+            default_topic_queue_nums: 4,
+            queue_id,
+            sys_flag: 0,
+            born_timestamp: 1,
+            flag: 0,
+            properties: None,
+            reconsume_times: None,
+            unit_mode: Some(false),
+            batch: Some(batch),
+            max_reconsume_times: None,
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: broker_name.map(CheetahString::from),
+                    ..Default::default()
+                }),
+                lo: None,
+            }),
+        };
+
+        // V1 header: the Broker name travels as `bname`.
+        let mut v1 =
+            RemotingCommand::create_request_command(RequestCode::SendMessage, header(Some("broker-b"), 1, false))
+                .set_body(Bytes::from_static(b"v1"));
+        v1.make_custom_header_to_net();
+        // V2 header: the Broker name travels as `n`.
+        let mut v2 = RemotingCommand::create_request_command(
+            RequestCode::SendMessageV2,
+            SendMessageRequestHeaderV2::create_send_message_request_header_v2(&header(Some("broker-c"), 3, false)),
+        )
+        .set_body(Bytes::from_static(b"v2"));
+        v2.make_custom_header_to_net();
+        // Every message in a batch keeps the batch's Broker.
+        let batch = rocketmq_model::common::message::message_batch::MessageBatch::generate_from_vec(vec![
+            Message::builder().topic("TopicA").body_slice(b"one").build_unchecked(),
+            Message::builder().topic("TopicA").body_slice(b"two").build_unchecked(),
+        ])
+        .expect("message batch should build");
+        let mut batch =
+            RemotingCommand::create_request_command(RequestCode::SendBatchMessage, header(Some("broker-b"), 0, true))
+                .set_body(MessageDecoder::encode_messages(&batch.messages));
+        batch.make_custom_header_to_net();
+        // An empty Broker name means the client did not pick one.
+        let mut unnamed = RemotingCommand::create_request_command(RequestCode::SendMessage, header(Some(""), 2, false))
+            .set_body(Bytes::from_static(b"unnamed"));
+        unnamed.make_custom_header_to_net();
+
+        for request in [&v1, &v2, &batch, &unnamed] {
+            let response = dispatcher.dispatch(&test_context(), request).await;
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        }
+
+        let targets = service.targets.lock().expect("send target lock poisoned");
+        assert_eq!(
+            targets.as_slice(),
+            [
+                (Some("broker-b".to_owned()), Some(1)),
+                (Some("broker-c".to_owned()), Some(3)),
+                (Some("broker-b".to_owned()), Some(0)),
+                (Some("broker-b".to_owned()), Some(0)),
+                (None, Some(2)),
+            ]
+        );
     }
 
     #[tokio::test]
