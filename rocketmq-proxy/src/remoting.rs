@@ -44,6 +44,7 @@ use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all::IS_SUB_CHANGE;
 use rocketmq_model::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
+use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -93,6 +94,7 @@ use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -259,12 +261,15 @@ where
             drain,
             command_factory,
             session_binder,
+            None,
         )
     }
 
+    /// `access_endpoint` replaces the endpoint derived from `config`; the listener passes
+    /// the one resolved against its bound address.
     #[allow(
         clippy::too_many_arguments,
-        reason = "assembles the request boundary with its independent session binder"
+        reason = "assembles the request boundary with its independent session binder and access endpoint"
     )]
     fn new_with_session_binder(
         config: Arc<ProxyConfig>,
@@ -277,19 +282,22 @@ where
         drain: ProxyDrainController,
         command_factory: RemotingCommandFactory,
         session_binder: ProxySessionBinder,
+        access_endpoint: Option<CheetahString>,
     ) -> Self {
+        let mut dispatcher = ProxyRemotingDispatcher::new_with_drain_controller_and_remoting_command_factory(
+            config,
+            processor,
+            sessions,
+            broker_remoting_handler,
+            drain.clone(),
+            command_factory,
+        )
+        .with_session_binder(session_binder.clone());
+        if let Some(access_endpoint) = access_endpoint {
+            dispatcher = dispatcher.with_access_endpoint(access_endpoint);
+        }
         Self {
-            dispatcher: Arc::new(
-                ProxyRemotingDispatcher::new_with_drain_controller_and_remoting_command_factory(
-                    config,
-                    processor,
-                    sessions,
-                    broker_remoting_handler,
-                    drain.clone(),
-                    command_factory,
-                )
-                .with_session_binder(session_binder.clone()),
-            ),
+            dispatcher: Arc::new(dispatcher),
             auth_runtime,
             drain,
             session_binder,
@@ -740,6 +748,11 @@ where
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
+    let bound_addr = listener
+        .local_addr()
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
+    // Fail startup rather than answer route queries with Broker addresses.
+    let access_endpoint = config.remoting.access_endpoint_for(bound_addr)?;
     let proxy_protocol = config.remoting.proxy_protocol.clone();
     let session_binder = Arc::new(ProxySessionBinder::new(sessions.clone()));
     let transport_sessions = Arc::new(SessionRegistry::with_lifecycle_listener(session_binder.clone()));
@@ -757,6 +770,7 @@ where
         drain,
         command_factory,
         session_binder.as_ref().clone(),
+        Some(CheetahString::from(access_endpoint)),
     );
     let server = TransportServer::new(server_config, service_context, request_processor)
         .with_telemetry(telemetry)
@@ -843,6 +857,10 @@ pub struct ProxyRemotingDispatcher<P> {
     drain: ProxyDrainController,
     command_factory: RemotingCommandFactory,
     session_binder: Option<ProxySessionBinder>,
+    /// `host:port` advertised for every Broker in route responses; `None` when the
+    /// configuration cannot produce one, which fails route queries instead of exposing
+    /// Broker addresses.
+    access_endpoint: Option<CheetahString>,
 }
 
 impl<P> ProxyRemotingDispatcher<P>
@@ -922,11 +940,17 @@ where
             drain,
             command_factory,
             session_binder: None,
+            access_endpoint: config.remoting.access_endpoint().ok().map(CheetahString::from),
         }
     }
 
     fn with_session_binder(mut self, session_binder: ProxySessionBinder) -> Self {
         self.session_binder = Some(session_binder);
+        self
+    }
+
+    fn with_access_endpoint(mut self, access_endpoint: CheetahString) -> Self {
+        self.access_endpoint = Some(access_endpoint);
         self
     }
 
@@ -1166,8 +1190,12 @@ where
                 return proxy_operation_error_response(&self.command_factory, request.opaque(), "query route", error);
             }
         };
+        let Some(access_endpoint) = self.access_endpoint.as_ref() else {
+            let error = owner_error(&CORE_INTERNAL_FAILURE, "resolve remoting access endpoint");
+            return descriptor_error_response(&self.command_factory, request.opaque(), &error);
+        };
 
-        let body = match plan.route.encode() {
+        let body = match proxy_remoting_route(plan.route, access_endpoint).encode() {
             Ok(body) => body,
             Err(error) => {
                 return serialization_error_response(
@@ -2243,6 +2271,31 @@ fn unique_lite_topics(subscriptions: &[crate::session::LiteSubscriptionSnapshot]
         .collect()
 }
 
+/// Builds the route a Remoting client receives from this Proxy.
+///
+/// As in Java Proxy, every Broker id maps to the Proxy's own Remoting endpoint so that
+/// sends, pulls, and offset calls come back through the Proxy, and only queue and Broker
+/// data are returned. Filter servers are keyed by Broker address, and static-topic queue
+/// mappings and ordered-topic configuration would steer clients away from the queue data
+/// the Proxy serves.
+fn proxy_remoting_route(route: TopicRouteData, access_endpoint: &CheetahString) -> TopicRouteData {
+    let TopicRouteData {
+        queue_datas,
+        mut broker_datas,
+        ..
+    } = route;
+    for broker in &mut broker_datas {
+        for address in broker.broker_addrs_mut().values_mut() {
+            address.clone_from(access_endpoint);
+        }
+    }
+    TopicRouteData {
+        queue_datas,
+        broker_datas,
+        ..TopicRouteData::default()
+    }
+}
+
 fn build_send_message_request(
     request: &RemotingCommand,
     header: &SendMessageRequestHeader,
@@ -2350,7 +2403,19 @@ fn build_pull_message_request(header: &PullMessageRequestHeader) -> PullMessageR
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "*".to_owned()),
         },
-        long_polling_timeout: std::time::Duration::from_millis(header.suspend_timeout_millis),
+        long_polling_timeout: pull_long_polling_timeout(header),
+    }
+}
+
+/// Long-polls only when the client sets the suspend flag, as the Broker does.
+///
+/// Non-blocking pulls, such as Java `DefaultMQPullConsumer.pull`, still send the default
+/// suspend timeout, which exceeds their own request timeout.
+fn pull_long_polling_timeout(header: &PullMessageRequestHeader) -> std::time::Duration {
+    if PullSysFlag::has_suspend_flag(header.sys_flag as u32) {
+        std::time::Duration::from_millis(header.suspend_timeout_millis)
+    } else {
+        std::time::Duration::ZERO
     }
 }
 
@@ -2680,6 +2745,7 @@ mod tests {
     use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
     use rocketmq_model::common::message::message_single::Message;
     use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
     use rocketmq_protocol::code::request_code::RequestCode;
@@ -3576,20 +3642,38 @@ mod tests {
         command
     }
 
-    #[tokio::test]
-    async fn dispatch_query_route_returns_success_response() {
+    fn route_dispatcher(remoting: RemotingConfig) -> ProxyRemotingDispatcher<DefaultMessagingProcessor> {
         let route_service = StaticRouteService::default();
         route_service.insert(
             ResourceIdentity::new(String::new(), "TopicA"),
             TopicRouteData {
-                queue_datas: vec![QueueData::new(CheetahString::from("broker-a"), 4, 4, 6, 0)],
-                broker_datas: vec![BrokerData::new(
-                    CheetahString::from("cluster-a"),
-                    CheetahString::from("broker-a"),
-                    HashMap::from([(0_u64, CheetahString::from("127.0.0.1:10911"))]),
-                    None,
-                )],
-                ..Default::default()
+                order_topic_conf: Some(CheetahString::from("broker-a:4;broker-b:4")),
+                queue_datas: vec![
+                    QueueData::new(CheetahString::from("broker-a"), 4, 4, 6, 0),
+                    QueueData::new(CheetahString::from("broker-b"), 4, 4, 6, 0),
+                ],
+                broker_datas: vec![
+                    BrokerData::new(
+                        CheetahString::from("cluster-a"),
+                        CheetahString::from("broker-a"),
+                        HashMap::from([
+                            (0_u64, CheetahString::from("127.0.0.1:10911")),
+                            (1_u64, CheetahString::from("127.0.0.1:10921")),
+                        ]),
+                        None,
+                    ),
+                    BrokerData::new(
+                        CheetahString::from("cluster-a"),
+                        CheetahString::from("broker-b"),
+                        HashMap::from([(0_u64, CheetahString::from("127.0.0.2:10911"))]),
+                        None,
+                    ),
+                ],
+                filter_server_table: HashMap::from([(
+                    CheetahString::from("127.0.0.1:10911"),
+                    vec![CheetahString::from("127.0.0.1:20911")],
+                )]),
+                topic_queue_mapping_by_broker: Some(HashMap::new()),
             },
         );
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
@@ -3602,25 +3686,96 @@ mod tests {
                 Arc::new(DefaultTransactionService),
             ),
         )));
-        let dispatcher = ProxyRemotingDispatcher::new(
+        ProxyRemotingDispatcher::new(
             Arc::new(ProxyConfig {
                 mode: ProxyMode::Local,
+                remoting,
                 ..ProxyConfig::default()
             }),
             processor,
             ClientSessionRegistry::default(),
             None,
-        );
+        )
+    }
+
+    async fn dispatch_route_query(dispatcher: &ProxyRemotingDispatcher<DefaultMessagingProcessor>) -> RemotingCommand {
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,
             GetRouteInfoRequestHeader::new("TopicA", Some(true)),
         );
         request.make_custom_header_to_net();
+        dispatcher.dispatch(&test_context(), &request).await
+    }
 
-        let response = dispatcher.dispatch(&test_context(), &request).await;
-
+    fn advertised_broker_addresses(response: &RemotingCommand) -> (TopicRouteData, Vec<(String, u64, String)>) {
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(response.body().is_some());
+        let route = TopicRouteData::decode(response.body().expect("route body")).expect("route body decodes");
+        let mut addresses = route
+            .broker_datas
+            .iter()
+            .flat_map(|broker| {
+                broker
+                    .broker_addrs()
+                    .iter()
+                    .map(|(id, address)| (broker.broker_name().to_string(), *id, address.to_string()))
+            })
+            .collect::<Vec<_>>();
+        addresses.sort();
+        (route, addresses)
+    }
+
+    #[tokio::test]
+    async fn dispatch_query_route_advertises_proxy_for_every_broker() {
+        let dispatcher = route_dispatcher(RemotingConfig {
+            listen_addr: "127.0.0.1:8080".to_owned(),
+            ..RemotingConfig::default()
+        });
+
+        let (route, addresses) = advertised_broker_addresses(&dispatch_route_query(&dispatcher).await);
+
+        let proxy = "127.0.0.1:8080".to_owned();
+        assert_eq!(
+            addresses,
+            vec![
+                ("broker-a".to_owned(), 0, proxy.clone()),
+                ("broker-a".to_owned(), 1, proxy.clone()),
+                ("broker-b".to_owned(), 0, proxy),
+            ]
+        );
+        assert_eq!(route.queue_datas.len(), 2);
+        // Java Proxy returns only queue and Broker data; the rest names or bypasses Brokers.
+        assert!(route.filter_server_table.is_empty());
+        assert!(route.order_topic_conf.is_none());
+        assert!(route.topic_queue_mapping_by_broker.is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_query_route_prefers_configured_access_address() {
+        let dispatcher = route_dispatcher(RemotingConfig {
+            listen_addr: "0.0.0.0:8080".to_owned(),
+            access_addr: Some("proxy.example.com".to_owned()),
+            ..RemotingConfig::default()
+        });
+
+        let (_, addresses) = advertised_broker_addresses(&dispatch_route_query(&dispatcher).await);
+
+        assert!(!addresses.is_empty());
+        assert!(addresses
+            .iter()
+            .all(|(_, _, address)| address == "proxy.example.com:8080"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_query_route_without_access_endpoint_never_returns_broker_addresses() {
+        let dispatcher = route_dispatcher(RemotingConfig {
+            listen_addr: "not-a-socket-address".to_owned(),
+            ..RemotingConfig::default()
+        });
+
+        let response = dispatch_route_query(&dispatcher).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert!(response.body().is_none());
     }
 
     #[tokio::test]
@@ -4187,6 +4342,29 @@ mod tests {
             assert!(!remark.contains('\r'));
             assert!(!remark.contains('\n'));
         }
+    }
+
+    #[test]
+    fn pull_long_polls_only_when_the_client_sets_the_suspend_flag() {
+        let mut header = PullMessageRequestHeader {
+            consumer_group: CheetahString::from("GroupA"),
+            topic: CheetahString::from("TopicA"),
+            queue_offset: 2,
+            max_msg_nums: 32,
+            suspend_timeout_millis: 20_000,
+            ..PullMessageRequestHeader::default()
+        };
+
+        header.sys_flag = PullSysFlag::build_sys_flag(false, false, true, false) as i32;
+        assert!(super::build_pull_message_request(&header)
+            .long_polling_timeout
+            .is_zero());
+
+        header.sys_flag = PullSysFlag::build_sys_flag(true, true, true, false) as i32;
+        assert_eq!(
+            super::build_pull_message_request(&header).long_polling_timeout,
+            Duration::from_millis(20_000)
+        );
     }
 
     #[tokio::test]

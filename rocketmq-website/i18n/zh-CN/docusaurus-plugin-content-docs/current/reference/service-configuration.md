@@ -99,7 +99,7 @@ Controller 管理接口的更新路径检查黑名单、解析已知属性、校
 
 根字段 `mode` 取 `"cluster"` 或 `"local"`。包含 `cluster-mode` 的构建默认使用 Cluster，仅包含 Local 的构建默认使用 Local。所选模式需要对应 feature 已编译。Cluster 通过客户端基础设施转发到外部 Broker，Local 则拥有嵌入式 Broker 路径；Local 配置不是完整的 Broker TOML 模型。
 
-读取文件或默认值后，Proxy 应用显式 `--mode`、`--grpcListenAddr`、`--remotingListenAddr`、`--enableRemoting` 和 `-n` / `--namesrvAddr`。`--enableRemoting` 只能启用监听器，禁用需通过文件设置。`--namesrvAddr` 更新 Cluster 配置，并要求 `cluster-mode`。不存在将环境变量自动映射到所有字段的通用规则；应显式配置文件值，遥测与安全环境输入则遵循各自文档。
+读取文件或默认值后，Proxy 应用显式 `--mode`、`--grpcListenAddr`、`--remotingListenAddr`、`--remotingAccessAddr`、`--enableRemoting` 和 `-n` / `--namesrvAddr`。`--enableRemoting` 只能启用监听器，禁用需通过文件设置。`--namesrvAddr` 更新 Cluster 配置，并要求 `cluster-mode`。不存在将环境变量自动映射到所有字段的通用规则；应显式配置文件值，遥测与安全环境输入则遵循各自文档。
 
 ```toml
 mode = "cluster"
@@ -124,6 +124,7 @@ brokerClusterName = "DocsCluster"
 | `grpc.timerMaxDelayMs` / `grpc.timerPrecisionMs` | u64 / `86400000` / `1000` ms | Proxy 延迟请求接纳时域与精度；Broker 仍需独立支持定时消息。 |
 | `remoting.enabled` | bool / `false` | 启用可选 remoting 入口。 |
 | `remoting.listenAddr` | string / `0.0.0.0:8080` | remoting 入口地址，与 gRPC 独立。 |
+| `remoting.accessAddr` | optional string / 未设置 | Remoting 路由响应为每个 Broker 返回的 `host` 或 `host:port`，使 Remoting 客户端经由 Proxy 发送和拉取；只写 host 时沿用监听端口。未设置时使用 `listenAddr`，绑定所有网卡时使用本机地址。 |
 | `cluster.namesrvAddr` | optional string / 未设置 | Cluster 模式下选择外部 NameServer。 |
 | `cluster.brokerClusterName` | string / `DefaultCluster` | 目标 Broker 集群。 |
 | `cluster.mqClientApiTimeoutMs` / `cluster.sendMessageTimeoutMs` | u64 / 各 `3000` | Cluster 客户端 API 与发送超时，单位为毫秒。 |

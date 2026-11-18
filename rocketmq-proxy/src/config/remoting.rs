@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::SocketAddr;
 
+mod access;
 mod tls;
 
 /// Normalized RocketMQ remoting ingress configuration.
@@ -28,6 +29,14 @@ mod tls;
 pub struct RemotingConfig {
     pub enabled: bool,
     pub listen_addr: String,
+    /// Address advertised to Remoting clients in place of Broker addresses, as `host` or
+    /// `host:port` (Java Proxy `remotingAccessAddr`).
+    ///
+    /// Unset advertises the listen address, or this host's address when the listener binds
+    /// all interfaces. A bare host keeps the listen port. Set it when clients reach the
+    /// Proxy through NAT, a container network, or a load balancer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_addr: Option<String>,
     pub proxy_protocol: ProxyProtocolConfig,
     /// Direct, startup-only TLS for the Remoting listener, independent of gRPC.
     #[serde(deserialize_with = "tls::deserialize")]
@@ -39,6 +48,7 @@ impl Default for RemotingConfig {
         Self {
             enabled: false,
             listen_addr: format!("0.0.0.0:{DEFAULT_PROXY_REMOTING_PORT}"),
+            access_addr: None,
             proxy_protocol: ProxyProtocolConfig::default(),
             tls_config: TlsConfig::default(),
         }
@@ -48,6 +58,7 @@ impl Default for RemotingConfig {
 impl RemotingConfig {
     pub fn validate(&self) -> ProxyResult<()> {
         self.socket_addr()?;
+        access::validate(self.access_addr.as_deref())?;
         self.proxy_protocol.validate()?;
         tls::validate(&self.tls_config)?;
         Ok(())
@@ -62,6 +73,23 @@ impl RemotingConfig {
     pub fn listen_port(&self) -> ProxyResult<u16> {
         Ok(self.socket_addr()?.port())
     }
+
+    /// Returns the `host:port` that Remoting route responses advertise for every Broker.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when the listen or access address is malformed, or
+    /// when the listener binds all interfaces, no access address is set, and no local
+    /// address can be found.
+    pub fn access_endpoint(&self) -> ProxyResult<String> {
+        self.access_endpoint_for(self.socket_addr()?)
+    }
+
+    /// Resolves [`Self::access_endpoint`] against the address the listener actually bound,
+    /// so an ephemeral listen port advertises the assigned port.
+    pub(crate) fn access_endpoint_for(&self, bound: SocketAddr) -> ProxyResult<String> {
+        access::resolve(self.access_addr.as_deref(), bound)
+    }
 }
 
 impl fmt::Debug for RemotingConfig {
@@ -70,6 +98,7 @@ impl fmt::Debug for RemotingConfig {
             .debug_struct("RemotingConfig")
             .field("enabled", &self.enabled)
             .field("listen_addr", &self.listen_addr)
+            .field("access_addr", &self.access_addr)
             .field("proxy_protocol", &self.proxy_protocol)
             .field("tls_enabled", &self.tls_config.enable)
             .finish_non_exhaustive()

@@ -14,6 +14,7 @@
 
 #![recursion_limit = "256"]
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_hea
 use rocketmq_protocol::protocol::heartbeat::consumer_data::ConsumerData;
 use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy::ClientSessionRegistry;
@@ -94,7 +96,15 @@ impl RouteService for RecordingRouteService {
                     local_addr: context.local_addr().map(str::to_owned),
                     remote_addr: context.remote_addr().map(str::to_owned),
                 });
-            Ok(TopicRouteData::default())
+            Ok(TopicRouteData {
+                broker_datas: vec![BrokerData::new(
+                    CheetahString::from("cluster-a"),
+                    CheetahString::from("broker-a"),
+                    HashMap::from([(0_u64, CheetahString::from("127.0.0.1:10911"))]),
+                    None,
+                )],
+                ..TopicRouteData::default()
+            })
         })
     }
 }
@@ -193,6 +203,14 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
 
     assert_eq!(response.code(), ResponseCode::Success as i32);
     assert_eq!(response.opaque(), opaque);
+    // Clients that use the Proxy as their NameServer must come back to the Proxy listener.
+    let route = TopicRouteData::decode(response.body().expect("route body")).expect("route body decodes");
+    let advertised = route
+        .broker_datas
+        .iter()
+        .flat_map(|broker| broker.broker_addrs().values().map(ToString::to_string))
+        .collect::<Vec<_>>();
+    assert_eq!(advertised, vec![remoting_addr.to_string()]);
 
     let _ = shutdown_tx.send(());
     let serve_result = server_task.await.expect("server task should join");
