@@ -129,7 +129,7 @@ brokerClusterName = "DocsCluster"
 | `cluster.brokerClusterName` | string / `DefaultCluster` | 目标 Broker 集群。 |
 | `cluster.mqClientApiTimeoutMs` / `cluster.sendMessageTimeoutMs` | u64 / 各 `3000` | Cluster 客户端 API 与发送超时，单位为毫秒。 |
 | `cluster.commandQueueCapacity` / `cluster.commandQueueMaxBytes` | usize / `1024` / `67108864` | 独立的请求数量与字节数预算。 |
-| `cluster.ioMaxInflight` / `cluster.longPollMaxInflight` | usize / `16` / `256` | 普通 I/O 与长轮询并发预算。 |
+| `cluster.ioMaxInflight` / `cluster.longPollMaxInflight` | usize / `1024` / `256` | 普通 I/O 与长轮询并发预算。同一客户端的普通消息发送在 `ioMaxInflight` 内并发执行，顺序消息和事务消息的发送保持顺序。 |
 | `local.brokerName` | string / `rocketmq-proxy-local` | Local 模式下的嵌入式 Broker 名称。 |
 | `local.brokerListenPort` | u16 / `10911` | 嵌入式 Broker 端口，与 Proxy 入口独立。 |
 | `local.storeRootDir` | string / `store/proxy/local-broker` | Local 存储根目录；非绝对路径时相对于工作目录解析。 |

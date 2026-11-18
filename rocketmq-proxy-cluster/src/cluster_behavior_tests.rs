@@ -37,6 +37,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
+#[path = "cluster_behavior_tests/concurrent_send.rs"]
+mod concurrent_send;
 #[path = "cluster_behavior_tests/dead_letter.rs"]
 mod dead_letter;
 

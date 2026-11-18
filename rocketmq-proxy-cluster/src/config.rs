@@ -96,6 +96,9 @@ pub struct ClusterConfig {
     /// Maximum time a command may remain queued, in milliseconds.
     pub command_queue_max_age_ms: u64,
     /// Maximum concurrent regular I/O operations, including control commands.
+    ///
+    /// Normal sends of one client run concurrently, so this bounds the Proxy's send
+    /// concurrency toward the Brokers; the default matches `command_queue_capacity`.
     pub io_max_inflight: usize,
     /// Command and regular I/O slots reserved for control operations, with proportional byte capacity.
     pub control_reserve: usize,
@@ -122,7 +125,7 @@ impl Default for ClusterConfig {
             command_queue_capacity: 1_024,
             command_queue_max_bytes: 64 * 1024 * 1024,
             command_queue_max_age_ms: 30_000,
-            io_max_inflight: 16,
+            io_max_inflight: 1_024,
             control_reserve: 2,
             long_poll_max_inflight: 256,
             execution_lane_idle_timeout_ms: 30_000,
