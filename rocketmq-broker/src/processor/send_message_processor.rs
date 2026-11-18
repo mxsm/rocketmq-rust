@@ -274,18 +274,6 @@ where
     }
 }
 
-fn send_request_peer(origin: &RequestOrigin) -> crate::broker_error::BrokerResult<SocketAddr> {
-    match origin {
-        RequestOrigin::Network { peer } => Ok(peer.address()),
-        RequestOrigin::Embedded { .. } => Err(crate::broker_error::invalid_argument(
-            "SendMessage requires a trusted network origin for the persisted born host",
-        )),
-        _ => Err(crate::broker_error::invariant_violated(
-            "SendMessage received an unrecognized request origin",
-        )),
-    }
-}
-
 impl<MS, TS> SendMessageProcessor<MS, TS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
@@ -346,7 +334,7 @@ where
         debug!("SendMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::SendMessage | RequestCode::SendMessageV2 | RequestCode::SendBatchMessage => {
-                let inbound_peer = send_request_peer(&origin)?;
+                let inbound_peer = crate::processor::born_host::trusted_born_host(&origin)?;
                 self.process_send_message(
                     inbound_peer,
                     control,

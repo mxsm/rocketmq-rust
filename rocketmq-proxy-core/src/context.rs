@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::fmt;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -183,6 +184,15 @@ impl<P> ProxyContextWithPrincipal<P> {
 
     pub fn remote_addr(&self) -> Option<&str> {
         self.remote_addr.as_deref()
+    }
+
+    /// Returns the client socket address recorded by the ingress adapter.
+    ///
+    /// Network ingress records the transport peer as `ip:port`; `None` means
+    /// the request has no network client (for example an internal context) or
+    /// the recorded value is not a socket address.
+    pub fn remote_socket_addr(&self) -> Option<SocketAddr> {
+        self.remote_addr.as_deref().and_then(|addr| addr.parse().ok())
     }
 
     pub fn local_addr(&self) -> Option<&str> {

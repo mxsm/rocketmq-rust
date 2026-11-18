@@ -1040,7 +1040,12 @@ where
             let mut broker_remoting_command = request.command().clone();
             broker_remoting_command.set_code_ref(request.original_identity().original_code());
             broker_remoting_command.set_opaque_mut(request.original_identity().original_opaque());
-            return match broker_remoting_handler.process(broker_remoting_command).await {
+            // The client address lets an embedded Broker persist the client
+            // as the born host of messages this command writes (recall).
+            return match broker_remoting_handler
+                .process_for_client(broker_remoting_command, context.remote_socket_addr())
+                .await
+            {
                 Ok(EmbeddedDispatchResult::Reply(plan)) => Ok(ResponseAction::Reply(plan)),
                 Ok(EmbeddedDispatchResult::OneWay { .. }) => Ok(ResponseAction::Reply(
                     RemotingResponse::empty_response(ResponseCode::Success as i32),

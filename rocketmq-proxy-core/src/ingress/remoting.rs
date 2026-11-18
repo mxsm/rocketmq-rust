@@ -19,6 +19,8 @@
 //! selects a canonical operation; it does not execute the request. The application facade
 //! owns wire decoding, the TCP lifecycle, and the actual dispatch of decoded commands.
 
+use std::net::SocketAddr;
+
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -44,6 +46,23 @@ pub trait ProxyRemotingRequestHandler: Send + Sync {
     /// remote providers wrap their response command in a `RemotingResponse`
     /// without introducing a reverse response-to-command adapter.
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, Self::Response>;
+
+    /// Processes a command on behalf of the client the facade observed at
+    /// `client_addr`, its network ingress peer.
+    ///
+    /// An embedded Broker records the address as the trusted born host of the
+    /// messages the command writes, the way a network Broker uses its own
+    /// transport peer; it never authenticates or authorizes the command. The
+    /// default ignores the address and calls [`Self::process`], which suits
+    /// providers that forward the command over their own network connection.
+    fn process_for_client(
+        &self,
+        request: RemotingCommand,
+        client_addr: Option<SocketAddr>,
+    ) -> ProxyServiceFuture<'_, Self::Response> {
+        let _ = client_addr;
+        self.process(request)
+    }
 
     /// Drains work owned by this handler within the supplied shutdown deadline.
     ///
