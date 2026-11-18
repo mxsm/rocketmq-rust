@@ -37,7 +37,6 @@ use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
@@ -623,10 +622,6 @@ macro_rules! message_store_methods {
 
     fn get_store_checkpoint_arc(&self) -> Arc<StoreCheckpoint> {
         delegate_store!(self, get_store_checkpoint_arc())
-    }
-
-    fn get_system_clock(&self) -> Arc<SystemClock> {
-        delegate_store!(self, get_system_clock())
     }
 
     fn get_commit_log(&self) -> &CommitLog {

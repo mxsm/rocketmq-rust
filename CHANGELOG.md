@@ -123,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(runtime)!:** Remove the public `rocketmq_runtime::common::system_clock` wrapper; `CommitLog::lock_time_mills` now reads `rocketmq_runtime::common::time_utils::current_millis()` and saturates on clock rollback instead of underflowing, and the internal Store engine trait no longer exposes `get_system_clock()`. Callers should use `current_millis()` and can widen the returned `u64` with `u128::from` ([#12776](https://github.com/mxsm/rocketmq-rust/issues/12776)).
 - **refactor(broker):** Remove duplicate session identity storage from ClientSessionTransport and derive its identity from the close capability, preserving identity checks and retirement behavior ([#12712](https://github.com/mxsm/rocketmq-rust/issues/12712)).
 - **refactor(client):** Remove the unused one-way egress snapshot and duplicate counters; runtime metrics and bounded admission are unchanged ([#12374](https://github.com/mxsm/rocketmq-rust/issues/12374)).
 - **refactor(client):** Remove unused initial delayed consume admission and exercise the shared retry task through worker retries ([#12407](https://github.com/mxsm/rocketmq-rust/issues/12407)).
