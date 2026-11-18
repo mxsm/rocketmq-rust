@@ -108,6 +108,7 @@ use rocketmq_proxy_core::ProxyDrainError;
 use rocketmq_proxy_core::ProxyDrainPhase;
 use rocketmq_proxy_core::ProxyDrainSnapshot;
 use rocketmq_proxy_core::ProxyPayloadStatus;
+use rocketmq_runtime::heap_future;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::api::error_response;
@@ -779,18 +780,21 @@ where
     let (startup_tx, mut startup_rx) = oneshot::channel();
     let readiness_cancellation = CancellationToken::new();
     let server_cancellation = readiness_cancellation.clone();
-    let server_future = server.try_serve_bound_listener_until_with_startup(
-        listener,
-        None,
-        async move {
-            tokio::select! {
-                _ = shutdown => {}
-                _ = server_cancellation.cancelled() => {}
-            }
-        },
-        startup_tx,
-    );
-    tokio::pin!(server_future);
+    // The process entrypoint polls this on its main thread; keep the server's accept loop off
+    // this frame.
+    let mut server_future = heap_future(|| {
+        server.try_serve_bound_listener_until_with_startup(
+            listener,
+            None,
+            async move {
+                tokio::select! {
+                    _ = shutdown => {}
+                    _ = server_cancellation.cancelled() => {}
+                }
+            },
+            startup_tx,
+        )
+    });
     let startup = tokio::select! {
         biased;
         startup = &mut startup_rx => startup

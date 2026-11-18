@@ -37,6 +37,7 @@ use rocketmq_proxy::ProxyRuntime;
 #[cfg(test)]
 use rocketmq_proxy::RemotingConfig;
 use rocketmq_proxy_core::error::canonical;
+use rocketmq_runtime::heap_future;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
@@ -82,14 +83,32 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
+/// Set by the Windows process test to read the main thread's stack peak.
+const MAIN_STACK_REPORT_ENV: &str = "ROCKETMQ_REPORT_MAIN_STACK";
+
 fn main() {
-    if let Err(source) = try_main() {
+    let result = try_main();
+    report_main_stack_if_requested();
+    if let Err(source) = result {
         let descriptor = source.descriptor();
         let context = source.context();
         let error = CanonicalError::caused_by(descriptor, source).with_context(context);
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
         eprintln!("{}", output.stderr());
         std::process::exit(output.exit_code().as_i32());
+    }
+}
+
+/// Prints the main thread's committed stack once the runtime is gone.
+///
+/// Committed stack pages stay committed until the thread exits, so this is the
+/// deepest the main thread went during the whole run.
+fn report_main_stack_if_requested() {
+    if std::env::var_os(MAIN_STACK_REPORT_ENV).is_none() {
+        return;
+    }
+    if let Some(bytes) = rocketmq_runtime::current_thread_committed_stack_bytes() {
+        eprintln!("main_thread_stack_committed_bytes={bytes}");
     }
 }
 
@@ -105,7 +124,8 @@ fn try_main() -> ProxyResult<()> {
     let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy")
         .map_err(proxy_runtime_error("load proxy lifecycle configuration"))?;
 
-    let run_result = owner.block_on(run(service_context, lifecycle.clone()));
+    // The process main thread polls the root future, and Windows gives it a 1 MiB stack.
+    let run_result = owner.block_on(heap_future(|| run(service_context, lifecycle.clone())));
     if run_result.is_err() {
         lifecycle.mark_failed();
     }
@@ -264,7 +284,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .with_runtime_diagnostics_sources(diagnostics_sources.clone())
         .build()
     {
-        Ok(proxy_runtime) => proxy_runtime.serve_with_lifecycle(lifecycle.clone()).await,
+        Ok(proxy_runtime) => heap_future(|| proxy_runtime.serve_with_lifecycle(lifecycle.clone())).await,
         Err(error) => Err(error),
     };
     let primary_result = match primary_result {
