@@ -146,10 +146,6 @@ impl BrokerStartupError {
         Self::with_source(BrokerStartupPhase::ComponentStart, Some(component), source)
     }
 
-    pub(crate) fn component_start_detail(component: &'static str, detail: impl Into<String>) -> Self {
-        Self::without_source(BrokerStartupPhase::ComponentStart, Some(component), Some(detail.into()))
-    }
-
     pub(crate) fn listener_startup<E>(listener: &'static str, result: Result<SocketAddr, E>) -> Result<SocketAddr, Self>
     where
         E: StdError + Send + Sync + 'static,
@@ -169,10 +165,6 @@ impl BrokerStartupError {
         source: impl StdError + Send + Sync + 'static,
     ) -> Self {
         Self::with_source(BrokerStartupPhase::ListenerReadiness, Some(listener), source)
-    }
-
-    pub(crate) fn listener_startup_dropped(listener: &'static str) -> Self {
-        Self::without_source(BrokerStartupPhase::ListenerReadiness, Some(listener), None)
     }
 
     pub(crate) fn readiness(missing: Vec<&'static str>) -> Self {

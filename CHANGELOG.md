@@ -123,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove unused internal startup error constructors while retaining the active typed-source error paths ([#12770](https://github.com/mxsm/rocketmq-rust/issues/12770)).
 - **refactor(broker):** Remove duplicate session identity storage from ClientSessionTransport and derive its identity from the close capability, preserving identity checks and retirement behavior ([#12712](https://github.com/mxsm/rocketmq-rust/issues/12712)).
 - **refactor(client):** Remove the unused one-way egress snapshot and duplicate counters; runtime metrics and bounded admission are unchanged ([#12374](https://github.com/mxsm/rocketmq-rust/issues/12374)).
 - **refactor(client):** Remove unused initial delayed consume admission and exercise the shared retry task through worker retries ([#12407](https://github.com/mxsm/rocketmq-rust/issues/12407)).
