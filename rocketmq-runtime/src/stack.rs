@@ -21,6 +21,23 @@
 // builds use Tokio's debug boxing boundary instead.
 pub(crate) const MAX_INLINE_SIZE: usize = if cfg!(debug_assertions) { 2 * 1024 } else { 16 * 1024 };
 
+/// Builds a future directly in a heap allocation.
+///
+/// Unoptimized builds give every temporary its own stack slot, so an `async fn`
+/// that builds a large future keeps a copy of it in its poll frame for as long
+/// as it runs, even when it boxes the result itself. Calling `make` from here
+/// puts that copy in this short-lived frame instead and leaves only the box
+/// pointer in the caller's frame and state. Use it where a large future is
+/// built on a thread whose stack the runtime cannot size, such as the process
+/// main thread, which Windows limits to 1 MiB.
+pub fn heap_future<F, Fut>(make: F) -> std::pin::Pin<Box<Fut>>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future,
+{
+    Box::pin(make())
+}
+
 /// Returns how many bytes of the calling thread's stack are committed.
 ///
 /// Windows commits a thread stack one page at a time as it grows and keeps
