@@ -17,6 +17,4 @@ pub mod file_utils;
 /// File configuration parsing and safe error diagnostics, available with `config-file`.
 #[cfg(feature = "config-file")]
 pub mod parse_config_file;
-/// System clock types and operations.
-pub mod system_clock;
 pub mod time_utils;
