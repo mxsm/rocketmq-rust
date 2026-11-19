@@ -15,8 +15,6 @@
 use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
-use rocketmq_runtime::common::time_utils::YYYY_MM_DD_HH_MM_SS_SSS;
-use rocketmq_runtime::common::time_utils::parse_date;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
@@ -55,18 +53,20 @@ pub struct PrintMsgByQueueSubCommand {
     #[arg(
         short = 'b',
         long = "beginTimestamp",
+        value_parser = super::parse_print_timestamp,
         required = false,
         help = "Begin timestamp[currentTimeMillis|yyyy-MM-dd#HH:mm:ss:SSS]"
     )]
-    begin_timestamp: Option<String>,
+    begin_timestamp: Option<u64>,
 
     #[arg(
         short = 'e',
         long = "endTimestamp",
+        value_parser = super::parse_print_timestamp,
         required = false,
         help = "End timestamp[currentTimeMillis|yyyy-MM-dd#HH:mm:ss:SSS]"
     )]
-    end_timestamp: Option<String>,
+    end_timestamp: Option<u64>,
 
     #[arg(
         short = 'p',
@@ -96,32 +96,19 @@ pub struct PrintMsgByQueueSubCommand {
     calculate_by_tag: bool,
 }
 
-fn timestamp_format(value: &str) -> u64 {
-    if let Ok(ts) = value.parse::<u64>() {
-        return ts;
-    }
-    let date_str = value.replace('#', " ");
-    if let Some(dt) = parse_date(&date_str, YYYY_MM_DD_HH_MM_SS_SSS) {
-        return dt.and_utc().timestamp_millis() as u64;
-    }
-    0
-}
-
 impl CommandExecute for PrintMsgByQueueSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        let begin_timestamp = self.begin_timestamp.as_deref().map(str::trim).map(timestamp_format);
-        let end_timestamp = self.end_timestamp.as_deref().map(str::trim).map(timestamp_format);
         let request = PrintMessagesByQueueRequest::try_new(
             self.topic.clone(),
             self.broker_name.clone(),
             self.queue_id,
             self.sub_expression.clone(),
-            begin_timestamp,
-            end_timestamp,
+            self.begin_timestamp,
+            self.end_timestamp,
             self.print_msg,
             self.calculate_by_tag,
         )?;
