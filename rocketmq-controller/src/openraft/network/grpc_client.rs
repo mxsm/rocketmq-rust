@@ -25,7 +25,8 @@ use openraft::error::StreamingError;
 use openraft::network::v2::RaftNetworkV2;
 use openraft::network::RPCOption;
 use openraft::raft::AppendEntriesRequest;
-use openraft::raft::AppendEntriesResponse;
+use openraft::raft::AppendError;
+use openraft::raft::AppendResult;
 use openraft::raft::SnapshotResponse;
 use openraft::raft::VoteRequest;
 use openraft::raft::VoteResponse;
@@ -42,8 +43,10 @@ use crate::openraft::SNAPSHOT_CHUNK_BYTES;
 use crate::openraft::SNAPSHOT_MAX_BYTES;
 use crate::protobuf::openraft::open_raft_service_client::OpenRaftServiceClient;
 use crate::protobuf::openraft::OpenRaftAppendRequest;
+use crate::protobuf::openraft::OpenRaftAppendResponse;
 use crate::protobuf::openraft::OpenRaftVote as ProtoVote;
 use crate::protobuf::openraft::OpenRaftVoteRequest as ProtoVoteRequest;
+use crate::typ::LogId;
 use crate::typ::NodeId;
 use crate::typ::Snapshot;
 use crate::typ::TypeConfig;
@@ -120,10 +123,59 @@ fn decode_vote(vote: ProtoVote) -> Vote {
     }
 }
 
+fn encode_vote(vote: Vote) -> ProtoVote {
+    ProtoVote {
+        term: vote.leader_id().term,
+        node_id: vote.leader_id().node_id,
+        committed: vote.is_committed(),
+    }
+}
+
 fn decode_log_id(log_id: crate::protobuf::openraft::OpenRaftLogId) -> crate::typ::LogId {
     crate::typ::LogId {
         leader_id: crate::typ::Vote::new(log_id.term, log_id.node_id).leader_id,
         index: log_id.index,
+    }
+}
+
+/// Decodes a follower's AppendEntries reply for the request with `prev_log_id` and `last_log_id`.
+///
+/// Plain success acknowledges the whole request. A partial success, sent only by older peers,
+/// acknowledges the log id it carries. A conflict always refers to the request's `prev_log_id`;
+/// a conflict reply to a request without one breaks the protocol and is returned as a network
+/// error instead of being passed to OpenRaft.
+fn decode_append_response(
+    response: OpenRaftAppendResponse,
+    prev_log_id: Option<LogId>,
+    last_log_id: Option<LogId>,
+) -> Result<AppendResult<TypeConfig>, RPCError<TypeConfig>> {
+    if let Some(higher_vote) = response.higher_vote {
+        Ok(Err(AppendError::HigherVote(decode_vote(higher_vote))))
+    } else if let Some(partial_success) = response.partial_success {
+        Ok(Ok(Some(decode_log_id(partial_success))))
+    } else if response.success {
+        Ok(Ok(last_log_id))
+    } else if let Some(log_id) = prev_log_id {
+        Ok(Err(AppendError::Conflict { log_id, hint: None }))
+    } else {
+        Err(RPCError::Network(NetworkError::new(&std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "AppendEntries conflict reply for a request without prev_log_id",
+        ))))
+    }
+}
+
+/// Encodes a vote request, also setting the legacy `leadership_transfer` flag for older peers.
+fn encode_vote_request(req: &VoteRequest<TypeConfig>) -> ProtoVoteRequest {
+    ProtoVoteRequest {
+        vote: Some(encode_vote(req.vote)),
+        last_log_id: req.last_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
+            term: id.leader_id.term,
+            node_id: id.leader_id.node_id,
+            index: id.index,
+        }),
+        leadership_transfer: req.leadership_transfer_from.is_some(),
+        leadership_transfer_from: req.leadership_transfer_from.map(encode_vote),
     }
 }
 
@@ -141,13 +193,15 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
         &mut self,
         req: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError<TypeConfig>> {
+    ) -> Result<AppendResult<TypeConfig>, RPCError<TypeConfig>> {
         debug!(
             "Sending append_entries to node {}: prev_log_id={:?}, entries={}",
             self.target,
             req.prev_log_id,
             req.entries.len()
         );
+        let prev_log_id = req.prev_log_id;
+        let last_log_id = req.entries.last().map(|entry| entry.log_id).or(prev_log_id);
 
         // Convert to protobuf request
         let entries = req
@@ -199,19 +253,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             }
         };
 
-        let proto_resp = response.into_inner();
-
-        if let Some(higher_vote) = proto_resp.higher_vote {
-            Ok(AppendEntriesResponse::HigherVote(decode_vote(higher_vote)))
-        } else if let Some(partial_success) = proto_resp.partial_success {
-            Ok(AppendEntriesResponse::PartialSuccess(Some(decode_log_id(
-                partial_success,
-            ))))
-        } else if proto_resp.success {
-            Ok(AppendEntriesResponse::Success)
-        } else {
-            Ok(AppendEntriesResponse::Conflict)
-        }
+        decode_append_response(response.into_inner(), prev_log_id, last_log_id)
     }
 
     async fn full_snapshot(
@@ -315,19 +357,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             self.target, req.vote, req.last_log_id
         );
 
-        let proto_req = ProtoVoteRequest {
-            leadership_transfer: req.leadership_transfer,
-            vote: Some(crate::protobuf::openraft::OpenRaftVote {
-                term: req.vote.leader_id().term,
-                node_id: req.vote.leader_id().node_id,
-                committed: req.vote.is_committed(),
-            }),
-            last_log_id: req.last_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                term: id.leader_id.term,
-                node_id: id.leader_id.node_id,
-                index: id.index,
-            }),
-        };
+        let proto_req = encode_vote_request(&req);
 
         let response = {
             let client = self.get_client().await.map_err(RPCError::Network)?;
@@ -388,16 +418,95 @@ mod tests {
 
         let result = network
             .vote(
-                VoteRequest {
-                    leadership_transfer: false,
-                    vote: Vote::new(1, 1),
-                    last_log_id: None,
-                },
+                VoteRequest::new(Vote::new(1, 1), None),
                 RPCOption::new(Duration::from_secs(1)),
             )
             .await;
 
         assert!(result.is_err());
         assert!(network.client.is_none());
+    }
+
+    fn log_id(term: u64, node_id: u64, index: u64) -> LogId {
+        LogId {
+            leader_id: Vote::new(term, node_id).leader_id,
+            index,
+        }
+    }
+
+    fn append_response() -> OpenRaftAppendResponse {
+        OpenRaftAppendResponse {
+            vote: Some(encode_vote(Vote::new_committed(1, 1))),
+            success: false,
+            conflict: None,
+            partial_success: None,
+            higher_vote: None,
+        }
+    }
+
+    #[test]
+    fn append_reply_decodes_against_the_sent_request() {
+        let prev = Some(log_id(1, 1, 3));
+        let last = Some(log_id(1, 1, 5));
+
+        let success = OpenRaftAppendResponse {
+            success: true,
+            ..append_response()
+        };
+        assert_eq!(decode_append_response(success, prev, last).unwrap(), Ok(last));
+
+        let partial = OpenRaftAppendResponse {
+            partial_success: Some(crate::protobuf::openraft::OpenRaftLogId {
+                term: 1,
+                node_id: 1,
+                index: 4,
+            }),
+            ..append_response()
+        };
+        assert_eq!(
+            decode_append_response(partial, prev, last).unwrap(),
+            Ok(Some(log_id(1, 1, 4)))
+        );
+
+        assert_eq!(
+            decode_append_response(append_response(), prev, last).unwrap(),
+            Err(AppendError::Conflict {
+                log_id: log_id(1, 1, 3),
+                hint: None,
+            })
+        );
+
+        let higher = OpenRaftAppendResponse {
+            higher_vote: Some(encode_vote(Vote::new(2, 3))),
+            ..append_response()
+        };
+        assert_eq!(
+            decode_append_response(higher, prev, last).unwrap(),
+            Err(AppendError::HigherVote(Vote::new(2, 3)))
+        );
+    }
+
+    #[test]
+    fn append_conflict_without_prev_log_id_is_a_network_error() {
+        let result = decode_append_response(append_response(), None, Some(log_id(1, 1, 1)));
+
+        assert!(matches!(result, Err(RPCError::Network(_))));
+    }
+
+    #[test]
+    fn vote_request_carries_the_authorizing_leader_and_the_legacy_flag() {
+        let ordinary = encode_vote_request(&VoteRequest::new(Vote::new(2, 2), Some(log_id(1, 1, 7))));
+        assert!(!ordinary.leadership_transfer);
+        assert_eq!(ordinary.leadership_transfer_from, None);
+        assert_eq!(ordinary.last_log_id.map(|id| id.index), Some(7));
+
+        let mut transfer = VoteRequest::new(Vote::new(2, 2), None);
+        transfer.leadership_transfer_from = Some(Vote::new_committed(1, 1));
+        let encoded = encode_vote_request(&transfer);
+        assert!(encoded.leadership_transfer);
+        assert_eq!(
+            encoded.leadership_transfer_from.map(decode_vote),
+            Some(Vote::new_committed(1, 1))
+        );
     }
 }

@@ -14,7 +14,6 @@
 
 pub(crate) mod default_transactional_message_check_listener;
 pub(crate) mod default_transactional_message_service;
-pub(crate) mod get_result;
 pub(crate) mod message_queue_op_context;
 pub(crate) mod transaction_message_store;
 pub(crate) mod transaction_topic_registration;

@@ -37,6 +37,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
+#[path = "cluster_behavior_tests/concurrent_send.rs"]
+mod concurrent_send;
 #[path = "cluster_behavior_tests/dead_letter.rs"]
 mod dead_letter;
 
@@ -1756,6 +1758,7 @@ async fn worker_maps_send_results_and_orders_shutdown() {
                             client_message_id: "client-message-1".to_owned(),
                             message: ProxyMessage::new("TopicA", b"first".to_vec()),
                             queue_id: None,
+                            broker_name: None,
                         },
                         // A second topic keeps this entry out of the compatible-batch fast
                         // path, so each entry reports the send result scripted for it.
@@ -1764,6 +1767,7 @@ async fn worker_maps_send_results_and_orders_shutdown() {
                             client_message_id: "client-message-2".to_owned(),
                             message: ProxyMessage::new("TopicB", b"second".to_vec()),
                             queue_id: None,
+                            broker_name: None,
                         },
                     ],
                     timeout: None,
@@ -1901,6 +1905,7 @@ async fn cancellation_during_producer_start_still_shuts_down_producer_before_cli
                     client_message_id: "client-message".to_owned(),
                     message: ProxyMessage::new("TopicA", b"body".to_vec()),
                     queue_id: None,
+                    broker_name: None,
                 }],
                 timeout: None,
                 validate_message_type: true,
@@ -1932,4 +1937,154 @@ async fn cancellation_during_producer_start_still_shuts_down_producer_before_cli
             "client.shutdown",
         ]
     );
+}
+
+/// Publishes queues 0..=3 on broker-a and 0..=1 on broker-b, so queue ids 0 and 1 exist on both
+/// Brokers and a queue-id-only lookup would pick broker-a.
+struct QueueRecordingProducer {
+    queues: Vec<MessageQueue>,
+    sent: Vec<MessageQueue>,
+}
+
+impl QueueRecordingProducer {
+    fn two_brokers() -> Self {
+        let queues = [("broker-a", 4), ("broker-b", 2)]
+            .into_iter()
+            .flat_map(|(broker, count)| {
+                (0..count).map(move |queue_id| MessageQueue::from_parts("TopicA", broker, queue_id))
+            })
+            .collect();
+        Self {
+            queues,
+            sent: Vec::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl ClusterProducerIo for QueueRecordingProducer {
+    fn set_topics(&mut self, _topics: Vec<CheetahString>) {}
+
+    fn topics(&self) -> Vec<CheetahString> {
+        Vec::new()
+    }
+
+    fn set_send_timeout(&mut self, _timeout_millis: u32) {}
+
+    fn producer_group(&self) -> CheetahString {
+        CheetahString::from_static_str("proxy-producer")
+    }
+
+    async fn start(&mut self) -> Result<(), CanonicalError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) {}
+
+    async fn recall_message(
+        &mut self,
+        _topic: CheetahString,
+        _recall_handle: CheetahString,
+    ) -> Result<String, CanonicalError> {
+        Err(unexpected_client_call("producer.recall_message"))
+    }
+
+    async fn fetch_publish_message_queues(&mut self, _topic: &str) -> Result<Vec<MessageQueue>, CanonicalError> {
+        Ok(self.queues.clone())
+    }
+
+    async fn send(&mut self, _message: Message, _timeout_millis: u64) -> Result<Option<SendResult>, CanonicalError> {
+        Err(unexpected_client_call("producer.send"))
+    }
+
+    async fn send_to_queue(
+        &mut self,
+        _message: Message,
+        queue: MessageQueue,
+        _timeout_millis: u64,
+    ) -> Result<Option<SendResult>, CanonicalError> {
+        self.sent.push(queue);
+        Ok(Some(SendResult::default()))
+    }
+
+    async fn send_batch(
+        &mut self,
+        _messages: Vec<Message>,
+        _timeout_millis: u64,
+    ) -> Result<SendResult, CanonicalError> {
+        Err(unexpected_client_call("producer.send_batch"))
+    }
+
+    async fn send_batch_to_queue(
+        &mut self,
+        _messages: Vec<Message>,
+        queue: MessageQueue,
+        _timeout_millis: u64,
+    ) -> Result<SendResult, CanonicalError> {
+        self.sent.push(queue);
+        Ok(SendResult::default())
+    }
+}
+
+fn routed_entry(id: &str, broker_name: Option<&str>, queue_id: i32) -> SendMessageEntry {
+    SendMessageEntry {
+        topic: ResourceIdentity::new("", "TopicA"),
+        client_message_id: id.to_owned(),
+        message: ProxyMessage::new("TopicA", id.as_bytes().to_vec()),
+        queue_id: Some(queue_id),
+        broker_name: broker_name.map(str::to_owned),
+    }
+}
+
+#[tokio::test]
+async fn send_writes_to_the_queue_on_the_broker_the_client_picked() {
+    let mut producer = QueueRecordingProducer::two_brokers();
+
+    let single = send_message_entry(&mut producer, routed_entry("single", Some("broker-b"), 1), 1_000).await;
+    assert!(single.status.is_ok(), "single send failed: {:?}", single.status);
+
+    let batch = vec![
+        routed_entry("batch-1", Some("broker-b"), 1),
+        routed_entry("batch-2", Some("broker-b"), 1),
+    ];
+    assert!(compatible_batch_entries(&batch));
+    let results = send_compatible_batch(&mut producer, batch, 1_000).await;
+    assert!(results.iter().all(|entry| entry.status.is_ok()), "batch failed");
+
+    // Without a Broker name, as from gRPC, the first queue with the id still wins.
+    let unnamed = send_message_entry(&mut producer, routed_entry("unnamed", None, 1), 1_000).await;
+    assert!(unnamed.status.is_ok(), "unnamed send failed: {:?}", unnamed.status);
+
+    assert_eq!(
+        producer.sent,
+        [
+            MessageQueue::from_parts("TopicA", "broker-b", 1),
+            MessageQueue::from_parts("TopicA", "broker-b", 1),
+            MessageQueue::from_parts("TopicA", "broker-a", 1),
+        ]
+    );
+    assert!(
+        !compatible_batch_entries(&[
+            routed_entry("a", Some("broker-a"), 1),
+            routed_entry("b", Some("broker-b"), 1),
+        ]),
+        "entries for different Brokers must not share one batch queue"
+    );
+}
+
+#[tokio::test]
+async fn send_rejects_queues_the_chosen_broker_does_not_publish() {
+    let mut producer = QueueRecordingProducer::two_brokers();
+
+    let unknown = resolve_target_queue(&mut producer, &routed_entry("unknown", Some("broker-c"), 0))
+        .await
+        .expect_err("unknown Broker must not fall back to another Broker's queue");
+    assert_eq!(unknown.descriptor(), &rocketmq_error::BROKER_LOOKUP_NOT_FOUND);
+
+    // broker-a publishes queue 3, but broker-b does not.
+    let out_of_range = resolve_target_queue(&mut producer, &routed_entry("range", Some("broker-b"), 3))
+        .await
+        .expect_err("queue outside the chosen Broker must be rejected");
+    assert_eq!(out_of_range.descriptor(), &rocketmq_error::BROKER_QUEUE_ID_OUT_OF_RANGE);
+    assert!(producer.sent.is_empty());
 }

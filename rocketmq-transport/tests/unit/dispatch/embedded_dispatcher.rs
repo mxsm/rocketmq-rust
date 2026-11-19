@@ -14,6 +14,7 @@
 
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -102,6 +103,7 @@ struct ProcessorState {
     processes: AtomicUsize,
     request_body_pointer: Mutex<Option<usize>>,
     facts: Mutex<Vec<(bool, bool, String)>>,
+    client_addrs: Mutex<Vec<Option<SocketAddr>>>,
     observations: Mutex<Vec<ResponseWriteObservation>>,
     entered: tokio::sync::Notify,
     resume: tokio::sync::Notify,
@@ -149,9 +151,19 @@ impl RequestProcessor for TestProcessor {
         let embedded = matches!(
             request.origin(),
             RequestOrigin::Embedded {
-                caller: EmbeddedCaller::BrokerProxy
+                caller: EmbeddedCaller::BrokerProxy,
+                ..
             }
         );
+        let client_addr = match request.origin() {
+            RequestOrigin::Embedded { client_addr, .. } => *client_addr,
+            _ => None,
+        };
+        self.state
+            .client_addrs
+            .lock()
+            .expect("client address lock")
+            .push(client_addr);
         let embedded_session = matches!(request.session(), crate::session_view::SessionView::Embedded { .. });
         let principal = match request.authentication() {
             AuthenticationState::Authenticated(principal, ..) => principal.id().to_owned(),
@@ -362,6 +374,59 @@ async fn public_reply_is_channel_free_zero_copy_bound_and_observed_once_after_on
             crate::runtime::processor::ResponseWritePath::Inline
         );
     }
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn embedded_client_address_reaches_the_processor_only_from_the_trusted_argument() {
+    let fixture = EmbeddedFixture::new("embedded-client-address");
+    let (processor, state, _) = TestProcessor::new(Behavior::Reply);
+    let dispatcher = fixture.dispatcher(
+        processor,
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    );
+    let client_addr = "198.51.100.31:50212"
+        .parse::<SocketAddr>()
+        .expect("client address parses");
+    let (mut forged, _) = request(false);
+    forged.add_ext_field("clientAddr", "203.0.113.9:1");
+    forged.add_ext_field("bornHost", "203.0.113.9:1");
+
+    for (command, client) in [(forged, None), (request(false).0, Some(client_addr))] {
+        let outcome = dispatcher
+            .dispatch_embedded_wait_response_for_client(
+                &fixture.task_group,
+                Principal::new("broker-proxy"),
+                client,
+                None,
+                command,
+            )
+            .await
+            .expect("embedded reply");
+        assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
+    }
+    let outcome = dispatcher
+        .dispatch_embedded(
+            &fixture.task_group,
+            Principal::new("broker-proxy"),
+            None,
+            request(false).0,
+        )
+        .await
+        .expect("embedded reply");
+    assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
+
+    assert_eq!(
+        state.client_addrs.lock().expect("client address lock").as_slice(),
+        [None, Some(client_addr), None],
+        "only the caller argument sets the client address; headers never do"
+    );
+    assert!(state
+        .facts
+        .lock()
+        .expect("facts lock")
+        .iter()
+        .all(|(embedded, embedded_session, _)| *embedded && *embedded_session));
     fixture.shutdown().await;
 }
 

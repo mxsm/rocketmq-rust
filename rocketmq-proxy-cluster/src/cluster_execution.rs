@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +24,7 @@ use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::message::MessageConst;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
@@ -59,20 +62,26 @@ use rocketmq_proxy_core::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::UpdateOffsetPlan;
 use rocketmq_proxy_core::UpdateOffsetRequest;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::OutboundSigner;
 use tokio::sync::oneshot;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use super::cluster_admission::ClusterExecutionLanes;
 use super::cluster_admission::ClusterExecutionPolicy;
+use super::cluster_admission::ClusterInflightPermit;
 use super::cluster_admission::ClusterLaneRegistration;
 use super::handle_cluster_command;
+use super::prepare_send;
 use super::ClusterClientFactory;
 use super::ClusterProducerFactory;
 use super::ClusterWorkerState;
 use super::DefaultClusterClientFactory;
 use super::DefaultClusterProducerFactory;
+use super::PreparedSend;
+use super::SendStep;
 use crate::config::ClusterConfig;
 
 #[derive(Clone)]
@@ -133,7 +142,7 @@ pub(super) enum ClusterCommand {
         request: SendMessageRequest,
         client_id: Option<String>,
         request_id: String,
-        reply: oneshot::Sender<ProxyResult<Vec<SendMessageResultEntry>>>,
+        reply: oneshot::Sender<ProxyResult<SendOutcome>>,
     },
     RecallMessage {
         request: RecallMessageRequest,
@@ -202,6 +211,94 @@ pub(super) enum ClusterCommand {
         timeout_millis: u64,
         reply: oneshot::Sender<ProxyResult<RemotingCommand>>,
     },
+}
+
+/// The reply a lane gives to a send command.
+pub(super) enum SendOutcome {
+    /// The lane sent the messages itself.
+    Completed(Vec<SendMessageResultEntry>),
+    /// The lane prepared the producer; the requesting task sends the messages.
+    Dispatched(DispatchedSend),
+}
+
+/// A send that runs on the requesting task instead of its lane.
+///
+/// It keeps the command's in-flight and queue permits until the send finishes, so the
+/// execution limits still count it, and keeps its lane from retiring the producer.
+pub(super) struct DispatchedSend {
+    send: PreparedSend,
+    _inflight: ClusterInflightPermit,
+    _active: ResourcePermit,
+    _lane: LaneSendGuard,
+}
+
+impl DispatchedSend {
+    async fn run(self) -> Vec<SendMessageResultEntry> {
+        self.send.run().await
+    }
+}
+
+/// A send command taken out of its lane's order.
+struct DetachableSend {
+    request: SendMessageRequest,
+    client_id: Option<String>,
+    request_id: String,
+    reply: oneshot::Sender<ProxyResult<SendOutcome>>,
+}
+
+/// Returns whether a send must wait for its lane's order.
+///
+/// Sends of one client share a lane because they share a producer group. Normal
+/// messages have no order among themselves, so their sends may overlap, as they do on a
+/// Java Proxy. Sends with a message group (FIFO) or a transaction half message keep the
+/// lane order, and so does every other command.
+fn send_keeps_lane_order(request: &SendMessageRequest) -> bool {
+    request.messages.is_empty()
+        || request.messages.iter().any(|entry| {
+            let properties = entry.message.properties();
+            properties.contains_key(MessageConst::PROPERTY_SHARDING_KEY)
+                || properties.contains_key(MessageConst::PROPERTY_TRANSACTION_PREPARED)
+        })
+}
+
+/// Counts the sends a lane has dispatched to requesting tasks.
+#[derive(Default)]
+struct LaneSendTracker {
+    active: AtomicUsize,
+    idle: Notify,
+}
+
+impl LaneSendTracker {
+    fn enter(self: &Arc<Self>) -> LaneSendGuard {
+        self.active.fetch_add(1, Ordering::AcqRel);
+        LaneSendGuard(self.clone())
+    }
+
+    fn is_idle(&self) -> bool {
+        self.active.load(Ordering::Acquire) == 0
+    }
+
+    async fn wait_idle(&self) {
+        loop {
+            let notified = self.idle.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_idle() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+struct LaneSendGuard(Arc<LaneSendTracker>);
+
+impl Drop for LaneSendGuard {
+    fn drop(&mut self) {
+        if self.0.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.idle.notify_waiters();
+        }
+    }
 }
 
 impl ClusterTaskExecutor {
@@ -425,12 +522,20 @@ impl ClusterTaskExecutor {
         client_id: Option<String>,
         request_id: String,
     ) -> ProxyResult<Vec<SendMessageResultEntry>> {
-        self.execute(|reply| ClusterCommand::SendMessage {
-            request,
-            client_id,
-            request_id,
-            reply,
-        })
+        self.execute_then(
+            |reply| ClusterCommand::SendMessage {
+                request,
+                client_id,
+                request_id,
+                reply,
+            },
+            |outcome| async move {
+                Ok(match outcome {
+                    SendOutcome::Completed(entries) => entries,
+                    SendOutcome::Dispatched(send) => send.run().await,
+                })
+            },
+        )
         .await
     }
 
@@ -602,6 +707,21 @@ impl ClusterTaskExecutor {
     where
         T: Send + 'static,
     {
+        self.execute_then(command, |value| async move { Ok(value) }).await
+    }
+
+    /// Runs `command` in its lane, then `then` on the lane's reply, both within the
+    /// command's deadline and the executor's lifetime.
+    async fn execute_then<T, U, Then, Next>(
+        &self,
+        command: impl FnOnce(oneshot::Sender<ProxyResult<T>>) -> ClusterCommand,
+        then: Then,
+    ) -> ProxyResult<U>
+    where
+        T: Send + 'static,
+        Then: FnOnce(T) -> Next,
+        Next: std::future::Future<Output = ProxyResult<U>>,
+    {
         let (reply, receiver) = oneshot::channel();
         let command = command(reply);
         let request_deadline = command.queue_deadline();
@@ -615,9 +735,10 @@ impl ClusterTaskExecutor {
         }
 
         let receive = async {
-            receiver
+            let value = receiver
                 .await
-                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))??;
+            then(value).await
         };
         tokio::pin!(receive);
         match request_deadline {
@@ -730,6 +851,7 @@ pub(super) async fn run_cluster_lane(
     lanes: Arc<ClusterExecutionLanes>,
 ) {
     let queue = &registration.queue;
+    let sends = Arc::new(LaneSendTracker::default());
     loop {
         let idle = tokio::time::sleep(lanes.idle_timeout());
         tokio::pin!(idle);
@@ -744,7 +866,11 @@ pub(super) async fn run_cluster_lane(
                 None => break,
             },
             () = &mut idle => {
-                shutdown_cluster_state(&config, &mut state, &shutdown_context).await;
+                if !sends.is_idle() {
+                    // Dispatched sends still use this lane's producers.
+                    continue;
+                }
+                shutdown_cluster_state(&config, &mut state, &shutdown_context, &sends).await;
                 if lanes.retire(&registration) {
                     return;
                 }
@@ -798,6 +924,39 @@ pub(super) async fn run_cluster_lane(
 
         let mut command = queued.command;
         command.apply_queue_wait(queued.enqueued_at.elapsed());
+        let command = match command {
+            ClusterCommand::SendMessage {
+                request,
+                client_id,
+                request_id,
+                reply,
+            } if !send_keeps_lane_order(&request) => {
+                let send = DetachableSend {
+                    request,
+                    client_id,
+                    request_id,
+                    reply,
+                };
+                let permits = (inflight_permit, active_permit, sends.enter());
+                let shutdown_during_dispatch = tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => {
+                        lanes.record_shutdown_rejected();
+                        true
+                    },
+                    () = queued.cancellation.cancelled() => {
+                        lanes.record_cancelled();
+                        false
+                    },
+                    () = dispatch_send(&config, &mut state, send, permits) => false,
+                };
+                if shutdown_during_dispatch {
+                    break;
+                }
+                continue;
+            }
+            command => command,
+        };
         let shutdown_during_command = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
@@ -822,16 +981,50 @@ pub(super) async fn run_cluster_lane(
             message: "proxy cluster command execution stopped during shutdown".to_owned(),
         });
     }
-    shutdown_cluster_state(&config, &mut state, &shutdown_context).await;
+    shutdown_cluster_state(&config, &mut state, &shutdown_context, &sends).await;
     lanes.retire(&registration);
+}
+
+/// Prepares the producer of a send in its lane and hands the send to the requesting task,
+/// or replies with the results when the lane sent the messages itself.
+async fn dispatch_send(
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    send: DetachableSend,
+    (inflight, active, lane): (ClusterInflightPermit, ResourcePermit, LaneSendGuard),
+) {
+    let DetachableSend {
+        request,
+        client_id,
+        request_id,
+        reply,
+    } = send;
+    let outcome = match prepare_send(config, state, request, client_id, request_id).await {
+        SendStep::Finished(entries) => SendOutcome::Completed(entries),
+        SendStep::Ready(send) => SendOutcome::Dispatched(DispatchedSend {
+            send,
+            _inflight: inflight,
+            _active: active,
+            _lane: lane,
+        }),
+    };
+    let _ = reply.send(Ok(outcome));
 }
 
 async fn shutdown_cluster_state(
     config: &ClusterConfig,
     state: &mut ClusterWorkerState,
     shutdown_context: &ChildServiceContext,
+    sends: &LaneSendTracker,
 ) {
     let shutdown_deadline = cluster_shutdown_deadline(shutdown_context, config.shutdown_timeout());
+    // Dispatched sends use clones of this lane's producers: let them finish first.
+    if tokio::time::timeout(shutdown_deadline.remaining(), sends.wait_idle())
+        .await
+        .is_err()
+    {
+        tracing::warn!("proxy cluster dispatched sends exceeded the shared shutdown deadline");
+    }
     for (producer_group, mut producer) in state.send_producers.drain() {
         if tokio::time::timeout(shutdown_deadline.remaining(), producer.shutdown())
             .await

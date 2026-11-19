@@ -17,6 +17,8 @@
 use std::error::Error as StdError;
 use std::sync::Arc;
 
+use openraft::raft::AppendError;
+use openraft::raft::AppendResult;
 use rocketmq_error::Error;
 use rocketmq_error::PublicErrorView;
 use tonic::Request;
@@ -41,6 +43,7 @@ use crate::protobuf::openraft::OpenRaftVote;
 use crate::protobuf::openraft::OpenRaftVoteRequest;
 use crate::protobuf::openraft::OpenRaftVoteResponse;
 use crate::typ::Raft;
+use crate::typ::TypeConfig;
 
 fn grpc_request_invalid_error(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Error {
     request_invalid_by(operation, source)
@@ -110,6 +113,53 @@ fn encode_log_id(log_id: crate::typ::LogId) -> ProtoLogId {
         term: log_id.leader_id.term,
         node_id: log_id.leader_id.node_id,
         index: log_id.index,
+    }
+}
+
+/// Decodes a vote request.
+///
+/// A peer that sends only the legacy `leadership_transfer` flag cannot name the authorizing
+/// Leader, so its request is handled as an ordinary election that respects the leader lease.
+fn decode_vote_request(req: OpenRaftVoteRequest) -> Result<openraft::raft::VoteRequest<TypeConfig>, Status> {
+    let vote = req.vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
+    let last_log_id = req.last_log_id.map(|id| crate::typ::LogId {
+        leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
+        index: id.index,
+    });
+    Ok(openraft::raft::VoteRequest {
+        vote: decode_vote(vote),
+        last_log_id,
+        leadership_transfer_from: req.leadership_transfer_from.map(decode_vote),
+    })
+}
+
+/// Encodes a follower's AppendEntries result in the existing wire format.
+///
+/// An accepted request is reported as plain success: the Leader acknowledges the last log id of
+/// the request it sent, which is what the follower accepted. The format carries no conflict hint.
+fn encode_append_result(request_vote: crate::typ::Vote, result: AppendResult<TypeConfig>) -> OpenRaftAppendResponse {
+    match result {
+        Ok(_) => OpenRaftAppendResponse {
+            vote: Some(encode_vote(request_vote)),
+            success: true,
+            conflict: None,
+            partial_success: None,
+            higher_vote: None,
+        },
+        Err(AppendError::Conflict { log_id, hint: _ }) => OpenRaftAppendResponse {
+            vote: Some(encode_vote(request_vote)),
+            success: false,
+            conflict: Some(encode_log_id(log_id)),
+            partial_success: None,
+            higher_vote: None,
+        },
+        Err(AppendError::HigherVote(vote)) => OpenRaftAppendResponse {
+            vote: Some(encode_vote(vote)),
+            success: false,
+            conflict: None,
+            partial_success: None,
+            higher_vote: Some(encode_vote(vote)),
+        },
     }
 }
 
@@ -277,7 +327,6 @@ impl OpenRaftService for GrpcRaftService {
             leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
             index: id.index,
         });
-        let response_conflict_log_id = prev_log_id;
 
         let entries = req
             .entries
@@ -312,36 +361,7 @@ impl OpenRaftService for GrpcRaftService {
 
         // Call Raft
         match self.raft.append_entries(append_req).await {
-            Ok(resp) => Ok(Response::new(match resp {
-                openraft::raft::AppendEntriesResponse::Success => OpenRaftAppendResponse {
-                    vote: Some(encode_vote(raft_vote)),
-                    success: true,
-                    conflict: None,
-                    partial_success: None,
-                    higher_vote: None,
-                },
-                openraft::raft::AppendEntriesResponse::PartialSuccess(log_id) => OpenRaftAppendResponse {
-                    vote: Some(encode_vote(raft_vote)),
-                    success: false,
-                    conflict: None,
-                    partial_success: log_id.map(encode_log_id),
-                    higher_vote: None,
-                },
-                openraft::raft::AppendEntriesResponse::Conflict => OpenRaftAppendResponse {
-                    vote: Some(encode_vote(raft_vote)),
-                    success: false,
-                    conflict: response_conflict_log_id.map(encode_log_id),
-                    partial_success: None,
-                    higher_vote: None,
-                },
-                openraft::raft::AppendEntriesResponse::HigherVote(vote) => OpenRaftAppendResponse {
-                    vote: Some(encode_vote(vote)),
-                    success: false,
-                    conflict: None,
-                    partial_success: None,
-                    higher_vote: Some(encode_vote(vote)),
-                },
-            })),
+            Ok(result) => Ok(Response::new(encode_append_result(raft_vote, result))),
             Err(e) => {
                 error!("AppendEntries failed: {}", e);
                 Err(operation_internal_status("append Raft entries", e))
@@ -350,22 +370,8 @@ impl OpenRaftService for GrpcRaftService {
     }
 
     async fn vote(&self, request: Request<OpenRaftVoteRequest>) -> Result<Response<OpenRaftVoteResponse>, Status> {
-        let req = request.into_inner();
         debug!("Received vote request");
-
-        let vote = req.vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
-        let raft_vote = decode_vote(vote);
-
-        let last_log_id = req.last_log_id.map(|id| crate::typ::LogId {
-            leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
-            index: id.index,
-        });
-
-        let vote_req = openraft::raft::VoteRequest {
-            leadership_transfer: req.leadership_transfer,
-            vote: raft_vote,
-            last_log_id,
-        };
+        let vote_req = decode_vote_request(request.into_inner())?;
 
         match self.raft.vote(vote_req).await {
             Ok(resp) => Ok(Response::new(OpenRaftVoteResponse {
@@ -615,5 +621,63 @@ mod tests {
             .expect_err("oversized snapshot must fail");
         assert_eq!(error.code(), tonic::Code::ResourceExhausted);
         assert!(assembler.data.is_empty());
+    }
+
+    fn vote_request(leadership_transfer: bool, from: Option<OpenRaftVote>) -> OpenRaftVoteRequest {
+        OpenRaftVoteRequest {
+            vote: Some(encode_vote(crate::typ::Vote::new(2, 2))),
+            last_log_id: Some(ProtoLogId {
+                term: 1,
+                node_id: 1,
+                index: 7,
+            }),
+            leadership_transfer,
+            leadership_transfer_from: from,
+        }
+    }
+
+    #[test]
+    fn vote_request_uses_only_the_authorizing_leader_vote() {
+        let leader = crate::typ::Vote::new_committed(1, 1);
+        let transfer = decode_vote_request(vote_request(true, Some(encode_vote(leader)))).expect("transfer vote");
+        assert_eq!(transfer.vote, crate::typ::Vote::new(2, 2));
+        assert_eq!(transfer.last_log_id.map(|id| id.index), Some(7));
+        assert_eq!(transfer.leadership_transfer_from, Some(leader));
+
+        let legacy = decode_vote_request(vote_request(true, None)).expect("legacy vote");
+        assert_eq!(legacy.leadership_transfer_from, None);
+
+        let mut missing_vote = vote_request(false, None);
+        missing_vote.vote = None;
+        let error = decode_vote_request(missing_vote).expect_err("missing vote must fail");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn append_result_keeps_the_existing_wire_format() {
+        let request_vote = crate::typ::Vote::new_committed(1, 1);
+        let log_id = crate::typ::LogId {
+            leader_id: crate::typ::Vote::new(1, 1).leader_id,
+            index: 3,
+        };
+
+        let accepted = encode_append_result(request_vote, Ok(Some(log_id)));
+        assert!(accepted.success);
+        assert_eq!(accepted.vote, Some(encode_vote(request_vote)));
+        assert_eq!(
+            (accepted.conflict, accepted.partial_success, accepted.higher_vote),
+            (None, None, None)
+        );
+
+        let conflict = encode_append_result(request_vote, Err(AppendError::Conflict { log_id, hint: None }));
+        assert!(!conflict.success);
+        assert_eq!(conflict.conflict, Some(encode_log_id(log_id)));
+        assert_eq!(conflict.higher_vote, None);
+
+        let higher = crate::typ::Vote::new(2, 3);
+        let rejected = encode_append_result(request_vote, Err(AppendError::HigherVote(higher)));
+        assert!(!rejected.success);
+        assert_eq!(rejected.vote, Some(encode_vote(higher)));
+        assert_eq!(rejected.higher_vote, Some(encode_vote(higher)));
     }
 }

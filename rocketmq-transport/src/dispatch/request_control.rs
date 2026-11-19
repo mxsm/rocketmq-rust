@@ -644,11 +644,13 @@ mod tests {
             rejected_extension(
                 &mut extensions,
                 RequestOrigin::Embedded {
-                    caller: EmbeddedCaller::BrokerProxy
+                    caller: EmbeddedCaller::BrokerProxy,
+                    client_addr: None,
                 }
             ),
             RequestOrigin::Embedded {
-                caller: EmbeddedCaller::BrokerProxy
+                caller: EmbeddedCaller::BrokerProxy,
+                client_addr: None,
             }
         );
         assert_eq!(

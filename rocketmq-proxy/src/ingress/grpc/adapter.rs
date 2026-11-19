@@ -1033,6 +1033,8 @@ fn build_send_message_entry(config: &GrpcConfig, message: &v2::Message, now_ms: 
         client_message_id,
         message: rocketmq_message,
         queue_id: explicit_queue_id(system.queue_id),
+        // gRPC system properties carry no Broker name.
+        broker_name: None,
     })
 }
 

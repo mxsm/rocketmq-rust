@@ -173,6 +173,7 @@ CLI 参数会覆盖配置文件中对应字段：
 rocketmq-proxy-rust [-c <proxy.toml>] [--mode cluster|local]
   [--grpcListenAddr <host:port>]
   [--enableRemoting] [--remotingListenAddr <host:port>]
+  [--remotingAccessAddr <host[:port]>]
   [--namesrvAddr <host:port>] [--printConfig]
 ```
 
@@ -246,6 +247,7 @@ aclFileWatchEnabled = false
 | `grpc.listenAddr` | `0.0.0.0:8081` | v2 `MessagingService` 的 gRPC 绑定地址。 |
 | `remoting.enabled` | `false` | 启用 remoting 兼容入口。 |
 | `remoting.listenAddr` | `0.0.0.0:8080` | remoting 启用时的绑定地址。 |
+| `remoting.accessAddr` | 未设置 | Remoting 路由响应为每个 Broker 返回的地址，格式为 `host` 或 `host:port`（只写 host 时沿用监听端口），使 Remoting 客户端经由 proxy 发送和拉取。未设置时使用监听地址；监听所有网卡时使用本机地址。部署在 NAT、容器或负载均衡之后时需要设置。 |
 | `cluster.namesrvAddr` | 未设置 | Cluster 模式使用的 NameServer 地址。 |
 | `cluster.brokerClusterName` | `DefaultCluster` | Cluster 模式服务的 Broker 集群；未设置 `auth.clusterName` 时也作为 ACL `Cluster` 资源。 |
 | `cluster.routeCacheTtlMs` | `5000` | Cluster client 使用的路由缓存 TTL。 |

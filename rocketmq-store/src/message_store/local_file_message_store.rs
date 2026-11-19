@@ -74,7 +74,6 @@ use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::file_utils::string_to_file;
-use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -2105,10 +2104,6 @@ impl MessageStoreEngine for LocalFileMessageStore {
 
     fn get_store_checkpoint_arc(&self) -> Arc<StoreCheckpoint> {
         self.store_checkpoint.clone().unwrap()
-    }
-
-    fn get_system_clock(&self) -> Arc<SystemClock> {
-        Arc::new(SystemClock)
     }
 
     fn get_commit_log(&self) -> &CommitLog {

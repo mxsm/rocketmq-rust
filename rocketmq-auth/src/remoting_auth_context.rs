@@ -86,7 +86,9 @@ impl RemotingAuthContext {
                 validate_network_origin(peer.address(), *remote_addr)?;
                 Self::network(remote_addr.ip().to_string(), channel_id)
             }
-            (RequestOrigin::Embedded { caller }, SessionView::Embedded { .. }) => {
+            // The embedded client address is a born-host fact, not an
+            // authentication source: embedded contexts have no source IP.
+            (RequestOrigin::Embedded { caller, .. }, SessionView::Embedded { .. }) => {
                 validate_embedded_caller(*caller)?;
                 Self::embedded(channel_id)
             }

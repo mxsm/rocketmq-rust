@@ -31,6 +31,7 @@ use futures_util::StreamExt;
 use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingCommandType;
+use rocketmq_runtime::heap_future;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::CancellationObserver;
 use rocketmq_runtime::ChildServiceContext;
@@ -1278,8 +1279,11 @@ impl TransportListener {
             #[cfg(test)]
             let test_request_deadline = self.test_request_deadline;
             let spawn_group = session_group.clone();
+            // A service entrypoint may poll this accept loop on its process main thread. The
+            // session future holds the whole connection state machine, so it is built on the
+            // heap: neither this loop's frame nor the spawn path then keeps a copy of it.
             if spawn_group
-                .spawn_service("rocketmq.transport.session", async move {
+                .spawn_service("rocketmq.transport.session", heap_future(move || async move {
                     let _connection_permit = connection_permit;
                     let handshake_cancellation = session_group.cancellation_token();
                     let mut stream = stream;
@@ -1345,7 +1349,7 @@ impl TransportListener {
                         route,
                     )
                     .await;
-                })
+                }))
                 .is_err()
             {
                 return Ok(());

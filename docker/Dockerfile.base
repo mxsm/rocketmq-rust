@@ -155,6 +155,11 @@ ARG ROCKETMQ_BROKER_BOLT=true
 # services keep the baseline: they are not on the message path, and RocksDB in the Controller
 # does not build for x86-64-v3 alone.
 ARG ROCKETMQ_BROKER_TARGET_CPU=
+# Builds the Proxy with PGO: an instrumented Proxy in cluster mode, in front of the final Broker,
+# is trained on loopback gRPC sends by scripts/pgo-train-proxy.sh and the merged profile guides
+# the release build. It measured 10%-17% less Proxy CPU per message. Set it to false for a faster
+# build without PGO.
+ARG ROCKETMQ_PROXY_PGO=true
 
 RUN <<EOF
 set -eu
@@ -179,10 +184,18 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},target=/workspace/target,sharing=locked <<EOF
 set -eux
 broker_features=otlp-metrics,otlp-traces,otlp-logs,tls,allocator-mimalloc
+proxy_features=otlp-metrics,otlp-traces,otlp-logs,allocator-mimalloc
 case "${ROCKETMQ_BROKER_BOLT}" in
     true|false) ;;
     *)
         echo "ROCKETMQ_BROKER_BOLT must be true or false" >&2
+        exit 1
+        ;;
+esac
+case "${ROCKETMQ_PROXY_PGO}" in
+    true|false) ;;
+    *)
+        echo "ROCKETMQ_PROXY_PGO must be true or false" >&2
         exit 1
         ;;
 esac
@@ -196,7 +209,6 @@ case "${ROCKETMQ_BROKER_TARGET_CPU}" in
 esac
 cargo build --locked --release --package rocketmq-namesrv --features observability,otlp-metrics,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-namesrv-rust
 cargo build --locked --release --package rocketmq-controller --features metrics-otlp,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-controller-rust
-cargo build --locked --release --package rocketmq-proxy --features otlp-metrics,otlp-traces,otlp-logs,allocator-mimalloc --bin rocketmq-proxy-rust
 case "${ROCKETMQ_BROKER_PGO}" in
     true)
         # The instrumented and the final Broker get their own target directories because their
@@ -259,13 +271,41 @@ case "${ROCKETMQ_BROKER_PGO}" in
         exit 1
         ;;
 esac
+case "${ROCKETMQ_PROXY_PGO}" in
+    true)
+        # The Proxy is trained in front of the final Broker. Its instrumented and final builds
+        # get their own target directories: their RUSTFLAGS differ from the release build and,
+        # without the Broker's target CPU, from the Broker's PGO builds.
+        proxy_pgo=/tmp/rocketmq-pgo-proxy
+        proxy_mangling="-C symbol-mangling-version=v0"
+        RUSTFLAGS="${proxy_mangling} -Cprofile-generate=${proxy_pgo}/raw" cargo build --locked --release --target-dir /workspace/target/pgo-generate-proxy --package rocketmq-proxy --features "${proxy_features}" --bin rocketmq-proxy-rust
+        cargo build --locked --release --package rocketmq-client-rust --example client-production-benchmark
+        cargo build --locked --release --package rocketmq-proxy --example grpc_send_benchmark
+        bash scripts/pgo-train-proxy.sh \
+            /workspace/target/pgo-generate-proxy/release/rocketmq-proxy-rust \
+            /workspace/target/release/rocketmq-namesrv-rust \
+            "${broker_binary}" \
+            /workspace/target/release/examples/client-production-benchmark \
+            /workspace/target/release/examples/grpc_send_benchmark \
+            "${proxy_pgo}/work" \
+            "${proxy_pgo}/raw"
+        host="$(rustc -vV | sed -n 's/^host: //p')"
+        "$(rustc --print sysroot)/lib/rustlib/${host}/bin/llvm-profdata" merge -o "${proxy_pgo}/proxy.profdata" "${proxy_pgo}/raw"
+        RUSTFLAGS="${proxy_mangling} -Cprofile-use=${proxy_pgo}/proxy.profdata" cargo build --locked --release --target-dir /workspace/target/pgo-use-proxy --package rocketmq-proxy --features "${proxy_features}" --bin rocketmq-proxy-rust
+        proxy_binary=/workspace/target/pgo-use-proxy/release/rocketmq-proxy-rust
+        ;;
+    false)
+        cargo build --locked --release --package rocketmq-proxy --features "${proxy_features}" --bin rocketmq-proxy-rust
+        proxy_binary=/workspace/target/release/rocketmq-proxy-rust
+        ;;
+esac
 install -d /opt/rocketmq-binaries
 install -m 0555 "${broker_binary}" /opt/rocketmq-binaries/rocketmq-broker-rust
-rm -rf /tmp/rocketmq-pgo
+install -m 0555 "${proxy_binary}" /opt/rocketmq-binaries/rocketmq-proxy-rust
+rm -rf /tmp/rocketmq-pgo /tmp/rocketmq-pgo-proxy
 for binary in \
     rocketmq-namesrv-rust \
-    rocketmq-controller-rust \
-    rocketmq-proxy-rust
+    rocketmq-controller-rust
 do
     install -m 0555 "/workspace/target/release/${binary}" "/opt/rocketmq-binaries/${binary}"
 done

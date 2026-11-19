@@ -17,6 +17,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 
 pub(crate) mod ack_message_processor;
 pub(crate) mod admin_broker_processor;
+mod born_host;
 pub(crate) mod change_invisible_time_processor;
 pub(crate) mod client_manage_processor;
 pub(crate) mod consumer_manage_processor;

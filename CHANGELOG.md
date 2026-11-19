@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **docs(controller):** Clarify that file-storage startup requires `dev-single`; `storage-file` alone only compiles the implementation ([#12771](https://github.com/mxsm/rocketmq-rust/issues/12771)).
 - **fix(fuzz):** Resolve OpenRaft dependencies through the Controller to prevent version conflicts in fuzz builds ([#12767](https://github.com/mxsm/rocketmq-rust/issues/12767)).
 - **fix(fuzz):** Align the standalone OpenRaft runtime pin and lockfile with the Controller's `0.10.0` requirement ([#12754](https://github.com/mxsm/rocketmq-rust/issues/12754)).
 - **fix(ci):** Use a unique outer idempotency key in the SRE malformed execution-receipt fixture so repeated database tests do not collide ([#12717](https://github.com/mxsm/rocketmq-rust/issues/12717)).
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(broker):** Read transaction half-message records and offsets from the canonical decoded result, removing the duplicate `GetResult` wrapper ([#12769](https://github.com/mxsm/rocketmq-rust/issues/12769)).
 - **refactor(protocol)!:** Change the optional Store discriminator in `MaintenanceGetCapabilities` responses from `store.backend` to `store.storeKind` without an alias. Previously saved responses and older readers require coordinated Broker and consumer upgrades. `schemaVersion` remains `1`; responses without `store` and checkpoint manifest `backend` fields are unchanged ([#12710](https://github.com/mxsm/rocketmq-rust/issues/12710)).
 - **refactor(broker):** Consolidate ConsumerManager initialization and remove its unused configuration-only constructor, preserving distinct expiry timeouts and shared session locks ([#12711](https://github.com/mxsm/rocketmq-rust/issues/12711)).
 - **refactor(client):** Rename the public `ServiceDetector` trait to `BrokerReachabilityProbe`; `ServiceDetector` stays as a crate-root alias, so existing implementations still compile, and `detect` keeps its timeout and reachability result ([#12622](https://github.com/mxsm/rocketmq-rust/issues/12622)).
@@ -124,6 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(broker):** Remove unused internal startup error constructors while retaining the active typed-source error paths ([#12770](https://github.com/mxsm/rocketmq-rust/issues/12770)).
+- **refactor(runtime)!:** Remove the public `rocketmq_runtime::common::system_clock` wrapper; `CommitLog::lock_time_mills` now reads `rocketmq_runtime::common::time_utils::current_millis()` and saturates on clock rollback instead of underflowing, and the internal Store engine trait no longer exposes `get_system_clock()`. Callers should use `current_millis()` and can widen the returned `u64` with `u128::from` ([#12776](https://github.com/mxsm/rocketmq-rust/issues/12776)).
 - **refactor(broker):** Remove duplicate session identity storage from ClientSessionTransport and derive its identity from the close capability, preserving identity checks and retirement behavior ([#12712](https://github.com/mxsm/rocketmq-rust/issues/12712)).
 - **refactor(client):** Remove the unused one-way egress snapshot and duplicate counters; runtime metrics and bounded admission are unchanged ([#12374](https://github.com/mxsm/rocketmq-rust/issues/12374)).
 - **refactor(client):** Remove unused initial delayed consume admission and exercise the shared retry task through worker retries ([#12407](https://github.com/mxsm/rocketmq-rust/issues/12407)).

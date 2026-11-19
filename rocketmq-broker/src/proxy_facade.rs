@@ -13,6 +13,7 @@
 //  limitations under the License.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -281,7 +282,10 @@ impl EmbeddedBroker {
     ///
     /// The transport boundary fixes the origin to `EmbeddedCaller::BrokerProxy`;
     /// the principal below is a composition-owned service identity and is never
-    /// read from command headers.
+    /// read from command headers. The command carries no client address, so
+    /// message writes that persist a born host (send, reply, recall) are
+    /// rejected; use [`Self::process_client_request`] for commands issued on
+    /// behalf of a Proxy client.
     ///
     /// # Errors
     ///
@@ -294,13 +298,34 @@ impl EmbeddedBroker {
         request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         timeout: Duration,
     ) -> crate::broker_error::BrokerResult<EmbeddedDispatchResult> {
-        self.process_request_with_deadline(request, RequestDeadline::after(timeout))
+        self.process_client_request(request, None, timeout).await
+    }
+
+    /// Dispatches one local Proxy command issued on behalf of a Proxy client.
+    ///
+    /// `client_addr` is the client address that the Proxy observed at its own
+    /// network ingress (gRPC or Remoting). The Broker trusts it as it trusts a
+    /// network peer: message writes persist it as the born host, as Java local
+    /// mode does. It never authenticates or authorizes the command, and command
+    /// headers cannot replace it. `None` behaves like [`Self::process_request`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::process_request`].
+    pub async fn process_client_request(
+        &self,
+        request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        client_addr: Option<SocketAddr>,
+        timeout: Duration,
+    ) -> crate::broker_error::BrokerResult<EmbeddedDispatchResult> {
+        self.process_request_with_deadline(request, client_addr, RequestDeadline::after(timeout))
             .await
     }
 
     async fn process_request_with_deadline(
         &self,
         mut request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        client_addr: Option<SocketAddr>,
         deadline: RequestDeadline,
     ) -> crate::broker_error::BrokerResult<EmbeddedDispatchResult> {
         request.make_custom_header_to_net();
@@ -309,9 +334,10 @@ impl EmbeddedBroker {
             .canonical_dispatcher()
             .ok_or_else(embedded_broker_request_processor_not_ready)?;
         let result = dispatcher
-            .dispatch_embedded_wait_response(
+            .dispatch_embedded_wait_response_for_client(
                 &self.local_request_tasks,
                 Principal::new("broker-proxy"),
+                client_addr,
                 Some(deadline),
                 request,
             )

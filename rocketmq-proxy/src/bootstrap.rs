@@ -14,6 +14,7 @@
 
 use futures::FutureExt;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_runtime::heap_future;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownDeadline;
@@ -599,7 +600,9 @@ where
         let mut auth_runtime_for_shutdown = auth_runtime.clone();
         let lifecycle_for_shutdown = lifecycle.clone();
         let shared_shutdown = shutdown.boxed().shared();
-        let listener_result = async {
+        // The process entrypoint polls this on its main thread. Each large startup and listener
+        // future below is built on the heap, so no frame of this chain keeps a copy of one.
+        let listener_result = heap_future(|| async {
             if matches!(config.mode, ProxyMode::Local) && !local_mode_supported {
                 return Err(crate::error::ProxyError::not_implemented(
                     "Local mode requires a broker-backed service manager and is not available in the default proxy \
@@ -615,11 +618,14 @@ where
             let effective_auth_runtime = match auth_runtime.clone() {
                 Some(auth_runtime) => Some(auth_runtime),
                 None => {
-                    ProxyAuthRuntime::from_proxy_config_with_metadata_service(
-                        &config.effective_auth_config(),
-                        auth_metadata_service.clone(),
-                        &auth_context,
-                    )
+                    let auth_config = config.effective_auth_config();
+                    heap_future(|| {
+                        ProxyAuthRuntime::from_proxy_config_with_metadata_service(
+                            &auth_config,
+                            auth_metadata_service.clone(),
+                            &auth_context,
+                        )
+                    })
                     .await?
                 }
             };
@@ -627,22 +633,22 @@ where
             let health_source = auth_metadata_service.ok_or_else(|| ProxyError::Transport {
                 message: "Proxy readiness requires an explicit backend metadata service".into(),
             })?;
-            dependency_health
-                .start(health_source, &service_context, lifecycle.clone())
-                .await?;
+            heap_future(|| dependency_health.start(health_source, &service_context, lifecycle.clone())).await?;
             let grpc_service = grpc_service.with_auth_runtime(effective_auth_runtime.clone());
             let readiness_gate = lifecycle
                 .map(|lifecycle| ListenerReadinessGate::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
             let serve_result = if !config.remoting.enabled {
                 let grpc_readiness_gate = readiness_gate;
                 let grpc_context = service_context.component("grpc-ingress");
-                server::serve_with_report_with_service_context_and_ready(
-                    config,
-                    grpc_service,
-                    shared_shutdown.clone(),
-                    grpc_context,
-                    move || publish_listener_ready(grpc_readiness_gate),
-                )
+                heap_future(|| {
+                    server::serve_with_report_with_service_context_and_ready(
+                        config,
+                        grpc_service,
+                        shared_shutdown.clone(),
+                        grpc_context,
+                        move || publish_listener_ready(grpc_readiness_gate),
+                    )
+                })
                 .await
                 .and_then(require_healthy_grpc_shutdown)
             } else {
@@ -660,7 +666,7 @@ where
                 let remoting_auth_runtime = effective_auth_runtime;
                 let grpc_readiness_gate = readiness_gate.clone();
                 let remoting_readiness_gate = readiness_gate;
-                let grpc_future = async move {
+                let grpc_future = heap_future(|| {
                     server::serve_with_report_with_service_context_and_ready(
                         grpc_config,
                         grpc_service,
@@ -668,10 +674,9 @@ where
                         grpc_service_context,
                         move || publish_listener_ready(grpc_readiness_gate),
                     )
-                    .await
-                    .and_then(require_healthy_grpc_shutdown)
-                };
-                let remoting_future = async move {
+                })
+                .map(|result| result.and_then(require_healthy_grpc_shutdown));
+                let remoting_future = heap_future(|| {
                     remoting::serve_with_service_context_and_ready_and_drain_and_remoting_command_factory(
                         remoting_service_context,
                         transport_telemetry,
@@ -685,25 +690,26 @@ where
                         remoting_shutdown,
                         move || publish_listener_ready(remoting_readiness_gate),
                     )
-                    .await
-                    .and_then(require_healthy_remoting_shutdown)
-                };
+                })
+                .map(|result| result.and_then(require_healthy_remoting_shutdown));
                 tokio::try_join!(grpc_future, remoting_future).map(|_| ())
             };
             serve_result
-        }
+        })
         .await;
         let deadline = resolve_shutdown_deadline(&shared_shutdown, lifecycle_for_shutdown.as_ref());
-        finalize_proxy_run(
-            listener_result,
-            Some(&mut dependency_health),
-            broker_remoting_handler_for_shutdown.as_ref(),
-            dependency_service_context.as_ref(),
-            auth_runtime_for_shutdown.as_ref(),
-            &auth_context,
-            &service_context,
-            deadline,
-        )
+        heap_future(|| {
+            finalize_proxy_run(
+                listener_result,
+                Some(&mut dependency_health),
+                broker_remoting_handler_for_shutdown.as_ref(),
+                dependency_service_context.as_ref(),
+                auth_runtime_for_shutdown.as_ref(),
+                &auth_context,
+                &service_context,
+                deadline,
+            )
+        })
         .await
     }
 }

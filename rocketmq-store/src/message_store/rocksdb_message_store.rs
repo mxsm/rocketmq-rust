@@ -34,7 +34,6 @@ use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_store_api::GetStatus as ApiGetStatus;
 use rocketmq_store_api::WalPort;
@@ -899,10 +898,6 @@ impl MessageStoreEngine for RocksDBMessageStore {
 
     fn get_store_checkpoint_arc(&self) -> Arc<StoreCheckpoint> {
         self.local_file_store.get_store_checkpoint_arc()
-    }
-
-    fn get_system_clock(&self) -> Arc<SystemClock> {
-        self.local_file_store.get_system_clock()
     }
 
     fn get_commit_log(&self) -> &CommitLog {

@@ -61,8 +61,12 @@ message OpenRaftAppendResponse {
 message OpenRaftVoteRequest {
   OpenRaftVote vote = 1;
   optional OpenRaftLogId last_log_id = 2;
-  // Absent on older peers, where ordinary elections remain the default.
+  // Set together with leadership_transfer_from for peers that predate that field.
+  // Receivers read only leadership_transfer_from.
   bool leadership_transfer = 3;
+  // Vote of the Leader that authorized this election as a leadership transfer.
+  // Absent for an ordinary election and on older peers, whose requests keep the leader lease.
+  optional OpenRaftVote leadership_transfer_from = 4;
 }
 
 // Vote response
