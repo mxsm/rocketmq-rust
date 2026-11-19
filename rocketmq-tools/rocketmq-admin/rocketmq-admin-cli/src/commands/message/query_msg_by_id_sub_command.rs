@@ -51,7 +51,10 @@ pub struct QueryMsgByIdSubCommand {
     #[arg(
         short = 'p',
         long = "printBody",
-        default_value = "true",
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = true,
         help = "Whether to print message body"
     )]
     print_body: bool,
@@ -415,37 +418,17 @@ mod tests {
     use super::*;
     use rocketmq_model::common::message::message_single::Message;
 
-    #[allow(dead_code)]
-    fn create_test_command() -> QueryMsgByIdSubCommand {
-        QueryMsgByIdSubCommand {
-            message_ids: vec!["AC11000100002A9F0000000000000001".to_string()],
-            topic: Some("test_topic".to_string()),
-            print_body: true,
-            charset: "UTF-8".to_string(),
-            timeout: DEFAULT_TIMEOUT_MS,
-            common_args: CommonArgs {
-                namesrv_addr: Some("127.0.0.1:9876".to_string()),
-                skip_confirm: false,
-            },
-        }
-    }
-
-    #[allow(dead_code)]
-    fn create_test_command_multiple_ids() -> QueryMsgByIdSubCommand {
-        QueryMsgByIdSubCommand {
-            message_ids: vec![
-                "AC11000100002A9F0000000000000001".to_string(),
-                "AC11000100002A9F0000000000000002".to_string(),
-            ],
-            topic: Some("test_topic".to_string()),
-            print_body: true,
-            charset: "UTF-8".to_string(),
-            timeout: DEFAULT_TIMEOUT_MS,
-            common_args: CommonArgs {
-                namesrv_addr: Some("127.0.0.1:9876".to_string()),
-                skip_confirm: false,
-            },
-        }
+    #[test]
+    fn parses_print_body_override_and_preserves_default() {
+        let args = ["queryMsgById", "-i", "AC11000100002A9F0000000000000001"];
+        let parse = |options: &[&str]| {
+            QueryMsgByIdSubCommand::try_parse_from(args.iter().chain(options))
+                .unwrap()
+                .print_body
+        };
+        assert!(parse(&[]));
+        assert!(parse(&["-p"]));
+        assert!(!parse(&["--printBody", "false"]));
     }
 
     #[test]
