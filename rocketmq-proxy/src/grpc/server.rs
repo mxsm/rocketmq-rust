@@ -17,7 +17,11 @@ use std::sync::Arc;
 
 #[cfg(feature = "tls")]
 use futures::TryStreamExt;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::Stream;
+use tokio_stream::StreamExt;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Server;
 
@@ -37,6 +41,23 @@ use crate::proto::v2::messaging_service_server::MessagingServiceServer;
 
 #[doc(hidden)]
 pub type ProxyGrpcServerShutdownReport = crate::ingress::grpc::server::GrpcServerShutdownReport;
+
+/// Accepts gRPC connections with `TCP_NODELAY` set.
+///
+/// Tonic applies `Server::tcp_nodelay` only to listeners it binds itself; connections handed
+/// to `serve_with_incoming*` keep the socket defaults. With Nagle's algorithm on, a small
+/// HTTP/2 frame waits for earlier data to be acknowledged, which adds up to a delayed-ACK
+/// interval (about 40 ms on Linux) to some responses. A connection whose option cannot be
+/// set is still served.
+fn accept_nodelay(listener: TcpListener) -> impl Stream<Item = std::io::Result<TcpStream>> + Unpin + Send + 'static {
+    TcpListenerStream::new(listener).map(|accepted| {
+        accepted.inspect(|stream| {
+            if let Err(error) = stream.set_nodelay(true) {
+                tracing::debug!(%error, "could not disable Nagle's algorithm on an accepted gRPC connection");
+            }
+        })
+    })
+}
 
 pub async fn serve<P, F>(
     config: Arc<ProxyConfig>,
@@ -222,7 +243,7 @@ where
             #[cfg(feature = "tls")]
             if let Some(tls_acceptor) = tls_acceptor {
                 tls_acceptor.start_reload(&tls_task_group)?;
-                let handshakes = TcpListenerStream::new(listener)
+                let handshakes = accept_nodelay(listener)
                     .map_ok(move |stream| {
                         let tls_acceptor = tls_acceptor.clone();
                         async move { tls_acceptor.accept(stream).await }
@@ -244,7 +265,7 @@ where
             Server::builder()
                 .concurrency_limit_per_connection(concurrency_limit_per_connection)
                 .add_service(service)
-                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+                .serve_with_incoming_shutdown(accept_nodelay(listener), async move {
                     loop {
                         if *shutdown_rx.borrow() || shutdown_rx.changed().await.is_err() {
                             break;
@@ -651,5 +672,25 @@ mod tests {
         request
             .metadata_mut()
             .insert("channel-id", MetadataValue::from_static("auth-channel"));
+    }
+
+    #[tokio::test]
+    async fn accepted_grpc_connections_disable_nagle() {
+        use tokio_stream::StreamExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let address = listener.local_addr().expect("listener address");
+        let mut incoming = super::accept_nodelay(listener);
+        let _client = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect to listener");
+        let accepted = incoming
+            .next()
+            .await
+            .expect("listener stream yields a connection")
+            .expect("connection is accepted");
+        assert!(accepted.nodelay().expect("read TCP_NODELAY"));
     }
 }
