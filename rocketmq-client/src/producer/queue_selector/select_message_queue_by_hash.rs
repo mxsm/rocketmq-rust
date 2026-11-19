@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageTrait;
 
@@ -39,7 +40,7 @@ where
 impl JavaHashCode for str {
     #[inline]
     fn java_hash_code(&self) -> i32 {
-        java_string_hash_code(self)
+        JavaStringHasher::hash_str(self)
     }
 }
 
@@ -96,13 +97,6 @@ macro_rules! impl_java_long_hash_code {
 
 impl_java_integer_hash_code!(i8, i16, i32, u8, u16, u32);
 impl_java_long_hash_code!(i64, u64, isize, usize);
-
-#[inline]
-fn java_string_hash_code(value: &str) -> i32 {
-    value
-        .encode_utf16()
-        .fold(0i32, |hash, unit| hash.wrapping_mul(31).wrapping_add(unit as i32))
-}
 
 #[inline]
 fn java_long_hash_code(value: u64) -> i32 {

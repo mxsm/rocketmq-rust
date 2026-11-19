@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_model::common::lite::get_lite_topic;
 
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
@@ -49,7 +50,7 @@ impl LiteShardingView {
         };
 
         let bucket = consistent_hash(
-            java_string_hash_code(lite_topic.as_str()),
+            JavaStringHasher::hash_str(lite_topic.as_str()),
             publish_info.message_queues().len(),
         );
         publish_info
@@ -58,12 +59,6 @@ impl LiteShardingView {
             .map(|queue| queue.broker_name().clone())
             .unwrap_or_else(|| self.current_broker.clone())
     }
-}
-
-fn java_string_hash_code(value: &str) -> i32 {
-    value
-        .encode_utf16()
-        .fold(0_i32, |hash, unit| hash.wrapping_mul(31).wrapping_add(unit as i32))
 }
 
 fn consistent_hash(input: i32, buckets: usize) -> usize {
@@ -90,14 +85,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn java_string_hash_code_matches_java_contract() {
-        assert_eq!(java_string_hash_code(""), 0);
-        assert_eq!(java_string_hash_code("abc"), 96_354);
-        assert_eq!(java_string_hash_code("lite_topic"), 2_023_630_430);
-    }
-
-    #[test]
     fn consistent_hash_returns_single_bucket_for_single_queue() {
-        assert_eq!(consistent_hash(java_string_hash_code("child-a"), 1), 0);
+        assert_eq!(consistent_hash(JavaStringHasher::hash_str("child-a"), 1), 0);
     }
 }

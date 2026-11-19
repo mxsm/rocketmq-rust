@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor:** Share the model Java string hash across producer queue selection, Broker Lite sharding and tiered index keys ([#12813](https://github.com/mxsm/rocketmq-rust/issues/12813)).
 - **refactor(broker):** Read transaction half-message records and offsets from the canonical decoded result, removing the duplicate `GetResult` wrapper ([#12769](https://github.com/mxsm/rocketmq-rust/issues/12769)).
 - **refactor(protocol)!:** Change the optional Store discriminator in `MaintenanceGetCapabilities` responses from `store.backend` to `store.storeKind` without an alias. Previously saved responses and older readers require coordinated Broker and consumer upgrades. `schemaVersion` remains `1`; responses without `store` and checkpoint manifest `backend` fields are unchanged ([#12710](https://github.com/mxsm/rocketmq-rust/issues/12710)).
 - **refactor(broker):** Consolidate ConsumerManager initialization and remove its unused configuration-only constructor, preserving distinct expiry timeouts and shared session locks ([#12711](https://github.com/mxsm/rocketmq-rust/issues/12711)).
