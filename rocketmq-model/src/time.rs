@@ -75,14 +75,18 @@ fn local_timestamp_millis_or_epoch(t: i64) -> DateTime<Local> {
 /// Returns whether the current local hour is one of the `;`-separated hours
 /// in `when`, such as a `deleteWhen` setting of `"04;16"`.
 pub fn is_it_time_to_do(when: &str) -> bool {
-    let hours: Vec<&str> = when.split(";").collect();
-    if !hours.is_empty() {
-        let now = Local::now();
-        for hour in hours {
-            let now_hour: i32 = hour.parse().unwrap_or(0);
-            if now_hour == now.hour() as i32 {
-                return true;
-            }
+    is_it_time_to_do_at(when, Local::now().hour())
+}
+
+/// Returns whether `current_hour` is one of the `;`-separated hours in `when`.
+///
+/// Split out from [`is_it_time_to_do`] so the tests can assert fixed hours
+/// instead of the live wall clock.
+fn is_it_time_to_do_at(when: &str, current_hour: u32) -> bool {
+    for hour in when.split(';') {
+        let hour_number: i32 = hour.parse().unwrap_or(0);
+        if hour_number == current_hour as i32 {
+            return true;
         }
     }
     false
@@ -273,15 +277,18 @@ mod tests {
     }
 
     #[test]
-    fn is_it_time_to_do_returns_true_when_current_hour_is_in_input() {
-        let current_hour = Local::now().hour();
-        assert!(is_it_time_to_do(&current_hour.to_string()));
+    fn is_it_time_to_do_matches_each_fixed_hour_in_the_window() {
+        assert!(is_it_time_to_do_at("04;16", 4));
+        assert!(is_it_time_to_do_at("04;16", 16));
+        assert!(!is_it_time_to_do_at("04;16", 5));
     }
 
     #[test]
-    fn is_it_time_to_do_returns_false_when_current_hour_is_not_in_input() {
-        let current_hour = (Local::now().hour() + 1) % 24;
-        assert!(!is_it_time_to_do(&current_hour.to_string()));
+    fn is_it_time_to_do_defaults_invalid_hours_to_zero() {
+        assert!(!is_it_time_to_do_at("abc;xyz", 5));
+        assert!(is_it_time_to_do_at("abc", 0));
+        assert!(is_it_time_to_do_at("", 0));
+        assert!(is_it_time_to_do_at("abc;07", 7));
     }
 
     #[test]
