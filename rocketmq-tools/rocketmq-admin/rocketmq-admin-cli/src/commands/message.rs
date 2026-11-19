@@ -27,6 +27,8 @@ pub mod send_message_sub_command;
 
 use clap::Subcommand;
 use rocketmq_error::Result as CanonicalResult;
+use rocketmq_runtime::common::time_utils::YYYY_MM_DD_HH_MM_SS_SSS;
+use rocketmq_runtime::common::time_utils::parse_date_to_millis;
 
 use crate::commands::CommandExecute;
 use crate::commands::message::check_msg_send_rt_sub_command::CheckMsgSendRTSubCommand;
@@ -41,6 +43,16 @@ use crate::commands::message::query_msg_by_offset_sub_command::QueryMsgByOffsetS
 use crate::commands::message::query_msg_by_unique_key_sub_command::QueryMsgByUniqueKeySubCommand;
 use crate::commands::message::query_msg_trace_by_id_sub_command::QueryMsgTraceByIdSubCommand;
 use crate::commands::message::send_message_sub_command::SendMessageSubCommand;
+
+fn parse_print_timestamp(value: &str) -> Result<u64, String> {
+    let value = value.trim();
+    if let Ok(millis) = value.parse() {
+        return Ok(millis);
+    }
+    parse_date_to_millis(value, YYYY_MM_DD_HH_MM_SS_SSS)
+        .and_then(|millis| u64::try_from(millis).ok())
+        .ok_or_else(|| format!("Expected non-negative milliseconds or yyyy-MM-dd#HH:mm:ss:SSS, got '{value}'"))
+}
 
 #[derive(Subcommand)]
 pub enum MessageCommands {

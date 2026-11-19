@@ -17,7 +17,7 @@ use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_runtime::common::time_utils::YYYY_MM_DD_HH_MM_SS_SSS;
-use rocketmq_runtime::common::time_utils::parse_date;
+use rocketmq_runtime::common::time_utils::parse_date_to_millis;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::ConsumeMessagesRequest;
@@ -75,11 +75,11 @@ impl ConsumeMessageSubCommand {
             return Ok(ts);
         }
 
-        let date_str = value.trim().replace('#', " ");
-        if let Some(dt) = parse_date(&date_str, YYYY_MM_DD_HH_MM_SS_SSS) {
-            return Ok(dt.and_utc().timestamp_millis());
+        if let Some(millis) = parse_date_to_millis(value.trim(), YYYY_MM_DD_HH_MM_SS_SSS) {
+            return Ok(millis);
         }
 
+        let date_str = value.trim().replace('#', " ");
         if let Ok(dt) = NaiveDateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S") {
             return Ok(dt.and_utc().timestamp_millis());
         }
@@ -157,5 +157,26 @@ impl CommandExecute for ConsumeMessageSubCommand {
             Ok(())
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Local, TimeZone};
+
+    use super::*;
+
+    #[test]
+    fn consumes_from_the_documented_millisecond_timestamp() {
+        let expected = Local
+            .with_ymd_and_hms(2025, 1, 2, 3, 4, 5)
+            .single()
+            .unwrap()
+            .timestamp_millis()
+            + 123;
+        assert_eq!(
+            ConsumeMessageSubCommand::timestamp_format("2025-01-02#03:04:05:123").unwrap(),
+            expected
+        );
     }
 }

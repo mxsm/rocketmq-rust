@@ -16,8 +16,6 @@ use clap::ArgAction;
 use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
-use rocketmq_runtime::common::time_utils::YYYY_MM_DD_HH_MM_SS_SSS;
-use rocketmq_runtime::common::time_utils::parse_date;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
@@ -50,18 +48,20 @@ pub struct PrintMessageSubCommand {
     #[arg(
         short = 'b',
         long = "beginTimestamp",
+        value_parser = super::parse_print_timestamp,
         required = false,
         help = "Begin timestamp[currentTimeMillis|yyyy-MM-dd#HH:mm:ss:SSS]"
     )]
-    begin_timestamp: Option<String>,
+    begin_timestamp: Option<u64>,
 
     #[arg(
         short = 'e',
         long = "endTimestamp",
+        value_parser = super::parse_print_timestamp,
         required = false,
         help = "End timestamp[currentTimeMillis|yyyy-MM-dd#HH:mm:ss:SSS]"
     )]
-    end_timestamp: Option<String>,
+    end_timestamp: Option<u64>,
 
     #[arg(
         short = 'd',
@@ -80,19 +80,6 @@ pub struct PrintMessageSubCommand {
         help = "Lmq parent topic, lmq is used to find the route"
     )]
     lmq_parent_topic: Option<String>,
-}
-
-fn timestamp_format(value: &str) -> u64 {
-    if let Ok(ts) = value.parse::<u64>() {
-        return ts;
-    }
-
-    let date_str = value.replace('#', " ");
-    if let Some(dt) = parse_date(&date_str, YYYY_MM_DD_HH_MM_SS_SSS) {
-        return dt.and_utc().timestamp_millis() as u64;
-    }
-
-    0
 }
 
 fn print_message(msgs: &[MessageExt], _charset_name: &str, print_body: bool) {
@@ -117,13 +104,11 @@ impl CommandExecute for PrintMessageSubCommand {
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        let begin_timestamp = self.begin_timestamp.as_deref().map(str::trim).map(timestamp_format);
-        let end_timestamp = self.end_timestamp.as_deref().map(str::trim).map(timestamp_format);
         let request = PrintMessagesRequest::try_new(
             self.topic.clone(),
             self.sub_expression.clone(),
-            begin_timestamp,
-            end_timestamp,
+            self.begin_timestamp,
+            self.end_timestamp,
             self.lmq_parent_topic.clone(),
         )?;
         let charset_name = self.charset_name.trim().to_string();
@@ -150,5 +135,27 @@ impl CommandExecute for PrintMessageSubCommand {
             Ok(())
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Local, TimeZone};
+
+    use super::*;
+
+    #[test]
+    fn parses_print_time_bounds_and_rejects_invalid_dates() {
+        let parse = |end| PrintMessageSubCommand::try_parse_from(["printMsg", "-t", "test", "-b", "0", "-e", end]);
+        let command = parse("2025-01-02#03:04:05:123").unwrap();
+        let expected = Local
+            .with_ymd_and_hms(2025, 1, 2, 3, 4, 5)
+            .single()
+            .unwrap()
+            .timestamp_millis()
+            + 123;
+        assert_eq!(command.begin_timestamp, Some(0));
+        assert_eq!(command.end_timestamp, Some(expected as u64));
+        assert!(parse("invalid").is_err());
     }
 }
