@@ -99,7 +99,7 @@ The Java Proxy runs were one day earlier than the Rust Proxy runs, on the same h
 
 ## Not covered yet
 
-- Separate machines and a real network: every result above comes from one host over loopback.
+- Separate machines and a real network: every result above comes from one host over loopback. A full benchmark on dedicated machines is planned; [issue #12799](https://github.com/mxsm/rocketmq-rust/issues/12799) lists the machines it needs and how to sponsor them.
 - Push and POP consumers, tag and SQL filtering, reads of data no longer in the page cache, many topics and queues, and long-running or failover tests.
 - Consumption through the Proxy: only gRPC sends were measured.
 
