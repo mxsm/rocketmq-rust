@@ -93,11 +93,21 @@ class ProductionReleaseStateTests(unittest.TestCase):
                 )
                 selected_features = ",".join(service["features"])
                 manifest_arg = f"--manifest-path {service['manifest']} " if service_name == "mcp" else ""
-                command = (
-                    f"cargo build {manifest_arg}--locked --release --package {service['package']} "
-                    f"--features {selected_features} --bin {service['binary']}"
-                )
-                self.assertIn(command, self.dockerfile)
+                target_args = [""]
+                if service_name in ("broker", "proxy"):
+                    feature_variable = f"{service_name}_features"
+                    self.assertIn(f"{feature_variable}={selected_features}", self.dockerfile.splitlines())
+                    selected_features = f'"${{{feature_variable}}}"'
+                    target_suffix = "-proxy" if service_name == "proxy" else ""
+                    target_args.extend(
+                        f"--target-dir /workspace/target/{mode}{target_suffix} " for mode in ("pgo-generate", "pgo-use")
+                    )
+                for target_arg in target_args:
+                    command = (
+                        f"cargo build {manifest_arg}--locked --release {target_arg}--package {service['package']} "
+                        f"--features {selected_features} --bin {service['binary']}"
+                    )
+                    self.assertIn(command, self.dockerfile)
 
     def test_core_candidate_policy_is_separate_and_local_only(self) -> None:
         policy = json.loads((ROOT / "docker" / "core-container-policy.json").read_text(encoding="utf-8"))

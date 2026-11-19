@@ -2074,6 +2074,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::admin::{ MQAdminNameserverRouteReadExt, NameserverReadOperation, NameserverReadReply, NameserverReplyStatus, }",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::{ MQAdminNameserverRouteReadExt, NameserverReadOperation, NameserverReadReply, NameserverReplyStatus, }",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "read-only NameServer admin operations and their bounded replies",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::base::client_config::ClientConfig",
           "identity": "rocketmq-client/src/public_api.rs:pub use crate::base::client_config::ClientConfig",
           "owner": "client",
@@ -2334,7 +2343,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 259
+      "maximum_exports": 260
     },
     "rocketmq-model": {
       "entries": [
@@ -2841,6 +2850,15 @@
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use cancellation_observer::CancellationObserver",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use cancellation_observer::CancellationObserver",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "observe cancellation across tasks sharing one token",
           "removal_condition": "retain while the stable entry point remains supported"
         },
         {
@@ -3717,6 +3735,24 @@
           "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
         },
         {
+          "category": "experimental",
+          "declaration": "pub use stack::heap_future",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use stack::heap_future",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "construct large startup and shutdown futures outside the Proxy main-thread frame",
+          "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use task_group::CountedTaskSet",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use task_group::CountedTaskSet",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "track and drain short-lived tasks owned by a task group",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
           "category": "stable",
           "declaration": "pub use task_group::TaskGroupEventCounts",
           "identity": "rocketmq-runtime/src/lib.rs:pub use task_group::TaskGroupEventCounts",
@@ -4221,7 +4257,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 170
+      "maximum_exports": 172
     },
     "rocketmq-store": {
       "entries": [

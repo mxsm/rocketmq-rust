@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(ci):** Register Client and Runtime API exports and check Broker and Proxy production features in both PGO and ordinary builds ([#12778](https://github.com/mxsm/rocketmq-rust/issues/12778)).
 - **docs(controller):** Clarify that file-storage startup requires `dev-single`; `storage-file` alone only compiles the implementation ([#12771](https://github.com/mxsm/rocketmq-rust/issues/12771)).
 - **fix(fuzz):** Resolve OpenRaft dependencies through the Controller to prevent version conflicts in fuzz builds ([#12767](https://github.com/mxsm/rocketmq-rust/issues/12767)).
 - **fix(fuzz):** Align the standalone OpenRaft runtime pin and lockfile with the Controller's `0.10.0` requirement ([#12754](https://github.com/mxsm/rocketmq-rust/issues/12754)).
