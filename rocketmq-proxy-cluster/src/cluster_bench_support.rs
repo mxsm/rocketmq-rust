@@ -386,6 +386,7 @@ fn send_message_command(producer_key: &str, messages_per_command: usize, message
                 client_message_id: format!("{producer_key}-{index}"),
                 message: ProxyMessage::new(topic.name(), vec![0x5a; message_size_bytes]),
                 queue_id: None,
+                broker_name: None,
             }
         })
         .collect();

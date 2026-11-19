@@ -6,6 +6,8 @@ title: "Performance questions"
 
 There is no workload-independent throughput figure on this page. Report the actual hardware, storage, versions/features, message sizes, queue layout, client mode, flush/replication policy, duration, errors, and completed consumption. A short producer burst is not sustainable end-to-end throughput.
 
+For measured comparisons with Apache RocketMQ 5.5.0 under fixed loads on one host, see the [performance benchmark](../operations/performance-benchmark.md). They describe relative cost and throughput for those loads, not the capacity of your deployment.
+
 ## How do I size or tune a deployment?
 
 [Capacity and performance](../operations/capacity-performance.md) provides storage and catch-up calculations, bottleneck observations, and a repeatable comparison method. [Monitoring](../operations/monitoring.md) explains the signals used to locate the limiting stage.

@@ -30,7 +30,7 @@ flowchart TD
 
 gRPC 服务包括路由/分配查询、心跳、发送、接收、拉取、ACK、不可见时长修改、偏移量操作、事务、撤回、遥测、客户端终止及 Lite 订阅。流式 Receive/Pull 响应具有独立生命周期和结果保留预算。
 
-Remoting 默认关闭。启用后，将选定客户端请求码适配到处理器/后端模型。它不是通用 Broker 管理隧道：该入口拒绝认证管理请求码，这类请求应发送至 Broker 管理端点。本地模式的加锁/解锁透传是单独支持的路径。
+Remoting 默认关闭。启用后，将选定客户端请求码适配到处理器/后端模型。它不是通用 Broker 管理隧道：该入口拒绝认证管理请求码，这类请求应发送至 Broker 管理端点。本地模式的加锁/解锁透传是单独支持的路径。与 Java Proxy 一致，Remoting 路由响应为每个 Broker 返回 Proxy 自身的 Remoting 地址（`remoting.accessAddr`），因此把 Proxy 当作 NameServer 的 Remoting 客户端会经由 Proxy 发送、拉取和提交偏移量。
 
 gRPC 默认端口为 8081，可选 Remoting 为 8080；它们是 Proxy 入站端口，与嵌入式或远端 Broker 端点不同。生成 protobuf 绑定需要构建时提供 `protoc`，但 core crate 本身不会启动服务器。
 

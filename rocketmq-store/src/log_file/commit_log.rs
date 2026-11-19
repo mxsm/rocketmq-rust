@@ -56,7 +56,6 @@ use rocketmq_model::utils::crc32_utils::crc32;
 use rocketmq_model::utils::crc32_utils::crc32_bytes;
 use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_protocol::common::message::message_decoder::cheetah_from_utf8_lossy;
-use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::resource_budget::QueueSnapshot;
 use rocketmq_store_api::WriteLeaseToken;
 use tracing::error;
@@ -2588,7 +2587,8 @@ impl CommitLog {
             .begin_time_in_lock()
             .load(std::sync::atomic::Ordering::Acquire);
         if begin > 0 {
-            (SystemClock::now() - (begin as u128)) as i64
+            let elapsed = rocketmq_runtime::common::time_utils::current_millis().saturating_sub(begin);
+            i64::try_from(elapsed).unwrap_or(i64::MAX)
         } else {
             0
         }
@@ -3085,6 +3085,27 @@ mod tests {
         assert_eq!(snapshot.wait_max_millis, 5);
         assert_eq!(snapshot.hold_total_millis, 9);
         assert_eq!(snapshot.hold_max_millis, 7);
+    }
+
+    #[tokio::test]
+    async fn lock_time_mills_saturates_on_clock_rollback() {
+        let root = tempfile::tempdir().unwrap();
+        let store = new_test_message_store(root.path(), BrokerRole::SyncMaster, false);
+        let commit_log = store.get_commit_log();
+
+        assert_eq!(commit_log.lock_time_mills(), 0);
+
+        let future = current_millis() + 60_000;
+        commit_log
+            .begin_time_in_lock()
+            .store(future, std::sync::atomic::Ordering::Release);
+        assert_eq!(commit_log.lock_time_mills(), 0);
+
+        commit_log
+            .begin_time_in_lock()
+            .store(current_millis() - 1_000, std::sync::atomic::Ordering::Release);
+        let elapsed = commit_log.lock_time_mills();
+        assert!((1_000..30_000).contains(&elapsed));
     }
 
     fn new_test_message_store(

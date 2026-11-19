@@ -37,6 +37,7 @@ use rocketmq_proxy::ProxyRuntime;
 #[cfg(test)]
 use rocketmq_proxy::RemotingConfig;
 use rocketmq_proxy_core::error::canonical;
+use rocketmq_runtime::heap_future;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
@@ -82,14 +83,32 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
+/// Set by the Windows process test to read the main thread's stack peak.
+const MAIN_STACK_REPORT_ENV: &str = "ROCKETMQ_REPORT_MAIN_STACK";
+
 fn main() {
-    if let Err(source) = try_main() {
+    let result = try_main();
+    report_main_stack_if_requested();
+    if let Err(source) = result {
         let descriptor = source.descriptor();
         let context = source.context();
         let error = CanonicalError::caused_by(descriptor, source).with_context(context);
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
         eprintln!("{}", output.stderr());
         std::process::exit(output.exit_code().as_i32());
+    }
+}
+
+/// Prints the main thread's committed stack once the runtime is gone.
+///
+/// Committed stack pages stay committed until the thread exits, so this is the
+/// deepest the main thread went during the whole run.
+fn report_main_stack_if_requested() {
+    if std::env::var_os(MAIN_STACK_REPORT_ENV).is_none() {
+        return;
+    }
+    if let Some(bytes) = rocketmq_runtime::current_thread_committed_stack_bytes() {
+        eprintln!("main_thread_stack_committed_bytes={bytes}");
     }
 }
 
@@ -105,7 +124,8 @@ fn try_main() -> ProxyResult<()> {
     let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy")
         .map_err(proxy_runtime_error("load proxy lifecycle configuration"))?;
 
-    let run_result = owner.block_on(run(service_context, lifecycle.clone()));
+    // The process main thread polls the root future, and Windows gives it a 1 MiB stack.
+    let run_result = owner.block_on(heap_future(|| run(service_context, lifecycle.clone())));
     if run_result.is_err() {
         lifecycle.mark_failed();
     }
@@ -264,7 +284,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .with_runtime_diagnostics_sources(diagnostics_sources.clone())
         .build()
     {
-        Ok(proxy_runtime) => proxy_runtime.serve_with_lifecycle(lifecycle.clone()).await,
+        Ok(proxy_runtime) => heap_future(|| proxy_runtime.serve_with_lifecycle(lifecycle.clone())).await,
         Err(error) => Err(error),
     };
     let primary_result = match primary_result {
@@ -536,6 +556,7 @@ struct Args {
     mode: Option<ProxyMode>,
     grpc_listen_addr: Option<String>,
     remoting_listen_addr: Option<String>,
+    remoting_access_addr: Option<String>,
     enable_remoting: bool,
     namesrv_addr: Option<String>,
     print_config: bool,
@@ -558,6 +579,7 @@ impl Args {
             mode: None,
             grpc_listen_addr: None,
             remoting_listen_addr: None,
+            remoting_access_addr: None,
             enable_remoting: false,
             namesrv_addr: None,
             print_config: false,
@@ -570,6 +592,7 @@ impl Args {
                 "--mode" => parsed.mode = Some(parse_mode(next_value(&mut args, arg.as_str())?.as_str())?),
                 "--grpcListenAddr" => parsed.grpc_listen_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--remotingListenAddr" => parsed.remoting_listen_addr = Some(next_value(&mut args, arg.as_str())?),
+                "--remotingAccessAddr" => parsed.remoting_access_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--enableRemoting" => parsed.enable_remoting = true,
                 "--namesrvAddr" | "-n" => parsed.namesrv_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--printConfig" => parsed.print_config = true,
@@ -630,6 +653,9 @@ fn apply_overrides(config: &mut ProxyConfig, args: &Args) -> ProxyResult<()> {
     if let Some(addr) = &args.remoting_listen_addr {
         config.remoting.listen_addr = addr.clone();
     }
+    if let Some(addr) = &args.remoting_access_addr {
+        config.remoting.access_addr = Some(addr.clone());
+    }
     if args.enable_remoting {
         config.remoting.enabled = true;
     }
@@ -684,6 +710,8 @@ Options:
       --enableRemoting               Enable the remoting ingress
       --remotingListenAddr <HOST:PORT>
                                      Remoting listen address, overrides remoting.listenAddr
+      --remotingAccessAddr <HOST[:PORT]>
+                                     Address Remoting routes advertise, overrides remoting.accessAddr
   -n, --namesrvAddr <HOST:PORT>      NameServer address for cluster mode (requires 'cluster-mode')
       --log-filter <DIRECTIVE>       Override the process log filter for this startup
       --printConfig                  Print the effective configuration and exit
@@ -706,6 +734,7 @@ fn print_config(config: &ProxyConfig) {
     println!("grpc.listenAddr = {}", config.grpc.listen_addr);
     println!("remoting.enabled = {}", config.remoting.enabled);
     println!("remoting.listenAddr = {}", config.remoting.listen_addr);
+    println!("remoting.accessAddr = {:?}", config.remoting.access_addr);
     #[cfg(feature = "cluster-mode")]
     println!("cluster.namesrvAddr = {:?}", config.cluster.namesrv_addr);
 }
@@ -853,6 +882,29 @@ mod tests {
             .expect("log filter should parse");
 
         assert_eq!(args.log_filter.as_deref(), Some("info,rocketmq_proxy=debug"));
+    }
+
+    #[test]
+    fn proxy_cli_remoting_access_addr_overrides_and_is_validated() {
+        let args = Args::parse_from([
+            "rocketmq-proxy-rust",
+            "--enableRemoting",
+            "--remotingAccessAddr",
+            "proxy.example.com:18080",
+        ])
+        .expect("access address should parse");
+        let mut config = ProxyConfig::default();
+        apply_overrides(&mut config, &args).expect("valid access address should apply");
+        assert_eq!(config.remoting.access_addr.as_deref(), Some("proxy.example.com:18080"));
+
+        let args = Args::parse_from([
+            "rocketmq-proxy-rust",
+            "--enableRemoting",
+            "--remotingAccessAddr",
+            "proxy:0",
+        ])
+        .expect("access address should parse");
+        assert!(apply_overrides(&mut ProxyConfig::default(), &args).is_err());
     }
 
     #[test]

@@ -107,6 +107,7 @@ const sidebars: SidebarsConfig = {
         'operations/monitoring',
         'operations/troubleshooting',
         'operations/capacity-performance',
+        'operations/performance-benchmark',
         'operations/maintenance',
         'operations/backup-recovery',
         'operations/upgrade-rollback',

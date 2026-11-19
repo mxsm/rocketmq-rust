@@ -708,6 +708,7 @@ mod tests {
         LocalBrokerCommand::ProcessRemoting {
             request,
             timeout: Duration::from_millis(15_500),
+            client_addr: None,
             reply,
         }
     }
@@ -746,6 +747,7 @@ mod tests {
         let pop = LocalBrokerCommand::ProcessRemoting {
             request: pop,
             timeout: Duration::from_millis(15_500),
+            client_addr: None,
             reply: pop_reply,
         };
         let (route_reply, _route_receiver) = oneshot::channel();

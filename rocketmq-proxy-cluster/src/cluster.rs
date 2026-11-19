@@ -790,6 +790,12 @@ trait ClusterProducerIo: Send {
 
     fn producer_group(&self) -> CheetahString;
 
+    /// Returns a handle that sends through this producer from another task, or `None`
+    /// when sends must stay on the owning lane.
+    fn concurrent_handle(&self) -> Option<Box<dyn ClusterProducerIo>> {
+        None
+    }
+
     async fn start(&mut self) -> Result<(), CanonicalError>;
 
     async fn shutdown(&mut self);
@@ -837,6 +843,11 @@ impl ClusterProducerIo for DefaultMQProducer {
 
     fn producer_group(&self) -> CheetahString {
         self.producer_group()
+    }
+
+    fn concurrent_handle(&self) -> Option<Box<dyn ClusterProducerIo>> {
+        // Clones share the started producer; its sends take `&self` and may overlap.
+        Some(Box::new(self.clone()))
     }
 
     async fn start(&mut self) -> Result<(), CanonicalError> {
@@ -1149,6 +1160,7 @@ use cluster_admission::ClusterExecutionPolicy;
 use cluster_execution::run_cluster_lane;
 use cluster_execution::ClusterCommand;
 use cluster_execution::ClusterTaskExecutor;
+use cluster_execution::SendOutcome;
 
 #[derive(Clone)]
 struct CachedValue<T> {
@@ -1427,7 +1439,11 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             request_id,
             reply,
         } => {
-            let _ = reply.send(send_message_inner(config, state, request, client_id, request_id).await);
+            let _ = reply.send(
+                send_message_inner(config, state, request, client_id, request_id)
+                    .await
+                    .map(SendOutcome::Completed),
+            );
         }
         ClusterCommand::RecallMessage {
             request,
@@ -1857,15 +1873,77 @@ async fn send_message_inner(
                 .collect());
         }
     };
-    let entries = request.messages;
+    Ok(send_entries(producer, request.messages, timeout).await)
+}
+
+/// The result of preparing a send in its lane.
+enum SendStep {
+    /// The lane could not hand the send off and finished it.
+    Finished(Vec<SendMessageResultEntry>),
+    /// The producer is ready for the requesting task to send.
+    Ready(PreparedSend),
+}
+
+/// Messages and a producer handle, ready to send outside the lane.
+struct PreparedSend {
+    producer: Box<dyn ClusterProducerIo>,
+    entries: Vec<SendMessageEntry>,
+    timeout: u64,
+}
+
+impl PreparedSend {
+    async fn run(mut self) -> Vec<SendMessageResultEntry> {
+        send_entries(self.producer.as_mut(), self.entries, self.timeout).await
+    }
+}
+
+/// Starts or refreshes the client's producer in its lane, as [`send_message_inner`]
+/// does, and returns a handle for the requesting task to send with.
+async fn prepare_send(
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    request: SendMessageRequest,
+    client_id: Option<String>,
+    request_id: String,
+) -> SendStep {
+    let timeout = effective_send_timeout_ms(config, request.timeout);
+    let producer_group = build_proxy_producer_group(config, client_id.as_deref(), request_id.as_str());
+    let topics = collect_send_topics(&request);
+    let producer = match acquire_send_producer(config, state, producer_group.as_str(), topics, timeout).await {
+        Ok(producer) => producer,
+        Err(error) => {
+            return SendStep::Finished(
+                request
+                    .messages
+                    .iter()
+                    .map(|_| failure_send_result_entry(&error))
+                    .collect(),
+            );
+        }
+    };
+    match producer.concurrent_handle() {
+        Some(handle) => SendStep::Ready(PreparedSend {
+            producer: handle,
+            entries: request.messages,
+            timeout,
+        }),
+        None => SendStep::Finished(send_entries(producer, request.messages, timeout).await),
+    }
+}
+
+async fn send_entries(
+    producer: &mut dyn ClusterProducerIo,
+    entries: Vec<SendMessageEntry>,
+    timeout: u64,
+) -> Vec<SendMessageResultEntry> {
     if compatible_batch_entries(&entries) {
-        return Ok(send_compatible_batch(producer, entries, timeout).await);
+        return send_compatible_batch(producer, entries, timeout).await;
     }
     let mut results = Vec::with_capacity(entries.len());
     for entry in entries {
         results.push(send_message_entry(producer, entry, timeout).await);
     }
-    Ok(results)
+    results
 }
 
 async fn sync_lite_subscription_inner(
@@ -1901,6 +1979,7 @@ fn compatible_batch_entries(entries: &[SendMessageEntry]) -> bool {
         && entries.iter().all(|entry| {
             entry.topic == first.topic
                 && entry.queue_id == first.queue_id
+                && entry.broker_name == first.broker_name
                 && !entry.message.properties().keys().any(|key| {
                     matches!(
                         key.as_str(),
@@ -3012,9 +3091,19 @@ async fn resolve_target_queue(
     let queues = producer
         .fetch_publish_message_queues(entry.topic.to_string().as_str())
         .await?;
-    let max_queue_id = queues.iter().map(MessageQueue::queue_id).max().unwrap_or(-1);
+    // Queue ids repeat across Brokers: a client that picked a Broker must get that Broker's queue.
+    let broker_name = entry.broker_name.as_deref();
+    let has_queues = !queues.is_empty();
+    let broker_queues = queues
+        .into_iter()
+        .filter(|queue| broker_name.is_none_or(|name| queue.broker_name().as_str() == name))
+        .collect::<Vec<_>>();
+    if let Some(broker_name) = broker_name.filter(|_| has_queues && broker_queues.is_empty()) {
+        return Err(canonical::broker_not_found(broker_name).into());
+    }
+    let max_queue_id = broker_queues.iter().map(MessageQueue::queue_id).max().unwrap_or(-1);
 
-    queues
+    broker_queues
         .into_iter()
         .find(|queue| queue.queue_id() == queue_id)
         .map(Some)
@@ -3236,6 +3325,7 @@ mod tests {
             client_message_id: id.to_owned(),
             message: ProxyMessage::new("TopicA", id.as_bytes().to_vec()),
             queue_id: None,
+            broker_name: None,
         }
     }
 
@@ -3627,6 +3717,7 @@ mod tests {
                             client_message_id: "message-a".to_owned(),
                             message: ProxyMessage::new("TopicA", vec![7_u8; 32]),
                             queue_id: None,
+                            broker_name: None,
                         }],
                         timeout: None,
                         validate_message_type: true,

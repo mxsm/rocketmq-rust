@@ -180,6 +180,7 @@ CLI options override the loaded file for the fields they control:
 rocketmq-proxy-rust [-c <proxy.toml>] [--mode cluster|local]
   [--grpcListenAddr <host:port>]
   [--enableRemoting] [--remotingListenAddr <host:port>]
+  [--remotingAccessAddr <host[:port]>]
   [--namesrvAddr <host:port>] [--printConfig]
 ```
 
@@ -253,6 +254,7 @@ aclFileWatchEnabled = false
 | `grpc.listenAddr` | `0.0.0.0:8081` | gRPC bind address for the v2 `MessagingService`. |
 | `remoting.enabled` | `false` | Enables the remoting compatibility ingress. |
 | `remoting.listenAddr` | `0.0.0.0:8080` | Remoting bind address when enabled. |
+| `remoting.accessAddr` | unset | Address that Remoting route responses return for every Broker, as `host` or `host:port` (a bare host keeps the listen port), so Remoting clients send and pull through the proxy. Unset uses the listen address, or this host's address when listening on all interfaces. Set it behind NAT, in containers, or behind a load balancer. |
 | `cluster.namesrvAddr` | unset | NameServer address used by cluster mode. |
 | `cluster.brokerClusterName` | `DefaultCluster` | Broker cluster that cluster mode serves; also the ACL `Cluster` resource unless `auth.clusterName` is set. |
 | `cluster.routeCacheTtlMs` | `5000` | Route cache TTL used by cluster clients. |

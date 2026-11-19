@@ -51,7 +51,6 @@ use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
-use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
 use tracing::info;
@@ -247,7 +246,7 @@ impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
     ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
-        let remote_address = recall_remote_address(request.origin())?;
+        let remote_address = crate::processor::born_host::trusted_born_host(request.origin())?;
         let result = self.process_command(request.command_mut(), remote_address).await;
         crate::processor::response_assembly::immediate_outcome_from_command_result(
             &command_factory,
@@ -255,18 +254,6 @@ impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
             original_opaque,
             "RecallMessageProcessor command dispatch completed without a response",
         )
-    }
-}
-
-fn recall_remote_address(origin: &RequestOrigin) -> crate::broker_error::BrokerResult<std::net::SocketAddr> {
-    match origin {
-        RequestOrigin::Network { peer } => Ok(peer.address()),
-        RequestOrigin::Embedded { .. } => Err(crate::broker_error::invalid_argument(
-            "RecallMessage requires a trusted network origin for the persisted born host",
-        )),
-        _ => Err(crate::broker_error::invariant_violated(
-            "RecallMessage received an unrecognized request origin",
-        )),
     }
 }
 
@@ -703,7 +690,6 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedCaller;
     use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::TransportSecurity;
@@ -771,15 +757,6 @@ mod tests {
             None,
             false
         )));
-    }
-
-    #[test]
-    fn embedded_recall_cannot_forge_a_persisted_network_born_host() {
-        let origin = RequestOrigin::Embedded {
-            caller: EmbeddedCaller::BrokerProxy,
-        };
-
-        assert!(recall_remote_address(&origin).is_err());
     }
 
     #[test]

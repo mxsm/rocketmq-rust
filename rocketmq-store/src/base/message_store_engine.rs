@@ -31,7 +31,6 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::FlushBacklog;
 use rocketmq_store_api::StoreHealthSnapshot;
@@ -565,9 +564,6 @@ pub trait MessageStoreEngine: MessageStoreReader + Send + Sync + 'static {
     fn get_store_checkpoint(&self) -> &StoreCheckpoint;
 
     fn get_store_checkpoint_arc(&self) -> Arc<StoreCheckpoint>;
-
-    /// Get the system clock
-    fn get_system_clock(&self) -> Arc<SystemClock>;
 
     /// Get the commit log
     fn get_commit_log(&self) -> &CommitLog;

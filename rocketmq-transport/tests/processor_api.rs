@@ -491,8 +491,9 @@ fn api_exposes_read_only_origin_and_authenticated_principal() {
     fn inspect_origin(origin: &RequestOrigin) -> Option<std::net::SocketAddr> {
         match origin {
             RequestOrigin::Network { peer, .. } => Some(peer.address()),
-            RequestOrigin::Embedded { caller } => {
+            RequestOrigin::Embedded { caller, client_addr } => {
                 let _known_caller = matches!(caller, EmbeddedCaller::BrokerProxy);
+                let _client: Option<std::net::SocketAddr> = *client_addr;
                 None
             }
             _ => None,

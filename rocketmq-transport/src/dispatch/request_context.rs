@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::net::SocketAddr;
+
 use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::SecurityBootstrapProfile;
@@ -74,14 +76,31 @@ impl RequestContext {
     ///
     /// Returns a contract violation when the composition root did not inject a
     /// trusted principal.
+    #[cfg(test)]
     pub(crate) fn try_embedded_with_caller(
         caller: EmbeddedCaller,
         principal: Option<Principal>,
         deadline: Option<RequestDeadline>,
     ) -> Result<Self, TransportContractViolation> {
+        Self::try_embedded_for_client(caller, principal, None, deadline)
+    }
+
+    /// Creates a fail-closed embedded context that also records the end-client
+    /// address the trusted caller observed at its own network ingress.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when the composition root did not inject a
+    /// trusted principal.
+    pub(crate) fn try_embedded_for_client(
+        caller: EmbeddedCaller,
+        principal: Option<Principal>,
+        client_addr: Option<SocketAddr>,
+        deadline: Option<RequestDeadline>,
+    ) -> Result<Self, TransportContractViolation> {
         let principal = principal.ok_or(TransportContractViolation::RequestContextMissingEmbeddedAuthentication)?;
         Ok(Self {
-            origin: RequestOrigin::Embedded { caller },
+            origin: RequestOrigin::Embedded { caller, client_addr },
             deadline,
             authentication: AuthenticationState::authenticated(principal),
         })
@@ -153,8 +172,6 @@ impl RequestContext {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
     use super::*;
@@ -223,7 +240,34 @@ mod tests {
         assert_eq!(
             context.origin(),
             &RequestOrigin::Embedded {
-                caller: EmbeddedCaller::BrokerProxy
+                caller: EmbeddedCaller::BrokerProxy,
+                client_addr: None,
+            }
+        );
+        assert_eq!(context.authentication(), &AuthenticationState::authenticated(principal));
+    }
+
+    #[test]
+    fn embedded_context_records_the_supplied_client_without_a_network_peer() {
+        let principal = Principal::new("embedded-user");
+        let client_addr = "198.51.100.23:50123"
+            .parse::<SocketAddr>()
+            .expect("client address parses");
+        let context = RequestContext::try_embedded_for_client(
+            EmbeddedCaller::BrokerProxy,
+            Some(principal.clone()),
+            Some(client_addr),
+            None,
+        )
+        .expect("trusted embedded principal must construct context");
+
+        assert_eq!(context.transport(), RequestTransport::EmbeddedProxy);
+        assert_eq!(context.peer(), None, "the client address is not a transport peer");
+        assert_eq!(
+            context.origin(),
+            &RequestOrigin::Embedded {
+                caller: EmbeddedCaller::BrokerProxy,
+                client_addr: Some(client_addr),
             }
         );
         assert_eq!(context.authentication(), &AuthenticationState::authenticated(principal));

@@ -177,6 +177,7 @@ pub use shutdown_report::TaskSnapshot;
 pub use signal::wait_for_signal;
 pub use signal::wait_for_signal_result;
 pub use stack::current_thread_committed_stack_bytes;
+pub use stack::heap_future;
 pub use task_group::CountedTaskSet;
 pub use task_group::TaskGroupEventCounts;
 pub use task_group::TaskGroupId;

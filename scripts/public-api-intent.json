@@ -3735,6 +3735,15 @@
           "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
         },
         {
+          "category": "experimental",
+          "declaration": "pub use stack::heap_future",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use stack::heap_future",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "construct large startup and shutdown futures outside the Proxy main-thread frame",
+          "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
+        },
+        {
           "category": "stable",
           "declaration": "pub use task_group::CountedTaskSet",
           "identity": "rocketmq-runtime/src/lib.rs:pub use task_group::CountedTaskSet",
@@ -4248,7 +4257,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 171
+      "maximum_exports": 172
     },
     "rocketmq-store": {
       "entries": [
