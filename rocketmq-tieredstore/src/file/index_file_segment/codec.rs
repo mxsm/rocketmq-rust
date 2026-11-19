@@ -16,6 +16,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 
@@ -282,13 +283,5 @@ pub(super) fn item_base_position(hash_slot_count: usize) -> usize {
 }
 
 pub(super) fn java_positive_hash(key: &str) -> u32 {
-    let mut hash = 0_i32;
-    for value in key.encode_utf16() {
-        hash = hash.wrapping_mul(31).wrapping_add(value as i32);
-    }
-    if hash < 0 {
-        hash.wrapping_neg() as u32
-    } else {
-        hash as u32
-    }
+    JavaStringHasher::hash_str(key).unsigned_abs()
 }
