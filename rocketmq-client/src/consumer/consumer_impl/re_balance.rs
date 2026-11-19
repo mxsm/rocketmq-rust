@@ -15,9 +15,9 @@
 use std::collections::HashSet;
 
 use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::time as time_utils;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_runtime::common::time_utils;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::pop_request::PopRequest;

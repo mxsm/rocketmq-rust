@@ -15,6 +15,8 @@ Runtime-neutral RocketMQ domain types and value-level utilities. This crate has 
 `ModelContractViolation` describes invalid model contracts. Shared operational errors use `rocketmq-error`.
 Imports use `rocketmq_model`; the package name is `rocketmq-model`. Prefer these types over defining duplicate queue/message identities in consumers. Serialization names and enum values are compatibility surfaces.
 
+New code should use `rocketmq_model::time` for wall-clock timestamps, date parsing, and formatting. Scheduling and monotonic deadlines stay in `rocketmq-runtime`.
+
 ## Features and integration
 
 Default features are empty. `simd` enables the optional `simd-json` dependency and the model paths guarded by that feature. It does not add network or runtime ownership.
