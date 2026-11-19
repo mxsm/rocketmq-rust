@@ -34,7 +34,7 @@ impl ConsensusMembershipPort for RaftNodeManager {
         let metrics = self.raft().metrics().borrow_watched().clone();
         let stored = metrics.membership_config;
         let voters = stored.voter_ids().collect::<BTreeSet<_>>();
-        let learners = stored.membership().learner_ids().collect::<BTreeSet<_>>();
+        let learners = stored.membership().non_write_voter_ids().collect::<BTreeSet<_>>();
         let nodes = stored
             .nodes()
             .map(|(node_id, node)| {
