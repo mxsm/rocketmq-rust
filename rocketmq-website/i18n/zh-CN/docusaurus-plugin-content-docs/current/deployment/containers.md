@@ -11,7 +11,7 @@ title: "构建并运行本地服务容器"
 | 资产 | 行为 |
 | --- | --- |
 | `distribution/container/core-service.Dockerfile` | 将指定二进制和配置复制进 distroless 运行时，不编译 Rust |
-| `docker/Dockerfile.base` | 包含服务及独立测试驱动的多阶段构建/运行目标。服务目标用 profile 引导优化（PGO）构建 Broker，再用 BOLT 重排其代码布局，两者的训练都在构建过程中通过回环地址完成；传入 `--build-arg ROCKETMQ_BROKER_BOLT=false` 可跳过 BOLT，传入 `--build-arg ROCKETMQ_BROKER_PGO=false` 则两者都跳过，加快构建。传入 `--build-arg ROCKETMQ_BROKER_TARGET_CPU=x86-64-v3` 会按该 x86-64 级别（AVX2、BMI2、FMA：Intel Haswell、AMD Zen 及更新的 CPU）构建 Broker，实测 Broker 每条消息的 CPU 减少 2%–5%；但在更老的 CPU 上 Broker 会因非法指令而无法运行，因此默认保持基线 |
+| `docker/Dockerfile.base` | 包含服务及独立测试驱动的多阶段构建/运行目标。服务目标用 profile 引导优化（PGO）构建 Broker，再用 BOLT 重排其代码布局，两者的训练都在构建过程中通过回环地址完成；传入 `--build-arg ROCKETMQ_BROKER_BOLT=false` 可跳过 BOLT，传入 `--build-arg ROCKETMQ_BROKER_PGO=false` 则两者都跳过，加快构建。传入 `--build-arg ROCKETMQ_BROKER_TARGET_CPU=x86-64-v3` 会按该 x86-64 级别（AVX2、BMI2、FMA：Intel Haswell、AMD Zen 及更新的 CPU）构建 Broker，实测 Broker 每条消息的 CPU 减少 2%–5%；但在更老的 CPU 上 Broker 会因非法指令而无法运行，因此默认保持基线。Proxy 也用 PGO 构建，训练时在最终的 Broker 前通过回环地址发送 gRPC 消息，实测 Proxy 每条消息的 CPU 减少 10%–17%；传入 `--build-arg ROCKETMQ_PROXY_PGO=false` 可跳过 |
 | Core Helm chart 镜像 values | 需要填入实际可用制品的引用；默认标签不证明远端仓库可用 |
 
 以下命令使用第一条路径。二进制 CPU 架构、动态库要求必须与所选 distroless 运行时匹配。主机编译成功本身不能证明容器可以启动。
