@@ -14,6 +14,7 @@
 
 //! Drawing helpers shared by the panes.
 
+use std::ops::Range;
 use std::time::Duration;
 
 use ratatui::buffer::Buffer;
@@ -153,21 +154,29 @@ pub(super) fn scroll_into_view(top: usize, cursor: usize, total: usize, capacity
 /// Returns the slice of `text` to show in a field of `width` cells and the cell offset of
 /// the cursor within it. The window scrolls just far enough to keep the cursor visible.
 pub(super) fn field_window(text: &str, cursor: usize, width: usize) -> (&str, usize) {
+    let (visible, offset) = field_window_range(text, cursor, width);
+    (&text[visible], offset)
+}
+
+/// Returns the visible byte range for drawing styled portions of a field and the cursor's cell offset.
+pub(super) fn field_window_range(text: &str, cursor: usize, width: usize) -> (Range<usize>, usize) {
     if width == 0 {
-        return ("", 0);
+        return (0..0, 0);
     }
     let cursor_column = display_width(&text[..byte_offset(text, cursor)]);
     let wanted = cursor_column.saturating_sub(width - 1);
     // Start on a character boundary so a wide character is never split.
+    let mut column = 0;
     let mut start = 0;
     for character in text.chars() {
-        if start >= wanted {
+        if column >= wanted {
             break;
         }
-        start += char_width(character);
+        column += char_width(character);
+        start += character.len_utf8();
     }
-    let start = start.min(cursor_column);
-    (slice_columns(text, start, width), cursor_column - start)
+    let visible = slice_columns(&text[start..], 0, width);
+    (start..start + visible.len(), cursor_column - column)
 }
 
 /// Formats an elapsed duration for the status line.
