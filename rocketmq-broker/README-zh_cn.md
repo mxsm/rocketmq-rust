@@ -321,6 +321,16 @@ cargo bench -p rocketmq-broker --bench broker_runtime_lifecycle_bench
 
 比较测量结果时，保持工具链、feature、后端和负载一致。全部已声明的基准测试目标见 [`Cargo.toml`](Cargo.toml)。
 
+### Topic 和消费组键的哈希
+
+Broker 的 Topic、队列、消费位点和统计表继续使用随机种子哈希。对提交 `784170426` 的帧指针构建进行采样时，
+单连接异步发送使用 1 KiB 消息体，并保持最多 256 个在途请求。在 i7-11700K 上，归入 SipHash 的用户态开销约为
+每条消息 1,800 个周期。请求任务每条消息消耗约 143,600 个周期，占该次采样中 Broker 用户态总周期的 63%。
+据此估算，SipHash 约占 0.8%。该值汇总了使用默认哈希器的所有表，单张表只占其中一部分。
+
+Topic 和消费组名可以来自客户端。评估某张表的替代哈希器时，应在代表性负载中单独测量该表的开销，
+验证端到端收益，并评估输入键的碰撞风险。
+
 ## 许可证
 
 RocketMQ-Rust 使用 Apache License 2.0。参见 [LICENSE-APACHE](../LICENSE-APACHE)。
