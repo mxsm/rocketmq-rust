@@ -35,6 +35,8 @@ pub mod local_file_consume_queue_store;
 mod queue_offset_operator;
 pub mod single_consume_queue;
 
+#[cfg(feature = "rocksdb_store")]
+pub(crate) use queue_offset_operator::topic_queue_key;
 pub(crate) use queue_offset_operator::QueueOffsetHandle;
 
 /// Shared consume-queue handle with synchronization scoped to one queue.

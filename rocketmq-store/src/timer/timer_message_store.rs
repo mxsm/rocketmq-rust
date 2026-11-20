@@ -3680,10 +3680,10 @@ fn delete_identities_for_message(message: &MessageExt) -> Vec<TimerDeleteIdentit
     };
     let real_topic = message
         .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
-        .unwrap_or_else(|| CheetahString::from_string(message.topic().to_string()));
+        .unwrap_or_else(|| message.topic().clone());
     let generation = timer_generation(message);
     [
-        CheetahString::from_slice(unique_key.as_str()),
+        unique_key.clone(),
         build_delete_key(real_topic.as_str(), unique_key.as_str()),
         build_canonical_delete_key(real_topic.as_str(), unique_key.as_str(), true),
     ]

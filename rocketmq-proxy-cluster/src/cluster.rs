@@ -1616,13 +1616,8 @@ async fn lock_batch_mq_inner(
     }
     let (broker_name, topic_name) = single_broker_and_topic(&request.mq_set)?;
     let client = state.client(config).await?;
-    let broker_addr = resolve_remoting_broker_addr(
-        client.as_ref(),
-        broker_name.as_str(),
-        topic_name.as_str(),
-        request.only_this_broker,
-    )
-    .await?;
+    let broker_addr =
+        resolve_remoting_broker_addr(client.as_ref(), broker_name, topic_name, request.only_this_broker).await?;
     response.lock_ok_mq_set = client
         .lock_batch_mq(broker_addr.as_str(), request, config.mq_client_api_timeout_ms)
         .await?;
@@ -1639,13 +1634,8 @@ async fn unlock_batch_mq_inner(
     }
     let (broker_name, topic_name) = single_broker_and_topic(&request.mq_set)?;
     let client = state.client(config).await?;
-    let broker_addr = resolve_remoting_broker_addr(
-        client.as_ref(),
-        broker_name.as_str(),
-        topic_name.as_str(),
-        request.only_this_broker,
-    )
-    .await?;
+    let broker_addr =
+        resolve_remoting_broker_addr(client.as_ref(), broker_name, topic_name, request.only_this_broker).await?;
     client
         .unlock_batch_mq(&broker_addr, request, config.mq_client_api_timeout_ms)
         .await?;
@@ -1654,50 +1644,45 @@ async fn unlock_batch_mq_inner(
 
 fn single_broker_and_topic(
     mq_set: &std::collections::HashSet<MessageQueue>,
-) -> ProxyResult<(CheetahString, CheetahString)> {
-    let mut broker_name: Option<CheetahString> = None;
-    let mut topic_name: Option<CheetahString> = None;
-    for queue in mq_set {
-        if broker_name
-            .as_deref()
-            .is_some_and(|existing| existing != queue.broker_name())
-        {
+) -> ProxyResult<(&CheetahString, &CheetahString)> {
+    let mut queues = mq_set.iter();
+    let first = queues
+        .next()
+        .ok_or_else(|| ProxyError::invalid_metadata("message queue set must not be empty"))?;
+    let broker_name = first.broker_name();
+    let topic_name = first.topic();
+    for queue in queues {
+        if broker_name != queue.broker_name() {
             return Err(ProxyError::invalid_metadata(
                 "lock/unlock batch request must target a single broker",
             ));
         }
-        if topic_name.as_deref().is_some_and(|existing| existing != queue.topic()) {
+        if topic_name != queue.topic() {
             return Err(ProxyError::invalid_metadata(
                 "lock/unlock batch request must target a single topic",
             ));
         }
-        broker_name.get_or_insert_with(|| CheetahString::from(queue.broker_name()));
-        topic_name.get_or_insert_with(|| CheetahString::from(queue.topic()));
     }
-    Ok((
-        broker_name.ok_or_else(|| ProxyError::invalid_metadata("message queue set must not be empty"))?,
-        topic_name.ok_or_else(|| ProxyError::invalid_metadata("message queue set must not be empty"))?,
-    ))
+    Ok((broker_name, topic_name))
 }
 
 async fn resolve_remoting_broker_addr(
     client: &dyn ClusterClientIo,
-    broker_name: &str,
-    topic: &str,
+    broker_name: &CheetahString,
+    topic: &CheetahString,
     only_this_broker: bool,
 ) -> ProxyResult<CheetahString> {
-    let broker_name = CheetahString::from(broker_name);
     let mut result = client
-        .find_subscribe_broker_addr(&broker_name, 0, only_this_broker)
+        .find_subscribe_broker_addr(broker_name, 0, only_this_broker)
         .await;
     if result.is_none() {
-        client.refresh_topic_route(&CheetahString::from(topic)).await;
+        client.refresh_topic_route(topic).await;
         result = client
-            .find_subscribe_broker_addr(&broker_name, 0, only_this_broker)
+            .find_subscribe_broker_addr(broker_name, 0, only_this_broker)
             .await;
     }
     result
-        .ok_or_else(|| canonical::broker_not_found(&broker_name))
+        .ok_or_else(|| canonical::broker_not_found(broker_name))
         .map_err(Into::into)
 }
 

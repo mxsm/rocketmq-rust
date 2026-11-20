@@ -74,7 +74,7 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
-use crate::queue::queue_offset_operator::topic_queue_key;
+use crate::queue::topic_queue_key;
 use crate::queue::ArcConsumeQueue;
 use crate::rocksdb::config::RocksDbConfig;
 use crate::rocksdb::consume_queue::CommitLogDispatcherBuildRocksDbConsumeQueue;
