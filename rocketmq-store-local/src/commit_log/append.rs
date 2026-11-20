@@ -15,6 +15,8 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
+
 pub mod finalized_append;
 pub mod micro_batch;
 pub mod prepared_payload;
@@ -106,6 +108,14 @@ impl AppendMessageResult {
     #[inline]
     pub fn is_ok(&self) -> bool {
         self.status == AppendMessageStatus::PutOk
+    }
+
+    /// Resolves the lazy supplier first, or copies the stored ID directly into its response representation.
+    pub fn get_message_id_cheetah(&self) -> Option<CheetahString> {
+        match &self.msg_id_supplier {
+            Some(supplier) => Some(CheetahString::from_string(supplier())),
+            None => self.msg_id.as_deref().map(CheetahString::from_slice),
+        }
     }
 
     pub fn get_message_id(&self) -> Option<String> {

@@ -43,7 +43,7 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::MessageVersion;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_model::utils::crc32_utils::crc32;
-use rocketmq_model::utils::message_utils::build_message_id;
+use rocketmq_model::utils::message_utils::build_message_id_cheetah;
 
 pub const CHARSET_UTF8: &str = "UTF-8";
 pub const MESSAGE_MAGIC_CODE_POSITION: usize = 4;
@@ -278,10 +278,7 @@ pub fn decode(
         );
     }
     *msg_ext.message.properties_mut() = properties;
-    msg_ext.set_msg_id(CheetahString::from_string(build_message_id(
-        frame.store_host,
-        frame.commit_log_offset,
-    )));
+    msg_ext.set_msg_id(build_message_id_cheetah(frame.store_host, frame.commit_log_offset));
 
     Some(msg_ext)
 }

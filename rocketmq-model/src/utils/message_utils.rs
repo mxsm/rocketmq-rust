@@ -198,23 +198,46 @@ pub fn delete_property_to_cheetah_string(properties_string: &CheetahString, name
         .unwrap_or_else(|| properties_string.clone())
 }
 
-pub fn build_message_id(socket_addr: SocketAddr, wrote_offset: i64) -> String {
-    let mut msg_id_vec = match socket_addr {
-        SocketAddr::V4(addr) => {
-            let mut msg_id_vec = Vec::<u8>::with_capacity(16);
-            msg_id_vec.extend_from_slice(&addr.ip().octets());
-            msg_id_vec.put_i32(addr.port() as i32);
-            msg_id_vec
+fn message_id_text<'a>(store_host: &[u8], offset: i64, text: &'a mut [u8; 56]) -> &'a str {
+    let text = &mut text[..(store_host.len() + 8) * 2];
+    for (pair, byte) in text
+        .chunks_exact_mut(2)
+        .zip(store_host.iter().copied().chain(offset.to_be_bytes()))
+    {
+        pair.copy_from_slice(&crate::codec::upper_hex_pair(byte));
+    }
+    std::str::from_utf8(text).unwrap_or_default()
+}
+
+fn socket_message_id_text(addr: SocketAddr, offset: i64, text: &mut [u8; 56]) -> &str {
+    let mut host = [0u8; 20];
+    let ip_len = match addr.ip() {
+        IpAddr::V4(ip) => {
+            host[..4].copy_from_slice(&ip.octets());
+            4
         }
-        SocketAddr::V6(addr) => {
-            let mut msg_id_vec = Vec::<u8>::with_capacity(28);
-            msg_id_vec.extend_from_slice(&addr.ip().octets());
-            msg_id_vec.put_i32(addr.port() as i32);
-            msg_id_vec
+        IpAddr::V6(ip) => {
+            host[..16].copy_from_slice(&ip.octets());
+            16
         }
     };
-    msg_id_vec.put_i64(wrote_offset);
-    bytes_to_string(msg_id_vec.as_slice())
+    host[ip_len..ip_len + 4].copy_from_slice(&u32::from(addr.port()).to_be_bytes());
+    message_id_text(&host[..ip_len + 4], offset, text)
+}
+
+pub fn build_message_id(socket_addr: SocketAddr, wrote_offset: i64) -> String {
+    socket_message_id_text(socket_addr, wrote_offset, &mut [0; 56]).to_owned()
+}
+
+/// Encodes the store address and physical offset as an uppercase RocketMQ message ID.
+pub fn build_message_id_cheetah(socket_addr: SocketAddr, wrote_offset: i64) -> CheetahString {
+    CheetahString::from_slice(socket_message_id_text(socket_addr, wrote_offset, &mut [0; 56]))
+}
+
+/// Encodes a CommitLog store host verbatim. Returns `None` unless the host contains
+/// an IPv4 or IPv6 address followed by the four-byte wire port.
+pub fn build_message_id_from_store_host(host: &[u8], offset: i64) -> Option<CheetahString> {
+    matches!(host.len(), 8 | 20).then(|| CheetahString::from_slice(message_id_text(host, offset, &mut [0; 56])))
 }
 
 pub fn socket_address_to_vec(socket_addr: SocketAddr) -> Vec<u8> {
@@ -596,6 +619,26 @@ mod tests {
         let wrote_offset = 1;
         let result = build_message_id(socket_addr, wrote_offset);
         assert_eq!(result, "7F0000010000000C0000000000000001");
+    }
+
+    #[test]
+    fn offset_message_ids_match_the_store_wire_layout() {
+        for addr in ["127.0.0.1:10911", "[2001:db8::1]:65535"] {
+            let addr: SocketAddr = addr.parse().unwrap();
+            let host = socket_address_to_vec(addr);
+            for offset in [i64::MIN, -1, 0, 13, i64::MAX] {
+                let mut bytes = host.clone();
+                bytes.extend_from_slice(&offset.to_be_bytes());
+                let expected = bytes_to_string(&bytes);
+                assert_eq!(build_message_id(addr, offset), expected);
+                assert_eq!(build_message_id_cheetah(addr, offset).as_str(), expected);
+                assert_eq!(
+                    build_message_id_from_store_host(&host, offset).unwrap().as_str(),
+                    expected
+                );
+            }
+        }
+        assert!(build_message_id_from_store_host(&[0; 7], 0).is_none());
     }
 
     #[test]

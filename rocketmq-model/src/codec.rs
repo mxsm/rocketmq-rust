@@ -21,6 +21,11 @@ use cheetah_string::CheetahString;
 
 const HEX: &[u8; 16] = b"0123456789ABCDEF";
 
+#[inline]
+pub(crate) fn upper_hex_pair(byte: u8) -> [u8; 2] {
+    [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0x0f)]]
+}
+
 pub fn bytes_to_string(bytes: &[u8]) -> String {
     let mut value = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
