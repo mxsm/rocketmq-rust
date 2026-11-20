@@ -17,6 +17,7 @@ use std::fmt;
 use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
+use cheetah_string::CheetahText;
 
 use crate::common::message::MessageConst;
 
@@ -35,10 +36,14 @@ const NAME_VALUE_SEPARATOR: char = '\u{1}';
 /// a few properties and sets a few more therefore never builds a map, and cloning the message
 /// copies no map. Lookups return the same values the map would: entries with an empty key or value
 /// are skipped, and the last of duplicate keys wins.
+///
+/// Client-decoded properties can share the response frame with the message body. Cloning the
+/// properties also retains that frame. Call [`Self::detach_from_frame`] on the clone before
+/// caching it beyond the lifetime of the original message.
 #[derive(Clone, Default)]
 pub struct MessageProperties {
     /// Encoded properties not parsed into `map` yet; always valid UTF-8.
-    encoded: Option<CheetahString>,
+    encoded: Option<EncodedProperties>,
     /// Offsets of the entries of `encoded` that a map would keep, in text order; built by the first
     /// lookup and dropped with `encoded`.
     index: OnceLock<Vec<EncodedEntry>>,
@@ -48,6 +53,23 @@ pub struct MessageProperties {
     map: Option<HashMap<CheetahString, CheetahString>>,
     /// The map built for a shared whole-map access while `map` is `None`.
     parsed: OnceLock<HashMap<CheetahString, CheetahString>>,
+}
+
+#[derive(Clone)]
+enum EncodedProperties {
+    Owned(CheetahString),
+    Frame(CheetahText),
+}
+
+impl std::ops::Deref for EncodedProperties {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        match self {
+            Self::Owned(text) => text.as_str(),
+            Self::Frame(text) => text.as_str(),
+        }
+    }
 }
 
 impl fmt::Debug for MessageProperties {
@@ -67,15 +89,32 @@ impl MessageProperties {
     /// Creates properties from their encoded `key\u{1}value\u{2}` form, as stored in a message.
     ///
     /// Valid UTF-8 is kept as text and parsed on demand. Other input is parsed at once, replacing
-    /// invalid sequences as `String::from_utf8_lossy` does.
+    /// invalid sequences as `String::from_utf8_lossy` does. The input buffer can be released immediately.
     pub fn from_encoded(encoded: bytes::Bytes) -> Self {
-        match CheetahString::try_copy_from_bytes(encoded) {
+        Self::from_validated(CheetahString::try_copy_from_bytes(encoded).map(EncodedProperties::Owned))
+    }
+
+    /// Borrows valid property text from a client response whose message body retains the same frame.
+    /// Call [`Self::detach_from_frame`] before independently caching these properties.
+    pub fn from_frame_bytes(encoded: bytes::Bytes) -> Self {
+        Self::from_validated(CheetahText::try_from_bytes(encoded).map(EncodedProperties::Frame))
+    }
+
+    fn from_validated(text: Result<EncodedProperties, cheetah_string::FromUtf8BytesError>) -> Self {
+        match text {
             Ok(text) if text.is_empty() => Self::default(),
             Ok(text) => Self {
                 encoded: Some(text),
                 ..Self::default()
             },
             Err(error) => Self::from_map(parse_lossy(&error.into_parts().0)),
+        }
+    }
+
+    /// Releases the frame backing the encoded text, preserving its lazy index and any overlay.
+    pub fn detach_from_frame(&mut self) {
+        if let Some(EncodedProperties::Frame(text)) = &self.encoded {
+            self.encoded = Some(EncodedProperties::Owned(text.to_cheetah_string()));
         }
     }
 
@@ -124,7 +163,7 @@ impl MessageProperties {
         if let Some(map) = self.built() {
             return entries(&mut map.iter());
         }
-        let text = self.encoded.as_ref().map_or(0, CheetahString::len);
+        let text = self.encoded.as_deref().map_or(0, str::len);
         text.saturating_add(entries(&mut self.overlay.iter().map(|(key, value)| (key, value))))
     }
 
@@ -679,19 +718,36 @@ mod tests {
             let len = (next() % 24) as usize;
             let encoded: Vec<u8> = (0..len).map(|_| ALPHABET[(next() % 4) as usize]).collect();
             let expected = reference(&encoded);
-            let properties = MessageProperties::from_encoded(bytes::Bytes::from(encoded.clone()));
-
-            for key in ["a", "b", "ab", "ba", "aa", "bb", "aab", "c", ""] {
-                assert_eq!(
-                    properties.get_str(key),
-                    expected.get(key).map(CheetahString::as_str),
-                    "key {key:?} in {encoded:?}"
-                );
+            let bytes = bytes::Bytes::copy_from_slice(&encoded);
+            for properties in [
+                MessageProperties::from_encoded(bytes.clone()),
+                MessageProperties::from_frame_bytes(bytes),
+            ] {
+                for key in ["a", "b", "ab", "ba", "aa", "bb", "aab", "c", ""] {
+                    assert_eq!(
+                        properties.get_str(key),
+                        expected.get(key).map(CheetahString::as_str),
+                        "key {key:?} in {encoded:?}"
+                    );
+                }
+                assert!(properties.built().is_none(), "lookups must not build the map");
+                assert_eq!(properties.as_map(), &expected, "map of {encoded:?}");
+                assert_eq!(properties.len(), expected.len());
             }
-            assert!(properties.built().is_none(), "lookups must not build the map");
-            assert_eq!(properties.as_map(), &expected, "map of {encoded:?}");
-            assert_eq!(properties.len(), expected.len());
         }
+    }
+
+    #[test]
+    fn frame_properties_preserve_lossy_decoding_and_overlays_across_detach() {
+        let invalid = bytes::Bytes::from_static(b"key\x01\xff\x02");
+        let decoded = MessageProperties::from_frame_bytes(invalid.clone());
+        assert_eq!(decoded.as_map(), &reference(&invalid));
+        let mut properties = MessageProperties::from_frame_bytes(bytes::Bytes::from_static(b"key\x01value\x02"));
+        assert_eq!(properties.get_str("key"), Some("value"));
+        properties.put("overlay".into(), "new".into());
+        properties.detach_from_frame();
+        assert_eq!(properties.get_str("key"), Some("value"));
+        assert_eq!(properties.get_str("overlay"), Some("new"));
     }
 
     #[test]

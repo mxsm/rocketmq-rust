@@ -90,7 +90,7 @@ fn decode_pull_messages(
             should_decode_pull_message_body(metadata, subscription_data)
         })
     } else {
-        MessageDecoder::decodes_batch(message_binary, read_body, decompress_body)
+        MessageDecoder::decode_client_batch(message_binary, read_body, decompress_body)
     }
 }
 

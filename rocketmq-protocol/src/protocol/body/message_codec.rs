@@ -68,7 +68,7 @@ pub(crate) fn decode_message_frame_with(
     input: &mut Bytes,
     properties_string: PropertiesString,
 ) -> Result<DecodedMessageFrame> {
-    let (mut frame, property_bytes) = decode_message_frame_parts(input, properties_string)?;
+    let (mut frame, property_bytes) = decode_message_frame_with_encoded_properties(input, properties_string, None)?;
     frame.properties = decode_properties(&property_bytes);
     Ok(frame)
 }
@@ -79,13 +79,7 @@ pub(crate) fn decode_message_frame_with(
 pub(crate) fn decode_message_frame_with_encoded_properties(
     input: &mut Bytes,
     properties_string: PropertiesString,
-) -> Result<(DecodedMessageFrame, Bytes)> {
-    decode_message_frame_parts(input, properties_string)
-}
-
-fn decode_message_frame_parts(
-    input: &mut Bytes,
-    properties_string: PropertiesString,
+    previous_topic: Option<&CheetahString>,
 ) -> Result<(DecodedMessageFrame, Bytes)> {
     let initial_len = input.remaining();
     let store_size = read_i32(input)?;
@@ -116,9 +110,11 @@ fn decode_message_frame_parts(
         usize::from(read_u8(input)?)
     };
     let topic_bytes = take(input, topic_len)?;
-    let topic = std::str::from_utf8(&topic_bytes)
-        .map(CheetahString::from_slice)
-        .map_err(invalid_source)?;
+    let topic = match previous_topic {
+        // Matching a previously decoded topic also establishes that these bytes are valid UTF-8.
+        Some(previous) if previous.as_bytes() == topic_bytes.as_ref() => previous.clone(),
+        _ => CheetahString::from_slice(std::str::from_utf8(&topic_bytes).map_err(invalid_source)?),
+    };
     let property_len = usize::try_from(read_i16(input)?).map_err(|_| invalid("negative properties length"))?;
     let property_bytes = take(input, property_len)?;
     let properties_string = match properties_string {

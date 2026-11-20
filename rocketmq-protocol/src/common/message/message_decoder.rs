@@ -189,25 +189,11 @@ pub fn decode_client(
     is_set_properties_string: bool,
     check_crc: bool,
 ) -> Option<MessageClientExt> {
-    /*if let Some(msg_ext) = decode(
-        byte_buffer,
-        read_body,
-        de_compress_body,
-        false,
-        is_set_properties_string,
-        check_crc,
-    ) {
-        Some(MessageClientExt {
-            message_ext_inner: msg_ext,
-        })
-    } else {
-        None
-    }*/
     decode(
         byte_buffer,
         read_body,
         de_compress_body,
-        false,
+        true,
         is_set_properties_string,
         check_crc,
     )
@@ -216,14 +202,33 @@ pub fn decode_client(
     })
 }
 
-//this method will optimize later
 pub fn decode(
     byte_buffer: &mut Bytes,
     read_body: bool,
     de_compress_body: bool,
-    _is_client: bool,
+    is_client: bool,
     is_set_properties_string: bool,
     check_crc: bool,
+) -> Option<MessageExt> {
+    decode_with_previous_topic(
+        byte_buffer,
+        read_body,
+        de_compress_body,
+        is_client,
+        is_set_properties_string,
+        check_crc,
+        None,
+    )
+}
+
+fn decode_with_previous_topic(
+    byte_buffer: &mut Bytes,
+    read_body: bool,
+    de_compress_body: bool,
+    is_client: bool,
+    is_set_properties_string: bool,
+    check_crc: bool,
+    previous_topic: Option<&CheetahString>,
 ) -> Option<MessageExt> {
     use crate::protocol::body::message_codec::PropertiesString;
 
@@ -236,6 +241,7 @@ pub fn decode(
         crate::protocol::body::message_codec::decode_message_frame_with_encoded_properties(
             byte_buffer,
             properties_string,
+            previous_topic,
         )
         .ok()?;
 
@@ -259,9 +265,11 @@ pub fn decode(
     msg_ext.set_prepared_transaction_offset(frame.prepared_transaction_offset);
     msg_ext.message.set_topic(frame.topic);
 
+    let decompress = de_compress_body && frame.sys_flag & MessageSysFlag::COMPRESSED_FLAG != 0;
+    let retain_frame = is_client && read_body && !frame.body.is_empty() && !decompress;
     if read_body && !frame.body.is_empty() {
         let mut body = frame.body;
-        if de_compress_body && (frame.sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
+        if decompress {
             let compression_type = MessageSysFlag::try_get_compression_type(frame.sys_flag).ok()?;
             body = compression_type.try_decompression(&body).ok()?;
         }
@@ -270,7 +278,11 @@ pub fn decode(
 
     // Parsed on first whole-map access: a consumer that reads its tags and sets a few properties
     // never builds the map.
-    let mut properties = MessageProperties::from_encoded(encoded_properties);
+    let mut properties = if retain_frame {
+        MessageProperties::from_frame_bytes(encoded_properties)
+    } else {
+        MessageProperties::from_encoded(encoded_properties)
+    };
     if is_set_properties_string && !frame.properties_string.is_empty() {
         properties.put(
             CheetahString::from_static_str("propertiesString"),
@@ -358,10 +370,39 @@ pub fn encode_message_into(message: &Message, bytes: &mut BytesMut) {
 }
 
 pub fn decodes_batch(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageExt> {
+    decode_batch(byte_buffer, read_body, decompress_body, false, std::convert::identity)
+}
+
+/// Decodes client Pull or POP messages. Only a body kept as a slice of the reply
+/// permits its properties to share the frame. Broker and metadata-filtered reads stay detached.
+pub fn decode_client_batch(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageExt> {
+    decode_batch(byte_buffer, read_body, decompress_body, true, std::convert::identity)
+}
+
+fn decode_batch<M: MessageTrait>(
+    byte_buffer: &mut Bytes,
+    read_body: bool,
+    decompress_body: bool,
+    is_client: bool,
+    wrap: impl Fn(MessageExt) -> M,
+) -> Vec<M> {
     let mut messages = Vec::new();
     while byte_buffer.has_remaining() {
-        if let Some(msg_ext) = decode(byte_buffer, read_body, decompress_body, false, false, false) {
-            messages.push(msg_ext);
+        let previous_topic = if is_client {
+            messages.last().map(MessageTrait::topic)
+        } else {
+            None
+        };
+        if let Some(msg_ext) = decode_with_previous_topic(
+            byte_buffer,
+            read_body,
+            decompress_body,
+            is_client,
+            false,
+            false,
+            previous_topic,
+        ) {
+            messages.push(wrap(msg_ext));
         } else {
             break;
         }
@@ -442,15 +483,7 @@ fn decompress_message_body(msg_ext: &mut MessageExt) -> bool {
 }
 
 pub fn decodes_batch_client(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageClientExt> {
-    let mut messages = Vec::new();
-    while byte_buffer.has_remaining() {
-        if let Some(msg_ext) = decode_client(byte_buffer, read_body, decompress_body, false, false) {
-            messages.push(msg_ext);
-        } else {
-            break;
-        }
-    }
-    messages
+    decode_batch(byte_buffer, read_body, decompress_body, true, MessageClientExt::new)
 }
 
 pub fn decode_messages_from(mut message_ext: MessageExt, vec_: &mut Vec<MessageExt>) {
@@ -967,6 +1000,73 @@ mod tests {
         }
 
         assert_eq!(encode_messages(&messages), expected.freeze());
+    }
+
+    #[test]
+    fn client_batch_reuses_adjacent_long_topics_and_rejects_invalid_topic_bytes() {
+        let first = "%RETRY%payments-long-consumer-group-a";
+        let second = "%RETRY%payments-long-consumer-group-b";
+        let topics = [first, first, second, second];
+        let mut payload = BytesMut::new();
+        let mut source = message_ext_with_tag(0, "Tag", 8);
+        for topic in topics {
+            source.set_topic(CheetahString::from_slice(topic));
+            payload.put_slice(&encode(&source, false).unwrap());
+        }
+        let mut invalid = encode(&source, false).unwrap().to_vec();
+        let pos = invalid
+            .windows(second.len())
+            .position(|bytes| bytes == second.as_bytes())
+            .unwrap();
+        invalid[pos + second.len() - 1] = 0xff;
+        payload.put_slice(&invalid);
+
+        let messages = decode_client_batch(&mut payload.freeze(), true, false);
+        assert_eq!(
+            messages.iter().map(|msg| msg.topic().as_str()).collect::<Vec<_>>(),
+            topics
+        );
+        assert_eq!(messages[0].topic().as_ptr(), messages[1].topic().as_ptr());
+        assert_eq!(messages[2].topic().as_ptr(), messages[3].topic().as_ptr());
+    }
+
+    #[test]
+    fn client_properties_share_only_a_retained_wire_body() {
+        use std::sync::Arc;
+
+        for (is_client, read_body, compressed, size, shares) in [
+            (true, true, false, 32, true),
+            (false, true, false, 32, false),
+            (true, false, false, 32, false),
+            (true, true, true, 32, false),
+            (true, true, false, 0, false),
+        ] {
+            let mut source = message_ext_with_tag(0, "a-long-tag-for-the-frame-lifetime-test", size);
+            if compressed {
+                source.set_sys_flag(MessageSysFlag::COMPRESSED_FLAG | MessageSysFlag::COMPRESSION_ZSTD_TYPE);
+            }
+            let wire: Arc<[u8]> = Arc::from(encode(&source, compressed).unwrap().as_ref());
+            let range = wire.as_ptr_range();
+            let owner = Arc::downgrade(&wire);
+            let mut input = Bytes::from_owner(wire);
+            let mut message = decode(&mut input, read_body, true, is_client, false, false).unwrap();
+            drop(input);
+            let tag = message.message.properties().get_str("TAGS").unwrap();
+            assert_eq!(tag, "a-long-tag-for-the-frame-lifetime-test");
+            assert_eq!(range.contains(&tag.as_ptr()), shares);
+            let mut cached = message.message.properties().clone();
+            cached.detach_from_frame();
+            assert_eq!(cached.get_str("TAGS"), Some(tag));
+            drop(message.message.take_body());
+            assert!(owner.upgrade().is_none());
+            assert_eq!(
+                message.message.properties().get_str("TAGS"),
+                Some("a-long-tag-for-the-frame-lifetime-test")
+            );
+            drop(message);
+            assert!(owner.upgrade().is_none());
+            assert_eq!(cached.get_str("TAGS"), Some("a-long-tag-for-the-frame-lifetime-test"));
+        }
     }
 
     #[test]

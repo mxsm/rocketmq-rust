@@ -301,6 +301,7 @@ impl Message {
     #[doc(hidden)]
     #[inline]
     pub fn body_mut(&mut self) -> &mut MessageBody {
+        self.properties.detach_from_frame();
         &mut self.body
     }
 
@@ -329,6 +330,7 @@ impl Message {
     #[doc(hidden)]
     #[inline]
     pub fn set_body(&mut self, body: Option<Bytes>) {
+        self.properties.detach_from_frame();
         self.body = if let Some(b) = body {
             MessageBody::from(b)
         } else {
@@ -340,6 +342,7 @@ impl Message {
     #[doc(hidden)]
     #[inline]
     pub fn take_body(&mut self) -> Option<Bytes> {
+        self.properties.detach_from_frame();
         let old = std::mem::take(&mut self.body);
         old.raw().cloned()
     }
