@@ -471,29 +471,21 @@ fn prompt_line(ctx: &Ctx<'_>, expected: &str, color: Color) -> Line<'static> {
 /// Draws the typed confirmation, green while it follows the expected text and red after
 /// the first character that does not, and returns the cursor position.
 fn paint_confirm_input(buffer: &mut Buffer, field: Rect, typed: &str, expected: &str, cursor: usize) -> Position {
+    let text_width = field.width.saturating_sub(2);
+    if text_width == 0 {
+        return Position::new(field.x, field.y);
+    }
     let text_x = field.x + 1;
-    let text_width = usize::from(field.width.saturating_sub(2));
-    let characters = typed.chars().collect::<Vec<_>>();
-    let agreeing = typed
+    let (visible, offset) = widgets::field_window_range(typed, cursor, usize::from(text_width));
+    let matching_bytes = typed
         .chars()
         .zip(expected.chars())
         .take_while(|(typed, expected)| typed == expected)
-        .count();
-
-    // Scroll by characters so the cursor stays inside the field.
-    let first = cursor.saturating_sub(text_width.saturating_sub(1));
+        .map(|(character, _)| character.len_utf8())
+        .sum::<usize>();
     let mut x = text_x;
-    let mut cursor_x = text_x;
-    let limit = text_x + text_width as u16;
-    for (index, character) in characters.iter().enumerate().skip(first) {
-        if index == cursor {
-            cursor_x = x;
-        }
-        let cells = char_width(*character) as u16;
-        if x + cells > limit {
-            break;
-        }
-        let color = if index < agreeing {
+    for (byte, character) in typed[visible.clone()].char_indices() {
+        let color = if visible.start + byte < matching_bytes {
             theme::SUCCESS
         } else {
             theme::DANGER
@@ -505,13 +497,10 @@ fn paint_confirm_input(buffer: &mut Buffer, field: Rect, typed: &str, expected: 
             field.y,
             character.encode_utf8(&mut encoded),
             theme::bold(color),
-            cells,
+            char_width(character) as u16,
         );
     }
-    if cursor >= characters.len() {
-        cursor_x = x;
-    }
-    Position::new(cursor_x.min(limit.saturating_sub(1)), field.y)
+    Position::new(text_x + offset as u16, field.y)
 }
 
 fn paint_detail(frame: &mut Frame, ctx: &Ctx<'_>, area: Rect, opening: f32, view: &mut ViewCache) {
@@ -728,5 +717,19 @@ mod tests {
 
         let start = paint_confirm_input(&mut buffer, field, typed, typed, 0);
         assert_eq!(start, Position::new(1, 0));
+    }
+
+    #[test]
+    fn confirmation_input_scrolls_wide_text_by_terminal_cells() {
+        let field = Rect::new(0, 0, 8, 1);
+        let mut buffer = Buffer::empty(field);
+        let cursor = paint_confirm_input(&mut buffer, field, "甲乙丙丁戊", "甲乙丙己戊", 4);
+
+        assert_eq!(buffer[(1, 0)].symbol(), "丙");
+        assert_eq!(buffer[(1, 0)].fg, theme::SUCCESS);
+        assert_eq!(buffer[(3, 0)].symbol(), "丁");
+        assert_eq!(buffer[(3, 0)].fg, theme::DANGER);
+        assert_eq!(cursor, Position::new(5, 0));
+        assert_eq!(buffer[(5, 0)].symbol(), "戊");
     }
 }
