@@ -37,6 +37,7 @@ use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerI
 use rocketmq_model::common::message::message_single;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_observability::metrics::store::StoreMetricsRecorder;
 use rocketmq_observability::metrics::timer::TimerMetricsRecorder;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
@@ -3366,12 +3367,12 @@ impl TimerMessageStore {
         if store_timestamp > 0 {
             properties.insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS),
-                CheetahString::from_string(store_timestamp.to_string()),
+                cheetah_from_integer(store_timestamp),
             );
         }
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS),
-            CheetahString::from_string(current_millis().to_string()),
+            cheetah_from_integer(current_millis()),
         );
         if need_roll {
             let next_roll_times = properties
@@ -3381,7 +3382,7 @@ impl TimerMessageStore {
                 + 1;
             properties.insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES),
-                CheetahString::from_string(next_roll_times.to_string()),
+                cheetah_from_integer(next_roll_times),
             );
         }
         inner.message_ext_inner.set_properties(properties);

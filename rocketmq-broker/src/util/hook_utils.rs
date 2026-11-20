@@ -30,6 +30,7 @@ use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::MessageStoreConfig;
@@ -292,11 +293,11 @@ impl HookUtils {
 
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS),
-            CheetahString::from_string(normalized.timer_out_ms.to_string()),
+            cheetah_from_integer(normalized.timer_out_ms),
         );
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS),
-            CheetahString::from_string(normalized.original_deliver_ms.to_string()),
+            cheetah_from_integer(normalized.original_deliver_ms),
         );
         let generation = 0u64;
         let source_identity = msg
@@ -321,20 +322,29 @@ impl HookUtils {
         );
         let policy_fingerprint = policy.fingerprint();
         for (key, value) in [
-            (MessageConst::TIMER_ENGINE_TYPE, engine.to_owned()),
-            (MessageConst::PROPERTY_TIMER_FORMAT_VERSION, format_version.to_string()),
+            (MessageConst::TIMER_ENGINE_TYPE, CheetahString::from_static_str(engine)),
+            (
+                MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+                cheetah_from_integer(format_version),
+            ),
             (
                 MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
-                policy_fingerprint.to_string(),
+                cheetah_from_integer(policy_fingerprint),
             ),
-            (MessageConst::PROPERTY_TIMER_GENERATION, generation.to_string()),
-            (MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN, delivery_token),
+            (
+                MessageConst::PROPERTY_TIMER_GENERATION,
+                cheetah_from_integer(generation),
+            ),
+            (
+                MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+                CheetahString::from_string(delivery_token),
+            ),
         ] {
             msg.message_ext_inner
                 .message
                 .properties_mut()
                 .as_map_mut()
-                .insert(CheetahString::from_static_str(key), CheetahString::from_string(value));
+                .insert(CheetahString::from_static_str(key), value);
         }
         let topic_value = CheetahString::from_slice(msg.topic());
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
@@ -343,7 +353,7 @@ impl HookUtils {
         );
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
-            CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
+            cheetah_from_integer(msg.message_ext_inner.queue_id),
         );
         msg.properties_string = message_properties_to_string(msg.message_ext_inner.message.properties().as_map());
         msg.message_ext_inner
@@ -378,7 +388,7 @@ impl HookUtils {
         );
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
-            CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
+            cheetah_from_integer(msg.message_ext_inner.queue_id),
         );
         msg.properties_string = message_properties_to_string(msg.message_ext_inner.message.properties().as_map());
 

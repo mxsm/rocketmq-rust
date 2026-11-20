@@ -50,6 +50,7 @@ use rocketmq_model::common::TopicSysFlag;
 use rocketmq_model::common::TopicSysFlag::build_sys_flag;
 use rocketmq_model::utils::cleanup_policy_utils;
 use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -830,7 +831,7 @@ where
                 .message
                 .put_property(
                     CheetahString::from_static_str(MessageConst::PROPERTY_INNER_NUM),
-                    CheetahString::from_string(inner_num.to_string()),
+                    cheetah_from_integer(inner_num),
                 );
             batch_message.message_ext_broker_inner.properties_string = message_properties_to_string(
                 batch_message

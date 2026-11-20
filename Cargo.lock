@@ -4739,6 +4739,7 @@ dependencies = [
  "crc32fast",
  "dashmap",
  "flate2",
+ "itoa",
  "local-ip-address",
  "lz4_flex",
  "md-5 0.11.0",
