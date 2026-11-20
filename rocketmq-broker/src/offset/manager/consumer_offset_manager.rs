@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
@@ -27,7 +28,6 @@ use std::sync::Weak;
 use crate::config::broker_config::BrokerConfig;
 use crate::config::config_manager::ConfigManager;
 use arc_swap::ArcSwap;
-use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahString;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
@@ -55,20 +55,36 @@ use crate::failover::escape_bridge::EscapeBridge;
 
 pub const TOPIC_GROUP_SEPARATOR: &str = "@";
 
-fn build_topic_group_key(topic: &CheetahString, group: &CheetahString) -> CheetahString {
-    let mut builder = CheetahBuilder::with_capacity(topic.len() + TOPIC_GROUP_SEPARATOR.len() + group.len());
-    builder.push_str(topic);
-    builder.push_str(TOPIC_GROUP_SEPARATOR);
-    builder.push_str(group);
-    builder.finish()
+const OFFSET_KEY_BUFFER_LEN: usize = 256;
+
+fn build_topic_group_key(topic: &str, group: &str) -> CheetahString {
+    CheetahString::concat(&[topic, TOPIC_GROUP_SEPARATOR, group])
 }
 
-fn build_topic_group_lookup_key(topic: &str, group: &str) -> String {
-    let mut key = String::with_capacity(topic.len() + TOPIC_GROUP_SEPARATOR.len() + group.len());
-    key.push_str(topic);
-    key.push_str(TOPIC_GROUP_SEPARATOR);
-    key.push_str(group);
-    key
+fn topic_group_lookup_key<'a>(topic: &str, group: &str, scratch: &'a mut [u8; OFFSET_KEY_BUFFER_LEN]) -> Cow<'a, str> {
+    let len = topic.len() + TOPIC_GROUP_SEPARATOR.len() + group.len();
+    if let Some(bytes) = scratch.get_mut(..len) {
+        let (prefix, rest) = bytes.split_at_mut(topic.len());
+        prefix.copy_from_slice(topic.as_bytes());
+        let (separator, suffix) = rest.split_at_mut(TOPIC_GROUP_SEPARATOR.len());
+        separator.copy_from_slice(TOPIC_GROUP_SEPARATOR.as_bytes());
+        suffix.copy_from_slice(group.as_bytes());
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            return Cow::Borrowed(text);
+        }
+    }
+    Cow::Owned([topic, TOPIC_GROUP_SEPARATOR, group].concat())
+}
+
+fn update_queue_offsets<R>(
+    table: &mut HashMap<CheetahString, HashMap<i32, i64>>,
+    key: &str,
+    update: impl FnOnce(&mut HashMap<i32, i64>) -> R,
+) -> R {
+    match table.get_mut(key) {
+        Some(offsets) => update(offsets),
+        None => update(table.entry(CheetahString::from_slice(key)).or_default()),
+    }
 }
 
 fn split_topic_group_key(key: &CheetahString) -> Option<(&str, &str)> {
@@ -314,13 +330,15 @@ where
         offset: i64,
     ) {
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
-        let key = build_topic_group_key(topic, group);
-        self.consumer_offset_wrapper
-            .pull_offset_table
-            .write()
-            .entry(key)
-            .or_default()
-            .insert(queue_id, offset);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
+        update_queue_offsets(
+            &mut self.consumer_offset_wrapper.pull_offset_table.write(),
+            &key,
+            |map| {
+                map.insert(queue_id, offset);
+            },
+        );
     }
 
     pub fn query_then_erase_reset_offset(
@@ -330,39 +348,39 @@ where
         queue_id: i32,
     ) -> Option<i64> {
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
-        let key = build_topic_group_lookup_key(topic, group);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
         let mut write_guard = self.consumer_offset_wrapper.reset_offset_table.write();
         let reset_offset = write_guard
-            .get_mut(key.as_str())
+            .get_mut(key.as_ref())
             .and_then(|offset_table| offset_table.remove(&queue_id));
         if write_guard
-            .get(key.as_str())
+            .get(key.as_ref())
             .is_some_and(|offset_table| offset_table.is_empty())
         {
-            write_guard.remove(key.as_str());
+            write_guard.remove(key.as_ref());
         }
         reset_offset
     }
 
     pub fn assign_reset_offset(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32, offset: i64) {
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
-        let key = build_topic_group_key(topic, group);
-        self.consumer_offset_wrapper
-            .reset_offset_table
-            .write()
-            .entry(key.clone())
-            .or_default()
-            .insert(queue_id, offset);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
+        update_queue_offsets(
+            &mut self.consumer_offset_wrapper.reset_offset_table.write(),
+            &key,
+            |map| {
+                map.insert(queue_id, offset);
+            },
+        );
 
         // Keep the durable consumer position aligned with the transient reset marker. Once the
         // consumer observes and removes the marker, progress queries and subsequent commits must
         // continue from the reset position instead of falling back to the previous larger offset.
-        self.consumer_offset_wrapper
-            .offset_table
-            .write()
-            .entry(key)
-            .or_default()
-            .insert(queue_id, offset);
+        update_queue_offsets(&mut self.consumer_offset_wrapper.offset_table.write(), &key, |map| {
+            map.insert(queue_id, offset);
+        });
     }
 
     pub fn clean_offset_by_topic(&self, topic: &CheetahString) {
@@ -379,14 +397,25 @@ where
 
     pub fn clear_pull_offset(&self, group: &CheetahString, topic: &CheetahString) {
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
-        let key = build_topic_group_key(topic, group);
-        self.consumer_offset_wrapper.pull_offset_table.write().remove(&key);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
+        self.consumer_offset_wrapper
+            .pull_offset_table
+            .write()
+            .remove(key.as_ref());
     }
 
     pub fn clone_offset(&self, src_group: &CheetahString, dest_group: &CheetahString, topic: &CheetahString) {
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
-        let src_key = build_topic_group_key(topic, src_group);
-        let Some(offsets) = self.consumer_offset_wrapper.offset_table.read().get(&src_key).cloned() else {
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let src_key = topic_group_lookup_key(topic, src_group, &mut scratch);
+        let Some(offsets) = self
+            .consumer_offset_wrapper
+            .offset_table
+            .read()
+            .get(src_key.as_ref())
+            .cloned()
+        else {
             return;
         };
 
@@ -419,11 +448,10 @@ where
         offset: i64,
     ) {
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
-        let key = build_topic_group_key(topic, group);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
 
-        {
-            let mut write_guard = self.consumer_offset_wrapper.offset_table.write();
-            let map = write_guard.entry(key.clone()).or_default();
+        let changed = update_queue_offsets(&mut self.consumer_offset_wrapper.offset_table.write(), &key, |map| {
             if let Some(&store_offset) = map.get(&queue_id) {
                 if offset < store_offset {
                     warn!(
@@ -431,16 +459,18 @@ where
                          requestOffset={}, storeOffset={}",
                         client_host, key, queue_id, offset, store_offset
                     );
-                    return;
+                    return false;
                 }
                 if offset == store_offset {
-                    return;
+                    return false;
                 }
             }
             map.insert(queue_id, offset);
+            true
+        });
+        if changed {
+            self.record_offset_change_with_locked();
         }
-
-        self.record_offset_change_with_locked();
     }
 
     /// Replaces a Store-rejected consumer offset only while it is still the value that was read.
@@ -462,11 +492,12 @@ where
         }
 
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
-        let key = build_topic_group_key(topic, group);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
 
         {
             let mut write_guard = self.consumer_offset_wrapper.offset_table.write();
-            let Some(map) = write_guard.get_mut(&key) else {
+            let Some(map) = write_guard.get_mut(key.as_ref()) else {
                 return false;
             };
             let current = map.get(&queue_id).copied().unwrap_or(-1);
@@ -493,10 +524,11 @@ where
             return Err(self.query_offset(group, topic, queue_id));
         }
         let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
-        let key = build_topic_group_key(topic, group);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
         let mut offsets = self.consumer_offset_wrapper.offset_table.write();
         let current = offsets
-            .get(&key)
+            .get(key.as_ref())
             .and_then(|queues| queues.get(&queue_id))
             .copied()
             .unwrap_or(-1);
@@ -504,13 +536,16 @@ where
             return Err(current);
         }
         if current != new_offset {
-            offsets.entry(key.clone()).or_default().insert(queue_id, new_offset);
-            self.consumer_offset_wrapper
-                .reset_offset_table
-                .write()
-                .entry(key)
-                .or_default()
-                .insert(queue_id, new_offset);
+            update_queue_offsets(&mut offsets, &key, |map| {
+                map.insert(queue_id, new_offset);
+            });
+            update_queue_offsets(
+                &mut self.consumer_offset_wrapper.reset_offset_table.write(),
+                &key,
+                |map| {
+                    map.insert(queue_id, new_offset);
+                },
+            );
             drop(offsets);
             self.record_offset_change_with_locked();
         }
@@ -535,38 +570,41 @@ where
     }
 
     pub fn has_offset_reset(&self, group: &str, topic: &str, queue_id: i32) -> bool {
-        let key = build_topic_group_lookup_key(topic, group);
-        match self.consumer_offset_wrapper.reset_offset_table.read().get(key.as_str()) {
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
+        match self.consumer_offset_wrapper.reset_offset_table.read().get(key.as_ref()) {
             None => false,
             Some(inner) => inner.contains_key(&queue_id),
         }
     }
 
     pub fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
-        let key = build_topic_group_lookup_key(topic, group);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
         if self.broker_config.use_server_side_reset_offset {
             if let Some(offset) = self
                 .consumer_offset_wrapper
                 .reset_offset_table
                 .read()
-                .get(key.as_str())
+                .get(key.as_ref())
                 .and_then(|offset_table| offset_table.get(&queue_id))
             {
                 return *offset;
             }
         }
-        if let Some(value) = self.consumer_offset_wrapper.offset_table.read().get(key.as_str()) {
+        if let Some(value) = self.consumer_offset_wrapper.offset_table.read().get(key.as_ref()) {
             return *value.get(&queue_id).unwrap_or(&-1);
         }
         -1
     }
 
     pub fn query_offsets(&self, group: &CheetahString, topic: &CheetahString) -> Option<HashMap<i32, i64>> {
-        let key = build_topic_group_lookup_key(topic, group);
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let key = topic_group_lookup_key(topic, group, &mut scratch);
         self.consumer_offset_wrapper
             .offset_table
             .read()
-            .get(key.as_str())
+            .get(key.as_ref())
             .cloned()
     }
 
@@ -1230,9 +1268,10 @@ mod tests {
     use rocketmq_store::MessageStoreConfig;
 
     use super::build_topic_group_key;
-    use super::build_topic_group_lookup_key;
     use super::split_topic_group_key;
+    use super::topic_group_lookup_key;
     use super::ConsumerOffsetManager;
+    use super::OFFSET_KEY_BUFFER_LEN;
 
     fn new_manager() -> ConsumerOffsetManager<LocalFileMessageStore> {
         ConsumerOffsetManager::new(
@@ -1247,11 +1286,37 @@ mod tests {
         let group = CheetahString::from_static_str("group-a");
 
         let owned_key = build_topic_group_key(&topic, &group);
-        let lookup_key = build_topic_group_lookup_key(topic.as_str(), group.as_str());
+        let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+        let lookup_key = topic_group_lookup_key(&topic, &group, &mut scratch);
 
         assert_eq!(owned_key, "topic-a@group-a");
         assert_eq!(lookup_key, "topic-a@group-a");
         assert_eq!(split_topic_group_key(&owned_key), Some(("topic-a", "group-a")));
+    }
+
+    #[test]
+    fn offset_keys_crossing_the_stack_limit_keep_the_same_persisted_name() {
+        let manager = new_manager();
+        let group = CheetahString::from_static_str("组");
+        for topic_len in [
+            OFFSET_KEY_BUFFER_LEN - 5,
+            OFFSET_KEY_BUFFER_LEN - 4,
+            OFFSET_KEY_BUFFER_LEN - 3,
+        ] {
+            let topic = CheetahString::from("t".repeat(topic_len));
+            let expected = format!("{topic}@{group}");
+            let mut scratch = [0; OFFSET_KEY_BUFFER_LEN];
+            let key = topic_group_lookup_key(&topic, &group, &mut scratch);
+            assert_eq!(key.as_ref(), expected);
+            assert_eq!(
+                matches!(key, std::borrow::Cow::Borrowed(_)),
+                expected.len() <= OFFSET_KEY_BUFFER_LEN
+            );
+            manager.commit_offset("client".into(), &group, &topic, 0, 1);
+            manager.commit_offset("client".into(), &group, &topic, 0, 2);
+            assert_eq!(manager.query_offset(&group, &topic, 0), 2);
+            assert_eq!(manager.offset_table_snapshot()[expected.as_str()][&0], 2);
+        }
     }
 
     #[test]
