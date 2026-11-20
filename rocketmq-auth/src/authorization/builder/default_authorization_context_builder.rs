@@ -88,13 +88,13 @@ impl DefaultAuthorizationContextBuilder {
 
     fn field_value<'a>(&self, fields: &'a HashMap<CheetahString, CheetahString>, key: &str) -> Option<&'a str> {
         fields
-            .get(&CheetahString::from(key))
+            .get(key)
             .map(|value| value.as_str())
             .filter(|value| !value.is_empty())
     }
 
     fn raw_field_value<'a>(&self, fields: &'a HashMap<CheetahString, CheetahString>, key: &str) -> Option<&'a str> {
-        fields.get(&CheetahString::from(key)).map(|value| value.as_str())
+        fields.get(key).map(|value| value.as_str())
     }
 
     fn subject_key(&self, command: &RemotingCommand) -> Option<String> {

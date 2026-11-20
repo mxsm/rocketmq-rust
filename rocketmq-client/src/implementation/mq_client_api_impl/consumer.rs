@@ -933,8 +933,8 @@ impl MQClientAPIImpl {
             offset: msg.commit_log_offset,
             group: CheetahString::from_slice(consumer_group),
             delay_level,
-            origin_msg_id: Some(CheetahString::from_slice(msg.msg_id.as_str())),
-            origin_topic: Some(CheetahString::from_slice(msg.topic())),
+            origin_msg_id: Some(msg.msg_id.clone()),
+            origin_topic: Some(msg.topic().clone()),
             unit_mode: false,
             max_reconsume_times: Some(max_consume_retry_times),
             rpc_request_header: Some(RpcRequestHeader {

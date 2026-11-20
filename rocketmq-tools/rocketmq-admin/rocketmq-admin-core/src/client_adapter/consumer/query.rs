@@ -503,18 +503,14 @@ pub(super) async fn collect_queue_client_mapping(
 ) -> HashMap<MessageQueue, String> {
     let mut topics = offset_table
         .keys()
-        .map(|queue| queue.topic().to_string())
+        .map(|queue| queue.topic().clone())
         .collect::<Vec<_>>();
     topics.sort();
     topics.dedup();
     let mut result = HashMap::new();
     for topic in topics {
         match admin
-            .get_consume_status(
-                CheetahString::from(topic.as_str()),
-                CheetahString::from(group),
-                CheetahString::new(),
-            )
+            .get_consume_status(topic.clone(), CheetahString::from(group), CheetahString::new())
             .await
         {
             Ok(client_offsets) => {

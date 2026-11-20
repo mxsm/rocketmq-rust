@@ -274,10 +274,10 @@ impl DefaultAuthenticationContextBuilder {
 
     fn remoting_request_timestamp(fields: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<&str> {
         fields
-            .get(&CheetahString::from(TIMESTAMP))
-            .or_else(|| fields.get(&CheetahString::from(TIMESTAMP_LOWERCASE)))
-            .or_else(|| fields.get(&CheetahString::from(DATE_TIME)))
-            .or_else(|| fields.get(&CheetahString::from(X_MQ_DATE_TIME)))
+            .get(TIMESTAMP)
+            .or_else(|| fields.get(TIMESTAMP_LOWERCASE))
+            .or_else(|| fields.get(DATE_TIME))
+            .or_else(|| fields.get(X_MQ_DATE_TIME))
             .map(CheetahString::as_str)
     }
 }
@@ -321,7 +321,7 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
         };
 
         // Check for AccessKey
-        let access_key = match fields.get(&CheetahString::from(ACCESS_KEY)) {
+        let access_key = match fields.get(ACCESS_KEY) {
             Some(key) => key,
             None => return Ok(context), // No AccessKey, return empty context
         };
@@ -330,7 +330,7 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
         context.set_username(access_key.clone());
 
         // Set signature if present
-        if let Some(signature) = fields.get(&CheetahString::from(SIGNATURE_FIELD)) {
+        if let Some(signature) = fields.get(SIGNATURE_FIELD) {
             context.set_signature(signature.clone());
         }
 

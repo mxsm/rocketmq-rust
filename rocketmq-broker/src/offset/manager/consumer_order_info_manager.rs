@@ -130,7 +130,7 @@ impl ConsumerOrderInfoManager {
                 keys_to_remove.push(topic_at_group.clone());
                 continue;
             }
-            let subscription_group_config = self.subscription_group_table.get(&CheetahString::from(group));
+            let subscription_group_config = self.subscription_group_table.get(group);
             if subscription_group_config.is_none() {
                 info!("Group not exist, Clean order info, {}:{:?}", topic_at_group, qs);
                 keys_to_remove.push(topic_at_group.clone());

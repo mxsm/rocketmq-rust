@@ -1329,7 +1329,7 @@ fn require_authorization(decision: AuthorizationDecision) -> AuthServiceResult<(
 fn access_key_from_command(command: &RemotingCommand) -> Option<&str> {
     command.ext_fields().and_then(|fields| {
         fields
-            .get(&CheetahString::from_static_str(ACCESS_KEY))
+            .get(ACCESS_KEY)
             .map(|value| value.as_str().trim())
             .filter(|value| !value.is_empty())
     })

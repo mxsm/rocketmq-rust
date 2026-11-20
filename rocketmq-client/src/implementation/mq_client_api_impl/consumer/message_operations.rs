@@ -27,12 +27,12 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> crate::ClientResult<i64> {
         let request_header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from_slice(message_queue.topic_str()),
+            topic: message_queue.topic().clone(),
             queue_id: message_queue.queue_id(),
             committed: false,
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
-                    broker_name: Some(CheetahString::from_slice(message_queue.broker_name())),
+                    broker_name: Some(message_queue.broker_name().clone()),
                     ..Default::default()
                 }),
                 lo: None,
@@ -83,11 +83,11 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> crate::ClientResult<i64> {
         let request_header = GetMinOffsetRequestHeader {
-            topic: CheetahString::from_slice(message_queue.topic_str()),
+            topic: message_queue.topic().clone(),
             queue_id: message_queue.queue_id(),
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
-                    broker_name: Some(CheetahString::from_slice(message_queue.broker_name())),
+                    broker_name: Some(message_queue.broker_name().clone()),
                     ..Default::default()
                 }),
                 lo: None,
@@ -138,11 +138,11 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> crate::ClientResult<i64> {
         let request_header = GetEarliestMsgStoretimeRequestHeader {
-            topic: CheetahString::from_slice(message_queue.topic_str()),
+            topic: message_queue.topic().clone(),
             queue_id: message_queue.queue_id(),
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
-                    broker_name: Some(CheetahString::from_slice(message_queue.broker_name())),
+                    broker_name: Some(message_queue.broker_name().clone()),
                     ..Default::default()
                 }),
                 lo: None,

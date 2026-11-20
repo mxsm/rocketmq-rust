@@ -346,7 +346,7 @@ impl HookUtils {
                 .as_map_mut()
                 .insert(CheetahString::from_static_str(key), value);
         }
-        let topic_value = CheetahString::from_slice(msg.topic());
+        let topic_value = msg.topic().clone();
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
             topic_value,
@@ -381,7 +381,7 @@ impl HookUtils {
         }
 
         // Backup real topic, queueId
-        let topic_value = CheetahString::from_slice(msg.topic());
+        let topic_value = msg.topic().clone();
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC), // real topic: %RETRY% + consumerGroup
             topic_value,
@@ -436,7 +436,8 @@ mod tests {
         let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
         let message_store_config = MessageStoreConfig::default();
         let mut msg = MessageExtBrokerInner::default();
-        msg.set_topic(CheetahString::from_static_str("test_topic"));
+        let original = CheetahString::from_slice("customer-orders-delayed-delivery");
+        msg.set_topic(original.clone());
         msg.message_ext_inner.queue_id = 3;
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
@@ -451,12 +452,11 @@ mod tests {
         );
         assert_eq!(msg.topic().as_str(), TIMER_TOPIC);
         assert_eq!(msg.message_ext_inner.queue_id, 0);
-        assert_eq!(
-            msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
-                .as_ref()
-                .map(CheetahString::as_str),
-            Some("test_topic")
-        );
+        let real_topic = msg
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+            .unwrap();
+        assert_eq!(real_topic, original);
+        assert_eq!(real_topic.as_ptr(), original.as_ptr());
         assert_eq!(
             msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
                 .as_ref()
