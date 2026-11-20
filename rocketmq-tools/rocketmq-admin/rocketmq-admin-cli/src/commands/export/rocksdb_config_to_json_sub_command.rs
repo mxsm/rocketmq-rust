@@ -157,8 +157,11 @@ impl RocksDBConfigToJsonSubCommand {
 
     fn handle_local_result(result: &ExportMetadataInRocksDbResult, export_file: Option<&str>) -> CanonicalResult<()> {
         if let Some(export_file) = export_file
-            && let Some(json_value) = Self::local_result_json_value(result)?
+            && let ExportMetadataInRocksDbResult::Data {
+                config_type, entries, ..
+            } = result
         {
+            let json_value = Self::entries_json_value(*config_type, entries);
             let request = ExportFileWriteRequest::try_new(export_file, ExportFileOverwritePolicy::Overwrite)?;
             let write_result = ExportService::write_json_export_file(&request, &json_value)?;
             println!("export {} success", write_result.output_path().display());
@@ -184,7 +187,7 @@ impl RocksDBConfigToJsonSubCommand {
                 json_enable,
                 entries,
             } if *json_enable => {
-                let json_value = Self::entries_json_value(*config_type, entries)?;
+                let json_value = Self::entries_json_value(*config_type, entries);
                 let json = serde_json::to_string_pretty(&json_value)
                     .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
                 println!("{json}");
@@ -201,22 +204,10 @@ impl RocksDBConfigToJsonSubCommand {
         Ok(())
     }
 
-    fn local_result_json_value(result: &ExportMetadataInRocksDbResult) -> CanonicalResult<Option<serde_json::Value>> {
-        match result {
-            ExportMetadataInRocksDbResult::Data {
-                config_type, entries, ..
-            } => Self::entries_json_value(*config_type, entries).map(Some),
-            ExportMetadataInRocksDbResult::InvalidPath | ExportMetadataInRocksDbResult::InvalidConfigType { .. } => {
-                Self::print_local_result(result)?;
-                Ok(None)
-            }
-        }
-    }
-
     fn entries_json_value(
         config_type: ExportMetadataInRocksDbConfigType,
         entries: &[rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbEntry],
-    ) -> CanonicalResult<serde_json::Value> {
+    ) -> serde_json::Value {
         let mut config_table = serde_json::Map::new();
         for entry in entries {
             let value = serde_json::from_str::<serde_json::Value>(&entry.value)
@@ -229,7 +220,7 @@ impl RocksDBConfigToJsonSubCommand {
             config_type.table_key().to_string(),
             serde_json::Value::Object(config_table),
         );
-        Ok(serde_json::Value::Object(root))
+        serde_json::Value::Object(root)
     }
 
     fn print_rpc_result(result: &ExportRocksDbConfigRpcResult) {

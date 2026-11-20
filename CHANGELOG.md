@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(ci):** Align SRE canonical route coverage counts with the active send-latency and NameServer diagnostic packs ([#12670](https://github.com/mxsm/rocketmq-rust/issues/12670)).
 - **fix(protocol):** Support flexible JSON headers from non-Java remoting clients by accepting missing serializeTypeCurrentRPC, numeric and case-insensitive languageCode, serializeType aliases, and scalar extension fields while treating null fields as absent and preserving explicit empty strings ([#12090](https://github.com/mxsm/rocketmq-rust/issues/12090)).
 - **fix(admin-cli):** Allow `queryMsgById --printBody false` to suppress the message body ([#12812](https://github.com/mxsm/rocketmq-rust/issues/12812)).
+- **fix(admin-cli):** Print a single diagnostic for an invalid local RocksDB metadata export when `--exportFile` is supplied ([#12823](https://github.com/mxsm/rocketmq-rust/issues/12823)).
 
 ### Changed
 
