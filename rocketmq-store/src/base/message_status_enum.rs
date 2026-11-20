@@ -76,21 +76,27 @@ pub enum GetMessageStatus {
     OffsetReset,
 }
 
+impl GetMessageStatus {
+    /// Returns the Java enum name carried in a Pull response remark.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Found => "FOUND",
+            Self::NoMatchedMessage => "NO_MATCHED_MESSAGE",
+            Self::MessageWasRemoving => "MESSAGE_WAS_REMOVING",
+            Self::OffsetFoundNull => "OFFSET_FOUND_NULL",
+            Self::OffsetOverflowBadly => "OFFSET_OVERFLOW_BADLY",
+            Self::OffsetOverflowOne => "OFFSET_OVERFLOW_ONE",
+            Self::OffsetTooSmall => "OFFSET_TOO_SMALL",
+            Self::NoMatchedLogicQueue => "NO_MATCHED_LOGIC_QUEUE",
+            Self::NoMessageInQueue => "NO_MESSAGE_IN_QUEUE",
+            Self::OffsetReset => "OFFSET_RESET",
+        }
+    }
+}
+
 impl std::fmt::Display for GetMessageStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Compatible with Java enums
-        match self {
-            GetMessageStatus::Found => write!(f, "FOUND"),
-            GetMessageStatus::NoMatchedMessage => write!(f, "NO_MATCHED_MESSAGE"),
-            GetMessageStatus::MessageWasRemoving => write!(f, "MESSAGE_WAS_REMOVING"),
-            GetMessageStatus::OffsetFoundNull => write!(f, "OFFSET_FOUND_NULL"),
-            GetMessageStatus::OffsetOverflowBadly => write!(f, "OFFSET_OVERFLOW_BADLY"),
-            GetMessageStatus::OffsetOverflowOne => write!(f, "OFFSET_OVERFLOW_ONE"),
-            GetMessageStatus::OffsetTooSmall => write!(f, "OFFSET_TOO_SMALL"),
-            GetMessageStatus::NoMatchedLogicQueue => write!(f, "NO_MATCHED_LOGIC_QUEUE"),
-            GetMessageStatus::NoMessageInQueue => write!(f, "NO_MESSAGE_IN_QUEUE"),
-            GetMessageStatus::OffsetReset => write!(f, "OFFSET_RESET"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -135,7 +141,21 @@ mod tests {
     }
 
     #[test]
-    fn get_message_status_display_found() {
-        assert_eq!(GetMessageStatus::Found.to_string(), "FOUND");
+    fn get_message_status_names_match_java() {
+        for (status, name) in [
+            (GetMessageStatus::Found, "FOUND"),
+            (GetMessageStatus::NoMatchedMessage, "NO_MATCHED_MESSAGE"),
+            (GetMessageStatus::MessageWasRemoving, "MESSAGE_WAS_REMOVING"),
+            (GetMessageStatus::OffsetFoundNull, "OFFSET_FOUND_NULL"),
+            (GetMessageStatus::OffsetOverflowBadly, "OFFSET_OVERFLOW_BADLY"),
+            (GetMessageStatus::OffsetOverflowOne, "OFFSET_OVERFLOW_ONE"),
+            (GetMessageStatus::OffsetTooSmall, "OFFSET_TOO_SMALL"),
+            (GetMessageStatus::NoMatchedLogicQueue, "NO_MATCHED_LOGIC_QUEUE"),
+            (GetMessageStatus::NoMessageInQueue, "NO_MESSAGE_IN_QUEUE"),
+            (GetMessageStatus::OffsetReset, "OFFSET_RESET"),
+        ] {
+            assert_eq!(status.as_str(), name);
+            assert_eq!(status.to_string(), name);
+        }
     }
 }
