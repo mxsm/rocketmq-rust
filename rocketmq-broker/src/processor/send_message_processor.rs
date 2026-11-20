@@ -589,7 +589,7 @@ where
         if should_create_uniq_key(&properties) {
             properties.insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-                CheetahString::from_string(MessageClientIDSetter::create_uniq_id()),
+                MessageClientIDSetter::create_uniq_id_cheetah(),
             );
         }
         let tra_flag = properties
