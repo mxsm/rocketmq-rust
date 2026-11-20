@@ -1450,8 +1450,8 @@ async fn query_assignment(
     control: &RequestControl,
 ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
     let request_body = QueryAssignmentRequestBody {
-        topic: CheetahString::from(topic.to_string()),
-        consumer_group: CheetahString::from(group.to_string()),
+        topic: topic.to_cheetah_string(),
+        consumer_group: group.to_cheetah_string(),
         client_id: CheetahString::from(client_id),
         strategy_name: CheetahString::from(strategy_name),
         message_model: MessageModel::Clustering,
@@ -1665,7 +1665,7 @@ async fn recall_message(
 ) -> ProxyResult<RecallMessagePlan> {
     let producer_group = build_local_proxy_producer_group(client_id.as_deref(), request_id.as_str());
     let header = RecallMessageRequestHeader::new(
-        request.topic.to_string(),
+        request.topic.to_cheetah_string(),
         request.recall_handle.as_str(),
         Some(producer_group.as_str()),
     );
@@ -1718,7 +1718,7 @@ async fn end_transaction(
         })?;
 
     let header = EndTransactionRequestHeader {
-        topic: CheetahString::from(request.topic.to_string()),
+        topic: request.topic.to_cheetah_string(),
         producer_group: CheetahString::from(producer_group),
         tran_state_table_offset: transaction_state_table_offset,
         commit_log_offset: broker_message_id.offset,
@@ -1757,7 +1757,7 @@ async fn receive_message_via_broker(
     process_pop_response(
         response,
         client.broker_name(),
-        request.target.topic.to_string().as_str(),
+        request.target.topic.to_cheetah_string().as_str(),
         request.target.fifo,
     )
 }
@@ -1786,22 +1786,17 @@ async fn ack_message_via_broker(
     client: &LocalBrokerCommandGateway,
     request: &AckMessageRequest,
 ) -> ProxyResult<Vec<AckMessageResultEntry>> {
-    let group_name = request.group.to_string();
-    let topics = request
-        .entries
-        .iter()
-        .map(|entry| entry.lite_topic.clone().unwrap_or_else(|| request.topic.to_string()))
-        .collect::<Vec<_>>();
+    let group_name = request.group.to_cheetah_string();
+    let topic = request.topic.to_cheetah_string();
     let batch_inputs = request
         .entries
         .iter()
-        .zip(&topics)
         .enumerate()
-        .filter(|(_, (entry, _))| entry.lite_topic.is_none())
-        .map(|(entry_index, (entry, topic))| BatchAckInput {
+        .filter(|(_, entry)| entry.lite_topic.is_none())
+        .map(|(entry_index, entry)| BatchAckInput {
             entry_index,
             consumer_group: group_name.as_str(),
-            topic,
+            topic: topic.as_str(),
             receipt_handle: entry.receipt_handle.as_str(),
         })
         .collect::<Vec<_>>();
@@ -1882,11 +1877,15 @@ async fn ack_message_entry_via_broker(
     request: &AckMessageRequest,
     entry: &rocketmq_proxy_core::AckMessageEntry,
 ) -> ProxyResult<rocketmq_proxy_core::ProxyPayloadStatus> {
-    let topic_name = entry.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
-    let group_name = request.group.to_string();
+    let topic_name = entry
+        .lite_topic
+        .as_deref()
+        .map(CheetahString::from_slice)
+        .unwrap_or_else(|| request.topic.to_cheetah_string());
+    let group_name = request.group.to_cheetah_string();
     let parsed = parse_receipt_handle(entry.receipt_handle.as_str(), topic_name.as_str(), group_name.as_str())?;
     let header = AckMessageRequestHeader {
-        consumer_group: CheetahString::from(group_name),
+        consumer_group: group_name,
         topic: parsed.topic.clone(),
         queue_id: parsed.queue_id,
         extra_info: parsed.raw.clone(),
@@ -1920,16 +1919,17 @@ async fn forward_message_to_dead_letter_queue_via_broker(
     client: &LocalBrokerCommandGateway,
     request: &ForwardMessageToDeadLetterQueueRequest,
 ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
-    let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
-    let parsed = parse_receipt_handle(
-        request.receipt_handle.as_str(),
-        topic_name.as_str(),
-        request.group.to_string().as_str(),
-    )?;
+    let topic_name = request
+        .lite_topic
+        .as_deref()
+        .map(CheetahString::from_slice)
+        .unwrap_or_else(|| request.topic.to_cheetah_string());
+    let group = request.group.to_cheetah_string();
+    let parsed = parse_receipt_handle(request.receipt_handle.as_str(), topic_name.as_str(), group.as_str())?;
     let broker_message_id = decode_broker_message_id(request.message_id.as_str())?;
     let header = ConsumerSendMsgBackRequestHeader {
         offset: broker_message_id.offset,
-        group: CheetahString::from(request.group.to_string()),
+        group,
         delay_level: -1,
         origin_msg_id: Some(CheetahString::from(request.message_id.as_str())),
         origin_topic: Some(parsed.topic),
@@ -1959,14 +1959,15 @@ async fn change_invisible_duration_via_broker(
     client: &LocalBrokerCommandGateway,
     request: &ChangeInvisibleDurationRequest,
 ) -> ProxyResult<ChangeInvisibleDurationPlan> {
-    let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
-    let parsed = parse_receipt_handle(
-        request.receipt_handle.as_str(),
-        topic_name.as_str(),
-        request.group.to_string().as_str(),
-    )?;
+    let topic_name = request
+        .lite_topic
+        .as_deref()
+        .map(CheetahString::from_slice)
+        .unwrap_or_else(|| request.topic.to_cheetah_string());
+    let group = request.group.to_cheetah_string();
+    let parsed = parse_receipt_handle(request.receipt_handle.as_str(), topic_name.as_str(), group.as_str())?;
     let header = ChangeInvisibleTimeRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
+        consumer_group: group,
         topic: parsed.topic.clone(),
         queue_id: parsed.queue_id,
         extra_info: parsed.raw.clone(),
@@ -2073,7 +2074,7 @@ async fn query_offset_via_broker(
     let (request_code, command) = match request.policy {
         QueryOffsetPolicy::Beginning => {
             let header = GetMinOffsetRequestHeader {
-                topic: CheetahString::from(request.target.topic.to_string()),
+                topic: request.target.topic.to_cheetah_string(),
                 queue_id: request.target.queue_id,
                 topic_request_header: Some(TopicRequestHeader {
                     rpc_request_header: Some(RpcRequestHeader {
@@ -2090,7 +2091,7 @@ async fn query_offset_via_broker(
         }
         QueryOffsetPolicy::End => {
             let header = GetMaxOffsetRequestHeader {
-                topic: CheetahString::from(request.target.topic.to_string()),
+                topic: request.target.topic.to_cheetah_string(),
                 queue_id: request.target.queue_id,
                 committed: false,
                 topic_request_header: Some(TopicRequestHeader {
@@ -2108,7 +2109,7 @@ async fn query_offset_via_broker(
         }
         QueryOffsetPolicy::Timestamp => {
             let header = SearchOffsetRequestHeader {
-                topic: CheetahString::from(request.target.topic.to_string()),
+                topic: request.target.topic.to_cheetah_string(),
                 lite_topic: None,
                 queue_id: request.target.queue_id,
                 timestamp: request
@@ -2162,7 +2163,7 @@ fn build_send_message_request(
 ) -> ProxyResult<RemotingCommand> {
     let header = SendMessageRequestHeader {
         producer_group: CheetahString::from(producer_group),
-        topic: CheetahString::from(entry.topic.to_string()),
+        topic: entry.topic.to_cheetah_string(),
         default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
         default_topic_queue_nums: 8,
         queue_id: entry.queue_id.unwrap_or(-1),
@@ -2212,7 +2213,7 @@ fn build_send_batch_message_request(
     let body = MessageDecoder::encode_messages(&batch.messages);
     let header = SendMessageRequestHeader {
         producer_group: CheetahString::from(producer_group),
-        topic: CheetahString::from(first.topic.to_string()),
+        topic: first.topic.to_cheetah_string(),
         default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
         default_topic_queue_nums: 8,
         queue_id: first.queue_id.unwrap_or(-1),
@@ -2239,8 +2240,8 @@ fn build_send_batch_message_request(
 
 fn build_pop_request_header(broker_name: &str, request: &ReceiveMessageRequest) -> PopMessageRequestHeader {
     PopMessageRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
-        topic: CheetahString::from(request.target.topic.to_string()),
+        consumer_group: request.group.to_cheetah_string(),
+        topic: request.target.topic.to_cheetah_string(),
         queue_id: request.target.queue_id,
         max_msg_nums: request.batch_size,
         invisible_time: request.invisible_duration.as_millis().clamp(1, u128::from(u64::MAX)) as u64,
@@ -2263,8 +2264,8 @@ fn build_pop_request_header(broker_name: &str, request: &ReceiveMessageRequest) 
 
 fn build_pull_request_header(broker_name: &str, request: &PullMessageRequest) -> PullMessageRequestHeader {
     PullMessageRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
-        topic: CheetahString::from(request.target.topic.to_string()),
+        consumer_group: request.group.to_cheetah_string(),
+        topic: request.target.topic.to_cheetah_string(),
         lite_topic: None,
         queue_id: request.target.queue_id,
         queue_offset: request.offset,
@@ -2298,8 +2299,8 @@ fn build_update_offset_request_header(
     request: &UpdateOffsetRequest,
 ) -> UpdateConsumerOffsetRequestHeader {
     UpdateConsumerOffsetRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
-        topic: CheetahString::from(request.target.topic.to_string()),
+        consumer_group: request.group.to_cheetah_string(),
+        topic: request.target.topic.to_cheetah_string(),
         queue_id: request.target.queue_id,
         commit_offset: request.offset,
         topic_request_header: Some(OperationTopicRequestHeader {
@@ -2317,8 +2318,8 @@ fn build_query_consumer_offset_request_header(
     request: &GetOffsetRequest,
 ) -> QueryConsumerOffsetRequestHeader {
     QueryConsumerOffsetRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
-        topic: CheetahString::from(request.target.topic.to_string()),
+        consumer_group: request.group.to_cheetah_string(),
+        topic: request.target.topic.to_cheetah_string(),
         queue_id: request.target.queue_id,
         set_zero_if_not_found: Some(false),
         topic_request_header: Some(OperationTopicRequestHeader {
@@ -2352,7 +2353,7 @@ fn build_send_result(
         Some(header.msg_id().clone()),
         None,
         Some(MessageQueue::from_parts(
-            topic.to_string(),
+            topic.to_cheetah_string(),
             broker_name.clone(),
             header.queue_id(),
         )),

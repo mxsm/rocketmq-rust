@@ -1223,8 +1223,8 @@ struct ClusterWorkerState {
     producer_factory: Arc<dyn ClusterProducerFactory>,
     send_producers: HashMap<String, Box<dyn ClusterProducerIo>>,
     route_cache: HashMap<String, CachedValue<TopicRouteData>>,
-    topic_message_type_cache: HashMap<String, CachedValue<ProxyTopicMessageType>>,
-    subscription_group_cache: HashMap<(String, String), CachedValue<Option<SubscriptionGroupMetadata>>>,
+    topic_message_type_cache: HashMap<CheetahString, CachedValue<ProxyTopicMessageType>>,
+    subscription_group_cache: HashMap<(CheetahString, CheetahString), CachedValue<Option<SubscriptionGroupMetadata>>>,
     user_cache: HashMap<String, CachedValue<Option<UserInfo>>>,
     acl_cache: HashMap<String, CachedValue<Option<AclInfo>>>,
 }
@@ -1334,39 +1334,28 @@ impl ClusterWorkerState {
         cache_value(&mut self.route_cache, topic.into(), route, ttl);
     }
 
-    fn cached_topic_message_type(&mut self, topic: &str) -> Option<ProxyTopicMessageType> {
-        cached_value(&mut self.topic_message_type_cache, &topic.to_owned())
+    fn cached_topic_message_type(&mut self, topic: &CheetahString) -> Option<ProxyTopicMessageType> {
+        cached_value(&mut self.topic_message_type_cache, topic)
     }
 
-    fn cache_topic_message_type(
+    fn cache_topic_message_type(&mut self, topic: CheetahString, message_type: ProxyTopicMessageType, ttl: Duration) {
+        cache_value(&mut self.topic_message_type_cache, topic, message_type, ttl);
+    }
+
+    fn cached_subscription_group(
         &mut self,
-        topic: impl Into<String>,
-        message_type: ProxyTopicMessageType,
-        ttl: Duration,
-    ) {
-        cache_value(&mut self.topic_message_type_cache, topic.into(), message_type, ttl);
-    }
-
-    fn cached_subscription_group(&mut self, topic: &str, group: &str) -> Option<Option<SubscriptionGroupMetadata>> {
-        cached_value(
-            &mut self.subscription_group_cache,
-            &(topic.to_owned(), group.to_owned()),
-        )
+        key: &(CheetahString, CheetahString),
+    ) -> Option<Option<SubscriptionGroupMetadata>> {
+        cached_value(&mut self.subscription_group_cache, key)
     }
 
     fn cache_subscription_group(
         &mut self,
-        topic: impl Into<String>,
-        group: impl Into<String>,
+        key: (CheetahString, CheetahString),
         metadata: Option<SubscriptionGroupMetadata>,
         ttl: Duration,
     ) {
-        cache_value(
-            &mut self.subscription_group_cache,
-            (topic.into(), group.into()),
-            metadata,
-            ttl,
-        );
+        cache_value(&mut self.subscription_group_cache, key, metadata, ttl);
     }
 
     fn cached_user(&mut self, username: &str) -> Option<Option<UserInfo>> {
@@ -1717,7 +1706,7 @@ async fn query_route_inner(
     state: &mut ClusterWorkerState,
     topic: ResourceIdentity,
 ) -> ProxyResult<TopicRouteData> {
-    let topic_name = topic.to_string();
+    let topic_name = topic.to_cheetah_string();
     let client = state.client(config).await?;
     fetch_topic_route(client.as_ref(), config, state, topic_name.as_str()).await
 }
@@ -1729,17 +1718,16 @@ async fn query_assignment_inner(
     group: ResourceIdentity,
     client_id: String,
 ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
-    let topic_name = topic.to_string();
-    let group_name = group.to_string();
+    let topic_name = topic.to_cheetah_string();
+    let group_name = group.to_cheetah_string();
     let client = state.client(config).await?;
     let route = fetch_topic_route(client.as_ref(), config, state, topic_name.as_str()).await?;
-    let broker_addr =
-        select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(topic_name.clone()))?;
+    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(&topic_name))?;
     client
         .query_assignment(
             &broker_addr,
-            CheetahString::from(topic_name),
-            CheetahString::from(group_name),
+            topic_name,
+            group_name,
             CheetahString::from(client_id),
             CheetahString::from(config.query_assignment_strategy_name.as_str()),
             MessageModel::Clustering,
@@ -1754,21 +1742,16 @@ async fn query_topic_message_type_inner(
     state: &mut ClusterWorkerState,
     topic: ResourceIdentity,
 ) -> ProxyResult<ProxyTopicMessageType> {
-    let topic_name = topic.to_string();
-    if let Some(message_type) = state.cached_topic_message_type(topic_name.as_str()) {
+    let topic_name = topic.to_cheetah_string();
+    if let Some(message_type) = state.cached_topic_message_type(&topic_name) {
         return Ok(message_type);
     }
 
     let client = state.client(config).await?;
     let route = fetch_topic_route(client.as_ref(), config, state, topic_name.as_str()).await?;
-    let broker_addr =
-        select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(topic_name.clone()))?;
+    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(&topic_name))?;
     let topic_config = client
-        .topic_config(
-            &broker_addr,
-            CheetahString::from(topic_name.as_str()),
-            config.mq_client_api_timeout_ms,
-        )
+        .topic_config(&broker_addr, topic_name.clone(), config.mq_client_api_timeout_ms)
         .await?;
 
     let message_type = convert_topic_message_type(topic_config.get_topic_message_type());
@@ -1782,28 +1765,24 @@ async fn query_subscription_group_inner(
     topic: ResourceIdentity,
     group: ResourceIdentity,
 ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-    let topic_name = topic.to_string();
-    let group_name = group.to_string();
-    if let Some(metadata) = state.cached_subscription_group(topic_name.as_str(), group_name.as_str()) {
+    let key = (topic.to_cheetah_string(), group.to_cheetah_string());
+    if let Some(metadata) = state.cached_subscription_group(&key) {
         return Ok(metadata);
     }
 
     let client = state.client(config).await?;
+    let (topic_name, group_name) = &key;
     let route = fetch_topic_route(client.as_ref(), config, state, topic_name.as_str()).await?;
     let Some(broker_addr) = select_master_broker_addr(&route) else {
-        state.cache_subscription_group(topic_name, group_name, None, config.metadata_cache_ttl());
+        state.cache_subscription_group(key, None, config.metadata_cache_ttl());
         return Ok(None);
     };
     let group_config = client
-        .subscription_group_config(
-            &broker_addr,
-            CheetahString::from(group_name.as_str()),
-            config.mq_client_api_timeout_ms,
-        )
+        .subscription_group_config(&broker_addr, group_name.clone(), config.mq_client_api_timeout_ms)
         .await?;
 
     let metadata = Some(convert_subscription_group(group_config));
-    state.cache_subscription_group(topic_name, group_name, metadata.clone(), config.metadata_cache_ttl());
+    state.cache_subscription_group(key, metadata.clone(), config.metadata_cache_ttl());
     Ok(metadata)
 }
 
@@ -1952,7 +1931,7 @@ async fn sync_lite_subscription_inner(
     client_id: String,
     request: LiteSubscriptionSyncRequest,
 ) -> ProxyResult<()> {
-    let topic = request.topic.to_string();
+    let topic = request.topic.to_cheetah_string();
     let client = state.client(config).await?;
     let route = fetch_topic_route(client.as_ref(), config, state, topic.as_str()).await?;
     let broker_addrs = master_broker_addrs(&route);
@@ -2054,7 +2033,7 @@ async fn recall_message_inner(
     request_id: String,
 ) -> ProxyResult<RecallMessagePlan> {
     let producer_group = build_proxy_producer_group(config, client_id.as_deref(), request_id.as_str());
-    let topic = CheetahString::from(request.topic.to_string());
+    let topic = request.topic.to_cheetah_string();
     let producer = acquire_send_producer(
         config,
         state,
@@ -2131,10 +2110,8 @@ fn merge_topics(existing: Vec<CheetahString>, incoming: Vec<CheetahString>) -> V
     existing
         .into_iter()
         .chain(incoming)
-        .map(|topic| topic.to_string())
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .map(CheetahString::from)
         .collect()
 }
 
@@ -2142,10 +2119,9 @@ fn collect_send_topics(request: &SendMessageRequest) -> Vec<CheetahString> {
     request
         .messages
         .iter()
-        .map(|message| message.topic.to_string())
+        .map(|message| message.topic.to_cheetah_string())
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .map(CheetahString::from)
         .collect()
 }
 
@@ -2218,22 +2194,17 @@ async fn ack_message_inner(
 ) -> ProxyResult<Vec<AckMessageResultEntry>> {
     let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
     let client = state.client(config).await?;
-    let group_name = request.group.to_string();
-    let topics = request
-        .entries
-        .iter()
-        .map(|entry| entry.lite_topic.clone().unwrap_or_else(|| request.topic.to_string()))
-        .collect::<Vec<_>>();
+    let group_name = request.group.to_cheetah_string();
+    let topic = request.topic.to_cheetah_string();
     let batch_inputs = request
         .entries
         .iter()
-        .zip(&topics)
         .enumerate()
-        .filter(|(_, (entry, _))| entry.lite_topic.is_none())
-        .map(|(entry_index, (entry, topic))| BatchAckInput {
+        .filter(|(_, entry)| entry.lite_topic.is_none())
+        .map(|(entry_index, entry)| BatchAckInput {
             entry_index,
             consumer_group: group_name.as_str(),
-            topic,
+            topic: topic.as_str(),
             receipt_handle: entry.receipt_handle.as_str(),
         })
         .collect::<Vec<_>>();
@@ -2333,8 +2304,12 @@ async fn forward_message_to_dead_letter_queue_inner(
     let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     let client = state.client(config).await?;
-    let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
-    let group_name = request.group.to_string();
+    let topic_name = request
+        .lite_topic
+        .as_deref()
+        .map(CheetahString::from_slice)
+        .unwrap_or_else(|| request.topic.to_cheetah_string());
+    let group_name = request.group.to_cheetah_string();
     let parsed = parse_receipt_handle(
         request.receipt_handle.as_str(),
         topic_name.as_str(),
@@ -2609,7 +2584,7 @@ async fn resolve_broker_target(
         });
     }
 
-    let topic_name = CheetahString::from(topic.to_string());
+    let topic_name = topic.to_cheetah_string();
     if let Some(broker_name) = broker_name {
         let broker_name = CheetahString::from(broker_name);
         let actual_broker_name = resolve_subscription_broker_name(client, &topic_name, &broker_name, queue_id).await;
@@ -2648,8 +2623,12 @@ async fn ack_message_entry_inner(
     entry: &AckMessageEntry,
     timeout_ms: u64,
 ) -> ProxyResult<ProxyPayloadStatus> {
-    let topic_name = entry.lite_topic.clone().unwrap_or_else(|| topic.to_string());
-    let group_name = group.to_string();
+    let topic_name = entry
+        .lite_topic
+        .as_deref()
+        .map(CheetahString::from_slice)
+        .unwrap_or_else(|| topic.to_cheetah_string());
+    let group_name = group.to_cheetah_string();
     let parsed = parse_receipt_handle(entry.receipt_handle.as_str(), topic_name.as_str(), group_name.as_str())?;
     let actual_broker_name =
         resolve_subscription_broker_name(client, &parsed.topic, &parsed.broker_name, parsed.queue_id).await;
@@ -2657,7 +2636,7 @@ async fn ack_message_entry_inner(
         .await
         .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
     let request_header = AckMessageRequestHeader {
-        consumer_group: CheetahString::from(group.to_string()),
+        consumer_group: group_name,
         topic: parsed.topic.clone(),
         queue_id: parsed.queue_id,
         extra_info: parsed.raw.clone(),
@@ -2684,8 +2663,12 @@ async fn change_invisible_duration_inner(
     request: &ChangeInvisibleDurationRequest,
     timeout_ms: u64,
 ) -> ProxyResult<ChangeInvisibleDurationPlan> {
-    let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
-    let group_name = request.group.to_string();
+    let topic_name = request
+        .lite_topic
+        .as_deref()
+        .map(CheetahString::from_slice)
+        .unwrap_or_else(|| request.topic.to_cheetah_string());
+    let group_name = request.group.to_cheetah_string();
     let parsed = parse_receipt_handle(
         request.receipt_handle.as_str(),
         topic_name.as_str(),
@@ -2697,7 +2680,7 @@ async fn change_invisible_duration_inner(
         .await
         .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
     let request_header = ChangeInvisibleTimeRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
+        consumer_group: group_name,
         topic: parsed.topic.clone(),
         queue_id: parsed.queue_id,
         extra_info: parsed.raw.clone(),
@@ -2747,10 +2730,9 @@ async fn end_transaction_inner(
     request_id: &str,
     timeout_ms: u64,
 ) -> ProxyResult<EndTransactionPlan> {
-    let topic_name = request.topic.to_string();
+    let topic_name = request.topic.to_cheetah_string();
     let route = fetch_topic_route(client, config, state, topic_name.as_str()).await?;
-    let broker_addr =
-        select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(topic_name.clone()))?;
+    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(&topic_name))?;
     let producer_group = request
         .producer_group
         .clone()
@@ -2767,7 +2749,7 @@ async fn end_transaction_inner(
             .unwrap_or(request.message_id.as_str()),
     )?;
     let request_header = EndTransactionRequestHeader {
-        topic: CheetahString::from(topic_name),
+        topic: topic_name,
         producer_group: CheetahString::from(producer_group),
         tran_state_table_offset: transaction_state_table_offset,
         commit_log_offset: broker_message_id.offset,
@@ -2794,8 +2776,8 @@ async fn end_transaction_inner(
 
 fn build_pop_request_header(broker_name: &CheetahString, request: &ReceiveMessageRequest) -> PopMessageRequestHeader {
     PopMessageRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
-        topic: CheetahString::from(request.target.topic.to_string()),
+        consumer_group: request.group.to_cheetah_string(),
+        topic: request.target.topic.to_cheetah_string(),
         queue_id: request.target.queue_id,
         max_msg_nums: request.batch_size,
         invisible_time: request.invisible_duration.as_millis().clamp(1, u128::from(u64::MAX)) as u64,
@@ -2818,8 +2800,8 @@ fn build_pop_request_header(broker_name: &CheetahString, request: &ReceiveMessag
 
 fn build_pull_request_header(broker_name: &CheetahString, request: &PullMessageRequest) -> PullMessageRequestHeader {
     PullMessageRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
-        topic: CheetahString::from(request.target.topic.to_string()),
+        consumer_group: request.group.to_cheetah_string(),
+        topic: request.target.topic.to_cheetah_string(),
         lite_topic: None,
         queue_id: request.target.queue_id,
         queue_offset: request.offset,
@@ -2853,8 +2835,8 @@ fn build_update_offset_request_header(
     request: &UpdateOffsetRequest,
 ) -> UpdateConsumerOffsetRequestHeader {
     UpdateConsumerOffsetRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
-        topic: CheetahString::from(request.target.topic.to_string()),
+        consumer_group: request.group.to_cheetah_string(),
+        topic: request.target.topic.to_cheetah_string(),
         queue_id: request.target.queue_id,
         commit_offset: request.offset,
         topic_request_header: Some(PopTopicRequestHeader {
@@ -2872,8 +2854,8 @@ fn build_query_consumer_offset_request_header(
     request: &GetOffsetRequest,
 ) -> QueryConsumerOffsetRequestHeader {
     QueryConsumerOffsetRequestHeader {
-        consumer_group: CheetahString::from(request.group.to_string()),
-        topic: CheetahString::from(request.target.topic.to_string()),
+        consumer_group: request.group.to_cheetah_string(),
+        topic: request.target.topic.to_cheetah_string(),
         queue_id: request.target.queue_id,
         set_zero_if_not_found: Some(false),
         topic_request_header: Some(PopTopicRequestHeader {
@@ -2887,7 +2869,7 @@ fn build_query_consumer_offset_request_header(
 }
 
 fn build_message_queue(target: &MessageQueueTarget, broker_name: &CheetahString) -> MessageQueue {
-    MessageQueue::from_parts(target.topic.to_string(), broker_name.clone(), target.queue_id)
+    MessageQueue::from_parts(target.topic.to_cheetah_string(), broker_name.clone(), target.queue_id)
 }
 
 fn build_receive_plan(pop_result: PopResult) -> ReceiveMessagePlan {
@@ -3089,7 +3071,7 @@ async fn resolve_target_queue(
     };
 
     let queues = producer
-        .fetch_publish_message_queues(entry.topic.to_string().as_str())
+        .fetch_publish_message_queues(entry.topic.to_cheetah_string().as_str())
         .await?;
     // Queue ids repeat across Brokers: a client that picked a Broker must get that Broker's queue.
     let broker_name = entry.broker_name.as_deref();
@@ -3619,8 +3601,9 @@ mod tests {
     #[test]
     fn cluster_worker_state_returns_live_metadata_cache_entries() {
         let mut state = ClusterWorkerState::new();
+        let topic = CheetahString::from_static_str("TopicA");
         state.topic_message_type_cache.insert(
-            "TopicA".to_owned(),
+            topic.clone(),
             CachedValue {
                 value: ProxyTopicMessageType::Fifo,
                 expires_at: Instant::now() + Duration::from_secs(1),
@@ -3628,7 +3611,7 @@ mod tests {
         );
 
         assert_eq!(
-            state.cached_topic_message_type("TopicA"),
+            state.cached_topic_message_type(&topic),
             Some(ProxyTopicMessageType::Fifo)
         );
     }

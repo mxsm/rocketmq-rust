@@ -35,6 +35,7 @@ rocketmq-model = { workspace = true }
 rocketmq-protocol = { workspace = true }
 rocketmq-runtime = { workspace = true }
 
+cheetah-string.workspace = true
 dashmap.workspace = true
 serde.workspace = true
 thiserror.workspace = true
