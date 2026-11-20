@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(client):** Encode topic attributes once per create-topic operation and reuse them across broker requests and retries ([#12852](https://github.com/mxsm/rocketmq-rust/issues/12852)).
 - **refactor:** Share the model Java string hash across producer queue selection, Broker Lite sharding and tiered index keys ([#12813](https://github.com/mxsm/rocketmq-rust/issues/12813)).
 - **refactor(broker):** Read transaction half-message records and offsets from the canonical decoded result, removing the duplicate `GetResult` wrapper ([#12769](https://github.com/mxsm/rocketmq-rust/issues/12769)).
 - **refactor(protocol)!:** Change the optional Store discriminator in `MaintenanceGetCapabilities` responses from `store.backend` to `store.storeKind` without an alias. Previously saved responses and older readers require coordinated Broker and consumer upgrades. `schemaVersion` remains `1`; responses without `store` and checkpoint manifest `backend` fields are unchanged ([#12710](https://github.com/mxsm/rocketmq-rust/issues/12710)).
