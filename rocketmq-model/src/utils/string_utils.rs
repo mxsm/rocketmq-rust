@@ -17,6 +17,12 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 
+/// Encodes an integer as decimal message-property text.
+#[inline]
+pub fn cheetah_from_integer(value: impl itoa::Integer) -> CheetahString {
+    CheetahString::from_slice(itoa::Buffer::new().format(value))
+}
+
 pub struct StringUtils;
 
 impl StringUtils {
@@ -77,7 +83,16 @@ impl StringUtils {
 
 #[cfg(test)]
 mod tests {
+    use super::cheetah_from_integer;
     use super::StringUtils;
+
+    #[test]
+    fn integer_text_matches_decimal_display() {
+        for value in [i128::MIN, i64::MIN.into(), -1, 0, i64::MAX.into(), i128::MAX] {
+            assert_eq!(cheetah_from_integer(value).as_str(), value.to_string());
+        }
+        assert_eq!(cheetah_from_integer(u128::MAX).as_str(), u128::MAX.to_string());
+    }
 
     #[test]
     fn is_not_empty_str_with_some_non_empty_str() {

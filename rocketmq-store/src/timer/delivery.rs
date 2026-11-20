@@ -40,6 +40,8 @@ use rocketmq_model::common::message::MessageConst;
 #[cfg(feature = "extended_timeline")]
 use rocketmq_model::common::message::MessageTrait;
 #[cfg(feature = "extended_timeline")]
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 #[cfg(feature = "extended_timeline")]
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -586,32 +588,31 @@ fn build_final_message(
     for (property, value) in [
         (
             MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
-            state.route.delivery_token().to_owned(),
+            CheetahString::from_slice(state.route.delivery_token()),
         ),
-        (MessageConst::PROPERTY_TIMER_ID, key.timer_id.get().to_string()),
+        (
+            MessageConst::PROPERTY_TIMER_ID,
+            cheetah_from_integer(key.timer_id.get()),
+        ),
         (
             MessageConst::PROPERTY_TIMER_GENERATION,
-            key.generation.get().to_string(),
+            cheetah_from_integer(key.generation.get()),
         ),
         (
             MessageConst::TIMER_ENGINE_TYPE,
-            TimerEngineId::ExtendedTimeline.as_str().to_owned(),
+            CheetahString::from_static_str(TimerEngineId::ExtendedTimeline.as_str()),
         ),
         (
             MessageConst::PROPERTY_TIMER_OWNER_EPOCH,
-            state.owner_epoch.get().to_string(),
+            cheetah_from_integer(state.owner_epoch.get()),
         ),
-        (MessageConst::PROPERTY_TIMER_LANE, key.lane.to_string()),
+        (MessageConst::PROPERTY_TIMER_LANE, cheetah_from_integer(key.lane)),
         (
             MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
-            key.due_time_ms.to_string(),
+            cheetah_from_integer(key.due_time_ms),
         ),
     ] {
-        MessageAccessor::put_property(
-            &mut final_message,
-            CheetahString::from_static_str(property),
-            CheetahString::from_string(value),
-        );
+        MessageAccessor::put_property(&mut final_message, CheetahString::from_static_str(property), value);
     }
     final_message.properties_string = MessageDecoder::message_properties_to_string(final_message.get_properties());
     Ok(final_message)
@@ -635,12 +636,12 @@ fn copy_message(source: MessageExt) -> MessageExtBrokerInner {
     MessageAccessor::put_property(
         &mut inner,
         CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS),
-        CheetahString::from_string(store_timestamp.to_string()),
+        cheetah_from_integer(store_timestamp),
     );
     MessageAccessor::put_property(
         &mut inner,
         CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS),
-        CheetahString::from_string((current_millis() as i64).to_string()),
+        cheetah_from_integer(current_millis() as i64),
     );
     inner.message_ext_inner.sys_flag = sys_flag;
     inner.message_ext_inner.born_timestamp = born_timestamp;

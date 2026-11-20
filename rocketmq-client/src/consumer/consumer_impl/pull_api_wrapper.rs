@@ -31,6 +31,7 @@ use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mq_version::RocketMqVersion;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
@@ -209,8 +210,8 @@ impl PullAPIWrapper {
             // Resolve batch-level constants once before iterating to avoid repeated allocations.
             let broker_name = message_queue.broker_name().clone();
             let queue_id = message_queue.queue_id();
-            let min_offset_str = CheetahString::from_string(pull_result_ext.pull_result.min_offset.to_string());
-            let max_offset_str = CheetahString::from_string(pull_result_ext.pull_result.max_offset.to_string());
+            let min_offset_str = cheetah_from_integer(pull_result_ext.pull_result.min_offset);
+            let max_offset_str = cheetah_from_integer(pull_result_ext.pull_result.max_offset);
             for msg in &mut msg_list_filter_again {
                 let tra_flag = msg
                     .property(&CheetahString::from_static_str(
