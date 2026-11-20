@@ -5023,6 +5023,7 @@ dependencies = [
  "dirs",
  "fs2",
  "futures-util",
+ "itoa",
  "libc",
  "memmap2",
  "parking_lot 0.13.0",

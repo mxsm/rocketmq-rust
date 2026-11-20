@@ -53,6 +53,7 @@ use crate::filter::MessageFilter;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
+use crate::queue::queue_offset_operator::topic_queue_key;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
@@ -729,19 +730,12 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         msg: &MessageExtBrokerInner,
         message_num: i16,
     ) {
-        queue_offset_assigner.increase_batch_queue_offset(
-            &CheetahString::from_string(format!("{}-{}", msg.topic(), msg.queue_id())),
-            message_num,
-        );
+        queue_offset_assigner.increase_batch_queue_offset(&topic_queue_key(msg.topic(), msg.queue_id()), message_num);
     }
 
     #[inline]
     fn assign_queue_offset(&self, queue_offset_operator: &QueueOffsetOperator, msg: &mut MessageExtBrokerInner) {
-        let queue_offset = queue_offset_operator.get_batch_queue_offset(&CheetahString::from_string(format!(
-            "{}-{}",
-            msg.topic(),
-            msg.queue_id()
-        )));
+        let queue_offset = queue_offset_operator.get_batch_queue_offset(&topic_queue_key(msg.topic(), msg.queue_id()));
         msg.message_ext_inner.queue_offset = queue_offset;
     }
 

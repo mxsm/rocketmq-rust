@@ -58,6 +58,7 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+use crate::queue::queue_offset_operator::topic_queue_key;
 use crate::queue::queue_offset_operator::QueueOffsetHandle;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::queue_offset_operator::QueueOffsetTable;
@@ -567,7 +568,7 @@ impl ConsumeQueueStore {
     pub(crate) fn advance_topic_queue_offset(&self, topic: &str, queue_id: i32, next_offset: i64) {
         self.inner
             .queue_offset_operator
-            .advance_queue_offset(CheetahString::from_string(format!("{topic}-{queue_id}")), next_offset);
+            .advance_queue_offset(topic_queue_key(topic, queue_id), next_offset);
     }
 
     pub(crate) fn replace_topic_queue_table(&self, topic_queue_table: HashMap<CheetahString, i64>) {
@@ -1291,11 +1292,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter_mut() {
             for (queue_id, consume_queue) in consume_queue_table.iter() {
                 let consume_queue = consume_queue.read();
-                let key = CheetahString::from_string(format!(
-                    "{}-{}",
-                    consume_queue.get_topic(),
-                    consume_queue.get_queue_id()
-                ));
+                let key = topic_queue_key(consume_queue.get_topic(), consume_queue.get_queue_id());
                 let max_offset_in_queue = consume_queue.get_max_offset_in_queue();
                 if consume_queue.get_cq_type() == CQType::SimpleCQ {
                     cq_offset_table.insert(key, max_offset_in_queue);
@@ -1346,7 +1343,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         Some(
             self.inner
                 .queue_offset_operator
-                .current_queue_offset(&format!("{topic}-{queue_id}").into()),
+                .current_queue_offset(&topic_queue_key(topic, queue_id)),
         )
     }
 
@@ -1499,10 +1496,7 @@ impl ConsumeQueueStore {
                 }
                 let next_queue_offset = request.consume_queue_offset + 1;
                 cq_offset_table
-                    .entry(CheetahString::from_string(format!(
-                        "{}-{}",
-                        request.topic, request.queue_id
-                    )))
+                    .entry(topic_queue_key(&request.topic, request.queue_id))
                     .and_modify(|queue_offset| *queue_offset = (*queue_offset).max(next_queue_offset))
                     .or_insert(next_queue_offset);
                 compensated_messages += 1;

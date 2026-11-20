@@ -74,6 +74,7 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::queue::queue_offset_operator::topic_queue_key;
 use crate::queue::ArcConsumeQueue;
 use crate::rocksdb::config::RocksDbConfig;
 use crate::rocksdb::consume_queue::CommitLogDispatcherBuildRocksDbConsumeQueue;
@@ -583,7 +584,7 @@ impl RocksDBMessageStore {
             .derived()
             .topic_queue_offsets()?
             .into_iter()
-            .map(|((topic, queue_id), offset)| (CheetahString::from_string(format!("{topic}-{queue_id}")), offset))
+            .map(|((topic, queue_id), offset)| (topic_queue_key(&topic, queue_id), offset))
             .collect();
         self.local_file_store.replace_topic_queue_table(topic_queue_table);
         Ok(())

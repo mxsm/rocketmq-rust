@@ -117,10 +117,6 @@ pub(crate) mod multi_dispatch_utils {
     use crate::base::dispatch_request::DispatchRequest;
     use crate::config::message_store_config::MessageStoreConfig;
 
-    pub fn lmq_queue_key(queue_name: &str) -> String {
-        format!("{queue_name}-0")
-    }
-
     pub fn is_need_handle_multi_dispatch(cfg: &MessageStoreConfig, topic: &str) -> bool {
         cfg.enable_multi_dispatch
             && !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
@@ -152,11 +148,6 @@ mod tests {
     use super::*;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::config::message_store_config::MessageStoreConfig;
-
-    #[test]
-    fn test_lmq_queue_key() {
-        assert_eq!(multi_dispatch_utils::lmq_queue_key("Q"), "Q-0");
-    }
 
     #[test]
     fn test_is_need_handle_multi_dispatch() {

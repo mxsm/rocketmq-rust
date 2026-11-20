@@ -23,9 +23,8 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use rocketmq_model::common::attribute::cq_type::CQType;
 use rocketmq_model::common::mix_all::is_lmq;
+use rocketmq_model::common::mix_all::LMQ_QUEUE_ID;
 use tracing::info;
-
-use crate::queue::multi_dispatch_utils::lmq_queue_key;
 
 /// The next logical offset of one queue.
 ///
@@ -134,6 +133,12 @@ impl QueueOffsetHandle {
     }
 }
 
+/// Returns the Java-compatible offset-table key for a topic and signed queue ID.
+#[inline]
+pub(crate) fn topic_queue_key(topic: &str, queue_id: i32) -> CheetahString {
+    CheetahString::concat(&[topic, "-", itoa::Buffer::new().format(queue_id)])
+}
+
 /// Room for the `topic-queueId` key of every topic that fits RocketMQ's topic length limit.
 const STACK_QUEUE_KEY_BYTES: usize = 192;
 
@@ -145,14 +150,18 @@ fn with_queue_key<R>(topic: &str, queue_id: i32, f: impl FnOnce(&str) -> R) -> R
 
     let mut buffer = [0_u8; STACK_QUEUE_KEY_BYTES];
     let mut cursor = std::io::Cursor::new(&mut buffer[..]);
-    let written = cursor.write_all(topic.as_bytes()).is_ok() && write!(cursor, "-{queue_id}").is_ok();
+    let written = cursor.write_all(topic.as_bytes()).is_ok()
+        && cursor.write_all(b"-").is_ok()
+        && cursor
+            .write_all(itoa::Buffer::new().format(queue_id).as_bytes())
+            .is_ok();
     let len = usize::try_from(cursor.position()).ok();
     if let (true, Some(len)) = (written, len) {
         if let Ok(key) = std::str::from_utf8(&buffer[..len]) {
             return f(key);
         }
     }
-    f(&format!("{topic}-{queue_id}"))
+    f(&topic_queue_key(topic, queue_id))
 }
 
 type QueueOffsetSlots = DashMap<CheetahString, Arc<QueueOffsetSlot>>;
@@ -353,7 +362,7 @@ impl QueueOffsetOperator {
 
     #[inline]
     pub fn remove(&self, topic: &CheetahString, queue_id: i32) {
-        let topic_queue_key = CheetahString::from(format!("{topic}-{queue_id}"));
+        let topic_queue_key = topic_queue_key(topic, queue_id);
         Self::remove_slot(&self.topic_queue_table, &topic_queue_key);
         Self::remove_slot(&self.batch_topic_queue_table, &topic_queue_key);
         self.lmq_topic_queue_table.remove(&topic_queue_key);
@@ -394,8 +403,9 @@ impl QueueOffsetOperator {
 
     #[inline]
     pub fn is_lmq_exist(&self, lmq_topic: &str) -> bool {
-        let queue_key = CheetahString::from_string(lmq_queue_key(lmq_topic));
-        self.lmq_topic_queue_table.contains_key(&queue_key)
+        with_queue_key(lmq_topic, LMQ_QUEUE_ID as i32, |key| {
+            self.lmq_topic_queue_table.contains_key(key)
+        })
     }
 
     #[inline]
@@ -418,6 +428,18 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn owned_and_borrowed_queue_keys_match_java_decimal_text() {
+        let long_topic = "队列-".repeat(STACK_QUEUE_KEY_BYTES);
+        for topic in ["", "orders", "mixed-主题", &long_topic] {
+            for id in [i32::MIN, -1, 0, 42, i32::MAX] {
+                let expected = format!("{topic}-{id}");
+                assert_eq!(topic_queue_key(topic, id).as_str(), expected);
+                with_queue_key(topic, id, |key| assert_eq!(key, expected));
+            }
+        }
+    }
 
     #[test]
     fn queue_offset_operator_initializes_empty_tables() {
