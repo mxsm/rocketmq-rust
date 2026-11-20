@@ -581,7 +581,7 @@ impl MQClientAPIImpl {
                 let body = response
                     .get_body_mut()
                     .ok_or_else(|| client_broker_err!(raw_response_code, "PopMessage response body is empty"))?;
-                let messages = MessageDecoder::decodes_batch(
+                let messages = MessageDecoder::decode_client_batch(
                     body,
                     self.client_config.decode_read_body,
                     self.client_config.decode_decompress_body,
@@ -833,7 +833,7 @@ impl MQClientAPIImpl {
                 let body = response
                     .get_body_mut()
                     .ok_or_else(|| client_broker_err!(raw_response_code, "PopLiteMessage response body is empty"))?;
-                let messages = MessageDecoder::decodes_batch(
+                let messages = MessageDecoder::decode_client_batch(
                     body,
                     self.client_config.decode_read_body,
                     self.client_config.decode_decompress_body,
