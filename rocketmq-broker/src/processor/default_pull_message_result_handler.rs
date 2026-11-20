@@ -93,6 +93,11 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
         mut mapping_context: TopicQueueMappingContext,
         response_context: PullResponseContext<'_>,
     ) -> crate::broker_error::BrokerResult<PullMessageResult> {
+        let Some(status) = get_message_result.status() else {
+            response.set_remark_option_mut(None::<CheetahString>);
+            response.set_code_ref(ResponseCode::SystemError);
+            return command_result(response);
+        };
         let client_address = response_context.effective_peer.to_string();
         let policy = self.context.policy();
         let topic_config = self.context.topics().select_topic_config(request_header.topic.as_ref());
@@ -101,6 +106,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
             &self.context,
             &request_header,
             &get_message_result,
+            status,
             topic_sys_flag,
             subscription_group_config,
             &mut response,
@@ -463,20 +469,21 @@ impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
         context: &PullMessageProcessorContext<MS>,
         request_header: &PullMessageRequestHeader,
         get_message_result: &GetMessageResult,
+        status: GetMessageStatus,
         topic_sys_flag: i32,
         subscription_group_config: &SubscriptionGroupConfig,
         response: &mut RemotingCommand,
         client_address: &str,
     ) {
         let mut response_header = PullMessageResponseHeader::default();
-        response.set_remark_mut(format!("{:?}", get_message_result.status()));
+        response.set_remark_mut(CheetahString::from_static_str(status.as_str()));
         response_header.next_begin_offset = get_message_result.next_begin_offset();
         response_header.min_offset = get_message_result.min_offset();
         response_header.max_offset = get_message_result.max_offset();
         response_header.topic_sys_flag = Some(topic_sys_flag);
         response_header.group_sys_flag = Some(subscription_group_config.group_sys_flag());
 
-        match get_message_result.status().unwrap() {
+        match status {
             GetMessageStatus::Found => {
                 response.set_code_ref(RemotingSysResponseCode::Success);
             }
@@ -559,7 +566,7 @@ impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
                 response_header.max_offset
             );
             response_header.suggest_which_broker_id = MASTER_ID;
-            if get_message_result.status() != Some(GetMessageStatus::Found) {
+            if status != GetMessageStatus::Found {
                 response.set_code_ref(ResponseCode::PullRetryImmediately);
             }
         }

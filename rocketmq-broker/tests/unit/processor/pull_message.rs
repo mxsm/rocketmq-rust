@@ -328,6 +328,48 @@ async fn wait_for_deferred(service: &PullDeferredService) {
 }
 
 #[tokio::test]
+async fn missing_pull_store_status_returns_system_error_without_a_remark() {
+    use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
+    use crate::processor::pull_message_result_handler::{
+        PullMessageResult, PullMessageResultHandler, PullResponseContext,
+    };
+
+    let (mut runtime, root) = runtime("missing-status", false).await;
+    let handler =
+        DefaultPullMessageResultHandler::new(Arc::new(Vec::new()), runtime.pull_message_context_for_test(), None);
+    let result = handler
+        .handle(
+            rocketmq_store::GetMessageResult::new(),
+            PullMessageRequestHeader::default(),
+            Default::default(),
+            &Default::default(),
+            Arc::new(ExpressionForRetryMessageFilter),
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_remark("previous"),
+            Default::default(),
+            PullResponseContext {
+                effective_peer: ([127, 0, 0, 1], 0).into(),
+                hook_metadata: &Default::default(),
+                broadcast_client_resolver: &|_| Ok(None),
+                allow_suspend: false,
+                begin_time_millis: 0,
+            },
+        )
+        .await
+        .unwrap();
+    let PullMessageResult::Reply(parts) = result else {
+        panic!("expected an immediate error reply")
+    };
+    let ResponseAction::Reply(response) = parts.into_response_action().unwrap() else {
+        panic!("expected a response")
+    };
+    let (head, _) = response.into_embedded_response().into_parts();
+    assert_eq!(head.code(), ResponseCode::SystemError as i32);
+    assert!(head.remark().is_none());
+    runtime.shutdown_message_store_for_test().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
 async fn immediate_reply_is_bound_to_the_original_wire_opaque() {
     const OPAQUE: i32 = 98_471;
     let (mut runtime, root) = runtime("immediate", false).await;
@@ -444,6 +486,7 @@ async fn broadcast_offset_uses_the_canonical_network_session_identity() {
 
     let response = send_and_receive(&mut client, pull_request("group-a", 1, false, OPAQUE)).await;
     assert_eq!(response.code(), ResponseCode::Success as i32);
+    assert_eq!(response.remark().map(CheetahString::as_str), Some("FOUND"));
     assert_eq!(response.opaque(), OPAQUE);
     let observed_session = *sessions.lock().first().expect("observed Pull session");
     assert_eq!(
