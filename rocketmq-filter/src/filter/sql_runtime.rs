@@ -550,19 +550,20 @@ impl<'a> Lexer<'a> {
     fn read_string(&mut self, position: usize) -> Result<Token, FilterCompileError> {
         self.cursor += 1;
         let mut string = String::new();
+        let mut start = self.cursor;
         while self.cursor < self.bytes.len() {
-            let byte = self.bytes[self.cursor];
-            if byte == b'\'' {
+            if self.bytes[self.cursor] == b'\'' {
+                string.push_str(&self.input[start..self.cursor]);
                 if self.peek_byte(1) == Some(b'\'') {
                     string.push('\'');
                     self.cursor += 2;
+                    start = self.cursor;
                     continue;
                 }
                 self.cursor += 1;
                 return Ok(Token::String(CheetahString::from_string(string)));
             }
 
-            string.push(byte as char);
             self.cursor += 1;
         }
 

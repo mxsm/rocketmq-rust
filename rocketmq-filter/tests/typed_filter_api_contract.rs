@@ -43,6 +43,21 @@ fn factory_trait_object_compiles_and_evaluates_through_the_typed_api() {
 }
 
 #[test]
+fn sql92_string_literals_preserve_utf8_and_escaped_quotes() {
+    let filter = sql92_filter_from_factory();
+    let mut context = MessageEvaluationContext::new();
+    context.put("label", "café'猫🚀");
+    for selector in ["label = 'café''猫🚀'", "label CONTAINS '猫🚀'"] {
+        let expression = filter.try_compile(selector).unwrap();
+        assert_eq!(
+            expression.evaluate(&context).unwrap(),
+            Value::Boolean(true),
+            "{selector}"
+        );
+    }
+}
+
+#[test]
 fn factory_trait_object_typed_failures_preserve_safe_canonical_metadata() {
     let filter = sql92_filter_from_factory();
     let submitted = "  name = '秘密' @";

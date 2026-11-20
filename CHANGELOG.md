@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(filter):** Preserve UTF-8 text and escaped apostrophes in SQL92 string literals ([#12850](https://github.com/mxsm/rocketmq-rust/issues/12850)).
 - **fix(admin-tui):** Keep the confirmation cursor and mismatch highlighting aligned when wide characters scroll out of view ([#12824](https://github.com/mxsm/rocketmq-rust/issues/12824)).
 - **fix(ci):** Register Client and Runtime API exports and check Broker and Proxy production features in both PGO and ordinary builds ([#12778](https://github.com/mxsm/rocketmq-rust/issues/12778)).
 - **docs(controller):** Clarify that file-storage startup requires `dev-single`; `storage-file` alone only compiles the implementation ([#12771](https://github.com/mxsm/rocketmq-rust/issues/12771)).
