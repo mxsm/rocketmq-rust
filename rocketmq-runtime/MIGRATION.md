@@ -5,6 +5,15 @@ Consumers must migrate with this batch; the budget accessor change is a source
 compatibility break and must not be published as a compatible patch to an API
 that returns a mandatory capacity dimension.
 
+## Wall-clock time helpers
+
+Wall-clock time helpers are now also available from `rocketmq_model::time` with
+unchanged names, signatures, and behavior. Existing
+`rocketmq_runtime::common::time_utils` imports still compile and are not
+deprecated by this change. New code should import these helpers from
+`rocketmq_model::time`; scheduling and monotonic deadlines stay in
+`rocketmq-runtime`.
+
 ## Explicit resource and completion boundaries
 
 The APIs in this section are additive. Existing constructor capacity, boolean
