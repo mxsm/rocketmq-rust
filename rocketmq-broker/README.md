@@ -385,6 +385,19 @@ cargo bench -p rocketmq-broker --bench broker_runtime_lifecycle_bench
 Keep toolchain, features, backend, and workload consistent when comparing measurements. See
 [`Cargo.toml`](Cargo.toml) for all declared benchmark targets.
 
+### Hashing topic and consumer-group keys
+
+The Broker keeps randomized hashing for its topic, queue, offset and statistics tables. A frame-pointer
+profile of commit `784170426` on an i7-11700K measured about 1,800 user cycles per message in
+SipHash during single-connection asynchronous sends with 1 KiB bodies and 256 requests in flight.
+The request task used 143,600 cycles, or 63% of the sampled Broker total. This puts the attributed
+SipHash cost at about 0.8% of Broker user cycles in that run. The sample covers all default-hashed
+tables together, and individual tables receive only a share of that cost.
+
+Topic and group names can come from clients. A change to a particular table's hasher needs a
+representative profile isolating that table, a measured end-to-end benefit and a review of collision
+resistance for its input keys.
+
 ## License
 
 RocketMQ-Rust is licensed under the Apache License 2.0. See [LICENSE-APACHE](../LICENSE-APACHE).
