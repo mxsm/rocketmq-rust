@@ -14,6 +14,8 @@
 
 use std::fmt;
 
+use cheetah_string::CheetahString;
+
 /// A namespace-qualified RocketMQ resource name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResourceIdentity {
@@ -26,6 +28,15 @@ impl ResourceIdentity {
         Self {
             namespace: namespace.into(),
             name: name.into(),
+        }
+    }
+
+    /// Returns the resource name used in Broker requests, including its optional namespace.
+    pub fn to_cheetah_string(&self) -> CheetahString {
+        if self.namespace.is_empty() {
+            CheetahString::from_slice(&self.name)
+        } else {
+            CheetahString::concat(&[&self.namespace, "%", &self.name])
         }
     }
 
@@ -44,6 +55,25 @@ impl fmt::Display for ResourceIdentity {
             write!(f, "{}", self.name)
         } else {
             write!(f, "{}%{}", self.namespace, self.name)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_resource_names_match_display() {
+        for (namespace, name) in [
+            ("", ""),
+            ("", "orders"),
+            ("tenant", ""),
+            ("租户", "a%b"),
+            ("tenant", "a-long-name-that-requires-shared-storage"),
+        ] {
+            let resource = ResourceIdentity::new(namespace, name);
+            assert_eq!(resource.to_cheetah_string().as_str(), resource.to_string());
         }
     }
 }
