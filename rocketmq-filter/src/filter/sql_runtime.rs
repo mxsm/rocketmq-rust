@@ -319,8 +319,8 @@ fn eval_compare_values(op: CompareOp, left: &Value, right: &Value) -> Result<Opt
         })?;
 
         return Ok(Some(match op {
-            CompareOp::Eq => numeric_eq(left, right),
-            CompareOp::Ne => !numeric_eq(left, right),
+            CompareOp::Eq => ordering == Ordering::Equal,
+            CompareOp::Ne => ordering != Ordering::Equal,
             CompareOp::Gt => ordering == Ordering::Greater,
             CompareOp::Gte => matches!(ordering, Ordering::Greater | Ordering::Equal),
             CompareOp::Lt => ordering == Ordering::Less,
@@ -374,25 +374,37 @@ fn coerce_boolean_literal(value: &Value) -> Option<bool> {
     }
 }
 
-fn coerce_numeric(value: &Value) -> Option<f64> {
+enum Number {
+    Long(i64),
+    Double(f64),
+}
+
+impl Number {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Self::Long(left), Self::Long(right)) => Some(left.cmp(right)),
+            (Self::Double(left), Self::Double(right)) => left.partial_cmp(right),
+            (Self::Long(left), Self::Double(right)) => (*left as f64).partial_cmp(right),
+            (Self::Double(left), Self::Long(right)) => left.partial_cmp(&(*right as f64)),
+        }
+    }
+}
+
+fn coerce_numeric(value: &Value) -> Option<Number> {
     match value {
-        Value::Long(number) => Some(*number as f64),
-        Value::Double(number) => Some(*number),
+        Value::Long(number) => Some(Number::Long(*number)),
+        Value::Double(number) => Some(Number::Double(*number)),
         Value::String(string) => {
             if let Ok(number) = string.parse::<i64>() {
-                Some(number as f64)
+                Some(Number::Long(number))
             } else if let Ok(number) = string.parse::<f64>() {
-                number.is_finite().then_some(number)
+                number.is_finite().then_some(Number::Double(number))
             } else {
                 None
             }
         }
         _ => None,
     }
-}
-
-fn numeric_eq(left: f64, right: f64) -> bool {
-    (left - right).abs() <= f64::EPSILON
 }
 
 fn stringify_value(value: &Value) -> String {
@@ -1025,6 +1037,38 @@ mod tests {
         )
         .expect("evaluation should succeed");
         assert_eq!(value, Value::Boolean(true));
+    }
+
+    #[test]
+    fn evaluate_adjacent_large_integer_properties() {
+        let pairs = [("id", "9007199254740993")];
+        for (selector, expected) in [
+            ("id = 9007199254740992", false),
+            ("id > 9007199254740992", true),
+            ("id IN (9007199254740992, 9007199254740994)", false),
+            ("id BETWEEN 9007199254740993 AND 9007199254740993", true),
+        ] {
+            assert_eq!(
+                evaluate(selector, &pairs).unwrap(),
+                Value::Boolean(expected),
+                "{selector}"
+            );
+        }
+    }
+
+    #[test]
+    fn evaluate_distinct_small_floats_consistently() {
+        let value = evaluate("ratio <> 1e-17 AND ratio < 1e-17", &[("ratio", "0.0")]).unwrap();
+        assert_eq!(value, Value::Boolean(true));
+    }
+
+    #[test]
+    fn compile_rejects_reversed_adjacent_large_integer_bounds() {
+        let error = compile_error("id BETWEEN 9223372036854775807 AND 9223372036854775806");
+        assert_eq!(
+            error.kind(),
+            rocketmq_error::FilterCompileErrorKind::InvalidBetweenBounds
+        );
     }
 
     #[test]
