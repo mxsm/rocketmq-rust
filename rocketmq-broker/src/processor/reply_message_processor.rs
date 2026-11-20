@@ -200,7 +200,7 @@ fn apply_reply_store_result(
         }
     };
     if let (true, Some(append_result)) = (put_ok, put_message_result.append_message_result()) {
-        response_header.set_msg_id(append_result.get_message_id().unwrap_or_default());
+        response_header.set_msg_id(append_result.get_message_id_cheetah().unwrap_or_default());
         response_header.set_queue_id(queue_id);
         response_header.set_queue_offset(append_result.logics_offset);
     }

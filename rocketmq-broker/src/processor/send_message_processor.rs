@@ -1557,7 +1557,7 @@ fn set_success_response_header(
         .expect("append result must exist for successful send");
     response_header.set_msg_id(
         append_result
-            .get_message_id()
+            .get_message_id_cheetah()
             .expect("message_id must exist for successful send"),
     );
     response_header.set_queue_id(queue_id);

@@ -52,6 +52,7 @@ fn append_message_result_preserves_fields_default_display_and_supplier() {
     assert_eq!(0, default.page_cache_rt);
     assert_eq!(1, default.msg_num);
     assert!(!default.is_ok());
+    assert!(default.get_message_id_cheetah().is_none());
 
     let calls = Arc::new(AtomicUsize::new(0));
     let supplier_calls = Arc::clone(&calls);
@@ -71,7 +72,8 @@ fn append_message_result_preserves_fields_default_display_and_supplier() {
     };
     assert!(result.is_ok());
     assert_eq!(Some("lazy-id".to_string()), result.get_message_id());
-    assert_eq!(1, calls.load(Ordering::Relaxed));
+    assert_eq!(Some("lazy-id"), result.get_message_id_cheetah().as_deref());
+    assert_eq!(2, calls.load(Ordering::Relaxed));
     assert_eq!(
         "AppendMessageResult [status=PutOk, wrote_offset=41, wrote_bytes=13, msg_id=Some(\"eager-id\"), \
          store_timestamp=123, logics_offset=7, page_cache_rt=9, msg_num=2]",
@@ -83,6 +85,7 @@ fn append_message_result_preserves_fields_default_display_and_supplier() {
         ..AppendMessageResult::default()
     };
     assert_eq!(Some("direct-id".to_string()), direct.get_message_id());
+    assert_eq!(Some("direct-id"), direct.get_message_id_cheetah().as_deref());
 }
 
 #[test]

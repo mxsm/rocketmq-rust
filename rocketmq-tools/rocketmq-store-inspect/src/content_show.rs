@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::Result as CanonicalResult;
+use rocketmq_model::utils::message_utils::build_message_id_from_store_host;
 use rocketmq_store::inspect_commit_log_record;
 use rocketmq_store::CommitLogRecord;
 use rocketmq_store::CommitLogRecordBodyMode;
@@ -106,22 +107,11 @@ impl CommitLogRecordChecksum for InspectionChecksum {
 
 fn message_print(record: &CommitLogRecord) -> MessagePrint {
     MessagePrint {
-        message_id: CheetahString::from_string(build_message_id(&record.store_host, record.physical_offset)),
+        message_id: build_message_id_from_store_host(&record.store_host, record.physical_offset).unwrap_or_default(),
         client_message_id: property_value(record.properties.as_ref(), UNIQUE_CLIENT_MESSAGE_ID)
             .map(cheetah_from_utf8_lossy)
             .unwrap_or_default(),
     }
-}
-
-fn build_message_id(store_host: &Bytes, physical_offset: i64) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-    let mut encoded = String::with_capacity((store_host.len() + 8) * 2);
-    for byte in store_host.iter().chain(physical_offset.to_be_bytes().iter()) {
-        encoded.push(HEX[usize::from(*byte >> 4)] as char);
-        encoded.push(HEX[usize::from(*byte & 0x0F)] as char);
-    }
-    encoded
 }
 
 fn property_value<'a>(properties: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
@@ -149,7 +139,7 @@ mod tests {
     use bytes::Bytes;
     use rocketmq_error::CliExitCode;
 
-    use super::build_message_id;
+    use super::build_message_id_from_store_host;
     use super::print_content;
     use super::property_value;
 
@@ -172,7 +162,10 @@ mod tests {
     #[test]
     fn canonical_inspection_helpers_preserve_legacy_ids_and_properties() {
         let host = Bytes::from_static(&[127, 0, 0, 1, 0, 0, 42, 159]);
-        assert_eq!(build_message_id(&host, 13), "7F00000100002A9F000000000000000D");
+        assert_eq!(
+            build_message_id_from_store_host(&host, 13).unwrap(),
+            "7F00000100002A9F000000000000000D"
+        );
 
         let properties = b"TAGS\x01TagA\x02UNIQ_KEY\x01client-1\x02";
         assert_eq!(property_value(properties, b"UNIQ_KEY"), Some(&b"client-1"[..]));
