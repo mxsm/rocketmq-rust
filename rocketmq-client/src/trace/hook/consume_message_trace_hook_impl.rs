@@ -184,9 +184,9 @@ impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
             group_name: Self::without_namespace(&context.consumer_group),
             cost_time: 0,
             is_success: true,
-            request_id: CheetahString::from_string(
-                rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter::create_uniq_id(),
-            ),
+            request_id:
+                rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter::create_uniq_id_cheetah(
+                ),
             context_code: 0,
             access_channel: None,
             trace_beans: Some(beans),

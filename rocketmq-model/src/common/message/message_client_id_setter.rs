@@ -44,10 +44,6 @@ static TIME_WINDOW: LazyLock<TimeWindow> = LazyLock::new(|| {
         next_start_time: AtomicI64::new(next_start_time),
     }
 });
-static LEN: LazyLock<usize> = LazyLock::new(|| {
-    let ip = get_ip().unwrap_or_else(create_fake_ip);
-    ip.len() + 2 + 4 + 4 + 2
-});
 /// Hex prefix shared by every id of this process: IP, process id and class-loader hash.
 static FIX_STRING: LazyLock<String> = LazyLock::new(|| {
     let ip = get_ip().unwrap_or_else(create_fake_ip);
@@ -59,16 +55,6 @@ static FIX_STRING: LazyLock<String> = LazyLock::new(|| {
     bytes.put_i32(class_loader_hash);
     bytes_to_string(bytes.freeze().as_ref())
 });
-
-const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-/// Appends the low `digits` hex digits of `value`, most significant first, in uppercase.
-#[inline]
-fn push_upper_hex(id: &mut String, value: u32, digits: u32) {
-    for shift in (0..digits).rev().map(|digit| digit * 4) {
-        id.push(char::from(UPPER_HEX[((value >> shift) & 0x0f) as usize]));
-    }
-}
 
 struct TimeWindow {
     start_time: AtomicI64,
@@ -144,10 +130,15 @@ impl MessageClientIDSetter {
     }
 
     pub fn create_uniq_id() -> String {
-        // Built straight into the returned string: one allocation per id.
-        let mut id = String::with_capacity(*LEN * 2);
-        id.push_str(&FIX_STRING);
+        Self::uniq_id_text(&mut [0; 56]).to_owned()
+    }
 
+    /// Generates a producer message ID with the same Java-compatible layout as `create_uniq_id`.
+    pub fn create_uniq_id_cheetah() -> CheetahString {
+        CheetahString::from_slice(Self::uniq_id_text(&mut [0; 56]))
+    }
+
+    fn uniq_id_text(text: &mut [u8; 56]) -> &str {
         let current = current_millis() as i64;
         if current >= TIME_WINDOW.next_start_time.load(Ordering::Acquire) {
             Self::set_start_time(current);
@@ -159,11 +150,17 @@ impl MessageClientIDSetter {
             diff = 0;
         }
 
-        push_upper_hex(&mut id, diff as u32, 8);
-
-        let counter_val = COUNTER.fetch_add(1, Ordering::SeqCst) as i16;
-        push_upper_hex(&mut id, u32::from(counter_val as u16), 4);
-        id
+        let counter = COUNTER.fetch_add(1, Ordering::SeqCst) as i16;
+        let prefix = FIX_STRING.as_bytes();
+        let (head, tail) = text[..prefix.len() + 12].split_at_mut(prefix.len());
+        head.copy_from_slice(prefix);
+        for (pair, byte) in tail
+            .chunks_exact_mut(2)
+            .zip(diff.to_be_bytes().into_iter().chain(counter.to_be_bytes()))
+        {
+            pair.copy_from_slice(&crate::codec::upper_hex_pair(byte));
+        }
+        std::str::from_utf8(&text[..prefix.len() + 12]).unwrap_or_default()
     }
 
     pub fn get_nearly_time_from_id(msg_id: &str) -> Result<DateTime<Local>> {
@@ -230,10 +227,9 @@ impl MessageClientIDSetter {
             ))
             .is_none()
         {
-            let uniq_id = Self::create_uniq_id();
             message.put_property(
                 CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-                CheetahString::from_string(uniq_id),
+                Self::create_uniq_id_cheetah(),
             );
         }
     }
@@ -255,21 +251,25 @@ mod tests {
 
     #[test]
     fn unique_id_matches_the_char_buffer_layout() {
-        let id = MessageClientIDSetter::create_uniq_id();
-        assert_eq!(id.len(), *LEN * 2);
-        assert!(id.starts_with(FIX_STRING.as_str()));
+        for id in [
+            MessageClientIDSetter::create_uniq_id(),
+            MessageClientIDSetter::create_uniq_id_cheetah().to_string(),
+        ] {
+            assert!(matches!(id.len(), 32 | 56));
+            assert!(id.starts_with(FIX_STRING.as_str()));
 
-        let pos = FIX_STRING.len();
-        let diff = u32::from_str_radix(&id[pos..pos + 8], 16).expect("hex time diff") as i32;
-        let counter = u16::from_str_radix(&id[pos + 8..], 16).expect("hex counter") as i16;
-        let mut expected = vec!['\0'; *LEN * 2];
-        for (slot, digit) in expected.iter_mut().zip(FIX_STRING.chars()) {
-            *slot = digit;
+            let pos = FIX_STRING.len();
+            let diff = u32::from_str_radix(&id[pos..pos + 8], 16).expect("hex time diff") as i32;
+            let counter = u16::from_str_radix(&id[pos + 8..], 16).expect("hex counter") as i16;
+            let mut expected = vec!['\0'; pos + 12];
+            for (slot, digit) in expected.iter_mut().zip(FIX_STRING.chars()) {
+                *slot = digit;
+            }
+            crate::codec::write_int(&mut expected, pos, diff);
+            crate::codec::write_short(&mut expected, pos + 8, counter);
+
+            assert_eq!(id, expected.into_iter().collect::<String>());
         }
-        crate::codec::write_int(&mut expected, pos, diff);
-        crate::codec::write_short(&mut expected, pos + 8, counter);
-
-        assert_eq!(id, expected.into_iter().collect::<String>());
     }
 
     #[test]
