@@ -29,6 +29,7 @@ pub mod body;
 pub mod broker_sync_info;
 pub mod command_custom_header;
 pub mod encoded_frame;
+mod fastjson;
 pub mod filter;
 pub mod forbidden_type;
 pub mod header;

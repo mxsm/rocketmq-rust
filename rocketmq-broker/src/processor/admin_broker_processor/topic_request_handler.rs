@@ -69,61 +69,11 @@ fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDet
             let text = std::str::from_utf8(body).map_err(|utf8_error| {
                 format!("decode TopicQueueMappingDetail failed: {error}; body is not utf8: {utf8_error}")
             })?;
-            let normalized = quote_unquoted_numeric_json_keys(text);
-            serde_json::from_str::<TopicQueueMappingDetail>(&normalized).map_err(|normalized_error| {
+            TopicQueueMappingDetail::from_fastjson(text).map_err(|normalized_error| {
                 format!("{error}; normalized Java numeric map keys failed: {normalized_error}")
             })
         }
     }
-}
-
-fn quote_unquoted_numeric_json_keys(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut output = String::with_capacity(input.len());
-    let mut index = 0;
-
-    while index < bytes.len() {
-        let byte = bytes[index];
-        output.push(byte as char);
-        index += 1;
-
-        if byte != b'{' && byte != b',' {
-            continue;
-        }
-
-        let whitespace_start = index;
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-
-        let key_start = index;
-        if index < bytes.len() && bytes[index] == b'-' {
-            index += 1;
-        }
-        let digit_start = index;
-        while index < bytes.len() && bytes[index].is_ascii_digit() {
-            index += 1;
-        }
-        let key_end = index;
-
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-
-        if key_end > digit_start && index < bytes.len() && bytes[index] == b':' {
-            output.push_str(&input[whitespace_start..key_start]);
-            output.push('"');
-            output.push_str(&input[key_start..key_end]);
-            output.push('"');
-            output.push_str(&input[key_end..index]);
-            output.push(':');
-            index += 1;
-        } else {
-            output.push_str(&input[whitespace_start..index]);
-        }
-    }
-
-    output
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1317,6 +1267,19 @@ mod tests {
                 .map(|item| item.queue_id),
             Some(1)
         );
+    }
+
+    #[test]
+    fn java_mapping_keys_preserve_quoted_broker_names() {
+        for name in ["节点", r#"zone", 12:west"#] {
+            let quoted = serde_json::to_string(name).unwrap();
+            let body = format!(
+                r#"{{"topic":"static-topic","totalQueues":1,"bname":{quoted},"epoch":1,"dirty":false,"currIdMap":{{0:9}}}}"#
+            );
+            let detail = decode_topic_queue_mapping_detail(body.as_bytes()).unwrap();
+            assert_eq!(detail.topic_queue_mapping_info.bname.as_deref(), Some(name));
+            assert_eq!(detail.topic_queue_mapping_info.curr_id_map.unwrap().get(&0), Some(&9));
+        }
     }
 
     #[tokio::test]
