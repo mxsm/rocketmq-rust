@@ -1473,10 +1473,9 @@ impl LocalFileMessageStore {
 pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
     let mut delay_level_table = BTreeMap::new();
 
-    let level_array: Vec<&str> = level_string.split(' ').collect();
     let mut max_delay_level = 0;
 
-    for (i, value) in level_array.iter().enumerate() {
+    for (i, value) in level_string.split_whitespace().enumerate() {
         let Some(ch) = value.chars().last() else {
             continue;
         };
