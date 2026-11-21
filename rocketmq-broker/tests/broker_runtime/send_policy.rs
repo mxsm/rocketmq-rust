@@ -17,6 +17,11 @@ use std::sync::Barrier;
 use parking_lot::Mutex;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
+use rocketmq_transport::api::EmbeddedResponseBody;
+use rocketmq_transport::api::RemotingRequest;
+use rocketmq_transport::api::RemotingResponse;
+use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 
 use super::*;
 use crate::mqtrace::send_message_context::SendMessageContext;
@@ -252,6 +257,25 @@ async fn send_policy_generation_survives_configuration_update_through_store_and_
     }
 }
 
+#[derive(Clone)]
+struct ObserveSendOpaque {
+    processor: DefaultServerProcessor,
+    opaque: Arc<Mutex<Option<i32>>>,
+}
+
+impl RequestProcessor for ObserveSendOpaque {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
+        let ResponseAction::Reply(reply) = self.processor.process(request).await? else {
+            panic!("Send must produce an immediate reply")
+        };
+        let (head, body) = reply.into_embedded_response().into_parts();
+        assert!(matches!(body, EmbeddedResponseBody::Empty));
+        // The transport binds this response to the original request after this point.
+        *self.opaque.lock() = Some(head.opaque());
+        Ok(ResponseAction::Reply(RemotingResponse::command(head).unwrap()))
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_without_hooks_still_stores_broker_owned_properties() {
     for code in [RequestCode::SendMessage, RequestCode::SendBatchMessage] {
@@ -262,10 +286,24 @@ async fn send_without_hooks_still_stores_broker_owned_properties() {
         config.broker_identity.broker_cluster_name = "hookless-cluster".into();
         config.async_topic_create_persist_enable = false;
         runtime.composition.state.set_broker_config(config).unwrap();
-        let (processor, _) = runtime.init_processor_checked().unwrap();
-
-        let response = process_broker_request(&processor, &mut request(code, "HooklessTopic", false)).await;
+        let (mut processor, _) = runtime.init_processor_checked().unwrap();
+        processor.set_auth_disabled_by_validated_config();
+        let opaque = Arc::new(Mutex::new(None));
+        let (mut client, server) = crate::processor::processor_test_support::start_processor_server(
+            "hookless-send",
+            ObserveSendOpaque {
+                processor: processor.clone(),
+                opaque: Arc::clone(&opaque),
+            },
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        )
+        .await;
+        let command = request(code, "HooklessTopic", false).set_opaque(-947);
+        let expected_opaque = command.opaque();
+        client.send_command(command).await.unwrap();
+        let response = server.receive_one_then_finish_and_collect(client).await.remove(0);
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(*opaque.lock(), Some(expected_opaque));
         let ext_fields = response.ext_fields().unwrap();
         assert_eq!(
             ext_fields.get(MessageConst::PROPERTY_MSG_REGION).unwrap(),

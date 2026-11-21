@@ -127,9 +127,8 @@ pub struct SendMessageProcessor<MS: BrokerWriteStore, TS> {
     after_hooks: Arc<Mutex<HashMap<RequestId, SendMessageContext>>>,
 }
 
-struct SendCompletionFacts {
+struct SendHookMetadata {
     policy: Arc<SendMessagePolicy>,
-    opaque: i32,
     body_len: i32,
     owner: Option<CheetahString>,
     auth_type: Option<CheetahString>,
@@ -137,7 +136,7 @@ struct SendCompletionFacts {
     owner_self: Option<CheetahString>,
 }
 
-impl SendCompletionFacts {
+impl SendHookMetadata {
     fn capture(request: &RemotingCommand, policy: Arc<SendMessagePolicy>) -> Self {
         // One walk over the header: a send header is otherwise never turned into a field map.
         // As in that map, the last occurrence of a repeated field wins.
@@ -158,8 +157,7 @@ impl SendCompletionFacts {
         });
         Self {
             policy,
-            opaque: request.opaque(),
-            body_len: request.body().as_ref().map_or(0, |body| body.len() as i32),
+            body_len: request.body().map_or(0, |body| body.len() as i32),
             owner: owner.map(CheetahString::from),
             auth_type: auth_type.map(CheetahString::from),
             owner_parent: owner_parent.map(CheetahString::from),
@@ -652,7 +650,9 @@ where
         if !self.inner.check_broker_permission(&policy, &mut response) {
             return BrokerResponseParts::from_command(response)?.into_response_action();
         }
-        let completion_facts = SendCompletionFacts::capture(request, policy);
+        let hook_metadata = self
+            .has_send_message_hook()
+            .then(|| SendHookMetadata::capture(request, policy));
         if transactional {
             let mut store = TransactionalMessageAppender::new(self.inner.transactional_message_service.as_ref());
             let result = match await_store(StoreAwaitControl::Request(control), store.append_message(message_ext))
@@ -674,7 +674,7 @@ where
             let completion = self.handle_put_message_result(
                 store_append_receipt(result, max_phy_offset, flushed_where),
                 &mut response,
-                completion_facts,
+                hook_metadata,
                 topic.as_str(),
                 transaction_id,
                 recall_handle,
@@ -701,7 +701,7 @@ where
                 let completion = processor.handle_put_message_result(
                     receipt,
                     &mut response,
-                    completion_facts,
+                    hook_metadata,
                     topic.as_str(),
                     transaction_id,
                     recall_handle,
@@ -852,7 +852,9 @@ where
         if !self.inner.check_broker_permission(&policy, &mut response) {
             return BrokerResponseParts::from_command(response)?.into_response_action();
         }
-        let completion_facts = SendCompletionFacts::capture(request, policy);
+        let hook_metadata = self
+            .has_send_message_hook()
+            .then(|| SendHookMetadata::capture(request, policy));
         let processor = self;
         let reply = if is_inner_batch {
             let mut store = self.inner.context.store.clone();
@@ -865,7 +867,7 @@ where
                         let completion = processor.handle_put_message_result(
                             receipt,
                             &mut response,
-                            completion_facts,
+                            hook_metadata,
                             topic.as_str(),
                             transaction_id,
                             None,
@@ -903,7 +905,7 @@ where
                     let completion = processor.handle_put_message_result(
                         receipt,
                         &mut response,
-                        completion_facts,
+                        hook_metadata,
                         topic.as_str(),
                         transaction_id,
                         None,
@@ -1128,17 +1130,13 @@ where
     /// Update send message context for hooks
     fn update_send_context_on_success(
         &self,
-        policy: &SendMessagePolicy,
+        metadata: SendHookMetadata,
         send_message_context: &mut SendMessageContext,
         response_header: &SendMessageResponseHeader,
         append_receipt: &StoreAppendReceipt,
-        owner: Option<CheetahString>,
-        auth_type: Option<CheetahString>,
-        owner_parent: Option<CheetahString>,
-        owner_self: Option<CheetahString>,
     ) {
-        let commercial_size_per_msg = policy.commercial_size_per_msg;
-        let commercial_base_count = policy.commercial_base_count;
+        let commercial_size_per_msg = metadata.policy.commercial_size_per_msg;
+        let commercial_base_count = metadata.policy.commercial_base_count;
 
         send_message_context.msg_id = response_header.msg_id().clone();
         send_message_context.queue_id = Some(response_header.queue_id());
@@ -1154,13 +1152,13 @@ where
         send_message_context.commercial_send_stats = StatsType::SendSuccess;
         send_message_context.commercial_send_times = inc_value;
         send_message_context.commercial_send_size = append_result.wrote_bytes;
-        send_message_context.commercial_owner = owner.unwrap_or_default();
+        send_message_context.commercial_owner = metadata.owner.unwrap_or_default();
 
         send_message_context.send_stat = StatsType::SendSuccess;
         send_message_context.commercial_send_msg_num = commercial_msg_num;
-        send_message_context.account_auth_type = auth_type.unwrap_or_default();
-        send_message_context.account_owner_parent = owner_parent.unwrap_or_default();
-        send_message_context.account_owner_self = owner_self.unwrap_or_default();
+        send_message_context.account_auth_type = metadata.auth_type.unwrap_or_default();
+        send_message_context.account_owner_parent = metadata.owner_parent.unwrap_or_default();
+        send_message_context.account_owner_self = metadata.owner_self.unwrap_or_default();
         send_message_context.send_msg_size = append_result.wrote_bytes;
         send_message_context.send_msg_num = append_result.msg_num;
     }
@@ -1168,16 +1166,12 @@ where
     /// Update send message context for failure case
     fn update_send_context_on_failure(
         &self,
-        policy: &SendMessagePolicy,
+        metadata: SendHookMetadata,
         send_message_context: &mut SendMessageContext,
         append_receipt: &StoreAppendReceipt,
-        request_body_len: i32,
-        owner: Option<CheetahString>,
-        auth_type: Option<CheetahString>,
-        owner_parent: Option<CheetahString>,
-        owner_self: Option<CheetahString>,
     ) {
-        let commercial_size_per_msg = policy.commercial_size_per_msg;
+        let commercial_size_per_msg = metadata.policy.commercial_size_per_msg;
+        let request_body_len = metadata.body_len;
 
         let msg_num = append_receipt
             .result()
@@ -1189,13 +1183,13 @@ where
         send_message_context.commercial_send_stats = StatsType::SendFailure;
         send_message_context.commercial_send_times = commercial_msg_num;
         send_message_context.commercial_send_size = request_body_len;
-        send_message_context.commercial_owner = owner.unwrap_or_default();
+        send_message_context.commercial_owner = metadata.owner.unwrap_or_default();
 
         send_message_context.send_stat = StatsType::SendFailure;
         send_message_context.commercial_send_msg_num = commercial_msg_num;
-        send_message_context.account_auth_type = auth_type.unwrap_or_default();
-        send_message_context.account_owner_parent = owner_parent.unwrap_or_default();
-        send_message_context.account_owner_self = owner_self.unwrap_or_default();
+        send_message_context.account_auth_type = metadata.auth_type.unwrap_or_default();
+        send_message_context.account_owner_parent = metadata.owner_parent.unwrap_or_default();
+        send_message_context.account_owner_self = metadata.owner_self.unwrap_or_default();
         send_message_context.send_msg_size = request_body_len;
         send_message_context.send_msg_num = msg_num;
     }
@@ -1208,7 +1202,7 @@ where
         &self,
         append_receipt: StoreAppendReceipt,
         response: &mut RemotingCommand,
-        completion_facts: SendCompletionFacts,
+        hook_metadata: Option<SendHookMetadata>,
         topic: &str,
         transaction_id: Option<CheetahString>,
         recall_handle: Option<CheetahString>,
@@ -1227,8 +1221,6 @@ where
                 "Store append completed without a successful send response"
             );
         }
-
-        let has_send_message_hook = self.has_send_message_hook();
 
         if send_ok {
             response.set_command_custom_header_ref(SendMessageResponseHeader::default());
@@ -1249,8 +1241,8 @@ where
                     response_header,
                     &append_receipt,
                     queue_id_int,
-                    transaction_id.clone(),
-                    recall_handle.clone(),
+                    transaction_id,
+                    recall_handle,
                 );
 
                 let rewrite_result = rewrite_response_for_static_topic(
@@ -1262,34 +1254,20 @@ where
                     return (rewrite_result, false);
                 }
 
-                if has_send_message_hook {
+                if let Some(metadata) = hook_metadata {
                     self.update_send_context_on_success(
-                        &completion_facts.policy,
+                        metadata,
                         send_message_context,
                         response_header,
                         &append_receipt,
-                        completion_facts.owner,
-                        completion_facts.auth_type,
-                        completion_facts.owner_parent,
-                        completion_facts.owner_self,
                     );
                 }
             }
 
-            response.set_opaque_mut(completion_facts.opaque);
             (None, true)
         } else {
-            if has_send_message_hook {
-                self.update_send_context_on_failure(
-                    &completion_facts.policy,
-                    send_message_context,
-                    &append_receipt,
-                    completion_facts.body_len,
-                    completion_facts.owner,
-                    completion_facts.auth_type,
-                    completion_facts.owner_parent,
-                    completion_facts.owner_self,
-                );
+            if let Some(metadata) = hook_metadata {
+                self.update_send_context_on_failure(metadata, send_message_context, &append_receipt);
             }
             (None, false)
         }
@@ -2466,6 +2444,33 @@ mod tests {
 
         let hooks: Vec<Box<dyn SendMessageHook>> = vec![Box::new(NoopSendMessageHook)];
         assert!(has_registered_send_message_hooks(&hooks));
+    }
+
+    #[test]
+    fn send_hook_metadata_keeps_the_last_account_field_and_request_body_length() {
+        let header = concat!(
+            r#"{"code":10,"language":"RUST","version":0,"opaque":17,"flag":0,"extFields":{"#,
+            r#""Owner":"old","AUTH_TYPE":"signed","OWNER_PARENT":"parent","OWNER_SELF":"self","Owner":"new"}}"#,
+        );
+        let mut encoded = bytes::BytesMut::from(header);
+        let request = RemotingCommand::header_decode(&mut encoded, header.len(), SerializeType::JSON)
+            .unwrap()
+            .unwrap()
+            .set_body(bytes::Bytes::from_static(b"payload"));
+        let broker = BrokerConfig::default();
+        let policy = super::SendMessagePolicy::from_configs(
+            &broker,
+            &rocketmq_store::MessageStoreConfig::default(),
+            ([127, 0, 0, 1], 10911).into(),
+            crate::broker::broker_runtime_config_state::BrokerPermissionState::new(broker.broker_permission),
+        );
+        let metadata = super::SendHookMetadata::capture(&request, Arc::new(policy));
+
+        assert_eq!(metadata.owner.as_deref(), Some("new"));
+        assert_eq!(metadata.auth_type.as_deref(), Some("signed"));
+        assert_eq!(metadata.owner_parent.as_deref(), Some("parent"));
+        assert_eq!(metadata.owner_self.as_deref(), Some("self"));
+        assert_eq!(metadata.body_len, 7);
     }
 
     #[test]
