@@ -50,6 +50,33 @@ fn fixture() -> GoldenFixture {
     serde_json::from_str(GOLDENS).expect("committed Admin golden fixture must be valid JSON")
 }
 
+#[test]
+fn local_rocksdb_export_reports_invalid_input_once_with_an_output_file() {
+    let directory = std::env::temp_dir();
+    let output_path = directory.join(format!("rocketmq-export-invalid-{}.json", std::process::id()));
+    let missing = std::env::current_exe().unwrap().join("missing-directory");
+    for (path, config_type, diagnostic) in [
+        (&missing, "topics", "Rocksdb path is invalid."),
+        (
+            &directory,
+            "unknown",
+            "Invalid configType: unknown please input topics/subscriptionGroups/consumerOffsets",
+        ),
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rocketmq-admin-cli"))
+            .args(["export", "rocksDBConfigToJson", "-t", config_type, "-p"])
+            .arg(path)
+            .arg("-e")
+            .arg(&output_path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(stdout.lines().filter(|line| *line == diagnostic).count(), 1, "{stdout}");
+        assert!(!output_path.exists());
+    }
+}
+
 fn error_for(kind: &str) -> CanonicalError {
     match kind {
         "invalid-input" => CanonicalError::new(&rocketmq_error::CORE_ARGUMENT_INVALID)
