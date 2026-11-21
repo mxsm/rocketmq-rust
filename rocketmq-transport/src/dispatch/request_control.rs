@@ -155,6 +155,13 @@ pub struct RequestControlView {
     lifecycle: Arc<RequestLifecycle>,
 }
 
+/// Session and parent state, independent of the request's deadline.
+pub(crate) enum RequestLifecycleState {
+    Active,
+    ParentCancelled,
+    SessionClosed,
+}
+
 struct RequestLifecycle {
     session: SessionStateView,
     parent_task_group_id: TaskGroupId,
@@ -169,8 +176,8 @@ enum LifecycleStop {
     /// parent token, and the observer answers checks and waits without the token's lock, which
     /// every request of the session would otherwise share.
     ///
-    /// The parent's cancellation cancels the stop before it returns, so the parent itself is
-    /// read only to tell a parent cancellation from a session close once the stop is cancelled.
+    /// The parent's cancellation cancels the stop before it returns. Once the session closes
+    /// or the observer wakes, the parent token distinguishes cancellation from a session close.
     Session {
         stop: CancellationObserver,
         parent: TaskGroup,
@@ -255,15 +262,24 @@ impl RequestControlView {
         }
     }
 
-    pub(crate) fn session_is_closed(&self) -> bool {
-        self.lifecycle.session.is_closed()
+    pub(crate) fn lifecycle_state(&self) -> RequestLifecycleState {
+        // The session reader can publish close after its parent token is cancelled but
+        // before the child observer wakes. Either signal warrants checking the parent.
+        let session_stop_pending =
+            matches!(&self.lifecycle.stop, LifecycleStop::Session { stop, .. } if !stop.is_cancelled());
+        let session_closed = self.lifecycle.session.is_closed();
+        if (session_closed || !session_stop_pending) && self.parent_is_cancelled() {
+            RequestLifecycleState::ParentCancelled
+        } else if session_closed {
+            RequestLifecycleState::SessionClosed
+        } else {
+            RequestLifecycleState::Active
+        }
     }
 
     pub(crate) fn parent_is_cancelled(&self) -> bool {
         match &self.lifecycle.stop {
-            LifecycleStop::Session { stop, parent } => {
-                stop.is_cancelled() && parent.cancellation_token().is_cancelled()
-            }
+            LifecycleStop::Session { parent, .. } => parent.cancellation_token().is_cancelled(),
             LifecycleStop::Parent(parent) => parent.is_cancelled(),
         }
     }

@@ -12,8 +12,64 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
+use std::sync::OnceLock;
+use std::task::Context;
+use std::task::Wake;
+use std::task::Waker;
+
+use rocketmq_runtime::CancellationObserver;
+use rocketmq_runtime::RuntimeContext;
+
 use super::*;
 use crate::dispatch::DeferredTerminalReason;
+
+#[tokio::test]
+async fn parent_cancellation_wins_when_the_reader_closes_during_cancellation() {
+    struct ReaderWake {
+        session: EmbeddedSessionRecord,
+        view: ResumeStopView,
+        observed: OnceLock<Option<DeferredTerminalReason>>,
+    }
+
+    impl Wake for ReaderWake {
+        fn wake(self: Arc<Self>) {
+            self.session.close();
+            let _ = self
+                .observed
+                .set(self.view.current_before_write().map(|stop| stop.terminal_reason()));
+        }
+    }
+
+    let runtime = RuntimeContext::from_current("deferred-parent-cancel");
+    let server = runtime.service_context("server");
+    let owner = server.component("session");
+    let parent = owner.task_group();
+    let request_stop = CancellationObserver::new(parent.cancellation_token().child_token());
+    let session = EmbeddedSessionRecord::new(9_821);
+    let control = RequestControlView::from_meta_with_session_stop(
+        &RequestMeta::new(std::time::Instant::now(), None),
+        session.view().state().clone(),
+        parent.clone(),
+        Some(request_stop),
+    );
+    let reader = Arc::new(ReaderWake {
+        session,
+        view: ResumeStopView::new(control, None),
+        observed: OnceLock::new(),
+    });
+    // Publish the reader's close from its wake, while server cancellation is propagating.
+    let waker = Waker::from(Arc::clone(&reader));
+    let mut wait = std::pin::pin!(parent.cancellation_token().cancelled_owned());
+    assert!(wait.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+    server.task_group().cancel();
+
+    assert_eq!(
+        reader.observed.get(),
+        Some(&Some(DeferredTerminalReason::ParentCancelled))
+    );
+    assert!(runtime.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
+}
 
 #[tokio::test(start_paused = true)]
 async fn owner_cutoff_is_live_early_and_terminal_at_equal_and_late_instants() {

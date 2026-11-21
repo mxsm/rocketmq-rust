@@ -27,6 +27,7 @@ use crate::codec::prepare_response;
 use crate::dispatch::BoundResponse;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
+use crate::dispatch::RequestLifecycleState;
 use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseOperationalFailure;
@@ -496,17 +497,17 @@ impl ResponseStop {
 }
 
 fn current_stop(control: &RequestControlView) -> Option<ResponseStop> {
-    if control.parent_is_cancelled() {
-        Some(ResponseStop::Cancelled)
-    } else if control.session_is_closed() {
-        Some(ResponseStop::SessionClosed)
-    } else if control
-        .deadline()
-        .is_some_and(crate::deadline::RequestDeadline::is_expired)
-    {
-        Some(ResponseStop::DeadlineExceeded)
-    } else {
-        None
+    match control.lifecycle_state() {
+        RequestLifecycleState::ParentCancelled => Some(ResponseStop::Cancelled),
+        RequestLifecycleState::SessionClosed => Some(ResponseStop::SessionClosed),
+        RequestLifecycleState::Active
+            if control
+                .deadline()
+                .is_some_and(crate::deadline::RequestDeadline::is_expired) =>
+        {
+            Some(ResponseStop::DeadlineExceeded)
+        }
+        RequestLifecycleState::Active => None,
     }
 }
 

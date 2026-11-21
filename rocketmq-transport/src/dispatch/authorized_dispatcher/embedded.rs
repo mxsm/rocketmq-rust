@@ -45,6 +45,7 @@ use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestControlView;
+use crate::dispatch::RequestLifecycleState;
 use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSink;
 use crate::error::TransportError;
@@ -727,14 +728,15 @@ fn map_resolve_error(error: crate::contract::TransportContractViolation) -> Embe
 }
 
 fn receiver_stop(control: &RequestControlView, original_one_way: bool) -> Option<EmbeddedDispatchResult> {
-    if control.parent_is_cancelled() {
-        Some(EmbeddedDispatchResult::Cancelled)
-    } else if control.session_is_closed() {
-        Some(EmbeddedDispatchResult::SessionClosed)
-    } else if !original_one_way && control.deadline().is_some_and(RequestDeadline::is_expired) {
-        Some(EmbeddedDispatchResult::DeadlineExceeded)
-    } else {
-        None
+    match control.lifecycle_state() {
+        RequestLifecycleState::ParentCancelled => Some(EmbeddedDispatchResult::Cancelled),
+        RequestLifecycleState::SessionClosed => Some(EmbeddedDispatchResult::SessionClosed),
+        RequestLifecycleState::Active
+            if !original_one_way && control.deadline().is_some_and(RequestDeadline::is_expired) =>
+        {
+            Some(EmbeddedDispatchResult::DeadlineExceeded)
+        }
+        RequestLifecycleState::Active => None,
     }
 }
 

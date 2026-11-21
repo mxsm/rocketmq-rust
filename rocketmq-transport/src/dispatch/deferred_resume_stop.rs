@@ -26,6 +26,7 @@ use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::ClaimedDeferred;
 use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::RequestControlView;
+use crate::dispatch::RequestLifecycleState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResumeStop {
@@ -115,14 +116,13 @@ impl ResumeStopView {
         let Some(control) = &self.control else {
             return None;
         };
-        if control.parent_is_cancelled() {
-            Some(ResumeStop::ParentCancelled)
-        } else if control.session_is_closed() {
-            Some(ResumeStop::SessionClosed)
-        } else if cutoff.is_some_and(|cutoff| Instant::now() >= cutoff) {
-            Some(ResumeStop::OwnerDeadline)
-        } else {
-            None
+        match control.lifecycle_state() {
+            RequestLifecycleState::ParentCancelled => Some(ResumeStop::ParentCancelled),
+            RequestLifecycleState::SessionClosed => Some(ResumeStop::SessionClosed),
+            RequestLifecycleState::Active if cutoff.is_some_and(|cutoff| Instant::now() >= cutoff) => {
+                Some(ResumeStop::OwnerDeadline)
+            }
+            RequestLifecycleState::Active => None,
         }
     }
 

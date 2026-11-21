@@ -109,6 +109,7 @@ pub use remoting_response::ResponseBodyKind;
 pub(crate) use request_context::RequestContext;
 pub(crate) use request_context::RequestTransport;
 pub use request_control::RequestControlView;
+pub(crate) use request_control::RequestLifecycleState;
 pub use request_control::RequestMeta;
 pub(crate) use request_identity::reserve_session_owner;
 pub use request_identity::OriginalRequestIdentity;

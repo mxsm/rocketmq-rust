@@ -298,7 +298,7 @@ async fn notification_deferred_parent_cancel_stops_accepted_handler_without_a_fr
         .await
         .expect("parent-cancel receipt channel")
         .expect("parent cancellation is a normal deferred resume outcome");
-    assert!(matches!(outcome, DeferredResumeResult::Cancelled));
+    assert_eq!(outcome, DeferredResumeResult::Cancelled);
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     assert_terminal(&service);
     drop(release);

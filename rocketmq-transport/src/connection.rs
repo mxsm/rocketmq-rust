@@ -43,6 +43,7 @@ use crate::codec::PreparedResponse;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::DeferredTransportDropHandle;
 use crate::dispatch::RequestControlView;
+use crate::dispatch::RequestLifecycleState;
 use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseSendResult;
@@ -318,14 +319,16 @@ enum RequestStopPolicy {
 }
 
 fn current_request_stop(control: &RequestControlView, policy: RequestStopPolicy) -> Option<QueuedWriteCancellation> {
-    if control.parent_is_cancelled() {
-        Some(QueuedWriteCancellation::Request)
-    } else if control.session_is_closed() {
-        Some(QueuedWriteCancellation::SessionClosed)
-    } else if matches!(policy, RequestStopPolicy::All) && control.deadline().is_some_and(RequestDeadline::is_expired) {
-        Some(QueuedWriteCancellation::Deadline)
-    } else {
-        None
+    match control.lifecycle_state() {
+        RequestLifecycleState::ParentCancelled => Some(QueuedWriteCancellation::Request),
+        RequestLifecycleState::SessionClosed => Some(QueuedWriteCancellation::SessionClosed),
+        RequestLifecycleState::Active
+            if matches!(policy, RequestStopPolicy::All)
+                && control.deadline().is_some_and(RequestDeadline::is_expired) =>
+        {
+            Some(QueuedWriteCancellation::Deadline)
+        }
+        RequestLifecycleState::Active => None,
     }
 }
 
