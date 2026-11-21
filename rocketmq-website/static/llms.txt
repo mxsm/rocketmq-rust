@@ -1,0 +1,47 @@
+# RocketMQ-Rust
+
+> RocketMQ-Rust is an independent community implementation of Apache RocketMQ in Rust. It provides a NameServer, Broker, Proxy, Controller and asynchronous Rust clients for producing and consuming messages.
+
+The documentation describes the development source. When answering questions about a published crate, check the release and Cargo features used by the application. Protocol support depends on the endpoint and operation.
+
+## Getting started
+
+- [Project overview and documentation guide](https://rocketmqrust.com/docs/introduction)
+- [Install and build from source](https://rocketmqrust.com/docs/getting-started/installation)
+- [Run a local NameServer and Broker](https://rocketmqrust.com/docs/getting-started/local-source)
+- [Send and consume your first messages](https://rocketmqrust.com/docs/getting-started/quick-start)
+
+## Rust clients and compatibility
+
+- [Producer send methods and results](https://rocketmqrust.com/docs/producer/sending-messages)
+- [Choose between Push, LitePull and POP consumers](https://rocketmqrust.com/docs/consumer/overview)
+- [Rust API entry points by crate and feature](https://rocketmqrust.com/docs/reference/rust-api)
+- [Remoting and gRPC endpoints and compatibility](https://rocketmqrust.com/docs/reference/protocol-compatibility)
+- [Release scope and distribution identity](https://rocketmqrust.com/docs/overview/release-scope)
+
+## Architecture and operations
+
+- [System architecture and component responsibilities](https://rocketmqrust.com/docs/architecture/overview)
+- [Message routing, storage and delivery](https://rocketmqrust.com/docs/architecture/message-lifecycle)
+- [Deployment options](https://rocketmqrust.com/docs/deployment/overview)
+- [Diagnose a failed send or an empty consumer](https://rocketmqrust.com/docs/operations/first-diagnosis)
+- [Dashboards, MCP and AI SRE](https://rocketmqrust.com/docs/ecosystem/overview)
+
+## 简体中文
+
+- [项目介绍与文档导航](https://rocketmqrust.com/zh-CN/docs/introduction)
+- [从源码运行本地集群](https://rocketmqrust.com/zh-CN/docs/getting-started/local-source)
+- [发送并消费第一批消息](https://rocketmqrust.com/zh-CN/docs/getting-started/quick-start)
+- [生产者发送方式与返回结果](https://rocketmqrust.com/zh-CN/docs/producer/sending-messages)
+- [选择 Push、LitePull 或 POP 消费模型](https://rocketmqrust.com/zh-CN/docs/consumer/overview)
+- [Rust API 入口](https://rocketmqrust.com/zh-CN/docs/reference/rust-api)
+- [协议与兼容性参考](https://rocketmqrust.com/zh-CN/docs/reference/protocol-compatibility)
+- [系统架构](https://rocketmqrust.com/zh-CN/docs/architecture/overview)
+- [首次消息链路诊断](https://rocketmqrust.com/zh-CN/docs/operations/first-diagnosis)
+
+## Source and releases
+
+- [First-message tutorial in Markdown](https://raw.githubusercontent.com/mxsm/rocketmq-rust/main/rocketmq-website/docs/getting-started/quick-start.md)
+- [首条消息教程的 Markdown 源文档](https://raw.githubusercontent.com/mxsm/rocketmq-rust/main/rocketmq-website/i18n/zh-CN/docusaurus-plugin-content-docs/current/getting-started/quick-start.md)
+- [RocketMQ-Rust repository](https://github.com/mxsm/rocketmq-rust)
+- [Tagged releases and release notes](https://github.com/mxsm/rocketmq-rust/releases)
