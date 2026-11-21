@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::Local;
+use chrono::TimeZone;
 use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
@@ -38,7 +40,7 @@ pub struct ResetOffsetByTimeOldSubCommand {
         short = 's',
         long = "timestamp",
         required = true,
-        help = "set the timestamp[currentTimeMillis|yyyy-MM-dd#HH:mm:ss:SSS]"
+        help = "set the timestamp in epoch milliseconds or local time (yyyy-MM-dd#HH:mm:ss:SSS)"
     )]
     timestamp: String,
 
@@ -60,23 +62,16 @@ pub struct ResetOffsetByTimeOldSubCommand {
 }
 
 impl ResetOffsetByTimeOldSubCommand {
-    fn request(&self) -> CanonicalResult<Option<ResetOffsetByTimeOldRequest>> {
+    fn request(&self, timezone: &impl TimeZone) -> CanonicalResult<Option<ResetOffsetByTimeOldRequest>> {
         let timestamp_str = self.timestamp.trim();
-        let timestamp = match timestamp_str.parse::<u64>() {
-            Ok(timestamp) => timestamp,
-            Err(_) => {
-                if let Some(date) = parse_date(timestamp_str, YYYY_MM_DD_HH_MM_SS_SSS) {
-                    let millis = date.and_utc().timestamp_millis();
-                    if millis < 0 {
-                        println!("specified timestamp invalid.");
-                        return Ok(None);
-                    }
-                    millis as u64
-                } else {
-                    println!("specified timestamp invalid.");
-                    return Ok(None);
-                }
-            }
+        let timestamp = timestamp_str.parse::<u64>().ok().or_else(|| {
+            let date = parse_date(timestamp_str, YYYY_MM_DD_HH_MM_SS_SSS)?;
+            let local = timezone.from_local_datetime(&date).single()?;
+            u64::try_from(local.timestamp_millis()).ok()
+        });
+        let Some(timestamp) = timestamp else {
+            println!("specified timestamp invalid.");
+            return Ok(None);
         };
 
         Ok(Some(ResetOffsetByTimeOldRequest::try_new(
@@ -135,7 +130,7 @@ impl CommandExecute for ResetOffsetByTimeOldSubCommand {
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        let Some(request) = self.request()? else {
+        let Some(request) = self.request(&Local)? else {
             return Ok(());
         };
 
@@ -152,9 +147,29 @@ impl CommandExecute for ResetOffsetByTimeOldSubCommand {
 
 #[cfg(test)]
 mod tests {
+    use chrono::FixedOffset;
     use clap::Parser;
 
     use super::*;
+
+    #[test]
+    fn legacy_reset_uses_local_time_for_formatted_timestamps() {
+        let cmd = ResetOffsetByTimeOldSubCommand::try_parse_from([
+            "resetOffsetByTimeOld",
+            "-g",
+            "group",
+            "-t",
+            "topic",
+            "-s",
+            "2024-02-19#10:00:00:123",
+        ])
+        .unwrap();
+        let utc_plus_eight = FixedOffset::east_opt(8 * 3600).unwrap();
+        assert_eq!(
+            cmd.request(&utc_plus_eight).unwrap().unwrap().timestamp(),
+            1_708_308_000_123
+        );
+    }
 
     #[test]
     fn parses_reset_offset_by_time_old_request() {
@@ -174,7 +189,7 @@ mod tests {
             " 127.0.0.1:9876 ",
         ])
         .unwrap();
-        let request = cmd.request().unwrap().unwrap();
+        let request = cmd.request(&Local).unwrap().unwrap();
 
         assert_eq!(request.group().as_str(), "TestGroup");
         assert_eq!(request.topic().as_str(), "TestTopic");
