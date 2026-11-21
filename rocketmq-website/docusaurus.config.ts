@@ -1,5 +1,6 @@
 import type {Config} from '@docusaurus/types';
 import type {Options as PresetOptions} from '@docusaurus/preset-classic';
+import publishAgentSkills from './plugins/publishAgentSkills';
 import {diagramThemeCss} from './src/mermaid/diagramTheme';
 import {darkCodeTheme, lightCodeTheme} from './src/prism/codeThemes';
 
@@ -20,6 +21,7 @@ const config: Config = {
     // Set the /<baseUrl>/ to <repoPath>.
     baseUrl: '/',
     trailingSlash: false,
+    plugins: [publishAgentSkills],
 
     // GitHub pages deployment config.
     organizationName: 'mxsm',
