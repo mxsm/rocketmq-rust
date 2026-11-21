@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - '.agents/skills/rocketmq-rust-local-cluster/**'
       - 'rocketmq-website/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -46,6 +47,7 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           path: ./rocketmq-website/build
+          include-hidden-files: true
 
   # Deployment job
   deploy:

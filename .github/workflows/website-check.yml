@@ -6,6 +6,7 @@ on:
       - main
       - master
     paths:
+      - '.agents/skills/rocketmq-rust-local-cluster/**'
       - 'rocketmq-website/**'
       - '.github/workflows/website-check.yml'
       - '.github/workflows/deploy.yml'
@@ -33,6 +34,10 @@ jobs:
       - name: Build website
         working-directory: ./rocketmq-website
         run: npm run build
+
+      - name: Verify published Agent Skill
+        working-directory: ./rocketmq-website
+        run: node --test tests/publishedAgentSkill.test.mjs
 
       - name: Build success
         run: echo "✅ Build completed successfully!"
