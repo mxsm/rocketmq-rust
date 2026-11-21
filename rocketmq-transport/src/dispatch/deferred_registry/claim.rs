@@ -31,6 +31,7 @@ use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
+use crate::dispatch::RequestLifecycleState;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseState;
 use crate::dispatch::ResponseStateSnapshot;
@@ -486,21 +487,22 @@ where
     }
 
     fn terminalize_release(&self) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
-        if self.control.parent_is_cancelled() {
-            self.cancel_parent_response()
-        } else if self.control.session_is_closed() {
-            self.close_session_response()
-        } else if self
-            .expiry
-            .and_then(super::DeferredExpiry::resume_cutoff)
-            .or_else(|| self.control.deadline().map(|deadline| deadline.instant()))
-            .is_some_and(|cutoff| tokio::time::Instant::now() >= cutoff)
-        {
-            self.state
-                .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
-        } else {
-            self.state
-                .cancel_with_reason(DeferredSystemCancellationReason::CLAIM_DROPPED)
+        match self.control.lifecycle_state() {
+            RequestLifecycleState::ParentCancelled => self.cancel_parent_response(),
+            RequestLifecycleState::SessionClosed => self.close_session_response(),
+            RequestLifecycleState::Active
+                if self
+                    .expiry
+                    .and_then(super::DeferredExpiry::resume_cutoff)
+                    .or_else(|| self.control.deadline().map(|deadline| deadline.instant()))
+                    .is_some_and(|cutoff| tokio::time::Instant::now() >= cutoff) =>
+            {
+                self.state
+                    .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
+            }
+            RequestLifecycleState::Active => self
+                .state
+                .cancel_with_reason(DeferredSystemCancellationReason::CLAIM_DROPPED),
         }
     }
 }

@@ -31,6 +31,7 @@ use super::DeferredId;
 use super::DeferredWakeReason;
 use super::RequestControlView;
 use crate::dispatch::deferred_expiry::DeferredExpiryKind;
+use crate::dispatch::RequestLifecycleState;
 
 /// One bounded, caller-driven expiry sweep result.
 ///
@@ -271,18 +272,18 @@ where
 }
 
 fn cleanup_cause_at<R>(entry: &Entry<R>, key: ExpiryKey, now: tokio::time::Instant) -> Option<CleanupCause> {
-    if entry.control.parent_is_cancelled() {
-        Some(CleanupCause::ParentCancelled)
-    } else if entry.control.session_is_closed() {
-        Some(CleanupCause::SessionClosed)
-    } else if entry
-        .expiry
-        .owner_cutoff(&entry.control)
-        .is_some_and(|cutoff| now >= cutoff)
-        || key.kind == ExpiryKeyKind::OwnerDeadline
-    {
-        Some(CleanupCause::OwnerDeadline)
-    } else {
-        None
+    match entry.control.lifecycle_state() {
+        RequestLifecycleState::ParentCancelled => Some(CleanupCause::ParentCancelled),
+        RequestLifecycleState::SessionClosed => Some(CleanupCause::SessionClosed),
+        RequestLifecycleState::Active
+            if entry
+                .expiry
+                .owner_cutoff(&entry.control)
+                .is_some_and(|cutoff| now >= cutoff)
+                || key.kind == ExpiryKeyKind::OwnerDeadline =>
+        {
+            Some(CleanupCause::OwnerDeadline)
+        }
+        RequestLifecycleState::Active => None,
     }
 }

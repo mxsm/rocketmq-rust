@@ -58,6 +58,7 @@ use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
 use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
 use crate::dispatch::deferred_session_cleanup::TargetRecord;
+use crate::dispatch::RequestLifecycleState;
 use crate::dispatch::ResponseStateSnapshot;
 use crate::dispatch::ResponseTransitionResult;
 
@@ -1416,17 +1417,17 @@ pub(super) fn lifecycle_stop_with_expiry(
     control: &RequestControlView,
     expiry: Option<DeferredExpiry>,
 ) -> Option<RegistryFailure> {
-    if control.parent_is_cancelled() {
-        Some(RegistryFailure::ParentCancelled)
-    } else if control.session_is_closed() {
-        Some(RegistryFailure::SessionClosed)
-    } else if expiry
-        .and_then(DeferredExpiry::resume_cutoff)
-        .is_some_and(|cutoff| tokio::time::Instant::now() >= cutoff)
-        || expiry.is_none() && control.deadline().is_some_and(RequestDeadline::is_expired)
-    {
-        Some(RegistryFailure::DeadlineExpired)
-    } else {
-        None
+    match control.lifecycle_state() {
+        RequestLifecycleState::ParentCancelled => Some(RegistryFailure::ParentCancelled),
+        RequestLifecycleState::SessionClosed => Some(RegistryFailure::SessionClosed),
+        RequestLifecycleState::Active
+            if expiry
+                .and_then(DeferredExpiry::resume_cutoff)
+                .is_some_and(|cutoff| tokio::time::Instant::now() >= cutoff)
+                || expiry.is_none() && control.deadline().is_some_and(RequestDeadline::is_expired) =>
+        {
+            Some(RegistryFailure::DeadlineExpired)
+        }
+        RequestLifecycleState::Active => None,
     }
 }
