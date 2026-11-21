@@ -1,4 +1,5 @@
 User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
 # Skip internal search results in both languages.
 Disallow: /search?
 Disallow: /zh-CN/search?
