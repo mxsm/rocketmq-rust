@@ -137,15 +137,8 @@ impl MQAdminImpl {
     }
 
     fn encode_topic_attributes(attributes: HashMap<String, String>) -> Option<CheetahString> {
-        if attributes.is_empty() {
-            return None;
-        }
         let encoded = AttributeParser::parse_to_string(&attributes);
-        if encoded.is_empty() {
-            None
-        } else {
-            Some(CheetahString::from_string(encoded))
-        }
+        (!encoded.is_empty()).then(|| CheetahString::from_string(encoded))
     }
 
     fn message_matches_query(
@@ -256,6 +249,7 @@ impl MQAdminImpl {
 
         let mut broker_datas = route_data.broker_datas;
         broker_datas.sort();
+        let attributes = Self::encode_topic_attributes(attributes);
         let mut create_ok_at_least_once = false;
         let mut last_error: Option<crate::ClientError> = None;
         for broker_data in broker_datas {
@@ -277,7 +271,7 @@ impl MQAdminImpl {
                     topic_filter_type: CheetahString::from_static_str(TopicFilterType::SingleTag.as_str()),
                     topic_sys_flag: Some(topic_sys_flag),
                     order: false,
-                    attributes: Self::encode_topic_attributes(attributes.clone()),
+                    attributes: attributes.clone(),
                     force: Some(false),
                     topic_request_header: None,
                 };
@@ -636,7 +630,7 @@ mod tests {
         broker_addr: OnceLock<CheetahString>,
         create_responses: Mutex<VecDeque<RemotingCommand>>,
         route_requests: std::sync::atomic::AtomicUsize,
-        create_requests: std::sync::atomic::AtomicUsize,
+        create_attributes: Mutex<Vec<Option<CheetahString>>>,
     }
 
     impl CreateTopicProcessor {
@@ -645,7 +639,7 @@ mod tests {
                 broker_addr: OnceLock::new(),
                 create_responses: Mutex::new(VecDeque::new()),
                 route_requests: std::sync::atomic::AtomicUsize::new(0),
-                create_requests: std::sync::atomic::AtomicUsize::new(0),
+                create_attributes: Mutex::new(Vec::new()),
             }
         }
 
@@ -661,7 +655,7 @@ mod tests {
 
             (
                 self.route_requests.load(Ordering::SeqCst),
-                self.create_requests.load(Ordering::SeqCst),
+                self.create_attributes.lock().unwrap().len(),
             )
         }
 
@@ -695,7 +689,11 @@ mod tests {
                     self.route_requests.fetch_add(1, Ordering::SeqCst);
                     self.route_response()?
                 } else if request.code() == RequestCode::UpdateAndCreateTopic.to_i32() {
-                    self.create_requests.fetch_add(1, Ordering::SeqCst);
+                    let attributes = request
+                        .ext_fields()
+                        .and_then(|fields| fields.get("attributes"))
+                        .cloned();
+                    self.create_attributes.lock().unwrap().push(attributes);
                     self.create_responses
                         .lock()
                         .expect("create response queue")
@@ -803,11 +801,14 @@ mod tests {
         ));
         processor.push_create_response(RemotingCommand::create_success_response_command());
 
+        let attributes = HashMap::from([("+message.type".to_owned(), "FIFO".to_owned())]);
         admin
-            .create_topic("route-key", "created-topic", 4, 0, HashMap::new())
+            .create_topic("route-key", "created-topic", 4, 0, attributes)
             .await
             .expect("the second counted request should create the topic");
         assert_eq!(processor.counts(), (1, 2));
+        let encoded = Some(CheetahString::from_static_str("+message.type=FIFO"));
+        assert_eq!(*processor.create_attributes.lock().unwrap(), [encoded.clone(), encoded]);
 
         for attempt in 1..=CREATE_TOPIC_ATTEMPTS {
             processor.push_create_response(RemotingCommand::create_response_command_with_code_remark(
@@ -824,6 +825,9 @@ mod tests {
 
         assert_eq!(after.0 - before.0, 1, "outer route discovery remains one request");
         assert_eq!(after.1 - before.1, CREATE_TOPIC_ATTEMPTS as usize);
+        assert!(processor.create_attributes.lock().unwrap()[before.1..]
+            .iter()
+            .all(Option::is_none));
         assert!(
             client_exception(&error).to_string().contains("terminal-attempt-5"),
             "budget exhaustion must return the last broker response: {error}"
