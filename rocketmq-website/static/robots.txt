@@ -1,0 +1,8 @@
+User-agent: *
+# Skip internal search results in both languages.
+Disallow: /search?
+Disallow: /zh-CN/search?
+Allow: /
+
+Sitemap: https://rocketmqrust.com/sitemap.xml
+Sitemap: https://rocketmqrust.com/zh-CN/sitemap.xml
