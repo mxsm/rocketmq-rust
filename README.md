@@ -373,9 +373,11 @@ We welcome contributions from the community! Whether you're fixing bugs, adding 
 
 For detailed guidelines, please read [CONTRIBUTING.md](CONTRIBUTING.md) and our [Contribution Guide](https://rocketmqrust.com/docs/contributing/overview).
 
+<!--
 ### Repository Activity
 
 ![Repository Activity](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
+-->
 
 ## ❓ FAQ
 
@@ -427,6 +429,7 @@ The Broker can load an existing Java `broker.properties` file and report how eac
 - **🐛 Issues**: [GitHub Issues](https://github.com/mxsm/rocketmq-rust/issues) - Report bugs or request features
 - **📧 Contact**: Reach out to [mxsm@apache.org](mailto:mxsm@apache.org)
 
+<!--
 ### Contributors
 
 Thanks to all our contributors! 🙏
@@ -434,6 +437,7 @@ Thanks to all our contributors! 🙏
 <a href="https://github.com/mxsm/rocketmq-rust/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=mxsm/rocketmq-rust&anon=1" alt="RocketMQ-Rust contributors"/>
 </a>
+-->
 
 ## 📄 License
 
