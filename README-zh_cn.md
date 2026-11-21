@@ -372,9 +372,11 @@ Cargo 按包名选择包，因此 `rocketmq-client` 目录对应的包名是 `ro
 
 详细指南请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 和我们的[贡献指南](https://rocketmqrust.com/zh-CN/docs/contributing/overview)。
 
+<!--
 ### 仓库活动
 
 ![Repository Activity](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
+-->
 
 ## ❓ 常见问题
 
@@ -426,6 +428,7 @@ Broker 可以加载已有的 Java `broker.properties` 文件，并报告每个�
 - **🐛 问题**：[GitHub Issues](https://github.com/mxsm/rocketmq-rust/issues) - 报告错误或请求功能
 - **📧 联系**：联系 [mxsm@apache.org](mailto:mxsm@apache.org)
 
+<!--
 ### 贡献者
 
 感谢所有贡献者！🙏
@@ -433,6 +436,7 @@ Broker 可以加载已有的 Java `broker.properties` 文件，并报告每个�
 <a href="https://github.com/mxsm/rocketmq-rust/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=mxsm/rocketmq-rust&anon=1" alt="RocketMQ-Rust 贡献者"/>
 </a>
+-->
 
 ## 📄 许可证
 
