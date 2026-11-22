@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::future::Future;
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -106,27 +106,21 @@ struct ControlPlaneHandshakeState {
     state: String,
 }
 
-pub(crate) trait McpGateway: Send + Sync + 'static {
-    fn handshake(&self) -> impl Future<Output = Result<BTreeMap<String, VerifiedCapability>, ConnectorError>> + Send;
+#[trait_variant::make(Send)]
+pub(crate) trait McpGateway: Sync + 'static {
+    async fn handshake(&self) -> Result<BTreeMap<String, VerifiedCapability>, ConnectorError>;
 
-    fn query(
-        &self,
-        cluster: &str,
-        operation: &EvidenceOperation,
-    ) -> impl Future<Output = Result<WireEvidenceEnvelope, ConnectorError>> + Send;
+    async fn query(&self, cluster: &str, operation: &EvidenceOperation) -> Result<WireEvidenceEnvelope, ConnectorError>;
 
-    fn read_system_resource(&self, _uri: &str) -> impl Future<Output = Result<Value, ConnectorError>> + Send {
+    async fn read_system_resource(&self, _uri: &str) -> Result<Value, ConnectorError> {
         async { Err(ConnectorError::source("MCP System Resource is unavailable")) }
     }
 
-    fn ensure_cluster_active(
-        &self,
-        _cluster: &str,
-    ) -> impl Future<Output = Result<ConnectorAdmissionOutcome<()>, ConnectorError>> + Send {
+    async fn ensure_cluster_active(&self, _cluster: &str) -> Result<ConnectorAdmissionOutcome<()>, ConnectorError> {
         async { Ok(ConnectorAdmissionOutcome::Accepted(())) }
     }
 
-    fn close(&self) -> impl Future<Output = ()> + Send;
+    async fn close(&self);
 }
 
 struct RmcpSession {
