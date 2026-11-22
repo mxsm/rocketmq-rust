@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-use std::future::Future;
+
 use std::sync::Arc;
 
 use jsonwebtoken::Algorithm;
@@ -27,12 +27,13 @@ use crate::document::JwksDocumentError;
 use crate::policy::JwksPolicy;
 
 /// Where JWKS documents come from.
-pub trait JwksSource: Send + Sync {
+#[trait_variant::make(Send)]
+pub trait JwksSource: Sync {
     /// Why a document could not be fetched.
     type Error: Send;
 
     /// Fetches the current JWKS document.
-    fn fetch(&self) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + Send;
+    async fn fetch(&self) -> Result<Vec<u8>, Self::Error>;
 }
 
 /// Why no verification key was returned for a token.
