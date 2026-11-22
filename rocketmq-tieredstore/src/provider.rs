@@ -17,8 +17,6 @@ pub mod memory_file_segment;
 pub mod posix_file_segment;
 pub mod provider_impl;
 
-use std::future::Future;
-
 use bytes::Bytes;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
@@ -75,31 +73,22 @@ pub trait TieredStoreProvider: Sync + Clone + 'static {
     /// Makes prior writes to `path` durable when the backend exposes an explicit sync operation.
     ///
     /// Remote providers whose successful write is already durable may keep the default no-op.
-    fn sync(&self, _operation: StoreOperation, _path: String) -> impl Future<Output = Result<(), StoreError>> {
+    async fn sync(&self, _operation: StoreOperation, _path: String) -> Result<(), StoreError> {
         async { Ok(()) }
     }
 
     /// Renames one file or directory prefix without exposing a partially copied destination.
-    fn rename(
-        &self,
-        operation: StoreOperation,
-        _source: String,
-        _destination: String,
-    ) -> impl Future<Output = Result<(), StoreError>> {
+    async fn rename(&self, operation: StoreOperation, _source: String, _destination: String) -> Result<(), StoreError> {
         async move { Err(crate::error::unsupported(operation)) }
     }
 
     /// Lists provider paths rooted at `prefix`.
-    fn list(
-        &self,
-        _operation: StoreOperation,
-        _prefix: String,
-    ) -> impl Future<Output = Result<Vec<String>, StoreError>> {
+    async fn list(&self, _operation: StoreOperation, _prefix: String) -> Result<Vec<String>, StoreError> {
         async { Ok(Vec::new()) }
     }
 
     /// Deletes a file or directory prefix and all paths below it.
-    fn delete_prefix(&self, operation: StoreOperation, prefix: String) -> impl Future<Output = Result<(), StoreError>> {
+    async fn delete_prefix(&self, operation: StoreOperation, prefix: String) -> Result<(), StoreError> {
         async move {
             for path in self.list(operation, prefix.clone()).await? {
                 self.delete(operation, path).await?;
@@ -109,12 +98,7 @@ pub trait TieredStoreProvider: Sync + Clone + 'static {
     }
 
     /// Publishes a small metadata file with atomic replacement semantics.
-    fn atomic_write(
-        &self,
-        operation: StoreOperation,
-        path: String,
-        data: Bytes,
-    ) -> impl Future<Output = Result<(), StoreError>> {
+    async fn atomic_write(&self, operation: StoreOperation, path: String, data: Bytes) -> Result<(), StoreError> {
         async move {
             let temporary = format!("{path}.tmp");
             self.delete_prefix(operation, temporary.clone()).await?;
