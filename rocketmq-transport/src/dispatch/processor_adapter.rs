@@ -216,7 +216,8 @@ impl DispatchMetricsGuard {
 }
 
 /// Sealed statically dispatched processor boundary used by the core.
-pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'static {
+#[trait_variant::make(Send)]
+pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Sync + 'static {
     type NetworkSession: Clone + Send + Sync + 'static;
 
     fn open_network_session(&self) -> Self::NetworkSession;
@@ -259,7 +260,7 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         observation: Option<crate::telemetry::RequestObservation>,
     ) -> Result<RemotingRequestBuilder, TransportContractViolation>;
 
-    fn process(
+    async fn process(
         &mut self,
         request: &mut RemotingRequest,
         hook_snapshot: Option<&HookSnapshot>,
@@ -267,7 +268,7 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         session: &SessionHandle,
         network_session: &Self::NetworkSession,
         response: &ResponseSink,
-    ) -> impl Future<Output = Result<InternalProcessorCandidate, DispatchProcessorError>> + Send;
+    ) -> Result<InternalProcessorCandidate, DispatchProcessorError>;
 
     fn resolve_response_action(
         &self,
