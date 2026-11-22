@@ -79,6 +79,7 @@ use crate::admin::mq_admin_mutation_ext::TopicConfigPatch;
 use crate::admin::mq_admin_mutation_ext::TopicConfigPatchResult;
 use crate::admin::mq_admin_mutation_ext::TopicOffsetMutationFailureCode;
 
+use super::merge_order_conf_entries;
 use super::DefaultMQAdminExtImpl;
 use super::NAMESPACE_ORDER_TOPIC_CONFIG;
 
@@ -108,27 +109,6 @@ fn encode_topic_attributes(attributes: &HashMap<CheetahString, CheetahString>) -
             .collect::<HashMap<String, String>>(),
     );
     (!serialized.is_empty()).then(|| serialized.into())
-}
-
-fn merge_order_conf_entries(existing: &str, value: &str) -> String {
-    let mut entries = HashMap::new();
-    for item in existing.split(';').filter(|item| !item.trim().is_empty()) {
-        if let Some((broker_name, _)) = item.split_once(':') {
-            entries.insert(broker_name.to_string(), item.to_string());
-        }
-    }
-    if let Some((broker_name, _)) = value.split_once(':') {
-        entries.insert(broker_name.to_string(), value.to_string());
-    } else if !value.trim().is_empty() {
-        entries.insert(value.to_string(), value.to_string());
-    }
-    let mut broker_names = entries.keys().cloned().collect::<Vec<_>>();
-    broker_names.sort();
-    broker_names
-        .into_iter()
-        .filter_map(|broker_name| entries.remove(&broker_name))
-        .collect::<Vec<_>>()
-        .join(";")
 }
 
 fn offset_failure(broker_name: &str, queue_id: Option<i32>, error: &ClientError) -> ConsumerOffsetTargetReport {

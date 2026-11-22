@@ -362,28 +362,6 @@ impl DefaultMQAdminExtImpl {
     }
 }
 
-pub(super) fn merge_order_conf_entries(existing: &str, value: &str) -> String {
-    let mut entries = HashMap::new();
-    for item in existing.split(';').filter(|item| !item.trim().is_empty()) {
-        if let Some((broker_name, _)) = item.split_once(':') {
-            entries.insert(broker_name.to_string(), item.to_string());
-        }
-    }
-    if let Some((broker_name, _)) = value.split_once(':') {
-        entries.insert(broker_name.to_string(), value.to_string());
-    } else if !value.trim().is_empty() {
-        entries.insert(value.to_string(), value.to_string());
-    }
-
-    let mut broker_names: Vec<String> = entries.keys().cloned().collect();
-    broker_names.sort();
-    broker_names
-        .into_iter()
-        .filter_map(|broker_name| entries.remove(&broker_name))
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
 pub(super) fn retain_java_user_topic_config(
     topic_table: &mut HashMap<CheetahString, TopicConfig>,
     broker_system_topics: &[CheetahString],
