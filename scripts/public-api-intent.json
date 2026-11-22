@@ -175,15 +175,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::consumer::AbstractAllocateMessageQueueStrategy",
-          "identity": "rocketmq-client/src/lib.rs:pub use crate::consumer::AbstractAllocateMessageQueueStrategy",
-          "owner": "client",
-          "path": "rocketmq-client/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::consumer::AckCallback",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::consumer::AckCallback",
           "owner": "client",
@@ -2343,7 +2334,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 260
+      "maximum_exports": 259
     },
     "rocketmq-model": {
       "entries": [
