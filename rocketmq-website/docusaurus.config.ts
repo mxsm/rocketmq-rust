@@ -71,7 +71,7 @@ const config: Config = {
                     versions: {
                         current: {
                             label: '1.0.0 (development)',
-                            badge: true,
+                            badge: false,
                         },
                     },
                 },

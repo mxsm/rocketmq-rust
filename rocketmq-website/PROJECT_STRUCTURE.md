@@ -43,7 +43,7 @@ Use `sidebars.ts` to inspect the actual order. `_category_.json` files do not re
 
 English technical pages use `/docs/<route>`; Chinese pages use `/zh-CN/docs/<route>`. By default the route follows the file path, but existing explicit IDs/slugs must be preserved. Release history uses `/releases` and the locale-prefixed route in the Chinese build. There is currently no Chinese blog-content directory, so a Chinese route does not mean the historical post has a Chinese translation. The bilingual technical release index is maintained separately under `docs/release-notes/`. `baseUrl`, trailing-slash behavior and production URL are configured centrally.
 
-The current docs label is `1.0.0 (development)`, translated as `1.0.0（开发版）`, and is visible on technical pages. The site does not create a released 1.0.0 snapshot by changing this label. Retain the existing `current/` translation path; a new `versioned_docs/` tree or `versions.json` is unnecessary for this development document set.
+The current docs label is `1.0.0 (development)`, translated as `1.0.0（开发版）`. Setting `versions.current.badge` to `false` hides the label on documentation pages. The site does not create a released 1.0.0 snapshot by changing this label. Retain the existing `current/` translation path; a new `versioned_docs/` tree or `versions.json` is unnecessary for this development document set.
 
 UI translation extraction and document translation are separate. `npm run write-translations -- --locale zh-CN` extracts messages; authors maintain full Chinese Markdown and diagram labels. Historical release text keeps the version it originally described.
 
