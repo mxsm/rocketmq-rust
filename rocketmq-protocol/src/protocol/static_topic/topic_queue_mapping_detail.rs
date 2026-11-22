@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::protocol::fastjson::quote_unquoted_numeric_object_keys;
 use crate::protocol::static_topic::i32_key_map_serde;
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
@@ -48,6 +49,16 @@ impl Default for TopicQueueMappingDetail {
 }
 
 impl TopicQueueMappingDetail {
+    /// Decodes a static-topic mapping whose integer map keys may be unquoted in Java FastJSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns the JSON decoding error if the input cannot be read as a mapping detail.
+    pub fn from_fastjson(input: &str) -> serde_json::Result<Self> {
+        let normalized = quote_unquoted_numeric_object_keys(input);
+        serde_json::from_str(normalized.as_deref().unwrap_or(input))
+    }
+
     pub fn get_mapping_info(
         mapping_detail: &TopicQueueMappingDetail,
         global_id: i32,
