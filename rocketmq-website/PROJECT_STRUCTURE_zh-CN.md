@@ -43,7 +43,7 @@
 
 英文技术页面使用 `/docs/<route>`，中文使用 `/zh-CN/docs/<route>`。默认路由由文件路径形成，但必须保留已有显式 ID/slug。发行历史使用 `/releases`，中文构建使用带语言前缀的路由。当前没有中文博客正文目录，因此中文路由不代表历史文章已经翻译；双语技术发布索引在 `docs/release-notes/` 下单独维护。`baseUrl`、尾斜杠行为及生产 URL 统一配置。
 
-当前文档标签为 `1.0.0 (development)`，中文为 `1.0.0（开发版）`，在技术页面中可见。更改标签不会创建已发布的 1.0.0 快照。保留现有 `current/` 翻译路径；这套开发文档无需另建 `versioned_docs/` 或 `versions.json`。
+当前文档标签为 `1.0.0 (development)`，中文为 `1.0.0（开发版）`。将 `versions.current.badge` 设为 `false` 可在文档页隐藏该标签。更改标签不会创建已发布的 1.0.0 快照。保留现有 `current/` 翻译路径；这套开发文档无需另建 `versioned_docs/` 或 `versions.json`。
 
 界面消息提取与正文翻译是不同工作。`npm run write-translations -- --locale zh-CN` 提取消息；作者仍需维护完整中文 Markdown 和图示标签。历史发行正文保留原先描述的版本。
 

@@ -538,7 +538,7 @@ html[lang='zh-CN'] .markdown > h3 {
   content: '';
 }
 
-/* ---------- Breadcrumbs and version badge ---------- */
+/* ---------- Breadcrumbs ---------- */
 
 nav.theme-doc-breadcrumbs {
   --ifm-breadcrumb-size-multiplier: 0.86;
@@ -555,17 +555,6 @@ nav.theme-doc-breadcrumbs {
 .theme-doc-breadcrumbs .breadcrumbs__link:hover,
 .theme-doc-breadcrumbs .breadcrumbs__item--active .breadcrumbs__link {
   color: var(--ifm-heading-color);
-}
-
-.badge.theme-doc-version-badge {
-  padding: 0.28rem 0.65rem;
-  border: 1px solid var(--rmq-link-underline);
-  border-radius: 999px;
-  background: var(--rmq-accent-soft);
-  color: var(--ifm-link-color);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
 }
 
 /* ---------- Footer and page navigation ---------- */
