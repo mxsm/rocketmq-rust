@@ -103,8 +103,7 @@ impl KeyBuilder {
     }
 
     pub fn parse_pop_retry_topic<'a>(retry_topic: &'a str, cid: &str) -> Option<(PopRetryTopicVersion, &'a str)> {
-        let prefix = format!("{RETRY_GROUP_TOPIC_PREFIX}{cid}");
-        let suffix = retry_topic.strip_prefix(&prefix)?;
+        let suffix = retry_topic.strip_prefix(RETRY_GROUP_TOPIC_PREFIX)?.strip_prefix(cid)?;
         if let Some(topic) = suffix.strip_prefix(POP_RETRY_SEPARATOR_V2) {
             (!topic.is_empty()).then_some((PopRetryTopicVersion::V2, topic))
         } else if let Some(topic) = suffix.strip_prefix(POP_RETRY_SEPARATOR_V1) {
