@@ -595,10 +595,11 @@ pub fn validate_message_id(msg_id: &str) -> Result<(), String> {
 }
 
 pub fn decode_message_id(msg_id: &str) -> Result<MessageId, String> {
+    let msg_id = msg_id.trim();
     validate_message_id(msg_id)?;
     let bytes = string_to_bytes(msg_id).ok_or_else(|| "Failed to decode message ID: invalid hex string".to_string())?;
     let mut buffer = Bytes::from(bytes);
-    let address = if msg_id.len() == 32 {
+    let address = if msg_id.len() == MSG_ID_IPV4_LEN {
         let mut ip = [0u8; 4];
         buffer.copy_to_slice(&mut ip);
         let port = buffer.get_i32();
@@ -1559,6 +1560,20 @@ mod tests {
         let message_id = decode_message_id(msg_id).unwrap();
         assert_eq!(message_id.address, "[2001:db8::1]:10911".parse().unwrap());
         assert_eq!(message_id.offset, 1);
+    }
+
+    #[test]
+    fn decode_message_id_accepts_surrounding_whitespace() {
+        for id in [
+            "AC11000100002A9F0000000000000001",
+            "20010db81234567800000000abcdef0100002A9F0000000000001234",
+        ] {
+            let padded = format!(" \t{id}\n");
+            let expected = decode_message_id(id).unwrap();
+            let actual = decode_message_id(&padded).unwrap();
+            assert_eq!(actual.address, expected.address);
+            assert_eq!(actual.offset, expected.offset);
+        }
     }
 
     #[test]
