@@ -180,7 +180,8 @@ impl RetainedSize for ConnectionSnapshot {
     }
 }
 
-pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
+#[trait_variant::make(Send)]
+pub(crate) trait ReadOnlyQuery: Clone + Sync + 'static {
     /// Returns every configured logical cluster with its Proxy and Controller aliases.
     ///
     /// The list comes from configuration, so it reads no source and cannot fail. It is not
@@ -191,100 +192,88 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
 
     /// Returns the names of `class` in one cluster that can match `prefix`, for argument
     /// completion. The caller keeps the names that start with `prefix`.
-    fn completion_names(
+    async fn completion_names(
         &self,
         _cluster: &str,
         _class: crate::completion::CompletionClass,
         _prefix: &str,
-    ) -> impl Future<Output = Result<Vec<String>, ToolFailure>> + Send {
+    ) -> Result<Vec<String>, ToolFailure> {
         async { Ok(Vec::new()) }
     }
 
-    fn cluster_overview(
+    async fn cluster_overview(
         &self,
         args: ClusterOverviewArgs,
-    ) -> impl Future<Output = Result<QueryResult<ClusterOverviewOutput>, ToolFailure>> + Send;
+    ) -> Result<QueryResult<ClusterOverviewOutput>, ToolFailure>;
 
-    fn list_topics(
-        &self,
-        args: ListTopicsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListTopicsOutput>, ToolFailure>> + Send;
+    async fn list_topics(&self, args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolFailure>;
 
-    fn describe_topic(
-        &self,
-        args: DescribeTopicArgs,
-    ) -> impl Future<Output = Result<QueryResult<DescribeTopicOutput>, ToolFailure>> + Send;
+    async fn describe_topic(&self, args: DescribeTopicArgs) -> Result<QueryResult<DescribeTopicOutput>, ToolFailure>;
 
-    fn query_topic_route(
+    async fn query_topic_route(
         &self,
         args: QueryTopicRouteArgs,
-    ) -> impl Future<Output = Result<QueryResult<QueryTopicRouteOutput>, ToolFailure>> + Send;
+    ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolFailure>;
 
-    fn topic_stats(
+    async fn topic_stats(
         &self,
         _args: crate::tools::topic_tools::GetTopicStatsArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn topic_config(
+    async fn topic_config(
         &self,
         _args: crate::tools::config_tools::GetTopicConfigArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns what one connected consumer client reports about itself, named by its pseudonym.
-    fn consumer_running_info(
+    async fn consumer_running_info(
         &self,
         _args: crate::tools::consumer_tools::GetConsumerRunningInfoArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerRunningInfoOutput>, ToolFailure>>
-           + Send {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerRunningInfoOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns how many messages of a Consumer Group were dead-lettered and when the last one was.
-    fn dlq_summary(
+    async fn dlq_summary(
         &self,
         _args: crate::tools::consumer_tools::GetDlqSummaryArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetDlqSummaryOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetDlqSummaryOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns one page of the Consumer Groups that consume a Topic.
-    fn topic_consumers(
+    async fn topic_consumers(
         &self,
         _args: crate::tools::topic_tools::ListTopicConsumersArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::topic_tools::ListTopicConsumersOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::topic_tools::ListTopicConsumersOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn list_consumer_groups(
+    async fn list_consumer_groups(
         &self,
         args: ListConsumerGroupsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure>> + Send;
+    ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure>;
 
     /// Returns one page of Consumer Group names, without reading anything about each group.
     ///
     /// It pages the same result as [`list_consumer_groups`](Self::list_consumer_groups): a
     /// cursor of either continues with the other.
-    fn list_consumer_group_names(
+    async fn list_consumer_group_names(
         &self,
         _args: ListConsumerGroupsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupNamesOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<ListConsumerGroupNamesOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn describe_consumer_group(
+    async fn describe_consumer_group(
         &self,
         cluster: String,
         group: String,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolFailure> {
         async move {
             let result = self
                 .list_consumer_groups(ListConsumerGroupsArgs {
@@ -313,202 +302,187 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         }
     }
 
-    fn query_consumer_lag(
+    async fn query_consumer_lag(
         &self,
         args: QueryConsumerLagArgs,
-    ) -> impl Future<Output = Result<QueryResult<QueryConsumerLagOutput>, ToolFailure>> + Send;
+    ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolFailure>;
 
-    fn consumer_group_details(
+    async fn consumer_group_details(
         &self,
         _args: crate::tools::consumer_tools::GetConsumerGroupDetailsArgs,
-    ) -> impl Future<
-        Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolFailure>,
-    > + Send {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn consumer_progress(
+    async fn consumer_progress(
         &self,
         _args: crate::tools::consumer_tools::GetConsumerProgressArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn describe_broker(
-        &self,
-        args: DescribeBrokerArgs,
-    ) -> impl Future<Output = Result<QueryResult<DescribeBrokerOutput>, ToolFailure>> + Send;
+    async fn describe_broker(&self, args: DescribeBrokerArgs)
+        -> Result<QueryResult<DescribeBrokerOutput>, ToolFailure>;
 
     /// Lists the Broker instances of one cluster without sizing its inventories.
-    fn list_brokers(
+    async fn list_brokers(
         &self,
         _args: crate::tools::broker_tools::ListBrokersArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::broker_tools::ListBrokersOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::broker_tools::ListBrokersOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn broker_diagnostics(
+    async fn broker_diagnostics(
         &self,
         _args: BrokerDiagnosticsArgs,
-    ) -> impl Future<Output = Result<QueryResult<BrokerDiagnosticsOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<BrokerDiagnosticsOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn broker_config_summary(
+    async fn broker_config_summary(
         &self,
         _args: BrokerConfigSummaryArgs,
-    ) -> impl Future<Output = Result<QueryResult<BrokerConfigSummaryOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<BrokerConfigSummaryOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn broker_log_filter_state(
+    async fn broker_log_filter_state(
         &self,
         _args: BrokerLogFilterStateArgs,
-    ) -> impl Future<Output = Result<QueryResult<BrokerLogFilterStateOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<BrokerLogFilterStateOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn proxy_drain_state(
+    async fn proxy_drain_state(
         &self,
         _args: ProxyDrainStateArgs,
-    ) -> impl Future<Output = Result<QueryResult<ProxyDrainStateOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn list_consumer_connections(
+    async fn list_consumer_connections(
         &self,
         _args: ListConsumerConnectionsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListConsumerConnectionsOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<ListConsumerConnectionsOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn list_producer_connections(
+    async fn list_producer_connections(
         &self,
         _args: ListProducerConnectionsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListProducerConnectionsOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<ListProducerConnectionsOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn message_metadata(
+    async fn message_metadata(
         &self,
         _args: MessageMetadataArgs,
-    ) -> impl Future<Output = Result<QueryResult<MessageMetadataOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<MessageMetadataOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the ACL users of one cluster, without a password.
     #[cfg(feature = "security-admin")]
-    fn list_acl_users(
+    async fn list_acl_users(
         &self,
         _args: crate::tools::security_tools::ListAclUsersArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::security_tools::ListAclUsersOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::security_tools::ListAclUsersOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns what the master of one Broker holds for Lite Topics.
-    fn lite_broker_info(
+    async fn lite_broker_info(
         &self,
         _args: crate::tools::broker_tools::GetLiteBrokerInfoArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::broker_tools::GetLiteBrokerInfoOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::broker_tools::GetLiteBrokerInfoOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the trace records clients wrote about one message, reduced to what the caller may see.
-    fn message_trace(
+    async fn message_trace(
         &self,
         _args: crate::tools::message_tools::QueryMessageTraceArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::message_tools::QueryMessageTraceOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::message_tools::QueryMessageTraceOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the fixed metadata of the messages of a Topic that carry a key.
-    fn find_messages_by_key(
+    async fn find_messages_by_key(
         &self,
         _args: crate::tools::message_tools::FindMessagesByKeyArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::message_tools::FindMessagesByKeyOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::message_tools::FindMessagesByKeyOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn topic_config_state(
+    async fn topic_config_state(
         &self,
         _args: TopicConfigStateArgs,
-    ) -> impl Future<Output = Result<QueryResult<TopicConfigStateOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<TopicConfigStateOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn consumer_group_config_state(
+    async fn consumer_group_config_state(
         &self,
         _args: ConsumerGroupConfigStateArgs,
-    ) -> impl Future<Output = Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn ha_status(
+    async fn ha_status(
         &self,
         _args: crate::tools::infrastructure_tools::GetHaStatusArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn controller_metadata(
+    async fn controller_metadata(
         &self,
         _args: crate::tools::infrastructure_tools::GetControllerMetadataArgs,
-    ) -> impl Future<
-        Output = Result<QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure>,
-    > + Send {
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn nameserver_config_summary(
+    async fn nameserver_config_summary(
         &self,
         _args: crate::tools::infrastructure_tools::GetNameserverConfigSummaryArgs,
-    ) -> impl Future<
-        Output = Result<QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure>,
-    > + Send {
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn diagnose_consumer_lag(
+    async fn diagnose_consumer_lag(
         &self,
         args: DiagnoseConsumerLagArgs,
-    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send;
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure>;
 
     /// Diagnoses the path from one Topic to one Consumer Group, and one message on it.
-    fn diagnose_message_delivery(
+    async fn diagnose_message_delivery(
         &self,
         _args: crate::tools::diagnosis_tools::DiagnoseMessageDeliveryArgs,
-    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Checks the health of a cluster at a glance.
-    fn cluster_health(
+    async fn cluster_health(
         &self,
         _args: crate::tools::diagnosis_tools::GetClusterHealthArgs,
-    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Diagnoses the health of one Broker: its master and its replicas.
-    fn diagnose_broker_health(
+    async fn diagnose_broker_health(
         &self,
         _args: crate::tools::diagnosis_tools::DiagnoseBrokerHealthArgs,
-    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Diagnoses one Consumer Group across every Topic it consumes.
-    fn diagnose_consumer_group(
+    async fn diagnose_consumer_group(
         &self,
         _args: crate::tools::diagnosis_tools::DiagnoseConsumerGroupArgs,
-    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 }
