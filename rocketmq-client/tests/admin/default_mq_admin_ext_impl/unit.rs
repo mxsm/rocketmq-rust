@@ -36,6 +36,7 @@ use std::time::Duration;
 use crate::admin::capability::{AuthAdmin, BrokerAdmin, ConsumerAdmin, OffsetAdmin, RouteAdmin, TopicAdmin};
 use crate::base::client_config::ClientConfig;
 use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
+use crate::implementation::mq_client_api_impl::encode_topic_attributes;
 use crate::ClientError;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::base::plain_access_config::PlainAccessConfig;
@@ -264,11 +265,13 @@ fn merge_order_conf_entries_preserves_existing_input_handling() {
 #[test]
 fn encode_topic_attributes_matches_java_attribute_parser_format() {
     let mut attributes = HashMap::<CheetahString, CheetahString>::new();
+    assert_eq!(encode_topic_attributes(&attributes), None);
+
     attributes.insert("+message.type".into(), "NORMAL".into());
-
-    let encoded = encode_topic_attributes(&attributes);
-
-    assert_eq!(encoded, Some(CheetahString::from("+message.type=NORMAL")));
+    attributes.insert("-obsolete".into(), CheetahString::new());
+    let encoded = encode_topic_attributes(&attributes).unwrap();
+    let tokens: BTreeSet<_> = encoded.as_str().split(',').collect();
+    assert_eq!(tokens, BTreeSet::from(["+message.type=NORMAL", "-obsolete"]));
 }
 
 #[test]
