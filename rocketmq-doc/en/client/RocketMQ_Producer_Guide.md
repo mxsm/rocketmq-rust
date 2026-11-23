@@ -35,7 +35,7 @@ In the signatures below, `ClientResult<T>` means `rocketmq_client_rust::ClientRe
 
 ### Code Locations
 
-- **Rust Implementation**: [rocketmq-client/src/producer/default_mq_producer.rs](../rocketmq-client/src/producer/default_mq_producer.rs)
+- **Rust Implementation**: [rocketmq-client/src/producer/default_mq_producer.rs](../../../rocketmq-client/src/producer/default_mq_producer.rs)
 - **Java Reference**: [Apache RocketMQ DefaultMQProducer.java](https://github.com/apache/rocketmq/blob/develop/client/src/main/java/org/apache/rocketmq/client/producer/DefaultMQProducer.java)
 
 ## Core Sending Methods
@@ -325,7 +325,7 @@ producer.shutdown().await?;
 | `check_thread_pool_max_size` | Check thread pool maximum size |
 | `check_request_hold_max` | Max pending requests |
 
-**Code Location**: [rocketmq-client/src/producer/transaction_mq_producer.rs](../rocketmq-client/src/producer/transaction_mq_producer.rs)
+**Code Location**: [rocketmq-client/src/producer/transaction_mq_producer.rs](../../../rocketmq-client/src/producer/transaction_mq_producer.rs)
 
 ## Configuration
 
@@ -403,5 +403,5 @@ producer.shutdown().await?;
 ---
 
 > **Document Generation Time**: 2026-02-12
-> **Rust Code Location**: [rocketmq-client/src/producer/default_mq_producer.rs](../rocketmq-client/src/producer/default_mq_producer.rs)
+> **Rust Code Location**: [rocketmq-client/src/producer/default_mq_producer.rs](../../../rocketmq-client/src/producer/default_mq_producer.rs)
 > **Java Code Location**: [DefaultMQProducer.java](https://github.com/apache/rocketmq/blob/develop/client/src/main/java/org/apache/rocketmq/client/producer/DefaultMQProducer.java)

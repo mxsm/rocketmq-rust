@@ -35,7 +35,7 @@
 
 ### 代码位置
 
-- **Rust 实现**: [rocketmq-client/src/producer/default_mq_producer.rs](../../rocketmq-client/src/producer/default_mq_producer.rs)
+- **Rust 实现**: [rocketmq-client/src/producer/default_mq_producer.rs](../../../rocketmq-client/src/producer/default_mq_producer.rs)
 - **Java 参考实现**: [Apache RocketMQ DefaultMQProducer.java](https://github.com/apache/rocketmq/blob/develop/client/src/main/java/org/apache/rocketmq/client/producer/DefaultMQProducer.java)
 
 ## 核心发送方法
@@ -325,7 +325,7 @@ producer.shutdown().await?;
 | `check_thread_pool_max_size` | 检查线程池最大大小 |
 | `check_request_hold_max` | 最大挂起请求数 |
 
-**代码位置**: [rocketmq-client/src/producer/transaction_mq_producer.rs](../../rocketmq-client/src/producer/transaction_mq_producer.rs)
+**代码位置**: [rocketmq-client/src/producer/transaction_mq_producer.rs](../../../rocketmq-client/src/producer/transaction_mq_producer.rs)
 
 ## 配置
 
@@ -403,5 +403,5 @@ producer.shutdown().await?;
 ---
 
 > **文档生成时间**: 2026-02-12
-> **Rust 代码位置**: [rocketmq-client/src/producer/default_mq_producer.rs](../../rocketmq-client/src/producer/default_mq_producer.rs)
+> **Rust 代码位置**: [rocketmq-client/src/producer/default_mq_producer.rs](../../../rocketmq-client/src/producer/default_mq_producer.rs)
 > **Java 代码位置**: [DefaultMQProducer.java](https://github.com/apache/rocketmq/blob/develop/client/src/main/java/org/apache/rocketmq/client/producer/DefaultMQProducer.java)
