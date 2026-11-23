@@ -436,7 +436,7 @@ where
     true
 }
 
-mod admin;
+pub(crate) mod admin;
 mod callback_executor;
 mod consumer;
 #[cfg(feature = "admin-read")]

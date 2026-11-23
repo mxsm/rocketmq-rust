@@ -17,6 +17,7 @@ use super::group::*;
 use super::security::*;
 use super::topic::*;
 use super::*;
+use crate::implementation::mq_client_api_impl::admin::encode_topic_attributes;
 
 #[allow(unused_variables, reason = "trait contracts reserve parameters")]
 #[allow(unused_mut)]

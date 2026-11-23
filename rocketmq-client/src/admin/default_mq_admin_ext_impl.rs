@@ -52,7 +52,6 @@ use cheetah_string::CheetahString;
 #[cfg(feature = "admin-full")]
 use rand::seq::IndexedRandom;
 #[cfg(feature = "admin-full")]
-use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 #[cfg(feature = "admin-full")]
 use rocketmq_model::common::attribute::topic_attributes::TopicAttributes;
 #[cfg(feature = "admin-full")]

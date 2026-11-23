@@ -4489,9 +4489,7 @@ pub(super) fn cluster_names_for_topic_route(
     cluster_names
 }
 
-pub(super) fn encode_topic_attributes_like_java(
-    attributes: &HashMap<CheetahString, CheetahString>,
-) -> Option<CheetahString> {
+pub(crate) fn encode_topic_attributes(attributes: &HashMap<CheetahString, CheetahString>) -> Option<CheetahString> {
     if attributes.is_empty() {
         return None;
     }
@@ -4535,7 +4533,7 @@ pub(super) fn create_topic_request_header_like_java(
             topic_config.topic_sys_flag,
         )?),
         order: topic_config.order,
-        attributes: encode_topic_attributes_like_java(&topic_config.attributes),
+        attributes: encode_topic_attributes(&topic_config.attributes),
         force: None,
         topic_request_header: None,
     })
@@ -4936,5 +4934,39 @@ mod acl_policy_entry_tests {
         let legacy = DeleteAclRequestHeader::new("User:alice".into(), None);
         assert!(legacy.policy_type.is_none());
         assert!(legacy.resource.is_none());
+    }
+}
+
+#[cfg(test)]
+mod encode_topic_attributes_tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
+
+    #[test]
+    fn an_empty_attribute_map_is_omitted() {
+        assert!(super::encode_topic_attributes(&HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn additions_and_removals_share_the_wire_form() {
+        let mut attributes = HashMap::new();
+        attributes.insert(CheetahString::from("+topicType"), CheetahString::from("NORMAL"));
+        attributes.insert(CheetahString::from("-obsolete"), CheetahString::from(""));
+
+        let encoded = super::encode_topic_attributes(&attributes).expect("encoded attributes");
+        let decoded = AttributeParser::parse_to_map(encoded.as_str()).expect("well-formed attributes");
+
+        assert_eq!(decoded.get("+topicType").map(String::as_str), Some("NORMAL"));
+        assert_eq!(decoded.get("-obsolete").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn a_map_that_encodes_to_nothing_is_omitted() {
+        let mut attributes = HashMap::new();
+        attributes.insert(CheetahString::from(""), CheetahString::from(""));
+
+        assert!(super::encode_topic_attributes(&attributes).is_none());
     }
 }

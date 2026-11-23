@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::implementation::mq_client_api_impl::admin::encode_topic_attributes;
 use crate::test_support::error_assertions::assert_context_field;
 use crate::test_support::error_assertions::assert_error;
 use crate::test_support::error_assertions::assert_invalid_argument;

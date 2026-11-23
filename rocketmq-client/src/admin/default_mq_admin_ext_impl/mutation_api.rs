@@ -22,10 +22,10 @@ mod log_filter;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::implementation::mq_client_api_impl::admin::encode_topic_attributes;
 use crate::ClientError;
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
-use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -96,19 +96,6 @@ fn java_long_to_u64(operation: &'static str, field: &'static str, value: i64) ->
             "{operation} {field} is negative and cannot be represented as Rust u64"
         ))
     })
-}
-
-fn encode_topic_attributes(attributes: &HashMap<CheetahString, CheetahString>) -> Option<CheetahString> {
-    if attributes.is_empty() {
-        return None;
-    }
-    let serialized = AttributeParser::parse_to_string(
-        &attributes
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect::<HashMap<String, String>>(),
-    );
-    (!serialized.is_empty()).then(|| serialized.into())
 }
 
 fn offset_failure(broker_name: &str, queue_id: Option<i32>, error: &ClientError) -> ConsumerOffsetTargetReport {

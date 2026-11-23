@@ -18,25 +18,6 @@ use super::group::sync_pull_result_missing;
 use super::group::timestamp_to_java_long;
 use super::*;
 
-pub(super) fn encode_topic_attributes(attributes: &HashMap<CheetahString, CheetahString>) -> Option<CheetahString> {
-    if attributes.is_empty() {
-        return None;
-    }
-
-    let serialized = AttributeParser::parse_to_string(
-        &attributes
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect::<HashMap<String, String>>(),
-    );
-
-    if serialized.is_empty() {
-        None
-    } else {
-        Some(serialized.into())
-    }
-}
-
 pub(super) fn master_flush_offset_to_java_long(master_flush_offset: u64) -> crate::ClientResult<i64> {
     offset_to_java_long("resetMasterFlushOffset", master_flush_offset)
 }
