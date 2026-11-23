@@ -50,7 +50,7 @@ openraft = { version = "=0.10.0", default-features = false, features = [
 ] }
 # OpenRaft depends on its runtime crates and macros with caret constraints.
 # Pin them to the same release as the core crate.
-openraft-macros   = "=0.10.0"
+openraft-macros   = "=0.10.1"
 openraft-rt       = "=0.10.0"
 openraft-rt-tokio = "=0.10.0"
 
