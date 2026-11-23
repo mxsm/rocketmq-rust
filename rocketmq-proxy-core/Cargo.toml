@@ -41,6 +41,7 @@ serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+trait-variant.workspace = true
 uuid.workspace = true
 bytes.workspace = true
 
