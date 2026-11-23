@@ -84,6 +84,7 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 
+use super::merge_order_conf_entries;
 use super::DefaultMQAdminExtImpl;
 
 #[test]
@@ -251,6 +252,13 @@ fn merge_order_conf_entries_replaces_existing_broker_value() {
 fn merge_order_conf_entries_adds_new_broker_value() {
     let merged = merge_order_conf_entries("broker-a:4", "broker-b:8");
     assert_eq!(merged, "broker-a:4;broker-b:8");
+}
+
+#[test]
+fn merge_order_conf_entries_preserves_existing_input_handling() {
+    let existing = "broker-b:4;;ignored;broker-a:2;broker-b:8";
+    assert_eq!(merge_order_conf_entries(existing, " "), "broker-a:2;broker-b:8");
+    assert_eq!(merge_order_conf_entries(existing, "bare"), "bare;broker-a:2;broker-b:8");
 }
 
 #[test]
