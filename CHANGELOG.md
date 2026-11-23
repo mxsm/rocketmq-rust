@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(ci):** Set the MCP query error-boundary test recursion limit to prevent compilation failures in query and control CI ([#12285](https://github.com/mxsm/rocketmq-rust/issues/12285)).
 - **fix(ci):** Keep the HA port distinct from both remoting listener ports in Broker lifecycle test fixtures ([#12276](https://github.com/mxsm/rocketmq-rust/issues/12276)).
 - **fix(filter):** Compare SQL92 integer operands at full precision and use the same numeric ordering for equality and range predicates ([#12851](https://github.com/mxsm/rocketmq-rust/issues/12851)).
+- **fix(store):** Number delay levels consistently with the Broker when durations are separated by repeated spaces or tabs ([#12891](https://github.com/mxsm/rocketmq-rust/issues/12891)).
 - **fix(ci):** Keep Broker shutdown events visible to test subscribers during parallel test runs ([#12283](https://github.com/mxsm/rocketmq-rust/issues/12283)).
 - **fix(ci):** Register Store epoch and timer migration exports in Architecture Guards and release native Dashboard directory locks when their writer ownership ends ([#12222](https://github.com/mxsm/rocketmq-rust/issues/12222)).
 - **fix(ci):** Reconcile Architecture Guards inventories with merged Client, Store, and Transport exports and classify native Dashboard storage outside the core release scope ([#12173](https://github.com/mxsm/rocketmq-rust/issues/12173)).
