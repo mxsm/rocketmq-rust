@@ -311,6 +311,16 @@ fn eval_compare_values(op: CompareOp, left: &Value, right: &Value) -> Result<Opt
         return Ok(None);
     }
 
+    // Two string operands are compared as text before any coercion, so
+    // `'001'` and `'1'` stay distinct, as Apache RocketMQ's
+    // `ComparisonExpression` compares them (ISS 12941)
+    if let (Value::String(left), Value::String(right)) = (left, right) {
+        if matches!(op, CompareOp::Eq | CompareOp::Ne) {
+            let equal = left == right;
+            return Ok(Some(if op == CompareOp::Eq { equal } else { !equal }));
+        }
+    }
+
     if let (Some(left), Some(right)) = (coerce_numeric(left), coerce_numeric(right)) {
         let ordering = left.partial_cmp(&right).ok_or_else(|| {
             EvaluationError::InvalidOperation(CheetahString::from_static_str(
@@ -1195,5 +1205,47 @@ mod tests {
             .evaluate(&EmptyEvaluationContext)
             .expect("evaluation should succeed");
         assert_eq!(value, Value::Null);
+    }
+}
+
+#[cfg(test)]
+mod string_equality_tests {
+    use super::compile_expression;
+    use crate::expression::EvaluationError;
+    use crate::expression::MessageEvaluationContext;
+    use crate::expression::Value;
+
+    fn evaluate(expr: &str, pairs: &[(&str, &str)]) -> Result<Value, EvaluationError> {
+        let expression = compile_expression(expr).expect("expression should compile");
+        let mut context = MessageEvaluationContext::new();
+        for (key, value) in pairs {
+            context.put(*key, *value);
+        }
+        expression.evaluate(&context)
+    }
+
+    #[test]
+    fn string_equality_is_exact_before_numeric_coercion() {
+        let values = [("code", "001")];
+
+        assert_eq!(evaluate("code = '1'", &values).unwrap(), Value::Boolean(false));
+        assert_eq!(evaluate("code != '1'", &values).unwrap(), Value::Boolean(true));
+        assert_eq!(evaluate("code = 1", &values).unwrap(), Value::Boolean(true));
+        assert_eq!(
+            evaluate("code IN ('1', '002')", &values).unwrap(),
+            Value::Boolean(false)
+        );
+        assert_eq!(
+            evaluate("code NOT IN ('1', '002')", &values).unwrap(),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn quoted_booleans_compare_as_their_text() {
+        let values = [("flag", "true")];
+
+        assert_eq!(evaluate("flag = 'true'", &values).unwrap(), Value::Boolean(true));
+        assert_eq!(evaluate("flag = 'false'", &values).unwrap(), Value::Boolean(false));
     }
 }
