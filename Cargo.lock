@@ -4941,6 +4941,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "trait-variant",
  "uuid",
 ]
 

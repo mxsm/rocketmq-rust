@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -307,108 +306,85 @@ pub struct EndTransactionPlan {
     pub status: ProxyPayloadStatus,
 }
 
-pub trait MessagingProcessor: Send + Sync {
+#[trait_variant::make(Send)]
+pub trait MessagingProcessor: Sync {
     /// Returns the opaque producer group selected by the active transaction
     /// adapter, if transactional sends are supported.
     fn transaction_producer_group(&self, _context: &ProxyContext) -> Option<String> {
         None
     }
 
-    fn sync_lite_subscription(
+    async fn sync_lite_subscription(
         &self,
         _context: &ProxyContext,
         _client_id: &str,
         _request: LiteSubscriptionSyncRequest,
-    ) -> impl Future<Output = ProxyResult<()>> + Send {
+    ) -> ProxyResult<()> {
         async { Ok(()) }
     }
 
-    fn subscription_group_metadata(
+    async fn subscription_group_metadata(
         &self,
         _context: &ProxyContext,
         _topic: &ResourceIdentity,
         _group: &ResourceIdentity,
-    ) -> impl Future<Output = ProxyResult<Option<SubscriptionGroupMetadata>>> + Send {
+    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
         async { Ok(None) }
     }
 
-    fn query_route(
-        &self,
-        context: &ProxyContext,
-        request: QueryRouteRequest,
-    ) -> impl Future<Output = ProxyResult<QueryRoutePlan>> + Send;
+    async fn query_route(&self, context: &ProxyContext, request: QueryRouteRequest) -> ProxyResult<QueryRoutePlan>;
 
-    fn query_assignment(
+    async fn query_assignment(
         &self,
         context: &ProxyContext,
         request: QueryAssignmentRequest,
-    ) -> impl Future<Output = ProxyResult<QueryAssignmentPlan>> + Send;
+    ) -> ProxyResult<QueryAssignmentPlan>;
 
-    fn send_message(
-        &self,
-        context: &ProxyContext,
-        request: SendMessageRequest,
-    ) -> impl Future<Output = ProxyResult<SendMessagePlan>> + Send;
+    async fn send_message(&self, context: &ProxyContext, request: SendMessageRequest) -> ProxyResult<SendMessagePlan>;
 
-    fn recall_message(
+    async fn recall_message(
         &self,
         context: &ProxyContext,
         request: RecallMessageRequest,
-    ) -> impl Future<Output = ProxyResult<RecallMessagePlan>> + Send;
+    ) -> ProxyResult<RecallMessagePlan>;
 
-    fn receive_message(
+    async fn receive_message(
         &self,
         context: &ProxyContext,
         request: ReceiveMessageRequest,
-    ) -> impl Future<Output = ProxyResult<ReceiveMessagePlan>> + Send;
+    ) -> ProxyResult<ReceiveMessagePlan>;
 
-    fn pull_message(
-        &self,
-        context: &ProxyContext,
-        request: PullMessageRequest,
-    ) -> impl Future<Output = ProxyResult<PullMessagePlan>> + Send;
+    async fn pull_message(&self, context: &ProxyContext, request: PullMessageRequest) -> ProxyResult<PullMessagePlan>;
 
-    fn ack_message(
-        &self,
-        context: &ProxyContext,
-        request: AckMessageRequest,
-    ) -> impl Future<Output = ProxyResult<AckMessagePlan>> + Send;
+    async fn ack_message(&self, context: &ProxyContext, request: AckMessageRequest) -> ProxyResult<AckMessagePlan>;
 
-    fn forward_message_to_dead_letter_queue(
+    async fn forward_message_to_dead_letter_queue(
         &self,
         context: &ProxyContext,
         request: ForwardMessageToDeadLetterQueueRequest,
-    ) -> impl Future<Output = ProxyResult<ForwardMessageToDeadLetterQueuePlan>> + Send;
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan>;
 
-    fn change_invisible_duration(
+    async fn change_invisible_duration(
         &self,
         context: &ProxyContext,
         request: ChangeInvisibleDurationRequest,
-    ) -> impl Future<Output = ProxyResult<ChangeInvisibleDurationPlan>> + Send;
+    ) -> ProxyResult<ChangeInvisibleDurationPlan>;
 
-    fn update_offset(
+    async fn update_offset(
         &self,
         context: &ProxyContext,
         request: UpdateOffsetRequest,
-    ) -> impl Future<Output = ProxyResult<UpdateOffsetPlan>> + Send;
+    ) -> ProxyResult<UpdateOffsetPlan>;
 
-    fn get_offset(
-        &self,
-        context: &ProxyContext,
-        request: GetOffsetRequest,
-    ) -> impl Future<Output = ProxyResult<GetOffsetPlan>> + Send;
+    async fn get_offset(&self, context: &ProxyContext, request: GetOffsetRequest) -> ProxyResult<GetOffsetPlan>;
 
-    fn query_offset(
-        &self,
-        context: &ProxyContext,
-        request: QueryOffsetRequest,
-    ) -> impl Future<Output = ProxyResult<QueryOffsetPlan>> + Send;
+    async fn query_offset(&self, context: &ProxyContext, request: QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan>;
 
-    fn end_transaction(
+    async fn end_transaction(
         &self,
         context: &ProxyContext,
         request: EndTransactionRequest,
-    ) -> impl Future<Output = ProxyResult<EndTransactionPlan>> + Send;
+    ) -> ProxyResult<EndTransactionPlan>;
 }
 
 /// Object-safe boundary for dynamically selected Proxy processor plugins.

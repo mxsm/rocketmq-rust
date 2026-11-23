@@ -30,6 +30,7 @@ default = []
 grpc-bindings = ["dep:tonic", "dep:tonic-prost"]
 
 [dependencies]
+trait-variant.workspace = true
 rocketmq-error = { workspace = true }
 rocketmq-model = { workspace = true }
 rocketmq-protocol = { workspace = true }
