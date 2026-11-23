@@ -32,6 +32,7 @@ observability-traces = ["rocketmq-broker/otel-traces", "rocketmq-observability/o
 tieredstore = ["rocketmq-broker/tieredstore"]
 
 [dependencies]
+trait-variant.workspace = true
 rocketmq-broker = { workspace = true }
 rocketmq-error = { workspace = true }
 rocketmq-model = { workspace = true }
