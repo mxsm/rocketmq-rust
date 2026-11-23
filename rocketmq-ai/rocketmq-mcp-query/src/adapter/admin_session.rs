@@ -15,7 +15,6 @@
 use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolExecutionError;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
 
 use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
@@ -187,43 +186,33 @@ pub(crate) struct SessionMessageMetadata {
     pub prepared_transaction_offset: i64,
 }
 
-pub(crate) trait QueryAdminSession: Send {
-    fn broker_rows(&mut self) -> impl Future<Output = Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure>> + Send;
+#[trait_variant::make(Send)]
+pub(crate) trait QueryAdminSession {
+    async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure>;
 
-    fn topic_inventory(&mut self) -> impl Future<Output = Result<Vec<String>, ToolFailure>> + Send;
+    async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolFailure>;
 
-    fn topic_route(&mut self, topic: &str) -> impl Future<Output = Result<SessionTopicRoute, ToolFailure>> + Send;
+    async fn topic_route(&mut self, topic: &str) -> Result<SessionTopicRoute, ToolFailure>;
 
-    fn topic_stats(
-        &mut self,
-        _topic: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionTopicStats>, ToolFailure>> + Send {
+    async fn topic_stats(&mut self, _topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn topic_config(
+    async fn topic_config(
         &mut self,
         _topic: &str,
-    ) -> impl Future<Output = Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the Consumer Groups that consume `topic`, joined over the Brokers that host it.
-    fn topic_consumers(
-        &mut self,
-        _topic: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionTopicConsumers>, ToolFailure>> + Send {
+    async fn topic_consumers(&mut self, _topic: &str) -> Result<QueryPayload<SessionTopicConsumers>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn consumer_groups(
-        &mut self,
-    ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure>> + Send;
+    async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure>;
 
-    fn consumer_group_inventory(
-        &mut self,
-    ) -> impl Future<Output = Result<QueryPayload<Vec<String>>, ToolFailure>> + Send {
+    async fn consumer_group_inventory(&mut self) -> Result<QueryPayload<Vec<String>>, ToolFailure> {
         async {
             self.consumer_groups().await.map(|groups| {
                 groups.map(|groups| {
@@ -236,10 +225,10 @@ pub(crate) trait QueryAdminSession: Send {
         }
     }
 
-    fn consumer_groups_exact(
+    async fn consumer_groups_exact(
         &mut self,
         groups: &[String],
-    ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
         async move {
             self.consumer_groups().await.map(|result| {
                 result.map(|summaries| {
@@ -252,179 +241,166 @@ pub(crate) trait QueryAdminSession: Send {
         }
     }
 
-    fn consumer_lag(
+    async fn consumer_lag(
         &mut self,
         topic: &str,
         consumer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionConsumerLag>, ToolFailure>> + Send;
+    ) -> Result<QueryPayload<SessionConsumerLag>, ToolFailure>;
 
-    fn consumer_group_details(
+    async fn consumer_group_details(
         &mut self,
         _consumer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn consumer_progress(
+    async fn consumer_progress(
         &mut self,
         _consumer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionConsumerProgress>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<SessionConsumerProgress>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn probe_broker_runtime_target(
+    async fn probe_broker_runtime_target(
         &mut self,
         broker_name: &str,
-    ) -> impl Future<Output = Result<BrokerRuntimeTargetStatus, ToolFailure>> + Send;
+    ) -> Result<BrokerRuntimeTargetStatus, ToolFailure>;
 
-    fn broker_diagnostics(
+    async fn broker_diagnostics(
         &mut self,
         _broker_name: &str,
-    ) -> impl Future<Output = Result<QueryPayload<BrokerDiagnosticsOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn broker_config_summary(
+    async fn broker_config_summary(
         &mut self,
         _broker_name: &str,
-    ) -> impl Future<Output = Result<QueryPayload<BrokerConfigSummaryOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn broker_log_filter_state(
+    async fn broker_log_filter_state(
         &mut self,
         _broker_name: &str,
         _logger: &str,
-    ) -> impl Future<Output = Result<QueryPayload<BrokerLogFilterStateOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<BrokerLogFilterStateOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn proxy_drain_state(
+    async fn proxy_drain_state(
         &mut self,
         _proxy_name: &str,
         _proxy_endpoint: &str,
-    ) -> impl Future<Output = Result<QueryPayload<ProxyDrainStateOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<ProxyDrainStateOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn consumer_connections(
+    async fn consumer_connections(
         &mut self,
         _consumer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<SessionConnections>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Asks one connected client of a Consumer Group for its running state, through the Broker
     /// it is connected to. The identifier comes from a connection this session read.
-    fn consumer_client_runtime(
+    async fn consumer_client_runtime(
         &mut self,
         _consumer_group: &str,
         _broker_name: &str,
         _client_id: &str,
-    ) -> impl Future<Output = Result<SessionConsumerClientRuntime, ToolFailure>> + Send {
+    ) -> Result<SessionConsumerClientRuntime, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn producer_connections(
+    async fn producer_connections(
         &mut self,
         _topic: &str,
         _producer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<SessionConnections>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn message_metadata(
-        &mut self,
-        _message_id: &str,
-    ) -> impl Future<Output = Result<SessionMessageMetadata, ToolFailure>> + Send {
+    async fn message_metadata(&mut self, _message_id: &str) -> Result<SessionMessageMetadata, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the ACL users the masters of the cluster hold, without a password.
     #[cfg(feature = "security-admin")]
-    fn acl_users(
-        &mut self,
-    ) -> impl Future<Output = Result<crate::tools::security_tools::ListAclUsersOutput, ToolFailure>> + Send {
+    async fn acl_users(&mut self) -> Result<crate::tools::security_tools::ListAclUsersOutput, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns what the master of one Broker holds for Lite Topics.
-    fn lite_broker_info(
+    async fn lite_broker_info(
         &mut self,
         _broker_name: &str,
-    ) -> impl Future<Output = Result<crate::tools::broker_tools::GetLiteBrokerInfoOutput, ToolFailure>> + Send {
+    ) -> Result<crate::tools::broker_tools::GetLiteBrokerInfoOutput, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the trace records clients wrote about one message, read from `trace_topic` or
     /// from the default trace Topic.
-    fn message_trace(
+    async fn message_trace(
         &mut self,
         _message_id: &str,
         _trace_topic: Option<&str>,
-    ) -> impl Future<Output = Result<SessionMessageTrace, ToolFailure>> + Send {
+    ) -> Result<SessionMessageTrace, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the messages of `topic` that carry `key` and were stored between the two times,
     /// given in Unix milliseconds and both inclusive.
-    fn find_messages_by_key(
+    async fn find_messages_by_key(
         &mut self,
         _topic: &str,
         _key: &str,
         _begin_millis: i64,
         _end_millis: i64,
-    ) -> impl Future<Output = Result<SessionMessageKeyMatches, ToolFailure>> + Send {
+    ) -> Result<SessionMessageKeyMatches, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn topic_config_state(
+    async fn topic_config_state(
         &mut self,
         _topic: &str,
         _broker_names: &[String],
-    ) -> impl Future<Output = Result<QueryPayload<TopicConfigStateOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<TopicConfigStateOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn consumer_group_config_state(
+    async fn consumer_group_config_state(
         &mut self,
         _group: &str,
         _broker_names: &[String],
-    ) -> impl Future<Output = Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolFailure>> + Send {
+    ) -> Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn ha_status(
+    async fn ha_status(
         &mut self,
         _broker_names: &[String],
         _include_sync_state: bool,
         _controller_names: &[String],
-    ) -> impl Future<Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure>> + Send
-    {
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn controller_metadata(
+    async fn controller_metadata(
         &mut self,
         _controller_names: &[String],
-    ) -> impl Future<
-        Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure>,
-    > + Send {
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn nameserver_config_summary(
+    async fn nameserver_config_summary(
         &mut self,
-    ) -> impl Future<
-        Output = Result<
-            QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>,
-            ToolFailure,
-        >,
-    > + Send {
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn shutdown(self) -> impl Future<Output = Result<(), ToolFailure>> + Send;
+    async fn shutdown(self) -> Result<(), ToolFailure>;
 }
 
 #[trait_variant::make(Send)]
