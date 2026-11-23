@@ -44,15 +44,15 @@ tokio      = { workspace = true }
 tokio-util = { workspace = true }
 
 # Raft consensus algorithm
-openraft = { version = "=0.10.0", default-features = false, features = [
+openraft = { version = "=0.10.1", default-features = false, features = [
   "serde",
   "tokio-rt",
 ] }
 # OpenRaft depends on its runtime crates and macros with caret constraints.
 # Pin them to the same release as the core crate.
-openraft-macros   = "=0.10.0"
-openraft-rt       = "=0.10.0"
-openraft-rt-tokio = "=0.10.0"
+openraft-macros   = "=0.10.1"
+openraft-rt       = "=0.10.1"
+openraft-rt-tokio = "=0.10.1"
 
 # gRPC networking
 tonic       = { version = "0.14.6", features = ["transport", "codegen"] }
