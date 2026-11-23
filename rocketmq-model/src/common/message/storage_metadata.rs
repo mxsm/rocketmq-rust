@@ -14,10 +14,10 @@
 
 use std::net::SocketAddr;
 
-use bytes::BufMut;
 use bytes::Bytes;
-use bytes::BytesMut;
 use cheetah_string::CheetahString;
+
+use crate::utils::message_utils::socket_address_to_vec;
 
 /// Message storage metadata
 ///
@@ -100,24 +100,7 @@ impl StorageMetadata {
 
     /// Serializes store_host to bytes
     pub fn store_host_bytes(&self) -> Bytes {
-        Self::socket_addr_to_bytes(&self.store_host)
-    }
-
-    fn socket_addr_to_bytes(addr: &SocketAddr) -> Bytes {
-        match addr {
-            SocketAddr::V4(v4) => {
-                let mut buf = BytesMut::with_capacity(8);
-                buf.put_slice(&v4.ip().octets());
-                buf.put_i32(v4.port() as i32);
-                buf.freeze()
-            }
-            SocketAddr::V6(v6) => {
-                let mut buf = BytesMut::with_capacity(20);
-                buf.put_slice(&v6.ip().octets());
-                buf.put_i32(v6.port() as i32);
-                buf.freeze()
-            }
-        }
+        socket_address_to_vec(self.store_host).into()
     }
 }
 
@@ -176,7 +159,8 @@ mod tests {
         let metadata = StorageMetadata::new(CheetahString::new(), 0, 0, 0, 0, addr, 0);
 
         let bytes = metadata.store_host_bytes();
-        assert_eq!(bytes.len(), 20);
+        assert_eq!(&bytes[..16], &std::net::Ipv6Addr::LOCALHOST.octets());
+        assert_eq!(&bytes[16..], &[0, 0, 0x2a, 0x9f]);
     }
 
     #[test]

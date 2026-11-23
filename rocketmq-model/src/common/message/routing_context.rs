@@ -14,11 +14,10 @@
 
 use std::net::SocketAddr;
 
-use bytes::BufMut;
 use bytes::Bytes;
-use bytes::BytesMut;
 
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
+use crate::utils::message_utils::socket_address_to_vec;
 
 /// Message network transmission metadata
 ///
@@ -67,24 +66,7 @@ impl RoutingContext {
 
     /// Serializes born_host to bytes
     pub fn born_host_bytes(&self) -> Bytes {
-        Self::socket_addr_to_bytes(&self.born_host)
-    }
-
-    fn socket_addr_to_bytes(addr: &SocketAddr) -> Bytes {
-        match addr {
-            SocketAddr::V4(v4) => {
-                let mut buf = BytesMut::with_capacity(8);
-                buf.put_slice(&v4.ip().octets());
-                buf.put_i32(v4.port() as i32);
-                buf.freeze()
-            }
-            SocketAddr::V6(v6) => {
-                let mut buf = BytesMut::with_capacity(20);
-                buf.put_slice(&v6.ip().octets());
-                buf.put_i32(v6.port() as i32);
-                buf.freeze()
-            }
-        }
+        socket_address_to_vec(self.born_host).into()
     }
 }
 
@@ -127,7 +109,7 @@ mod tests {
         let ctx = RoutingContext::new(addr, 0, 0);
 
         let bytes = ctx.born_host_bytes();
-        assert_eq!(bytes.len(), 8); // 4 bytes IP + 4 bytes port
+        assert_eq!(bytes.as_ref(), &[192, 168, 1, 100, 0, 0, 0x2a, 0x9f]);
     }
 
     #[test]
