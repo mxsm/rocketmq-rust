@@ -427,10 +427,11 @@ pub(crate) trait QueryAdminSession: Send {
     fn shutdown(self) -> impl Future<Output = Result<(), ToolFailure>> + Send;
 }
 
-pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
+#[trait_variant::make(Send)]
+pub(crate) trait AdminSessionFactory: Clone + Sync + 'static {
     type Session: QueryAdminSession;
 
-    fn start(&self, cluster: ResolvedCluster) -> impl Future<Output = Result<Self::Session, ToolFailure>> + Send;
+    async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure>;
 }
 
 #[derive(Clone)]
