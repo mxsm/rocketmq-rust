@@ -388,23 +388,16 @@ pub(crate) trait QueryAdminSession {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn controller_metadata(
+    async fn controller_metadata(
         &mut self,
         _controller_names: &[String],
-    ) -> impl Future<
-        Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure>,
-    > + Send {
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
-    fn nameserver_config_summary(
+    async fn nameserver_config_summary(
         &mut self,
-    ) -> impl Future<
-        Output = Result<
-            QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>,
-            ToolFailure,
-        >,
-    > + Send {
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure> {
         async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
