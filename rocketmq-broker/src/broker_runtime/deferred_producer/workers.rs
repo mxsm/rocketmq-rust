@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::VecDeque;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::Weak;
 
@@ -455,32 +454,34 @@ enum StoreReplayMatch {
     Retry,
 }
 
-trait DeferredReplayRead: Send + Sync {
-    fn read_message<'a>(
-        &'a self,
-        group: &'a CheetahString,
-        topic: &'a CheetahString,
+#[trait_variant::make(Send)]
+trait DeferredReplayRead: Sync {
+    async fn read_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         max_messages: i32,
         filter: Option<ArcMessageFilter>,
-    ) -> impl Future<Output = Option<GetMessageResult>> + Send + 'a;
+    ) -> Option<GetMessageResult>;
 }
 
 impl<MS> DeferredReplayRead for MS
 where
     MS: BrokerReadWriteStore,
 {
-    fn read_message<'a>(
-        &'a self,
-        group: &'a CheetahString,
-        topic: &'a CheetahString,
+    async fn read_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         max_messages: i32,
         filter: Option<ArcMessageFilter>,
-    ) -> impl Future<Output = Option<GetMessageResult>> + Send + 'a {
+    ) -> Option<GetMessageResult> {
         self.get_message(group, topic, queue_id, offset, max_messages, filter)
+            .await
     }
 }
 
@@ -607,20 +608,19 @@ mod replay_tests {
     }
 
     impl DeferredReplayRead for ScriptedReplayStore {
-        fn read_message<'a>(
-            &'a self,
-            _group: &'a CheetahString,
-            _topic: &'a CheetahString,
+        async fn read_message(
+            &self,
+            _group: &CheetahString,
+            _topic: &CheetahString,
             _queue_id: i32,
             _offset: i64,
             _max_messages: i32,
             filter: Option<ArcMessageFilter>,
-        ) -> impl Future<Output = Option<GetMessageResult>> + Send + 'a {
+        ) -> Option<GetMessageResult> {
             if filter.is_some() {
                 self.filtered_reads.fetch_add(1, Ordering::AcqRel);
             }
-            let response = self.responses.lock().pop_front().flatten();
-            async move { response }
+            self.responses.lock().pop_front().flatten()
         }
     }
 
@@ -669,22 +669,22 @@ mod replay_tests {
     }
 
     impl DeferredReplayRead for TaggedReplayStore {
-        fn read_message<'a>(
-            &'a self,
-            _group: &'a CheetahString,
-            _topic: &'a CheetahString,
+        async fn read_message(
+            &self,
+            _group: &CheetahString,
+            _topic: &CheetahString,
             _queue_id: i32,
             offset: i64,
             _max_messages: i32,
             filter: Option<ArcMessageFilter>,
-        ) -> impl Future<Output = Option<GetMessageResult>> + Send + 'a {
+        ) -> Option<GetMessageResult> {
             let matched = self.tags_by_offset.get(&offset).is_some_and(|tag| {
                 filter.as_ref().is_none_or(|filter| {
                     let cq = rocketmq_store::CqExtUnit::new(*tag, 0, None);
                     filter.is_matched_by_consume_queue(Some(*tag), Some(&cq))
                 })
             });
-            async move { Some(result(i32::from(matched), offset.saturating_add(1))) }
+            Some(result(i32::from(matched), offset.saturating_add(1)))
         }
     }
 
