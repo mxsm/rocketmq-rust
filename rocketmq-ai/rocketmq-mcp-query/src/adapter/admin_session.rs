@@ -404,11 +404,10 @@ pub(crate) trait QueryAdminSession {
     async fn shutdown(self) -> Result<(), ToolFailure>;
 }
 
-#[trait_variant::make(Send)]
-pub(crate) trait AdminSessionFactory: Clone + Sync + 'static {
-    type Session: QueryAdminSession + Send;
+pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
+    type Session: QueryAdminSession;
 
-    async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure>;
+    fn start(&self, cluster: ResolvedCluster) -> impl Future<Output = Result<Self::Session, ToolFailure>> + Send;
 }
 
 #[derive(Clone)]
