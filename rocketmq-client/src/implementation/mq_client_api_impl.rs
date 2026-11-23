@@ -436,6 +436,20 @@ where
     true
 }
 
+pub(crate) fn encode_topic_attributes(attributes: &HashMap<CheetahString, CheetahString>) -> Option<CheetahString> {
+    if attributes.is_empty() {
+        return None;
+    }
+
+    let encoded = AttributeParser::parse_to_string(
+        &attributes
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<String, String>>(),
+    );
+    (!encoded.is_empty()).then(|| CheetahString::from_string(encoded))
+}
+
 mod admin;
 mod callback_executor;
 mod consumer;

@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(client):** Share topic attribute encoding across full admin, mutation-only admin, and low-level create-topic requests ([#12943](https://github.com/mxsm/rocketmq-rust/issues/12943)).
 - **refactor(client):** Share ordered-topic configuration merging between the full and mutation-only admin APIs ([#12922](https://github.com/mxsm/rocketmq-rust/issues/12922)).
 - **refactor(client):** Encode topic attributes once per create-topic operation and reuse them across broker requests and retries ([#12852](https://github.com/mxsm/rocketmq-rust/issues/12852)).
 - **refactor:** Share the model Java string hash across producer queue selection, Broker Lite sharding and tiered index keys ([#12813](https://github.com/mxsm/rocketmq-rust/issues/12813)).

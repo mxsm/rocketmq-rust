@@ -4489,26 +4489,6 @@ pub(super) fn cluster_names_for_topic_route(
     cluster_names
 }
 
-pub(super) fn encode_topic_attributes_like_java(
-    attributes: &HashMap<CheetahString, CheetahString>,
-) -> Option<CheetahString> {
-    if attributes.is_empty() {
-        return None;
-    }
-
-    let encoded = AttributeParser::parse_to_string(
-        &attributes
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect::<HashMap<String, String>>(),
-    );
-    if encoded.is_empty() {
-        None
-    } else {
-        Some(CheetahString::from_string(encoded))
-    }
-}
-
 pub(super) fn topic_config_u32_to_java_i32(_field_name: &'static str, value: u32) -> ClientResult<i32> {
     i32::try_from(value).map_err(ClientError::illegal_argument_source)
 }
@@ -4535,7 +4515,7 @@ pub(super) fn create_topic_request_header_like_java(
             topic_config.topic_sys_flag,
         )?),
         order: topic_config.order,
-        attributes: encode_topic_attributes_like_java(&topic_config.attributes),
+        attributes: encode_topic_attributes(&topic_config.attributes),
         force: None,
         topic_request_header: None,
     })
