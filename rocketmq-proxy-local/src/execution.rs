@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::hash::Hash;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -89,8 +88,9 @@ impl LocalExecutionPolicy {
     }
 }
 
-pub(crate) trait LocalCommandHandler: Send + Sync + 'static {
-    fn handle(&self, command: LocalBrokerCommand, control: RequestControl) -> impl Future<Output = ()> + Send;
+#[trait_variant::make(Send)]
+pub(crate) trait LocalCommandHandler: Sync + 'static {
+    async fn handle(&self, command: LocalBrokerCommand, control: RequestControl);
 }
 
 struct LocalExecutionLimits {

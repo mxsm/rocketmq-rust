@@ -4964,6 +4964,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "trait-variant",
 ]
 
 [[package]]
