@@ -47,6 +47,7 @@ serde = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+trait-variant.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
