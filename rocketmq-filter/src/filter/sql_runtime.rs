@@ -311,6 +311,12 @@ fn eval_compare_values(op: CompareOp, left: &Value, right: &Value) -> Result<Opt
         return Ok(None);
     }
 
+    match (op, left, right) {
+        (CompareOp::Eq, Value::String(left), Value::String(right)) => return Ok(Some(left == right)),
+        (CompareOp::Ne, Value::String(left), Value::String(right)) => return Ok(Some(left != right)),
+        _ => {}
+    }
+
     if let (Some(left), Some(right)) = (coerce_numeric(left), coerce_numeric(right)) {
         let ordering = left.partial_cmp(&right).ok_or_else(|| {
             EvaluationError::InvalidOperation(CheetahString::from_static_str(
@@ -1061,6 +1067,26 @@ mod tests {
     fn evaluate_distinct_small_floats_consistently() {
         let value = evaluate("ratio <> 1e-17 AND ratio < 1e-17", &[("ratio", "0.0")]).unwrap();
         assert_eq!(value, Value::Boolean(true));
+    }
+
+    #[test]
+    fn string_equality_preserves_spelling_in_comparisons_and_in_lists() {
+        let pairs = [("code", "001"), ("flag", "TRUE")];
+        for (selector, expected) in [
+            ("code = '1'", false),
+            ("code <> '1'", true),
+            ("code IN ('1', '002')", false),
+            ("code NOT IN ('1', '002')", true),
+            ("code NOT IN ('001', '002')", false),
+            ("flag = 'true'", false),
+            ("code = 1 AND flag = TRUE", true),
+        ] {
+            assert_eq!(
+                evaluate(selector, &pairs).unwrap(),
+                Value::Boolean(expected),
+                "{selector}"
+            );
+        }
     }
 
     #[test]
