@@ -42,9 +42,9 @@ impl FilterAPI {
         }
 
         for tag in tags {
-            let trimmed_tag = tag.trim();
-            if !trimmed_tag.is_empty() {
-                subscription_data.tags_set.insert(trimmed_tag.into());
+            let tag = tag.trim();
+            if !tag.is_empty() {
+                subscription_data.tags_set.insert(tag.into());
                 subscription_data.code_set.insert(JavaStringHasher::hash_str(tag));
             }
         }
@@ -99,13 +99,16 @@ mod tests {
     #[test]
     fn build_subscription_data_creates_correct_subscription_data() {
         let topic = "test_topic".into();
-        let sub_string = "tag1||tag2".into();
+        let sub_string = "tag1 || tag2".into();
         let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_string).unwrap();
 
         assert_eq!(subscription_data.topic.as_str(), topic.as_str());
         assert_eq!(subscription_data.sub_string.as_str(), sub_string.as_str());
         assert!(subscription_data.tags_set.contains("tag1"));
         assert!(subscription_data.tags_set.contains("tag2"));
+        for tag in ["tag1", "tag2"] {
+            assert!(subscription_data.code_set.contains(&JavaStringHasher::hash_str(tag)));
+        }
     }
 
     #[test]
