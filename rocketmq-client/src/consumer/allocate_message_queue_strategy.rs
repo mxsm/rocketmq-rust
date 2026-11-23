@@ -14,5 +14,4 @@
 
 //! Compatibility path for the canonical allocation contract.
 
-pub use rocketmq_model::allocation::AbstractAllocateMessageQueueStrategy;
 pub use rocketmq_model::allocation::AllocateMessageQueueStrategy;

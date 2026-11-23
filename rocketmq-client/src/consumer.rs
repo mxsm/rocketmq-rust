@@ -49,7 +49,6 @@ pub use ack_callback::AckCallback;
 pub use ack_callback::AckCallbackFn;
 pub use ack_result::AckResult;
 pub use ack_status::AckStatus;
-pub use allocate_message_queue_strategy::AbstractAllocateMessageQueueStrategy;
 pub use allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 pub use default_lite_pull_consumer::DefaultLitePullConsumer;
 pub use default_lite_pull_consumer_builder::DefaultLitePullConsumerBuilder;
