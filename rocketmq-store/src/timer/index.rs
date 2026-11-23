@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
-
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerId;
 use rocketmq_store_api::TimerTimelineCursor;
@@ -90,42 +88,31 @@ pub(crate) struct TimerSnapshotPin {
     pub(crate) gc_fence: TimerTimelineCursor,
 }
 
-pub(crate) trait TimerIndex: Send + Sync {
-    fn put_batch(
-        &self,
-        records: Vec<TimerSourceRecord>,
-        budget: WorkBudget,
-    ) -> impl Future<Output = Result<usize, TimerEngineError>> + Send;
+#[trait_variant::make(Send)]
+pub(crate) trait TimerIndex: Sync {
+    async fn put_batch(&self, records: Vec<TimerSourceRecord>, budget: WorkBudget) -> Result<usize, TimerEngineError>;
 
-    fn scan_due(
+    async fn scan_due(
         &self,
         from: Option<TimerIndexCursor>,
         due_exclusive_ms: i64,
         budget: WorkBudget,
-    ) -> impl Future<Output = Result<TimerIndexPage, TimerEngineError>> + Send;
+    ) -> Result<TimerIndexPage, TimerEngineError>;
 
-    fn set_state(
+    async fn set_state(
         &self,
         timer_id: TimerId,
         generation: u64,
         state: TimerRecordState,
-    ) -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+    ) -> Result<(), TimerEngineError>;
 
-    fn checkpoint(&self, checkpoint: TimerIndexCheckpoint)
-        -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+    async fn checkpoint(&self, checkpoint: TimerIndexCheckpoint) -> Result<(), TimerEngineError>;
 
-    fn load_checkpoint(&self) -> impl Future<Output = Result<Option<TimerIndexCheckpoint>, TimerEngineError>> + Send;
+    async fn load_checkpoint(&self) -> Result<Option<TimerIndexCheckpoint>, TimerEngineError>;
 
-    fn pin_snapshot(
-        &self,
-        gc_fence: TimerTimelineCursor,
-    ) -> impl Future<Output = Result<TimerSnapshotPin, TimerEngineError>> + Send;
+    async fn pin_snapshot(&self, gc_fence: TimerTimelineCursor) -> Result<TimerSnapshotPin, TimerEngineError>;
 
-    fn release_snapshot(&self, pin: TimerSnapshotPin) -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+    async fn release_snapshot(&self, pin: TimerSnapshotPin) -> Result<(), TimerEngineError>;
 
-    fn gc(
-        &self,
-        fence: TimerTimelineCursor,
-        budget: WorkBudget,
-    ) -> impl Future<Output = Result<usize, TimerEngineError>> + Send;
+    async fn gc(&self, fence: TimerTimelineCursor, budget: WorkBudget) -> Result<usize, TimerEngineError>;
 }
