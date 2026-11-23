@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-
 use std::sync::Arc;
 
 use jsonwebtoken::Algorithm;
