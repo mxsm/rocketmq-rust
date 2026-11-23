@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(protocol):** Hash trimmed tags so spaces around `||` do not prevent matching messages in the Broker ([#12920](https://github.com/mxsm/rocketmq-rust/issues/12920)).
 - **fix(protocol):** Decode IPv4 and IPv6 offset message IDs with the surrounding whitespace accepted by validation ([#12889](https://github.com/mxsm/rocketmq-rust/issues/12889)).
 - **fix(filter):** Preserve UTF-8 text and escaped apostrophes in SQL92 string literals ([#12850](https://github.com/mxsm/rocketmq-rust/issues/12850)).
 - **fix(admin-tui):** Keep the confirmation cursor and mismatch highlighting aligned when wide characters scroll out of view ([#12824](https://github.com/mxsm/rocketmq-rust/issues/12824)).
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(ci):** Use a unique outer idempotency key in the SRE malformed execution-receipt fixture so repeated database tests do not collide ([#12717](https://github.com/mxsm/rocketmq-rust/issues/12717)).
 - **fix(mcp-query):** Refresh catalog and protocol snapshots for the optional Store pressure diagnostics schema, restoring query and control contract checks ([#12668](https://github.com/mxsm/rocketmq-rust/issues/12668)).
 - **fix(ci):** Synchronize late replies in the Transport `GO_AWAY` deadline tests and verify typed deadline rejections without replaying the request ([#12465](https://github.com/mxsm/rocketmq-rust/issues/12465)).
+- **fix(client):** Restore the original topic for v2 POP retry messages delivered to concurrent Push listeners ([#12921](https://github.com/mxsm/rocketmq-rust/issues/12921)).
 - **fix(broker):** Preserve quoted text and UTF-8 broker names when decoding Java static-topic mappings with unquoted numeric keys ([#12890](https://github.com/mxsm/rocketmq-rust/issues/12890)).
 - **fix(ci):** Avoid animated hit targets when preparing the retained payload in the GPUI message logout test ([#12413](https://github.com/mxsm/rocketmq-rust/issues/12413)).
 - **fix(admin-cli):** Parse local timestamps with milliseconds in message inspection commands and reject invalid print bounds ([#12811](https://github.com/mxsm/rocketmq-rust/issues/12811)).
@@ -28,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(ci):** Set the MCP query error-boundary test recursion limit to prevent compilation failures in query and control CI ([#12285](https://github.com/mxsm/rocketmq-rust/issues/12285)).
 - **fix(ci):** Keep the HA port distinct from both remoting listener ports in Broker lifecycle test fixtures ([#12276](https://github.com/mxsm/rocketmq-rust/issues/12276)).
 - **fix(filter):** Compare SQL92 integer operands at full precision and use the same numeric ordering for equality and range predicates ([#12851](https://github.com/mxsm/rocketmq-rust/issues/12851)).
+- **fix(store):** Number delay levels consistently with the Broker when durations are separated by repeated spaces or tabs ([#12891](https://github.com/mxsm/rocketmq-rust/issues/12891)).
 - **fix(ci):** Keep Broker shutdown events visible to test subscribers during parallel test runs ([#12283](https://github.com/mxsm/rocketmq-rust/issues/12283)).
 - **fix(ci):** Register Store epoch and timer migration exports in Architecture Guards and release native Dashboard directory locks when their writer ownership ends ([#12222](https://github.com/mxsm/rocketmq-rust/issues/12222)).
 - **fix(ci):** Reconcile Architecture Guards inventories with merged Client, Store, and Transport exports and classify native Dashboard storage outside the core release scope ([#12173](https://github.com/mxsm/rocketmq-rust/issues/12173)).
@@ -38,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(client):** Share ordered-topic configuration merging between the full and mutation-only admin APIs ([#12922](https://github.com/mxsm/rocketmq-rust/issues/12922)).
 - **refactor(client):** Encode topic attributes once per create-topic operation and reuse them across broker requests and retries ([#12852](https://github.com/mxsm/rocketmq-rust/issues/12852)).
 - **refactor:** Share the model Java string hash across producer queue selection, Broker Lite sharding and tiered index keys ([#12813](https://github.com/mxsm/rocketmq-rust/issues/12813)).
 - **refactor(broker):** Read transaction half-message records and offsets from the canonical decoded result, removing the duplicate `GetResult` wrapper ([#12769](https://github.com/mxsm/rocketmq-rust/issues/12769)).

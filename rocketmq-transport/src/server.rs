@@ -887,20 +887,16 @@ pub trait ConnectionHandler: Send + Sync + 'static {
 ///
 /// The associated state makes per-session capabilities generation-specific
 /// without a runtime mode tag or a processor trait object.
-pub(crate) trait AuthorizedFrameRoute: Send + Sync + 'static {
+#[trait_variant::make(Send)]
+pub(crate) trait AuthorizedFrameRoute: Sync + 'static {
     type SessionState: Send + Sync + 'static;
 
-    fn connected(&self, session: SessionHandle) -> impl Future<Output = Option<Self::SessionState>> + Send;
+    async fn connected(&self, session: SessionHandle) -> Option<Self::SessionState>;
 
-    fn response(
-        &self,
-        state: &Self::SessionState,
-        session: SessionHandle,
-        command: RemotingCommand,
-    ) -> impl Future<Output = ()> + Send;
+    async fn response(&self, state: &Self::SessionState, session: SessionHandle, command: RemotingCommand);
 
     #[allow(clippy::too_many_arguments)]
-    fn request(
+    async fn request(
         &self,
         state: &Self::SessionState,
         authorized_session: &AuthorizedDispatchSession,
@@ -910,11 +906,11 @@ pub(crate) trait AuthorizedFrameRoute: Send + Sync + 'static {
         received_at: std::time::Instant,
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
-    ) -> impl Future<Output = bool> + Send;
+    ) -> bool;
 
     fn close_pending(&self, state: &Self::SessionState, session: SessionHandle) -> DeferredSessionCleanupReport;
 
-    fn disconnected(&self, state: Self::SessionState, session: SessionHandle) -> impl Future<Output = usize> + Send;
+    async fn disconnected(&self, state: Self::SessionState, session: SessionHandle) -> usize;
 }
 
 struct HandlerFrameRoute<H> {

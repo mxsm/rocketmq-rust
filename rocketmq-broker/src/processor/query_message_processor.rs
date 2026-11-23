@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::Weak;
 
@@ -67,11 +66,9 @@ fn query_store_unavailable() -> StoreError {
 }
 
 /// Narrow storage operations required by [`QueryMessageProcessor`].
-pub trait QueryMessageStore: Send + Sync {
-    fn query_message(
-        &self,
-        request: &QueryMessageRequest,
-    ) -> impl Future<Output = Result<Option<QueryMessageResult>, StoreError>> + Send;
+#[trait_variant::make(Send)]
+pub trait QueryMessageStore: Sync {
+    async fn query_message(&self, request: &QueryMessageRequest) -> Result<Option<QueryMessageResult>, StoreError>;
 
     fn select_message_by_offset(&self, offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError>;
 }

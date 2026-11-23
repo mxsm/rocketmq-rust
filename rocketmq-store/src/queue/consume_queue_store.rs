@@ -51,7 +51,7 @@ pub trait ConsumeQueueStoreTrait: Sync + Any {
     ///
     /// The compatibility default invokes the legacy recovery hook but fails closed because an
     /// implementation without an explicit outcome cannot prove that every repair completed.
-    fn recover_with_outcome(&self) -> impl std::future::Future<Output = bool> {
+    async fn recover_with_outcome(&self) -> bool {
         async {
             self.recover().await;
             false

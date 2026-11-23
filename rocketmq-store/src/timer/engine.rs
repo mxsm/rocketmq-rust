@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
 use std::time::Instant;
 
 use rocketmq_store_api::TimerEngineEpoch;
@@ -51,39 +50,29 @@ impl WorkBudget {
     }
 }
 
-pub(crate) trait TimerEngine: Send + Sync {
+#[trait_variant::make(Send)]
+pub(crate) trait TimerEngine: Sync {
     fn engine_id(&self) -> TimerEngineId;
 
-    fn load(&self) -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+    async fn load(&self) -> Result<(), TimerEngineError>;
 
-    fn enqueue_source(
-        &self,
-        budget: WorkBudget,
-    ) -> impl Future<Output = Result<EngineBatchProgress, TimerEngineError>> + Send;
+    async fn enqueue_source(&self, budget: WorkBudget) -> Result<EngineBatchProgress, TimerEngineError>;
 
-    fn roll_due(
+    async fn roll_due(
         &self,
         epoch: TimerEngineEpoch,
         budget: WorkBudget,
-    ) -> impl Future<Output = Result<EngineBatchProgress, TimerEngineError>> + Send;
+    ) -> Result<EngineBatchProgress, TimerEngineError>;
 
-    fn complete(
-        &self,
-        timer_id: TimerId,
-        epoch: TimerEngineEpoch,
-    ) -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+    async fn complete(&self, timer_id: TimerId, epoch: TimerEngineEpoch) -> Result<(), TimerEngineError>;
 
-    fn cancel(&self, timer_id: TimerId) -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+    async fn cancel(&self, timer_id: TimerId) -> Result<(), TimerEngineError>;
 
-    fn checkpoint(&self) -> impl Future<Output = Result<bool, TimerEngineError>> + Send;
+    async fn checkpoint(&self) -> Result<bool, TimerEngineError>;
 
-    fn on_role_change(
-        &self,
-        active: bool,
-        epoch: TimerEngineEpoch,
-    ) -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+    async fn on_role_change(&self, active: bool, epoch: TimerEngineEpoch) -> Result<(), TimerEngineError>;
 
-    fn shutdown(&self) -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+    async fn shutdown(&self) -> Result<(), TimerEngineError>;
 }
 
 pub(crate) fn select_engine_owner(

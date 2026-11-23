@@ -16,7 +16,6 @@ mod file_sink;
 mod target;
 
 use std::collections::VecDeque;
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -605,9 +604,10 @@ struct AuditEnvelope {
     pending: PendingAuditRecord,
 }
 
-trait AuditSink: Send + 'static {
-    fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> impl Future<Output = crate::McpResult<()>> + Send;
-    fn flush(&mut self) -> impl Future<Output = crate::McpResult<()>> + Send;
+#[trait_variant::make(Send)]
+trait AuditSink: 'static {
+    async fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> crate::McpResult<()>;
+    async fn flush(&mut self) -> crate::McpResult<()>;
 }
 
 enum ConfiguredAuditSink {

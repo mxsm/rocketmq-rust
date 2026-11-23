@@ -242,6 +242,16 @@ fn try_new_owned_test_store_at_root(
 }
 
 #[test]
+fn delay_level_numbers_ignore_separator_whitespace() {
+    let (table, max_level) = super::parse_delay_level("  1s   5s\t2m  ");
+    assert_eq!(max_level, 3);
+    assert_eq!(
+        table.into_iter().collect::<Vec<_>>(),
+        [(1, 1_000), (2, 5_000), (3, 120_000)]
+    );
+}
+
+#[test]
 fn direct_constructor_rejects_invalid_timer_configuration_before_store_io() {
     let parent = tempdir().expect("temporary parent");
     let store_root = parent.path().join("must-not-be-created");

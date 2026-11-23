@@ -15,7 +15,6 @@
 use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolExecutionError;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
 
 use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
@@ -404,10 +403,11 @@ pub(crate) trait QueryAdminSession {
     async fn shutdown(self) -> Result<(), ToolFailure>;
 }
 
-pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
+#[trait_variant::make(Send)]
+pub(crate) trait AdminSessionFactory: Clone + Sync + 'static {
     type Session: QueryAdminSession;
 
-    fn start(&self, cluster: ResolvedCluster) -> impl Future<Output = Result<Self::Session, ToolFailure>> + Send;
+    async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure>;
 }
 
 #[derive(Clone)]

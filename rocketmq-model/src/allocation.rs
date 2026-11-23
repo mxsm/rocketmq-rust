@@ -42,8 +42,6 @@ pub trait AllocateMessageQueueStrategy: Send + Sync {
     fn get_name(&self) -> &'static str;
 }
 
-pub type AbstractAllocateMessageQueueStrategy = dyn AllocateMessageQueueStrategy;
-
 /// Validates the shared preconditions used by allocation strategies.
 pub fn check(
     consumer_group: &CheetahString,

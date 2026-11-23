@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #![allow(dead_code)]
+#[cfg(feature = "admin-mutation")]
+use std::collections::BTreeMap;
 #[cfg(feature = "admin-full")]
 use std::collections::HashMap;
 #[cfg(feature = "admin-full")]
@@ -240,6 +242,22 @@ const SOCKS_PROXY_JSON: &str = "socksProxyJson";
 const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 #[cfg(feature = "admin-full")]
 const ROCKSDB_CONFIG_TYPE_CONSUMER_OFFSETS: &str = "consumerOffsets";
+
+#[cfg(feature = "admin-mutation")]
+fn merge_order_conf_entries(existing: &str, value: &str) -> String {
+    let mut entries = BTreeMap::new();
+    for item in existing.split(';') {
+        if let Some((broker, _)) = item.split_once(':') {
+            entries.insert(broker, item);
+        }
+    }
+    if let Some((broker, _)) = value.split_once(':') {
+        entries.insert(broker, value);
+    } else if !value.trim().is_empty() {
+        entries.insert(value, value);
+    }
+    entries.into_values().collect::<Vec<_>>().join(";")
+}
 
 pub struct DefaultMQAdminExtImpl {
     client_pool: ClientPool,
