@@ -14,9 +14,7 @@
 
 use std::net::SocketAddr;
 
-use bytes::BufMut;
 use bytes::Bytes;
-use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
 /// Message storage metadata
@@ -104,20 +102,7 @@ impl StorageMetadata {
     }
 
     fn socket_addr_to_bytes(addr: &SocketAddr) -> Bytes {
-        match addr {
-            SocketAddr::V4(v4) => {
-                let mut buf = BytesMut::with_capacity(8);
-                buf.put_slice(&v4.ip().octets());
-                buf.put_i32(v4.port() as i32);
-                buf.freeze()
-            }
-            SocketAddr::V6(v6) => {
-                let mut buf = BytesMut::with_capacity(20);
-                buf.put_slice(&v6.ip().octets());
-                buf.put_i32(v6.port() as i32);
-                buf.freeze()
-            }
-        }
+        Bytes::from(crate::utils::message_utils::socket_address_to_vec(*addr))
     }
 }
 
