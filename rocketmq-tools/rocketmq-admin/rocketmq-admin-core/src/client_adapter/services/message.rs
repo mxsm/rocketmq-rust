@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
+use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -1940,6 +1941,59 @@ impl MessageService {
         }
     }
 
+    async fn consume_queue_offsets(
+        admin: &DefaultMQAdminExt,
+        broker_addr: &CheetahString,
+        mq: &MessageQueue,
+        request: &ConsumeMessagesRequest,
+    ) -> CanonicalResult<Range<i64>> {
+        let mut min_offset = admin
+            .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
+            .await
+            .map_err(|error| errors::broker_operation_failed_by("min_offset", error))?;
+        let mut max_offset = admin
+            .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
+            .await
+            .map_err(|error| errors::broker_operation_failed_by("max_offset", error))?;
+
+        if let Some(begin_timestamp) = request.begin_timestamp.filter(|value| *value > 0) {
+            min_offset = admin
+                .search_offset(
+                    broker_addr.clone(),
+                    request.topic.clone(),
+                    mq.queue_id(),
+                    begin_timestamp as u64,
+                    PULL_TIMEOUT_MILLIS,
+                )
+                .await
+                .map_err(|error| errors::broker_operation_failed_by("search_begin_offset", error))?
+                as i64;
+        }
+
+        if let Some(end_timestamp) = request.end_timestamp.filter(|value| *value > 0) {
+            let last_offset = admin
+                .search_offset(
+                    broker_addr.clone(),
+                    request.topic.clone(),
+                    mq.queue_id(),
+                    end_timestamp as u64,
+                    PULL_TIMEOUT_MILLIS,
+                )
+                .await
+                .map_err(|error| errors::broker_operation_failed_by("search_end_offset", error))?
+                as i64;
+            // consumeMessage includes the offset returned for its end timestamp.
+            max_offset = max_offset.min(last_offset.saturating_add(1));
+        }
+
+        Ok(min_offset..max_offset)
+    }
+
+    fn take_consume_offsets(offsets: &Range<i64>, count: i64) -> (Range<i64>, i64) {
+        let end = offsets.end.min(offsets.start.saturating_add(count)).max(offsets.start);
+        (offsets.start..end, count - (end - offsets.start))
+    }
+
     async fn consume_messages_default<F>(
         admin: &DefaultMQAdminExt,
         request: &ConsumeMessagesRequest,
@@ -1960,61 +2014,16 @@ impl MessageService {
                 return Ok(());
             }
 
-            let mut min_offset = admin
-                .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
-                .await
-                .map_err(|error| errors::broker_operation_failed_by("min_offset", error))?;
-            let mut max_offset = admin
-                .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
-                .await
-                .map_err(|error| errors::broker_operation_failed_by("max_offset", error))?;
-
-            if let Some(begin_timestamp) = request.begin_timestamp {
-                if begin_timestamp > 0 {
-                    min_offset = admin
-                        .search_offset(
-                            broker_addr.clone(),
-                            request.topic.clone(),
-                            mq.queue_id(),
-                            begin_timestamp as u64,
-                            PULL_TIMEOUT_MILLIS,
-                        )
-                        .await
-                        .map_err(|error| errors::broker_operation_failed_by("search_begin_offset", error))?
-                        as i64;
-                }
-            }
-
-            if let Some(end_timestamp) = request.end_timestamp {
-                if end_timestamp > 0 {
-                    max_offset = admin
-                        .search_offset(
-                            broker_addr.clone(),
-                            request.topic.clone(),
-                            mq.queue_id(),
-                            end_timestamp as u64,
-                            PULL_TIMEOUT_MILLIS,
-                        )
-                        .await
-                        .map_err(|error| errors::broker_operation_failed_by("search_end_offset", error))?
-                        as i64;
-                }
-            }
-
-            if max_offset - min_offset > count_left {
+            let offsets = Self::consume_queue_offsets(admin, &broker_addr, &mq, request).await?;
+            let (range, remaining) = Self::take_consume_offsets(&offsets, count_left);
+            if range.end < offsets.end {
                 sink(MessagePullEvent::CountLimit {
                     message_number: count_left,
                     queue_id: Some(mq.queue_id()),
                 })?;
-                max_offset = min_offset + count_left - 1;
-                count_left = 0;
-            } else {
-                count_left = count_left - (max_offset - min_offset) - 1;
             }
-
-            Self::pull_consume_message_by_queue(admin, broker_addr.as_str(), &mq, min_offset, max_offset, &mut sink)
-                .await
-                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+            count_left = remaining;
+            Self::pull_consume_message_by_queue(admin, broker_addr.as_str(), &mq, range, &mut sink).await?;
         }
 
         Ok(())
@@ -2036,79 +2045,37 @@ impl MessageService {
             .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let mq = MessageQueue::from_parts(request.topic.clone(), broker_name.clone(), queue_id);
 
-        let mut min_offset = admin
-            .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
-            .await
-            .map_err(|error| errors::broker_operation_failed_by("min_offset", error))?;
-        let mut max_offset = admin
-            .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
-            .await
-            .map_err(|error| errors::broker_operation_failed_by("max_offset", error))?;
-
-        if let Some(begin_timestamp) = request.begin_timestamp {
-            if begin_timestamp > 0 {
-                min_offset = admin
-                    .search_offset(
-                        broker_addr.clone(),
-                        request.topic.clone(),
-                        queue_id,
-                        begin_timestamp as u64,
-                        PULL_TIMEOUT_MILLIS,
-                    )
-                    .await
-                    .map_err(|error| errors::broker_operation_failed_by("search_begin_offset", error))?
-                    as i64;
-            }
-        }
-
-        if let Some(end_timestamp) = request.end_timestamp {
-            if end_timestamp > 0 {
-                max_offset = admin
-                    .search_offset(
-                        broker_addr.clone(),
-                        request.topic.clone(),
-                        queue_id,
-                        end_timestamp as u64,
-                        PULL_TIMEOUT_MILLIS,
-                    )
-                    .await
-                    .map_err(|error| errors::broker_operation_failed_by("search_end_offset", error))?
-                    as i64;
-            }
-        }
-
-        if offset > max_offset {
+        let mut offsets = Self::consume_queue_offsets(admin, &broker_addr, &mq, request).await?;
+        if offset >= offsets.end {
             sink(MessagePullEvent::OffsetNotMatched { mq, offset })?;
             return Ok(());
         }
 
-        min_offset = min_offset.max(offset);
-
-        if max_offset - min_offset > request.message_number {
+        offsets.start = offsets.start.max(offset);
+        let (range, _) = Self::take_consume_offsets(&offsets, request.message_number);
+        if range.end < offsets.end {
             sink(MessagePullEvent::CountLimit {
                 message_number: request.message_number,
                 queue_id: None,
             })?;
-            max_offset = min_offset + request.message_number - 1;
         }
 
-        Self::pull_consume_message_by_queue(admin, broker_addr.as_str(), &mq, min_offset, max_offset, &mut sink).await
+        Self::pull_consume_message_by_queue(admin, broker_addr.as_str(), &mq, range, &mut sink).await
     }
 
     async fn pull_consume_message_by_queue<F>(
         admin: &DefaultMQAdminExt,
         broker_addr: &str,
         mq: &MessageQueue,
-        min_offset: i64,
-        max_offset: i64,
+        offsets: Range<i64>,
         sink: &mut F,
     ) -> CanonicalResult<()>
     where
         F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
-        let mut offset = min_offset;
-        'read_queue: while offset <= max_offset {
-            let batch_size = (max_offset - offset + 1) as i32;
+        let mut offset = offsets.start;
+        'read_queue: while offset < offsets.end {
+            let batch_size = i32::try_from(offsets.end.saturating_sub(offset)).unwrap_or(i32::MAX);
             let pull_result = admin
                 .pull_message_from_queue(broker_addr, mq, "*", offset, batch_size, PULL_TIMEOUT_MILLIS)
                 .await;
@@ -2185,6 +2152,45 @@ mod tests {
     fn consume_request_requires_broker_before_queue() {
         let result = ConsumeMessagesRequest::try_new("topic", None, Some(0), None, None, None, None, 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn consume_spreads_the_requested_count_across_half_open_queue_ranges() {
+        let mut remaining = 3;
+        for (available, expected, left) in [(10..10, 10..10, 3), (30..31, 30..31, 2), (5..8, 5..7, 0)] {
+            let (range, next_remaining) = MessageService::take_consume_offsets(&available, remaining);
+            assert_eq!((range, next_remaining), (expected, left));
+            remaining = next_remaining;
+        }
+        assert_eq!(MessageService::take_consume_offsets(&(8..10), 2), (8..10, 0));
+    }
+
+    #[test]
+    fn consume_skips_pull_at_the_exclusive_queue_end() {
+        use crate::client_adapter::{ClientRuntime, ClientRuntimeConfig, TelemetryHandle};
+        use rocketmq_runtime::{RuntimeConfig, RuntimeOwner};
+
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("consume-empty-queue"))
+            .unwrap()
+            .build()
+            .unwrap();
+        let runtime = ClientRuntime::try_new(
+            owner.root_context().component("client"),
+            ClientRuntimeConfig::default(),
+            TelemetryHandle::noop(),
+        )
+        .unwrap();
+        let admin = DefaultMQAdminExt::new(runtime);
+        let mq = MessageQueue::from_parts("TopicA", "broker-a", 0);
+        owner
+            .block_on(MessageService::pull_consume_message_by_queue(
+                &admin,
+                "127.0.0.1:0",
+                &mq,
+                10..10,
+                &mut |event| panic!("empty queue should not produce a pull event: {event:?}"),
+            ))
+            .unwrap();
     }
 
     #[test]
