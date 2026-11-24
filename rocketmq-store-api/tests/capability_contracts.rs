@@ -150,12 +150,17 @@ fn assert_replication_futures_are_send<R: ReplicationControl>(store: &mut R, com
     require_send(store.apply_replication(command));
 }
 
+fn assert_derived_futures_are_send<S: DerivedRecordSink>(sink: &mut S, record: S::Record) {
+    require_send(sink.append_derived(record));
+}
+
 #[test]
 fn capabilities_use_store_error_with_static_append_future() {
     assert_capabilities::<ContractStore>();
     let mut store = ContractStore;
     assert_lifecycle_futures_are_send(&mut store);
     assert_replication_futures_are_send(&mut store, 0i64);
+    assert_derived_futures_are_send(&mut store, Bytes::from_static(b"derived"));
     let _future = assert_static_append_future(&mut store);
 }
 
