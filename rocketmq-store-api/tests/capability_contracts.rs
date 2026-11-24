@@ -33,16 +33,16 @@ use rocketmq_store_api::StoreOperation;
 struct ContractStore;
 
 impl StoreLifecycle for ContractStore {
-    fn load(&mut self) -> impl Future<Output = Result<bool, StoreError>> + Send {
-        ready(Ok(true))
+    async fn load(&mut self) -> Result<bool, StoreError> {
+        ready(Ok(true)).await
     }
 
-    fn start(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send {
-        ready(Ok(()))
+    async fn start(&mut self) -> Result<(), StoreError> {
+        ready(Ok(())).await
     }
 
-    fn shutdown(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send {
-        ready(Ok(()))
+    async fn shutdown(&mut self) -> Result<(), StoreError> {
+        ready(Ok(())).await
     }
 }
 
@@ -137,10 +137,19 @@ where
     store.append_message(Bytes::from_static(b"message"))
 }
 
+fn require_send<F: Send>(_: F) {}
+
+fn assert_lifecycle_futures_are_send<S: StoreLifecycle>(store: &mut S) {
+    require_send(store.load());
+    require_send(store.start());
+    require_send(store.shutdown());
+}
+
 #[test]
 fn capabilities_use_store_error_with_static_append_future() {
     assert_capabilities::<ContractStore>();
     let mut store = ContractStore;
+    assert_lifecycle_futures_are_send(&mut store);
     let _future = assert_static_append_future(&mut store);
 }
 

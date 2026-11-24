@@ -35,6 +35,7 @@ hex = "0.4"
 serde.workspace = true
 sha2 = "0.11"
 thiserror.workspace = true
+trait-variant.workspace = true
 
 [dev-dependencies]
 rocketmq-model.workspace = true
