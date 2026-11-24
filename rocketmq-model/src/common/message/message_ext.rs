@@ -17,14 +17,13 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
 
-use bytes::Buf;
-use bytes::BufMut;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageTrait;
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
+use crate::utils::message_utils::socket_address_to_vec;
 
 #[derive(Clone)]
 pub struct MessageExt {
@@ -47,20 +46,7 @@ pub struct MessageExt {
 
 impl MessageExt {
     pub fn socket_address_2_byte_buffer(ip: &SocketAddr) -> bytes::Bytes {
-        match ip {
-            SocketAddr::V4(value) => {
-                let mut byte_buffer = bytes::BytesMut::with_capacity(4 + 4);
-                byte_buffer.put_slice(&value.ip().octets());
-                byte_buffer.put_i32(value.port() as i32);
-                byte_buffer.copy_to_bytes(byte_buffer.len())
-            }
-            SocketAddr::V6(value) => {
-                let mut byte_buffer = bytes::BytesMut::with_capacity(16 + 4);
-                byte_buffer.put_slice(&value.ip().octets());
-                byte_buffer.put_i32(value.port() as i32);
-                byte_buffer.copy_to_bytes(byte_buffer.len())
-            }
-        }
+        socket_address_to_vec(*ip).into()
     }
 
     #[inline]
