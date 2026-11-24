@@ -154,6 +154,10 @@ fn assert_derived_futures_are_send<S: DerivedRecordSink>(sink: &mut S, record: S
     require_send(sink.append_derived(record));
 }
 
+fn assert_admin_futures_are_send<S: AdminStore>(store: &mut S, request: S::Request) {
+    require_send(store.execute_admin(request));
+}
+
 #[test]
 fn capabilities_use_store_error_with_static_append_future() {
     assert_capabilities::<ContractStore>();
@@ -161,6 +165,7 @@ fn capabilities_use_store_error_with_static_append_future() {
     assert_lifecycle_futures_are_send(&mut store);
     assert_replication_futures_are_send(&mut store, 0i64);
     assert_derived_futures_are_send(&mut store, Bytes::from_static(b"derived"));
+    assert_admin_futures_are_send(&mut store, ());
     let _future = assert_static_append_future(&mut store);
 }
 

@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
-
 use crate::StoreError;
 
 /// Administrative storage capability with implementation-owned values.
-pub trait AdminStore: Send {
+#[trait_variant::make(Send)]
+pub trait AdminStore {
     /// Value type used for request.
     type Request: Send;
     /// Value type used for response.
@@ -29,8 +28,5 @@ pub trait AdminStore: Send {
     ///
     /// Returns [`StoreError`] with [`crate::StoreOperation::Admin`] when the
     /// administrative operation fails.
-    fn execute_admin(
-        &mut self,
-        request: Self::Request,
-    ) -> impl Future<Output = Result<Self::Response, StoreError>> + Send;
+    async fn execute_admin(&mut self, request: Self::Request) -> Result<Self::Response, StoreError>;
 }
