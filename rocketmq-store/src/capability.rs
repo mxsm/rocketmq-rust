@@ -213,12 +213,13 @@ pub trait BrokerStorePort: BrokerAdminStore + BrokerReplicationStore {
 }
 
 /// Broker primary append capability set.
+#[trait_variant::make(Send)]
 pub trait BrokerWriteStore: BrokerReadStore {
-    fn put_message(&mut self, message: MessageExtBrokerInner) -> impl Future<Output = PutMessageResult> + Send {
+    async fn put_message(&mut self, message: MessageExtBrokerInner) -> PutMessageResult {
         MessageStoreEngine::put_message(self.message_store_mut(), message)
     }
 
-    fn put_messages(&mut self, batch: MessageExtBatch) -> impl Future<Output = PutMessageResult> + Send {
+    async fn put_messages(&mut self, batch: MessageExtBatch) -> PutMessageResult {
         MessageStoreEngine::put_messages(self.message_store_mut(), batch)
     }
 
