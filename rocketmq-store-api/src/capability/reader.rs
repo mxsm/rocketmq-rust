@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
-
 use crate::StoreError;
 
 /// Message read capability with implementation-owned request and output values.
@@ -28,7 +26,8 @@ use crate::StoreError;
 ///     reader.execute_admin(());
 /// }
 /// ```
-pub trait MessageReader: Send + Sync {
+#[trait_variant::make(Send)]
+pub trait MessageReader: Sync {
     /// Value type used for request.
     type Request: Send;
     /// Value type used for output.
@@ -40,5 +39,5 @@ pub trait MessageReader: Send + Sync {
     ///
     /// Returns [`StoreError`] with [`crate::StoreOperation::Read`] when the
     /// requested data cannot be read safely.
-    fn read(&self, request: Self::Request) -> impl Future<Output = Result<Self::Output, StoreError>> + Send;
+    async fn read(&self, request: Self::Request) -> Result<Self::Output, StoreError>;
 }
