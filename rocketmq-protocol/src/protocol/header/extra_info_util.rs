@@ -385,7 +385,7 @@ impl ExtraInfoUtil {
         for (i, offset) in msg_offsets.iter().enumerate() {
             string_builder.push_str(&offset.to_string());
             if i < msg_offsets.len() - 1 {
-                string_builder.push(';');
+                string_builder.push(',');
             }
         }
     }
@@ -864,10 +864,15 @@ mod tests {
     }
 
     #[test]
-    fn build_msg_offset_info_creates_correct_string() {
+    fn msg_offset_info_round_trips_multiple_offsets_and_queues() {
         let mut string_builder = String::new();
         ExtraInfoUtil::build_msg_offset_info(&mut string_builder, "topic", 7, &[100, 200, 300]);
-        assert_eq!(string_builder, "0 7 100;200;300");
+        ExtraInfoUtil::build_msg_offset_info(&mut string_builder, "topic", 8, &[42]);
+        assert_eq!(string_builder, "0 7 100,200,300;0 8 42");
+        assert_eq!(
+            ExtraInfoUtil::parse_msg_offset_info(&string_builder).unwrap(),
+            HashMap::from([("0@7".to_string(), vec![100, 200, 300]), ("0@8".to_string(), vec![42])])
+        );
     }
 
     #[test]
