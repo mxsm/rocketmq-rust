@@ -145,11 +145,17 @@ fn assert_lifecycle_futures_are_send<S: StoreLifecycle>(store: &mut S) {
     require_send(store.shutdown());
 }
 
+fn assert_replication_futures_are_send<R: ReplicationControl>(store: &mut R, command: R::Command) {
+    let _: R::State = store.replication_state();
+    require_send(store.apply_replication(command));
+}
+
 #[test]
 fn capabilities_use_store_error_with_static_append_future() {
     assert_capabilities::<ContractStore>();
     let mut store = ContractStore;
     assert_lifecycle_futures_are_send(&mut store);
+    assert_replication_futures_are_send(&mut store, 0i64);
     let _future = assert_static_append_future(&mut store);
 }
 
