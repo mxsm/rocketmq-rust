@@ -382,11 +382,13 @@ impl ExtraInfoUtil {
         string_builder.push_str(&queue_id.to_string());
         string_builder.push_str(KEY_SEPARATOR);
 
+        // Offsets of one queue are comma-separated; ';' separates queue
+        // entries. The decoder already reads the Java wire format (issue #12984).
         for (i, offset) in msg_offsets.iter().enumerate() {
-            string_builder.push_str(&offset.to_string());
-            if i < msg_offsets.len() - 1 {
-                string_builder.push(';');
+            if i > 0 {
+                string_builder.push(',');
             }
+            string_builder.push_str(&offset.to_string());
         }
     }
 
@@ -867,7 +869,20 @@ mod tests {
     fn build_msg_offset_info_creates_correct_string() {
         let mut string_builder = String::new();
         ExtraInfoUtil::build_msg_offset_info(&mut string_builder, "topic", 7, &[100, 200, 300]);
-        assert_eq!(string_builder, "0 7 100;200;300");
+        assert_eq!(string_builder, "0 7 100,200,300");
+    }
+
+    #[test]
+    fn build_and_parse_msg_offset_info_round_trips_multiple_queues() {
+        let mut info = String::new();
+        ExtraInfoUtil::build_msg_offset_info(&mut info, "topic", 7, &[100, 200, 300]);
+        ExtraInfoUtil::build_msg_offset_info(&mut info, "topic", 8, &[42]);
+        assert_eq!(info, "0 7 100,200,300;0 8 42");
+
+        let parsed = ExtraInfoUtil::parse_msg_offset_info(&info).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed["0@7"], vec![100, 200, 300]);
+        assert_eq!(parsed["0@8"], vec![42]);
     }
 
     #[test]
