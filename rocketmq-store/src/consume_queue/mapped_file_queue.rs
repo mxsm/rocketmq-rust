@@ -140,6 +140,30 @@ impl MappedFileGeneration {
         }
     }
 
+    fn find_by_offset(
+        &self,
+        mapped_file_size: u64,
+        offset: i64,
+        return_first_on_not_found: bool,
+    ) -> Option<Arc<DefaultMappedFile>> {
+        let files = self.snapshot();
+        let first = files.first()?;
+        let index = file_index_by_offset(
+            files.as_ref(),
+            mapped_file_size,
+            offset,
+            return_first_on_not_found,
+            first.get_file_from_offset(),
+            files.last()?.get_file_from_offset(),
+            |file| file.get_file_from_offset(),
+        )?;
+        let file = match index {
+            MappedFileQueueIndex::First => first,
+            MappedFileQueueIndex::Indexed(index) => &files[index],
+        };
+        Some(Arc::clone(file))
+    }
+
     fn allows_legacy_namespace_mutation(&self) -> bool {
         matches!(self.state.load().as_ref(), MappedFileGenerationState::Legacy(_))
     }
@@ -256,22 +280,8 @@ impl MappedFileQueueReadHandle {
         offset: i64,
         return_first_on_not_found: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let files = self.mapped_files.snapshot();
-        let first = files.first()?.clone();
-        let last = files.last()?.clone();
-        match file_index_by_offset(
-            files.as_ref(),
-            self.mapped_file_size,
-            offset,
-            return_first_on_not_found,
-            first.get_file_from_offset(),
-            last.get_file_from_offset(),
-            |file| file.get_file_from_offset(),
-        ) {
-            Some(MappedFileQueueIndex::First) => Some(first),
-            Some(MappedFileQueueIndex::Indexed(index)) => Some(files[index].clone()),
-            None => None,
-        }
+        self.mapped_files
+            .find_by_offset(self.mapped_file_size, offset, return_first_on_not_found)
     }
 
     pub(crate) fn get_max_offset(&self) -> i64 {
@@ -889,22 +899,8 @@ impl MappedFileQueueFlushHandle {
         offset: i64,
         return_first_on_not_found: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let files = self.mapped_files.snapshot();
-        let first = files.first()?.clone();
-        let last = files.last()?.clone();
-        match file_index_by_offset(
-            files.as_ref(),
-            self.mapped_file_size,
-            offset,
-            return_first_on_not_found,
-            first.get_file_from_offset(),
-            last.get_file_from_offset(),
-            |file| file.get_file_from_offset(),
-        ) {
-            Some(MappedFileQueueIndex::First) => Some(first),
-            Some(MappedFileQueueIndex::Indexed(index)) => Some(files[index].clone()),
-            None => None,
-        }
+        self.mapped_files
+            .find_by_offset(self.mapped_file_size, offset, return_first_on_not_found)
     }
 
     #[inline]
@@ -2000,22 +1996,9 @@ impl MappedFileQueue {
         offset: i64,
         return_first_on_not_found: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let first = self.get_first_mapped_file()?;
-        let last = self.get_last_mapped_file()?;
-        let files = self.storage.mapped_files().snapshot();
-        match file_index_by_offset(
-            files.as_ref(),
-            self.storage.mapped_file_size(),
-            offset,
-            return_first_on_not_found,
-            first.get_file_from_offset(),
-            last.get_file_from_offset(),
-            |file| file.get_file_from_offset(),
-        ) {
-            Some(MappedFileQueueIndex::First) => Some(first),
-            Some(MappedFileQueueIndex::Indexed(index)) => Some(files[index].clone()),
-            None => None,
-        }
+        self.storage
+            .mapped_files()
+            .find_by_offset(self.storage.mapped_file_size(), offset, return_first_on_not_found)
     }
 
     #[inline]
