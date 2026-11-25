@@ -370,6 +370,7 @@ pub trait BrokerAdminStore: BrokerReplicationStore {
 }
 
 /// Broker HA and replication-control capability set.
+#[trait_variant::make(Send)]
 pub trait BrokerReplicationStore: BrokerReadWriteStore + BrokerMasterAddressStore {
     fn get_commit_log(&self) -> &CommitLog {
         MessageStoreEngine::get_commit_log(self.message_store())
@@ -383,17 +384,17 @@ pub trait BrokerReplicationStore: BrokerReadWriteStore + BrokerMasterAddressStor
         MessageStoreEngine::get_bulk_commit_log_data(self.message_store(), offset, size)
     }
 
-    fn append_to_commit_log(
+    async fn append_to_commit_log(
         &mut self,
         start_offset: i64,
         data: &[u8],
         data_start: i32,
         data_length: i32,
-    ) -> impl Future<Output = Result<bool, crate::store_error::StoreError>> + Send {
+    ) -> Result<bool, crate::store_error::StoreError> {
         MessageStoreEngine::append_to_commit_log(self.message_store_mut(), start_offset, data, data_start, data_length)
     }
 
-    fn update_ha_master_address(&self, new_addr: &str) -> impl Future<Output = ()> + Send {
+    async fn update_ha_master_address(&self, new_addr: &str) {
         MessageStoreEngine::update_ha_master_address(self.message_store(), new_addr)
     }
 
