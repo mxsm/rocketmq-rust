@@ -4489,6 +4489,7 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
+ "trait-variant",
 ]
 
 [[package]]

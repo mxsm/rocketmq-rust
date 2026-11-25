@@ -3011,6 +3011,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "trait-variant",
 ]
 
 [[package]]

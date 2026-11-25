@@ -48,6 +48,7 @@ chrono         = { version = "0.4.45", default-features = false, features = ["st
 
 
 tracing = { workspace = true }
+trait-variant = { workspace = true }
 
 # IP utilities for authorization models
 ipnetwork = "0.21.1"
