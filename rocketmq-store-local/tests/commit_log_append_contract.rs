@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-
 use bytes::Bytes;
 use rocketmq_store_local::commit_log::append::AppendMessageResult;
 use rocketmq_store_local::commit_log::append::AppendMessageStatus;
 use rocketmq_store_local::commit_log::append::CompactionAppendMsgCallback;
+use rocketmq_store_local::commit_log::append::MessageIdSource;
 use rocketmq_store_local::commit_log::append::PutMessageContext;
 use rocketmq_store_local::config::FlushDiskType;
 
@@ -40,13 +37,13 @@ fn append_message_status_preserves_default_and_java_vocabulary() {
 }
 
 #[test]
-fn append_message_result_preserves_fields_default_display_and_supplier() {
+fn append_message_result_preserves_fields_default_display_and_id_source() {
     let default = AppendMessageResult::default();
     assert_eq!(AppendMessageStatus::UnknownError, default.status);
     assert_eq!(0, default.wrote_offset);
     assert_eq!(0, default.wrote_bytes);
     assert_eq!(None, default.msg_id);
-    assert!(default.msg_id_supplier.is_none());
+    assert!(default.msg_id_source.is_none());
     assert_eq!(0, default.store_timestamp);
     assert_eq!(0, default.logics_offset);
     assert_eq!(0, default.page_cache_rt);
@@ -54,30 +51,43 @@ fn append_message_result_preserves_fields_default_display_and_supplier() {
     assert!(!default.is_ok());
     assert!(default.get_message_id_cheetah().is_none());
 
-    let calls = Arc::new(AtomicUsize::new(0));
-    let supplier_calls = Arc::clone(&calls);
+    let store_host = "127.0.0.1:10911".parse().unwrap();
     let result = AppendMessageResult {
         status: AppendMessageStatus::PutOk,
         wrote_offset: 41,
         wrote_bytes: 13,
         msg_id: Some("eager-id".to_string()),
-        msg_id_supplier: Some(Arc::new(move || {
-            supplier_calls.fetch_add(1, Ordering::Relaxed);
-            "lazy-id".to_string()
-        })),
+        msg_id_source: Some(MessageIdSource::Single { store_host, offset: 41 }),
         store_timestamp: 123,
         logics_offset: 7,
         page_cache_rt: 9,
         msg_num: 2,
     };
     assert!(result.is_ok());
-    assert_eq!(Some("lazy-id".to_string()), result.get_message_id());
-    assert_eq!(Some("lazy-id"), result.get_message_id_cheetah().as_deref());
-    assert_eq!(2, calls.load(Ordering::Relaxed));
+    // The source takes precedence over a stored ID.
     assert_eq!(
-        "AppendMessageResult [status=PutOk, wrote_offset=41, wrote_bytes=13, msg_id=Some(\"eager-id\"), \
-         store_timestamp=123, logics_offset=7, page_cache_rt=9, msg_num=2]",
+        Some("7F00000100002A9F0000000000000029".to_string()),
+        result.get_message_id()
+    );
+    assert_eq!(
+        Some("7F00000100002A9F0000000000000029"),
+        result.get_message_id_cheetah().as_deref()
+    );
+    assert_eq!(
+        "AppendMessageResult [status=PutOk, wrote_offset=41, wrote_bytes=13, msg_id=Some(\"eager-id\"), store_timestamp=123, logics_offset=7, page_cache_rt=9, msg_num=2]",
         result.to_string()
+    );
+
+    let batch = AppendMessageResult {
+        msg_id_source: Some(MessageIdSource::Batch {
+            store_host,
+            offsets: vec![1, 2],
+        }),
+        ..AppendMessageResult::default()
+    };
+    assert_eq!(
+        Some("7F00000100002A9F0000000000000001,7F00000100002A9F0000000000000002".to_string()),
+        batch.get_message_id()
     );
 
     let direct = AppendMessageResult {

@@ -148,7 +148,7 @@ mod put_message_result_tests {
             wrote_offset: 100,
             wrote_bytes: 50,
             msg_id: None,
-            msg_id_supplier: None,
+            msg_id_source: None,
             store_timestamp: 1609459200000,
             logics_offset: 10,
             page_cache_rt: 5,
