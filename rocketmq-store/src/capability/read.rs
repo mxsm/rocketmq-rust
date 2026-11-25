@@ -25,6 +25,7 @@ pub struct ConsumeQueueStatistics {
 }
 
 /// Broker message-read and logical-offset capability set.
+#[trait_variant::make(Send)]
 pub trait BrokerReadStore: MessageStoreAccess {
     fn is_message_in_cold_area(
         &self,
@@ -57,7 +58,7 @@ pub trait BrokerReadStore: MessageStoreAccess {
         MessageStoreReader::get_lmq_topic_names(self.message_store())
     }
 
-    fn get_message(
+    async fn get_message(
         &self,
         group: &CheetahString,
         topic: &CheetahString,
@@ -65,7 +66,7 @@ pub trait BrokerReadStore: MessageStoreAccess {
         offset: i64,
         max_msg_nums: i32,
         message_filter: Option<ArcMessageFilter>,
-    ) -> impl Future<Output = Option<GetMessageResult>> + Send {
+    ) -> Option<GetMessageResult> {
         MessageStoreReader::get_message(
             self.message_store(),
             group,
@@ -78,7 +79,7 @@ pub trait BrokerReadStore: MessageStoreAccess {
     }
 
     #[allow(clippy::too_many_arguments, reason = "preserves the Store read contract")]
-    fn get_message_with_size_limit(
+    async fn get_message_with_size_limit(
         &self,
         group: &CheetahString,
         topic: &CheetahString,
@@ -87,7 +88,7 @@ pub trait BrokerReadStore: MessageStoreAccess {
         max_msg_nums: i32,
         max_total_msg_size: i32,
         message_filter: Option<ArcMessageFilter>,
-    ) -> impl Future<Output = Option<GetMessageResult>> + Send {
+    ) -> Option<GetMessageResult> {
         MessageStoreReader::get_message_with_size_limit(
             self.message_store(),
             group,
@@ -100,21 +101,18 @@ pub trait BrokerReadStore: MessageStoreAccess {
         )
     }
 
-    fn query_message(
+    async fn query_message(
         &self,
         topic: &CheetahString,
         key: &CheetahString,
         max_num: i32,
         begin: i64,
         end: i64,
-    ) -> impl Future<Output = Option<QueryMessageResult>> + Send {
+    ) -> Option<QueryMessageResult> {
         MessageStoreReader::query_message(self.message_store(), topic, key, max_num, begin, end)
     }
 
-    fn query_message_with_options(
-        &self,
-        request: &QueryMessageRequest,
-    ) -> impl Future<Output = Option<QueryMessageResult>> + Send {
+    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult> {
         MessageStoreReader::query_message_with_options(self.message_store(), request)
     }
 
@@ -134,12 +132,12 @@ pub trait BrokerReadStore: MessageStoreAccess {
         MessageStoreReader::get_commit_log_offset_in_queue(self.message_store(), topic, queue_id, consume_queue_offset)
     }
 
-    fn get_offset_in_queue_by_time_async(
+    async fn get_offset_in_queue_by_time_async(
         &self,
         topic: &CheetahString,
         queue_id: i32,
         timestamp: i64,
-    ) -> impl Future<Output = Result<i64, crate::store_error::StoreError>> + Send {
+    ) -> Result<i64, crate::store_error::StoreError> {
         MessageStoreReader::get_offset_in_queue_by_time_async(self.message_store(), topic, queue_id, timestamp)
     }
 
@@ -163,13 +161,13 @@ pub trait BrokerReadStore: MessageStoreAccess {
         )
     }
 
-    fn get_offset_in_queue_by_time_with_boundary_async(
+    async fn get_offset_in_queue_by_time_with_boundary_async(
         &self,
         topic: &CheetahString,
         queue_id: i32,
         timestamp: i64,
         boundary_type: BoundaryType,
-    ) -> impl Future<Output = Result<i64, crate::store_error::StoreError>> + Send {
+    ) -> Result<i64, crate::store_error::StoreError> {
         MessageStoreReader::get_offset_in_queue_by_time_with_boundary_async(
             self.message_store(),
             topic,
@@ -223,12 +221,12 @@ pub trait BrokerReadStore: MessageStoreAccess {
         MessageStoreReader::get_message_store_timestamp(self.message_store(), topic, queue_id, consume_queue_offset)
     }
 
-    fn get_message_store_timestamp_async(
+    async fn get_message_store_timestamp_async(
         &self,
         topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
-    ) -> impl Future<Output = Result<i64, crate::store_error::StoreError>> + Send {
+    ) -> Result<i64, crate::store_error::StoreError> {
         MessageStoreReader::get_message_store_timestamp_async(
             self.message_store(),
             topic,
