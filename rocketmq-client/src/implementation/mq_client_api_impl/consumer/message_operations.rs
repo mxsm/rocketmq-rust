@@ -16,6 +16,7 @@ use super::*;
 
 #[cfg(test)]
 mod pop_response_tests;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::RequestDeadline;
 
@@ -636,31 +637,35 @@ impl MQClientAPIImpl {
                 .as_ref()
                 .map_or(&[] as &[MessageExt], |v| v.as_slice()),
         )?;
-        let mut map = HashMap::with_capacity(5);
+        // Every message of one response gets the same first-pop time and namespace-free topic.
+        let first_pop_time = cheetah_from_integer(response_header.pop_time);
+        let topic_without_namespace: CheetahString = NamespaceUtil::without_namespace_with_namespace(
+            topic.as_str(),
+            self.client_config.namespace.as_deref().unwrap_or_default(),
+        )
+        .into();
+        let mut extra_info_by_queue: HashMap<(CheetahString, i32), CheetahString> = HashMap::with_capacity(5);
         for message in pop_result.msg_found_list.as_mut().map_or(&mut vec![], |v| v) {
             if start_offset_info.is_empty() {
-                let key = CheetahString::from_string(format!("{}{}", message.topic(), message.queue_id() as i64));
-                if !map.contains_key(&key) {
-                    let extra_info = ExtraInfoUtil::build_extra_info(
-                        message.queue_offset(),
-                        response_header.pop_time as i64,
-                        response_header.invisible_time as i64,
-                        response_header.revive_qid as i32,
-                        message.topic(),
-                        broker_name,
-                        message.queue_id(),
-                    );
-                    map.insert(key.clone(), CheetahString::from_string(extra_info));
-                }
-                message.put_property(
-                    CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
-                    CheetahString::from_string(format!(
-                        "{}{}{}",
-                        map.get(&key).cloned().unwrap_or_default(),
-                        MessageConst::KEY_SEPARATOR,
-                        message.queue_offset()
-                    )),
-                );
+                let extra_info = extra_info_by_queue
+                    .entry((message.topic().clone(), message.queue_id()))
+                    .or_insert_with(|| {
+                        CheetahString::from_string(ExtraInfoUtil::build_extra_info(
+                            message.queue_offset(),
+                            response_header.pop_time as i64,
+                            response_header.invisible_time as i64,
+                            response_header.revive_qid as i32,
+                            message.topic(),
+                            broker_name,
+                            message.queue_id(),
+                        ))
+                    });
+                let pop_ck = CheetahString::concat(&[
+                    extra_info.as_str(),
+                    MessageConst::KEY_SEPARATOR,
+                    cheetah_from_integer(message.queue_offset()).as_str(),
+                ]);
+                message.put_property(CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK), pop_ck);
             } else {
                 let ck = message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK));
                 if ck.is_none() {
@@ -806,16 +811,10 @@ impl MQClientAPIImpl {
             }
             message.put_property(
                 CheetahString::from_static_str(MessageConst::PROPERTY_FIRST_POP_TIME),
-                CheetahString::from(response_header.pop_time.to_string()),
+                first_pop_time.clone(),
             );
             message.broker_name = broker_name.clone();
-            message.set_topic(
-                NamespaceUtil::without_namespace_with_namespace(
-                    topic.as_str(),
-                    self.client_config.namespace.clone().unwrap_or_default().as_str(),
-                )
-                .into(),
-            )
+            message.set_topic(topic_without_namespace.clone())
         }
         Ok(pop_result)
     }
@@ -864,6 +863,7 @@ impl MQClientAPIImpl {
         };
         let order_count_list =
             parse_lite_order_count_info_like_java(response_header.order_count_info.as_ref(), messages.len());
+        let first_pop_time = cheetah_from_integer(response_header.pop_time);
         for (index, message) in messages.iter_mut().enumerate() {
             let dispatch = message
                 .property(&CheetahString::from_static_str(
@@ -903,7 +903,7 @@ impl MQClientAPIImpl {
             {
                 message.put_property(
                     CheetahString::from_static_str(MessageConst::PROPERTY_FIRST_POP_TIME),
-                    CheetahString::from_string(response_header.pop_time.to_string()),
+                    first_pop_time.clone(),
                 );
             }
             message.broker_name = broker_name.clone();
