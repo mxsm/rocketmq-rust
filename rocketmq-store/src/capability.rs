@@ -164,26 +164,25 @@ where
 /// Broker composition and lifecycle ownership boundary.
 ///
 /// Request paths should prefer one of the narrower use-case markers below.
+#[trait_variant::make(Send)]
 pub trait BrokerStorePort: BrokerAdminStore + BrokerReplicationStore {
-    fn load(&mut self) -> impl Future<Output = bool> + Send {
+    async fn load(&mut self) -> bool {
         MessageStoreEngine::load(self.message_store_mut())
     }
 
-    fn start(&mut self) -> impl Future<Output = Result<(), crate::store_error::StoreError>> + Send {
+    async fn start(&mut self) -> Result<(), crate::store_error::StoreError> {
         MessageStoreEngine::start(self.message_store_mut())
     }
 
-    fn init(&mut self) -> impl Future<Output = Result<(), crate::store_error::StoreError>> + Send {
+    async fn init(&mut self) -> Result<(), crate::store_error::StoreError> {
         MessageStoreEngine::init(self.message_store_mut())
     }
 
-    fn shutdown_gracefully(
-        &mut self,
-    ) -> impl Future<Output = Result<MessageStoreShutdownReport, crate::store_error::StoreError>> + Send {
+    async fn shutdown_gracefully(&mut self) -> Result<MessageStoreShutdownReport, crate::store_error::StoreError> {
         MessageStoreEngine::shutdown_gracefully(self.message_store_mut())
     }
 
-    fn shutdown(&mut self) -> impl Future<Output = ()> + Send {
+    async fn shutdown(&mut self) {
         MessageStoreEngine::shutdown(self.message_store_mut())
     }
 
