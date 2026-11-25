@@ -604,7 +604,7 @@ pub struct QueryResult<L> {
     pub index_last_update_physical_offset: i64,
     /// The buffer total size value.
     pub buffer_total_size: i32,
-    /// Whether index query safe.
+    /// Whether the index is safe to use for this query.
     pub index_query_safe: bool,
     /// The index safe physical offset value.
     pub index_safe_physical_offset: i64,
