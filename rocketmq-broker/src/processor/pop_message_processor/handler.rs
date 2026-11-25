@@ -44,7 +44,6 @@ use super::resume::PopCallerHost;
 use super::resume::PopStoreReadRequest;
 use super::resume::PopStoreReadResult;
 use super::PopMessageProcessor;
-use super::BORN_TIME;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::long_polling::pop_deferred::service::PopDeferredPreparationStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredPrepareError;
@@ -53,6 +52,7 @@ use crate::long_polling::pop_deferred::service::PopDeferredRegisterError;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterRejection;
 use crate::long_polling::pop_deferred::service::PopDeferredRegistrationStatus;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
+use crate::processor::normalize_born_time;
 use crate::processor::response_assembly::BrokerResponseParts;
 
 pub(super) struct PopInitialSuspend {
@@ -562,18 +562,6 @@ where
     }
 }
 
-pub(super) fn normalize_born_time(request: &mut RemotingCommand) {
-    let now = current_millis();
-    request.add_ext_field_if_not_exist(CheetahString::from_static_str(BORN_TIME), now.to_string());
-    if request
-        .get_ext_fields()
-        .and_then(|fields| fields.get(BORN_TIME))
-        .is_some_and(|value| value == "0")
-    {
-        request.add_ext_field(CheetahString::from_static_str(BORN_TIME), now.to_string());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
@@ -596,7 +584,6 @@ mod tests {
 
     use super::super::tests::new_test_runtime;
     use super::super::PopMessageProcessor;
-    use super::normalize_born_time;
     use super::RemotingCommand;
     use crate::broker_runtime::BrokerMessageStore;
     use crate::long_polling::pop_deferred::deadline::LongPollingDeadline;
@@ -653,24 +640,6 @@ mod tests {
         let mut command = RemotingCommand::create_request_command(RequestCode::PopMessage, header).set_opaque(opaque);
         command.make_custom_header_to_net();
         command
-    }
-
-    #[test]
-    fn pop_normalizes_missing_and_zero_born_time() {
-        let mut missing = RemotingCommand::create_remoting_command(RequestCode::PopMessage.to_i32());
-        normalize_born_time(&mut missing);
-        assert!(missing
-            .get_ext_fields()
-            .and_then(|fields| fields.get("bornTime"))
-            .is_some_and(|value| value != "0"));
-
-        let mut zero = RemotingCommand::create_remoting_command(RequestCode::PopMessage.to_i32());
-        zero.add_ext_field(CheetahString::from_static_str("bornTime"), "0".to_owned());
-        normalize_born_time(&mut zero);
-        assert!(zero
-            .get_ext_fields()
-            .and_then(|fields| fields.get("bornTime"))
-            .is_some_and(|value| value != "0"));
     }
 
     #[tokio::test]

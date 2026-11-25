@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::latency::broker_fast_failure::FastFailureQueueKind;
+use cheetah_string::CheetahString;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
+
+use crate::latency::broker_fast_failure::FastFailureQueueKind;
 
 pub(crate) mod ack_message_processor;
 pub(crate) mod admin_broker_processor;
@@ -48,6 +53,17 @@ mod request_ordering;
 pub(crate) mod response_assembly;
 pub(crate) mod send_message_processor;
 
+const BORN_TIME: &str = "bornTime";
+
+fn normalize_born_time(request: &mut RemotingCommand) {
+    if matches!(request.ext_field(BORN_TIME), None | Some("0")) {
+        request.add_ext_field(
+            CheetahString::from_static_str(BORN_TIME),
+            cheetah_from_integer(current_millis()),
+        );
+    }
+}
+
 const fn is_privileged_maintenance_request(request_code: RequestCode) -> bool {
     matches!(
         request_code,
@@ -73,5 +89,28 @@ fn fast_failure_queue_kind(request_code: i32, default_processor: bool) -> Option
         RequestCode::EndTransaction => Some(FastFailureQueueKind::Transaction),
         RequestCode::AckMessage | RequestCode::BatchAckMessage => Some(FastFailureQueueKind::Ack),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_only_missing_and_zero_born_time() {
+        for input in [None, Some("0"), Some("12345"), Some("00"), Some(""), Some("invalid")] {
+            let mut request = RemotingCommand::create_remoting_command(RequestCode::PopMessage.to_i32());
+            if let Some(value) = input {
+                request.add_ext_field("bornTime", value);
+            }
+
+            normalize_born_time(&mut request);
+
+            let actual = request.ext_field("bornTime").unwrap();
+            match input {
+                None | Some("0") => assert!(actual.parse::<u64>().unwrap() > 0),
+                Some(value) => assert_eq!(actual, value),
+            }
+        }
     }
 }

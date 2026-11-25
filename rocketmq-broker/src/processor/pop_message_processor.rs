@@ -78,7 +78,6 @@ use crate::processor::pop_message_processor::capability::PopMessageProcessorCont
 use crate::processor::pop_message_processor::resume::PopCallerHost;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 
-const BORN_TIME: &str = "bornTime";
 const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(feature = "rocksdb_store")]
 const POP_CONSUMER_PROFILE_CAPACITY: usize = 100_000;

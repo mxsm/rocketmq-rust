@@ -35,6 +35,7 @@ use crate::long_polling::notification_deferred::service::NotificationDeferredReg
 use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterRejection;
 use crate::long_polling::notification_deferred::service::NotificationDeferredRegistrationStatus;
 use crate::long_polling::notification_deferred::service::NotificationRetainedEstimate;
+use crate::processor::normalize_born_time;
 use crate::processor::response_assembly::BrokerResponseParts;
 
 impl<MS> RequestProcessor for NotificationProcessor<MS>
@@ -294,25 +295,6 @@ where
     }
 }
 
-fn normalize_born_time(command: &mut rocketmq_protocol::protocol::remoting_command::RemotingCommand) {
-    const BORN_TIME: &str = "bornTime";
-    let now = rocketmq_runtime::common::time_utils::current_millis();
-    command.add_ext_field_if_not_exist(
-        cheetah_string::CheetahString::from_static_str(BORN_TIME),
-        now.to_string(),
-    );
-    if command
-        .get_ext_fields()
-        .and_then(|fields| fields.get(BORN_TIME))
-        .is_some_and(|value| value == "0")
-    {
-        command.add_ext_field(
-            cheetah_string::CheetahString::from_static_str(BORN_TIME),
-            now.to_string(),
-        );
-    }
-}
-
 fn command_outcome(
     command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
 ) -> crate::broker_error::BrokerResult<ResponseAction> {
@@ -342,7 +324,6 @@ mod tests {
 
     use super::super::tests::notification_processor_for_test;
     use super::super::NotificationProcessor;
-    use super::normalize_born_time;
     use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
     use crate::config::broker_config::BrokerConfig;
@@ -400,40 +381,6 @@ mod tests {
         let mut command = RemotingCommand::create_request_command(RequestCode::Notification, header).set_opaque(opaque);
         command.make_custom_header_to_net();
         command
-    }
-
-    #[test]
-    fn notification_normalizes_missing_and_zero_born_time_but_preserves_positive_value() {
-        let mut missing = RemotingCommand::create_remoting_command(RequestCode::Notification.to_i32());
-        normalize_born_time(&mut missing);
-        let missing_value = missing
-            .get_ext_fields()
-            .and_then(|fields| fields.get("bornTime"))
-            .expect("missing bornTime is normalized")
-            .parse::<u64>()
-            .expect("normalized bornTime is numeric");
-        assert!(missing_value > 0);
-
-        let mut zero = RemotingCommand::create_remoting_command(RequestCode::Notification.to_i32());
-        zero.add_ext_field(CheetahString::from_static_str("bornTime"), "0".to_owned());
-        normalize_born_time(&mut zero);
-        assert_ne!(
-            zero.get_ext_fields()
-                .and_then(|fields| fields.get("bornTime"))
-                .map(|value| value.as_str()),
-            Some("0")
-        );
-
-        let mut positive = RemotingCommand::create_remoting_command(RequestCode::Notification.to_i32());
-        positive.add_ext_field(CheetahString::from_static_str("bornTime"), "12345".to_owned());
-        normalize_born_time(&mut positive);
-        assert_eq!(
-            positive
-                .get_ext_fields()
-                .and_then(|fields| fields.get("bornTime"))
-                .map(|value| value.as_str()),
-            Some("12345")
-        );
     }
 
     #[tokio::test]
