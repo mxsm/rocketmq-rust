@@ -54,6 +54,7 @@ client-adapter = [
   "read-client-adapter",
   "mutation-client-adapter",
   "rocketmq-client-rust/admin-full",
+  "dep:trait-variant",
 ]
 rocksdb-export = ["dep:rocksdb"]
 
@@ -77,6 +78,10 @@ futures        = "0.3.32"
 regex          = "1.12.4"
 bytes          = { workspace = true }
 rocksdb        = { workspace = true, optional = true }
+trait-variant  = { workspace = true, optional = true }
+
+[dev-dependencies]
+trait-variant.workspace = true
 
 [[test]]
 name              = "auth_core_models"
