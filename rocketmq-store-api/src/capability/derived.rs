@@ -22,7 +22,7 @@ pub trait DerivedRecordSink {
     /// Value type used for progress.
     type Progress: Send;
 
-    /// Appends derived data independently from primary append acknowledgement.
+    /// Appends derived data independently of primary append acknowledgement.
     ///
     /// # Errors
     ///
