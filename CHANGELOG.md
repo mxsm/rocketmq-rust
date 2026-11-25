@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(client):** Restore the original topic for v2 POP retry messages delivered to concurrent Push listeners ([#12921](https://github.com/mxsm/rocketmq-rust/issues/12921)).
 - **fix(broker):** Preserve quoted text and UTF-8 broker names when decoding Java static-topic mappings with unquoted numeric keys ([#12890](https://github.com/mxsm/rocketmq-rust/issues/12890)).
 - **fix(ci):** Avoid animated hit targets when preparing the retained payload in the GPUI message logout test ([#12413](https://github.com/mxsm/rocketmq-rust/issues/12413)).
+- **fix(admin-core):** Count only readable offsets when `consumeMessage` pulls across queues, preserving the requested count after an empty queue ([#12985](https://github.com/mxsm/rocketmq-rust/issues/12985)).
 - **fix(admin-cli):** Parse local timestamps with milliseconds in message inspection commands and reject invalid print bounds ([#12811](https://github.com/mxsm/rocketmq-rust/issues/12811)).
 - **fix(admin-cli):** Interpret formatted `resetOffsetByTimeOld` timestamps in local time and reject ambiguous or nonexistent local times ([#12822](https://github.com/mxsm/rocketmq-rust/issues/12822)).
 - **fix(ci):** Bind an ephemeral listener and wait for Proxy lifecycle readiness in the ACL watcher shutdown test to avoid mistaking another listener for the test runtime ([#12404](https://github.com/mxsm/rocketmq-rust/issues/12404)).
