@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+
+use cheetah_string::CheetahString;
 use std::vec::Vec;
 
 use crate::common::wire_constants::KEY_SEPARATOR;
@@ -267,6 +269,70 @@ impl ExtraInfoUtil {
         )
     }
 
+    /// Builds the same text as [`Self::build_extra_info`] straight into one shared allocation.
+    pub fn build_extra_info_cheetah(
+        ck_queue_offset: i64,
+        pop_time: i64,
+        invisible_time: i64,
+        revive_qid: i32,
+        topic: &str,
+        broker_name: &str,
+        queue_id: i32,
+    ) -> CheetahString {
+        let mut numbers = [itoa::Buffer::new(); 5];
+        let [ck_queue_offset_text, pop_time_text, invisible_time_text, revive_qid_text, queue_id_text] = &mut numbers;
+        CheetahString::concat(&[
+            ck_queue_offset_text.format(ck_queue_offset),
+            KEY_SEPARATOR,
+            pop_time_text.format(pop_time),
+            KEY_SEPARATOR,
+            invisible_time_text.format(invisible_time),
+            KEY_SEPARATOR,
+            revive_qid_text.format(revive_qid),
+            KEY_SEPARATOR,
+            Self::get_retry_from_topic(topic),
+            KEY_SEPARATOR,
+            broker_name,
+            KEY_SEPARATOR,
+            queue_id_text.format(queue_id),
+        ])
+    }
+
+    /// Builds the same text as [`Self::build_extra_info_with_offset`] straight into one shared
+    /// allocation.
+    #[allow(clippy::too_many_arguments, reason = "mirrors build_extra_info_with_offset")]
+    pub fn build_extra_info_with_offset_cheetah(
+        ck_queue_offset: i64,
+        pop_time: i64,
+        invisible_time: i64,
+        revive_qid: i32,
+        topic: &str,
+        broker_name: &str,
+        queue_id: i32,
+        msg_queue_offset: i64,
+    ) -> CheetahString {
+        let mut numbers = [itoa::Buffer::new(); 6];
+        let [ck_queue_offset_text, pop_time_text, invisible_time_text, revive_qid_text, queue_id_text, msg_queue_offset_text] =
+            &mut numbers;
+        CheetahString::concat(&[
+            ck_queue_offset_text.format(ck_queue_offset),
+            KEY_SEPARATOR,
+            pop_time_text.format(pop_time),
+            KEY_SEPARATOR,
+            invisible_time_text.format(invisible_time),
+            KEY_SEPARATOR,
+            revive_qid_text.format(revive_qid),
+            KEY_SEPARATOR,
+            Self::get_retry_from_topic(topic),
+            KEY_SEPARATOR,
+            broker_name,
+            KEY_SEPARATOR,
+            queue_id_text.format(queue_id),
+            KEY_SEPARATOR,
+            msg_queue_offset_text.format(msg_queue_offset),
+        ])
+    }
+
     /// Build extra info string with queue offset
     pub fn build_extra_info_with_offset(
         ck_queue_offset: i64,
@@ -332,7 +398,7 @@ impl ExtraInfoUtil {
             string_builder.push(';');
         }
 
-        string_builder.push_str(&Self::get_retry_from_topic(topic));
+        string_builder.push_str(Self::get_retry_from_topic(topic));
         string_builder.push_str(KEY_SEPARATOR);
         string_builder.push_str(&queue_id.to_string());
         string_builder.push_str(KEY_SEPARATOR);
@@ -345,7 +411,7 @@ impl ExtraInfoUtil {
             string_builder.push(';');
         }
 
-        string_builder.push_str(&Self::get_retry_from_topic(topic));
+        string_builder.push_str(Self::get_retry_from_topic(topic));
         string_builder.push_str(KEY_SEPARATOR);
         string_builder.push_str(&queue_id.to_string());
         string_builder.push_str(KEY_SEPARATOR);
@@ -364,7 +430,7 @@ impl ExtraInfoUtil {
             string_builder.push(';');
         }
 
-        string_builder.push_str(&Self::get_retry_from_topic(topic));
+        string_builder.push_str(Self::get_retry_from_topic(topic));
         string_builder.push_str(KEY_SEPARATOR);
         string_builder.push_str(&Self::get_queue_offset_key_value_key(queue_id, queue_offset));
         string_builder.push_str(KEY_SEPARATOR);
@@ -377,7 +443,7 @@ impl ExtraInfoUtil {
             string_builder.push(';');
         }
 
-        string_builder.push_str(&Self::get_retry_from_topic(topic));
+        string_builder.push_str(Self::get_retry_from_topic(topic));
         string_builder.push_str(KEY_SEPARATOR);
         string_builder.push_str(&queue_id.to_string());
         string_builder.push_str(KEY_SEPARATOR);
@@ -504,7 +570,18 @@ impl ExtraInfoUtil {
 
     /// Get start offset info map key
     pub fn get_start_offset_info_map_key(topic: &str, key: i64) -> String {
-        format!("{}@{}", Self::get_retry_from_topic(topic), key)
+        let mut map_key = String::with_capacity(24);
+        Self::write_start_offset_info_map_key(&mut map_key, topic, key);
+        map_key
+    }
+
+    /// Writes the key [`Self::get_start_offset_info_map_key`] returns into `map_key`, replacing
+    /// its contents, so that a caller can look up many messages with one buffer.
+    pub fn write_start_offset_info_map_key(map_key: &mut String, topic: &str, key: i64) {
+        map_key.clear();
+        map_key.push_str(Self::get_retry_from_topic(topic));
+        map_key.push('@');
+        map_key.push_str(itoa::Buffer::new().format(key));
     }
 
     /// Get start offset info map key with pop check
@@ -519,11 +596,21 @@ impl ExtraInfoUtil {
 
     /// Get queue offset map key
     pub fn get_queue_offset_map_key(topic: &str, queue_id: i64, queue_offset: i64) -> String {
-        format!(
-            "{}@{}",
-            Self::get_retry_from_topic(topic),
-            Self::get_queue_offset_key_value_key(queue_id, queue_offset)
-        )
+        let mut map_key = String::with_capacity(48);
+        Self::write_queue_offset_map_key(&mut map_key, topic, queue_id, queue_offset);
+        map_key
+    }
+
+    /// Writes the key [`Self::get_queue_offset_map_key`] returns into `map_key`, replacing its
+    /// contents, so that a caller can look up many messages with one buffer.
+    pub fn write_queue_offset_map_key(map_key: &mut String, topic: &str, queue_id: i64, queue_offset: i64) {
+        map_key.clear();
+        map_key.push_str(Self::get_retry_from_topic(topic));
+        map_key.push('@');
+        map_key.push_str(QUEUE_OFFSET);
+        map_key.push_str(itoa::Buffer::new().format(queue_id));
+        map_key.push('%');
+        map_key.push_str(itoa::Buffer::new().format(queue_offset));
     }
 
     /// Check if the extra info represents an order
@@ -532,13 +619,13 @@ impl ExtraInfoUtil {
     }
 
     /// Get retry flag from topic name
-    fn get_retry_from_topic(topic: &str) -> String {
+    fn get_retry_from_topic(topic: &str) -> &'static str {
         if KeyBuilder::is_pop_retry_topic_v2(topic) {
-            RETRY_TOPIC_V2.to_string()
+            RETRY_TOPIC_V2
         } else if topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-            RETRY_TOPIC.to_string()
+            RETRY_TOPIC
         } else {
-            NORMAL_TOPIC.to_string()
+            NORMAL_TOPIC
         }
     }
 
@@ -546,7 +633,7 @@ impl ExtraInfoUtil {
     fn get_retry_from_topic_pop_ck(topic: &str, pop_ck: Option<&str>) -> Result<String> {
         match pop_ck {
             Some(ck) => Self::get_retry(&Self::split(ck)),
-            None => Ok(Self::get_retry_from_topic(topic)),
+            None => Ok(Self::get_retry_from_topic(topic).to_owned()),
         }
     }
 }
@@ -909,6 +996,51 @@ mod tests {
     fn get_retry_for_topic_with_normal_topic() {
         let result = ExtraInfoUtil::get_retry_from_topic("topic");
         assert_eq!(result, "0");
+    }
+
+    #[test]
+    fn buffered_keys_and_cheetah_extra_info_match_the_formatted_text() {
+        let retry_v1 = KeyBuilder::build_pop_retry_topic("orders", "group-a", false);
+        let retry_v2 = KeyBuilder::build_pop_retry_topic_v2("orders", "group-a");
+        let mut map_key = String::from("stale");
+        for topic in ["orders", "订单", retry_v1.as_str(), retry_v2.as_str()] {
+            let flag = ExtraInfoUtil::get_retry_from_topic(topic);
+            for number in [i64::MIN, -1, 0, 7, i64::MAX] {
+                let queue_id = number as i32;
+                ExtraInfoUtil::write_start_offset_info_map_key(&mut map_key, topic, number);
+                assert_eq!(map_key, format!("{flag}@{number}"));
+                assert_eq!(ExtraInfoUtil::get_start_offset_info_map_key(topic, number), map_key);
+                let offset = number.wrapping_neg();
+                ExtraInfoUtil::write_queue_offset_map_key(&mut map_key, topic, number, offset);
+                assert_eq!(map_key, format!("{flag}@qo{number}%{offset}"));
+                assert_eq!(ExtraInfoUtil::get_queue_offset_map_key(topic, number, offset), map_key);
+
+                let extra_info = format!("{number} {number} {number} {queue_id} {flag} broker-a {queue_id}");
+                assert_eq!(
+                    ExtraInfoUtil::build_extra_info(number, number, number, queue_id, topic, "broker-a", queue_id),
+                    extra_info
+                );
+                assert_eq!(
+                    ExtraInfoUtil::build_extra_info_cheetah(
+                        number, number, number, queue_id, topic, "broker-a", queue_id
+                    ),
+                    extra_info
+                );
+                let with_offset = format!("{extra_info} {number}");
+                assert_eq!(
+                    ExtraInfoUtil::build_extra_info_with_offset(
+                        number, number, number, queue_id, topic, "broker-a", queue_id, number
+                    ),
+                    with_offset
+                );
+                assert_eq!(
+                    ExtraInfoUtil::build_extra_info_with_offset_cheetah(
+                        number, number, number, queue_id, topic, "broker-a", queue_id, number
+                    ),
+                    with_offset
+                );
+            }
+        }
     }
 
     #[test]
