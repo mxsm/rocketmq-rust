@@ -51,7 +51,7 @@ fn append_result() -> AppendMessageResult {
         wrote_offset: 40,
         wrote_bytes: 20,
         msg_id: Some("message-id".to_string()),
-        msg_id_supplier: None,
+        msg_id_source: None,
         store_timestamp: 1234,
         logics_offset: 7,
         page_cache_rt: 0,

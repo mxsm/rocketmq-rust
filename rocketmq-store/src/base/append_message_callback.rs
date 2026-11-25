@@ -20,6 +20,7 @@ use dashmap::DashMap;
 use rocketmq_store_local::commit_log::append::finalized_append::FinalizedAppend;
 use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayload;
 use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayloadKind;
+use rocketmq_store_local::commit_log::append::MessageIdSource;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameKernel;
 use rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision;
@@ -28,10 +29,7 @@ use rocketmq_store_local::commit_log::append_frame::BLANK_MARKER_LENGTH;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_model::utils::crc32_utils::crc32;
-use rocketmq_model::utils::message_utils;
-use rocketmq_model::utils::message_utils::build_batch_message_id;
 use rocketmq_protocol::common::message::message_decoder::create_crc32;
 use tracing::error;
 
@@ -84,9 +82,9 @@ impl DefaultAppendMessageCallback {
             queue_offset,
             msg_inner.store_timestamp(),
             message_num,
-            |wrote_offset, _| {
-                let address = msg_inner.message_ext_inner.store_host;
-                Arc::new(move || message_utils::build_message_id(address, wrote_offset))
+            |wrote_offset, _| MessageIdSource::Single {
+                store_host: msg_inner.message_ext_inner.store_host,
+                offset: wrote_offset,
             },
             |_| {},
         )
@@ -110,12 +108,6 @@ impl DefaultAppendMessageCallback {
         }
         let queue_offset = msg_batch.message_ext_broker_inner.queue_offset();
         let address = msg_batch.message_ext_broker_inner.store_host();
-        let store_host_length =
-            if msg_batch.message_ext_broker_inner.sys_flag() & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG == 0 {
-                4 + 4
-            } else {
-                16 + 4
-            };
         self.append_prepared(
             file_from_offset,
             mapped_file,
@@ -123,11 +115,9 @@ impl DefaultAppendMessageCallback {
             queue_offset,
             msg_batch.message_ext_broker_inner.store_timestamp(),
             i32::from(prepared.message_count()),
-            move |_, physical_offsets| {
-                let physical_offsets = physical_offsets.to_vec();
-                Arc::new(move || {
-                    build_batch_message_id(address, store_host_length, physical_offsets.len(), &physical_offsets)
-                })
+            move |_, physical_offsets| MessageIdSource::Batch {
+                store_host: address,
+                offsets: physical_offsets.to_vec(),
             },
             |physical_offsets| {
                 put_message_context.set_batch_size(physical_offsets.len() as i32);
@@ -149,7 +139,7 @@ impl DefaultAppendMessageCallback {
     ) -> AppendMessageResult
     where
         MF: MappedFile,
-        I: FnOnce(i64, &[i64]) -> Arc<dyn Fn() -> String + Send + Sync>,
+        I: FnOnce(i64, &[i64]) -> MessageIdSource,
         C: FnMut(&[i64]),
     {
         let encoded_len = prepared.retained_bytes();
@@ -222,7 +212,7 @@ impl DefaultAppendMessageCallback {
                 store_timestamp,
                 logics_offset: queue_offset,
                 msg_num: message_num,
-                msg_id_supplier: Some(message_id_supplier(wrote_offset, &[])),
+                msg_id_source: Some(message_id_supplier(wrote_offset, &[])),
                 page_cache_rt: started.elapsed().as_millis() as i64,
                 ..Default::default()
             };
@@ -309,7 +299,7 @@ impl DefaultAppendMessageCallback {
             store_timestamp,
             logics_offset: queue_offset,
             msg_num: message_num,
-            msg_id_supplier: Some(message_id_supplier(wrote_offset, physical_offsets.as_slice())),
+            msg_id_source: Some(message_id_supplier(wrote_offset, physical_offsets.as_slice())),
             page_cache_rt: started.elapsed().as_millis() as i64,
             ..Default::default()
         }
@@ -487,5 +477,31 @@ mod tests {
         assert_eq!(batch_result.wrote_bytes, 340);
         assert_eq!(batch_result.msg_num, 2);
         assert_eq!(batch_retry.get_wrote_position(), 340);
+    }
+
+    #[test]
+    fn message_id_sources_render_the_model_message_ids() {
+        use rocketmq_model::utils::message_utils::build_batch_message_id;
+        use rocketmq_model::utils::message_utils::build_message_id;
+        use rocketmq_model::utils::message_utils::build_message_id_cheetah;
+
+        for store_host in ["10.1.2.3:10911", "[2001:db8::1]:65535"] {
+            let store_host: std::net::SocketAddr = store_host.parse().unwrap();
+            let store_host_length = if store_host.is_ipv4() { 8 } else { 20 };
+            for offset in [i64::MIN, -1, 0, 13, i64::MAX] {
+                let single = MessageIdSource::Single { store_host, offset };
+                assert_eq!(single.to_message_id(), build_message_id(store_host, offset));
+                assert_eq!(
+                    single.to_message_id_cheetah(),
+                    build_message_id_cheetah(store_host, offset)
+                );
+            }
+            for offsets in [vec![], vec![7], vec![0, i64::MAX, -1]] {
+                let expected = build_batch_message_id(store_host, store_host_length, offsets.len(), &offsets);
+                let batch = MessageIdSource::Batch { store_host, offsets };
+                assert_eq!(batch.to_message_id(), expected);
+                assert_eq!(batch.to_message_id_cheetah(), expected);
+            }
+        }
     }
 }
