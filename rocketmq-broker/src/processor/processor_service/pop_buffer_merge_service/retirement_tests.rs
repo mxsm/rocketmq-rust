@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::BrokerAdminStore;

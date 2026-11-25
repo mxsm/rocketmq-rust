@@ -29,7 +29,6 @@ use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
@@ -497,17 +496,19 @@ where
         inner.set_topic(self.context.policy.revive_topic.clone());
         inner.set_body(Bytes::from(ack_msg.encode()?));
         inner.message_ext_inner.queue_id = rq_id;
-        inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
+        inner
+            .message_ext_inner
+            .set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
         inner.message_ext_inner.born_timestamp = current_millis() as i64;
         inner.message_ext_inner.born_host = self.context.policy.store_host;
         inner.message_ext_inner.store_host = self.context.policy.store_host;
         let deliver_time_ms = ExtraInfoUtil::get_pop_time(extra_info)? + ExtraInfoUtil::get_invisible_time(extra_info)?;
-        inner.set_deliver_time_ms(deliver_time_ms as u64);
+        inner.message_ext_inner.set_deliver_time_ms(deliver_time_ms as u64);
         inner.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(&ack_msg)),
+            PopMessageProcessor::<MS>::gen_ack_unique_id(&ack_msg),
         );
-        inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
+        inner.refresh_properties_string();
         let result = match self.context.message_store.put_message(inner).await {
             Ok(result) => result,
             Err(MessageStoreUnavailable) => return Ok(()),
@@ -555,18 +556,20 @@ where
         inner.set_topic(self.context.policy.revive_topic.clone());
         inner.set_body(Bytes::from(ck.encode()?));
         inner.message_ext_inner.queue_id = revive_qid;
-        inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
+        inner
+            .message_ext_inner
+            .set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
         inner.message_ext_inner.born_timestamp = current_millis() as i64;
         inner.message_ext_inner.born_host = self.context.policy.store_host;
         inner.message_ext_inner.store_host = self.context.policy.store_host;
         let deliver_time_ms = ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL;
         let deliver_time_ms = if deliver_time_ms > 0 { deliver_time_ms as u64 } else { 0 };
-        inner.set_deliver_time_ms(deliver_time_ms);
+        inner.message_ext_inner.set_deliver_time_ms(deliver_time_ms);
         inner.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from(PopMessageProcessor::<MS>::gen_ck_unique_id(&ck)),
+            PopMessageProcessor::<MS>::gen_ck_unique_id(&ck),
         );
-        inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
+        inner.refresh_properties_string();
         let Ok(put_message_result) = self.context.message_store.put_message(inner).await else {
             return Ok(None);
         };
