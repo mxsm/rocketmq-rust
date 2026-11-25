@@ -3396,7 +3396,8 @@ impl TimerMessageStore {
         inner.message_ext_inner.born_host = born_host;
         inner.message_ext_inner.store_host = store_host;
         inner.message_ext_inner.reconsume_times = reconsume_times;
-        inner.set_wait_store_msg_ok(false);
+        // Encoded once with the other property changes below.
+        inner.message_ext_inner.set_wait_store_msg_ok(false);
 
         match target {
             TimerWriteTarget::NextRound => {
