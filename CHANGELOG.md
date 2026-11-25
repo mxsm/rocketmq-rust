@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **deps:** Update `form_urlencoded` to 1.2.3 for HTTP discovery query parameters and form bodies ([#13001](https://github.com/mxsm/rocketmq-rust/issues/13001)).
+- **refactor(client):** Share per-queue offset lookup, rollback reporting and conditional updates across the legacy admin reset paths ([#13029](https://github.com/mxsm/rocketmq-rust/issues/13029)).
 - **refactor(client):** Share topic attribute encoding across full admin, mutation-only admin, and low-level create-topic requests ([#12943](https://github.com/mxsm/rocketmq-rust/issues/12943)).
 - **refactor(client):** Share ordered-topic configuration merging between the full and mutation-only admin APIs ([#12922](https://github.com/mxsm/rocketmq-rust/issues/12922)).
 - **refactor(client):** Encode topic attributes once per create-topic operation and reuse them across broker requests and retries ([#12852](https://github.com/mxsm/rocketmq-rust/issues/12852)).
