@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix the `rocketmq-store` Clippy failure caused by an unused import after `MessageStoreReadPort` switched to `async fn` ([#13033](https://github.com/mxsm/rocketmq-rust/issues/13033)).
 - **fix(protocol):** Separate offsets within a POP queue with commas so clients can decode multi-message responses ([#12984](https://github.com/mxsm/rocketmq-rust/issues/12984)).
 - **fix(protocol):** Hash trimmed tags so spaces around `||` do not prevent matching messages in the Broker ([#12920](https://github.com/mxsm/rocketmq-rust/issues/12920)).
 - **fix(protocol):** Decode IPv4 and IPv6 offset message IDs with the surrounding whitespace accepted by validation ([#12889](https://github.com/mxsm/rocketmq-rust/issues/12889)).
