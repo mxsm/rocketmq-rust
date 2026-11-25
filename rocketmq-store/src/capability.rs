@@ -256,20 +256,17 @@ pub trait BrokerReadWriteStore: BrokerReadStore + BrokerWriteStore {
 }
 
 /// Broker capability for updating both HA and logical master addresses.
+#[trait_variant::make(Send)]
 pub trait BrokerMasterAddressStore: BrokerReadStore {
     fn update_logical_master_address(&self, new_addr: &CheetahString) {
         MessageStoreEngine::update_master_address(self.message_store(), new_addr);
     }
 
-    fn update_master_address(&self, new_addr: &CheetahString) -> impl Future<Output = ()> + Send {
+    async fn update_master_address(&self, new_addr: &CheetahString) {
         self.update_master_addresses(new_addr.as_str(), new_addr)
     }
 
-    fn update_master_addresses(
-        &self,
-        ha_address: &str,
-        logical_address: &CheetahString,
-    ) -> impl Future<Output = ()> + Send {
+    async fn update_master_addresses(&self, ha_address: &str, logical_address: &CheetahString) {
         async move {
             MessageStoreEngine::update_ha_master_address(self.message_store(), ha_address).await;
             self.update_logical_master_address(logical_address);
