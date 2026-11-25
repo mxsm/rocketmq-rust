@@ -246,7 +246,7 @@ pub struct CheckpointRestoreVerification {
     pub checkpoint_id: String,
     /// The generation value.
     pub generation: u64,
-    /// The verified at unix duration in milliseconds.
+    /// Time of restore verification, in milliseconds since the Unix epoch.
     pub verified_at_unix_millis: u64,
     /// Whether checksum verified.
     pub checksum_verified: bool,
