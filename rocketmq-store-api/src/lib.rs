@@ -332,7 +332,7 @@ impl AppendReceipt {
     }
 }
 
-/// Progress of derived records, independent from primary-log acknowledgement.
+/// Progress of derived records, independent of primary-log acknowledgement.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DerivedProgress {
     source_watermark: i64,
