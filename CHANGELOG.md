@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(protocol):** Separate offsets within a POP queue with commas so clients can decode multi-message responses ([#12984](https://github.com/mxsm/rocketmq-rust/issues/12984)).
 - **fix(protocol):** Hash trimmed tags so spaces around `||` do not prevent matching messages in the Broker ([#12920](https://github.com/mxsm/rocketmq-rust/issues/12920)).
 - **fix(protocol):** Decode IPv4 and IPv6 offset message IDs with the surrounding whitespace accepted by validation ([#12889](https://github.com/mxsm/rocketmq-rust/issues/12889)).
+- **fix(filter):** Preserve the unknown result for SQL92 `IN` and `NOT IN` when a list contains `NULL` and no member matches ([#13027](https://github.com/mxsm/rocketmq-rust/issues/13027)).
 - **fix(filter):** Compare SQL92 string operands by their exact text in equality and IN-list predicates ([#12941](https://github.com/mxsm/rocketmq-rust/issues/12941)).
 - **fix(filter):** Preserve UTF-8 text and escaped apostrophes in SQL92 string literals ([#12850](https://github.com/mxsm/rocketmq-rust/issues/12850)).
 - **fix(admin-tui):** Keep the confirmation cursor and mismatch highlighting aligned when wide characters scroll out of view ([#12824](https://github.com/mxsm/rocketmq-rust/issues/12824)).
