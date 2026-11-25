@@ -584,17 +584,18 @@ impl<'a, MS> MessageStoreHealthCapability<'a, MS> {
 /// Filtered reads remain on the backend trait. This canonical read port intentionally
 /// forwards only unfiltered reads, so its hot request path has no dynamic filter allocation.
 /// Test doubles can implement these four operations without copying `MessageStoreEngine`.
+#[trait_variant::make(Send)]
 pub(crate) trait MessageStoreReadPort: Sync {
-    fn get_message(
+    async fn get_message(
         &self,
         group: &CheetahString,
         topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         max_messages: i32,
-    ) -> impl Future<Output = Option<GetMessageResult>> + Send;
+    ) -> Option<GetMessageResult>;
 
-    fn get_message_with_size_limit(
+    async fn get_message_with_size_limit(
         &self,
         group: &CheetahString,
         topic: &CheetahString,
@@ -602,16 +603,16 @@ pub(crate) trait MessageStoreReadPort: Sync {
         offset: i64,
         max_messages: i32,
         max_total_size: i32,
-    ) -> impl Future<Output = Option<GetMessageResult>> + Send;
+    ) -> Option<GetMessageResult>;
 
-    fn query_message(
+    async fn query_message(
         &self,
         topic: &CheetahString,
         key: &CheetahString,
         max_messages: i32,
         begin: i64,
         end: i64,
-    ) -> impl Future<Output = Option<QueryMessageResult>> + Send;
+    ) -> Option<QueryMessageResult>;
 
     fn select_message(&self, physical_offset: i64, size: Option<i32>) -> Option<SelectMappedBufferResult>;
 }
