@@ -504,7 +504,7 @@ pub struct GetResult<L> {
     pub buffer_total_size: i32,
     /// The number of message entries.
     pub message_count: i32,
-    /// Whether suggest pulling from replica.
+    /// Whether the store recommends pulling messages from a replica.
     pub suggest_pulling_from_replica: bool,
     /// The number of commercial message entries.
     pub commercial_message_count: i32,
