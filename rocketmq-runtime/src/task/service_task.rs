@@ -267,18 +267,17 @@ impl Default for ServiceTaskContext {
 }
 
 /// Defines service task behavior.
-pub trait ServiceTask: Sync + Send {
+#[trait_variant::make(Send)]
+pub trait ServiceTask: Sync {
     /// Get the service name
     fn get_service_name(&self) -> String;
 
     /// implement the service logic here
-    fn run(&self, context: &ServiceTaskContext) -> impl ::core::future::Future<Output = ()> + Send;
+    async fn run(&self, context: &ServiceTaskContext);
 
     /// override for custom behavior
-    fn on_wait_end(&self) -> impl ::core::future::Future<Output = ()> + Send {
-        async {
-            // Default implementation does nothing
-        }
+    async fn on_wait_end(&self) {
+        async {}
     }
 }
 
