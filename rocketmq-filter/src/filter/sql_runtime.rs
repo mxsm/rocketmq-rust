@@ -170,15 +170,16 @@ impl ExprNode {
                     return Ok(Value::Null);
                 }
 
-                let mut matched = false;
+                let mut result_if_unmatched = Value::Boolean(*negated);
                 for item in items {
-                    if eval_compare_values(CompareOp::Eq, &value, item)? == Some(true) {
-                        matched = true;
-                        break;
+                    match eval_compare_values(CompareOp::Eq, &value, item)? {
+                        Some(true) => return Ok(Value::Boolean(!*negated)),
+                        Some(false) => {}
+                        None => result_if_unmatched = Value::Null,
                     }
                 }
 
-                Ok(Value::Boolean(if *negated { !matched } else { matched }))
+                Ok(result_if_unmatched)
             }
             ExprNode::Between {
                 expr,
@@ -1129,6 +1130,21 @@ mod tests {
 
         let value = evaluate("region NOT IN ('hz', 'sh', 'bj')", &[]).expect("evaluation should succeed");
         assert_eq!(value, Value::Null);
+    }
+
+    #[test]
+    fn evaluate_in_lists_with_null_members() {
+        let properties = [("region", "cd")];
+        for (selector, expected) in [
+            ("region NOT IN ('hz', NULL)", Value::Null),
+            ("region IN (NULL, 'hz')", Value::Null),
+            ("region IN (NULL, 'cd')", Value::Boolean(true)),
+            ("region NOT IN (NULL, 'cd')", Value::Boolean(false)),
+            ("region IN ('cd', NULL)", Value::Boolean(true)),
+            ("region NOT IN ('cd', NULL)", Value::Boolean(false)),
+        ] {
+            assert_eq!(evaluate(selector, &properties).unwrap(), expected, "{selector}");
+        }
     }
 
     #[test]
