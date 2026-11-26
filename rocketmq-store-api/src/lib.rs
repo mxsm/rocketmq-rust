@@ -644,7 +644,7 @@ pub struct StoreHealthSnapshot {
     pub last_error: Option<&'static rocketmq_error::ErrorDescriptor>,
     /// Whether page cache busy.
     pub page_cache_busy: bool,
-    /// Whether transient pool deficient.
+    /// Whether the transient store pool is enabled and has no available buffers.
     pub transient_pool_deficient: bool,
     /// The flush backlog value.
     pub flush_backlog: FlushBacklog,
