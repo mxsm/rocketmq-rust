@@ -340,7 +340,7 @@ pub struct NotificationProcessor<MS: BrokerReadWriteStore> {
 }
 
 impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
-    pub const BORN_TIME: &'static str = "bornTime";
+    pub const BORN_TIME: &'static str = super::BORN_TIME;
     pub(crate) fn new(context: NotificationProcessorContext<MS>) -> Arc<Self> {
         Arc::new(Self {
             notification_deferred_service: OnceLock::new(),
