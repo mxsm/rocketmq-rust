@@ -250,6 +250,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn deletion_operations_futures_are_send() {
+        fn assert_send_future<T, F: std::future::Future<Output = T> + Send>(_: F) {}
+
+        fn assert_methods<O: TopicDeletionOperations>(
+            ops: &mut O,
+            topic: &CheetahString,
+            cluster: &CheetahString,
+            broker: &CheetahString,
+        ) {
+            assert_send_future::<Result<Vec<CheetahString>>, _>(ops.master_targets(cluster));
+            assert_send_future::<std::result::Result<(), TopicOperationFailure>, _>(ops.delete_broker(topic, broker));
+            assert_send_future::<Result<()>, _>(ops.delete_route(topic, cluster));
+        }
+
+        let _ = assert_methods::<FakeTopicDeletionOperations>;
+    }
+
     #[tokio::test]
     async fn deletion_preserves_partial_outcomes_and_retains_the_route() {
         let mut deletion_operations = FakeTopicDeletionOperations {
