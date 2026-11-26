@@ -17,8 +17,6 @@
 //! decides what to do with it, [`NativeDueBatch::write`] writes the messages to their real
 //! topics, and [`NativeTimerEngine::settle`] moves the lane's watermark over the timers done.
 
-use std::future::Future;
-
 use bytes::Bytes;
 use futures_util::future::ready;
 use futures_util::future::Either;
@@ -57,15 +55,11 @@ pub(crate) enum NativeCommitLogRead {
 }
 
 /// Writes a due timer's message to its real topic.
+#[trait_variant::make(Send)]
 pub(crate) trait NativeTimerWriter {
     /// Writes `message` of the timer due at `due_ms` for delivery epoch `epoch`, and says what
     /// the write means for its timer: a write for an epoch that is no longer current must stay.
-    fn write(
-        &self,
-        message: MessageExtBrokerInner,
-        epoch: u64,
-        due_ms: i64,
-    ) -> impl Future<Output = NativeWriteOutcome> + Send;
+    async fn write(&self, message: MessageExtBrokerInner, epoch: u64, due_ms: i64) -> NativeWriteOutcome;
 }
 
 /// What a delivery write means for its timer.

@@ -154,6 +154,16 @@ impl MessageExtBrokerInner {
         self.properties_string.as_str()
     }
 
+    /// Re-encodes `properties_string` from the current properties.
+    ///
+    /// `put_property` and the `MessageTrait` setters built on it re-encode the whole string on
+    /// every call. A builder that sets several properties can set them on `message_ext_inner`,
+    /// which only updates the properties, and call this once before the message is stored.
+    #[inline]
+    pub fn refresh_properties_string(&mut self) {
+        self.properties_string = message_properties_to_string(self.message_ext_inner.get_properties());
+    }
+
     #[inline]
     pub fn queue_offset(&self) -> i64 {
         self.message_ext_inner.queue_offset()

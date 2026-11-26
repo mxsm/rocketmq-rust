@@ -184,10 +184,17 @@ impl TopicMessageType {
         .collect()
     }
 
-    pub fn parse_from_message_property(properties: &HashMap<String, String>) -> Self {
+    /// Classifies a message by its properties; accepts any map whose keys borrow as `str`, such
+    /// as `String` or `CheetahString` keys.
+    pub fn parse_from_message_property<K, V, S>(properties: &HashMap<K, V, S>) -> Self
+    where
+        K: std::borrow::Borrow<str> + std::hash::Hash + Eq,
+        V: AsRef<str>,
+        S: std::hash::BuildHasher,
+    {
         if properties
             .get("TRAN_MSG")
-            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+            .is_some_and(|value| value.as_ref().eq_ignore_ascii_case("true"))
         {
             Self::Transaction
         } else if ["DELAY", "TIMER_DELIVER_MS", "TIMER_DELAY_SEC", "TIMER_DELAY_MS"]

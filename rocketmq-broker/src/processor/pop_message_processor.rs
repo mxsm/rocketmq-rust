@@ -41,6 +41,7 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
@@ -964,59 +965,78 @@ where
 }
 
 impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
-    pub fn gen_ack_unique_id(ack_msg: &dyn AckMessage) -> String {
-        format!(
-            "{}{}{}{}{}{}{}{}{}{}{}{}{}",
+    /// Returns `topic@queueId@ackOffset@group@popTime@brokerName@ack`, the Java ack message key.
+    pub fn gen_ack_unique_id(ack_msg: &dyn AckMessage) -> CheetahString {
+        let queue_id = cheetah_from_integer(ack_msg.queue_id());
+        let ack_offset = cheetah_from_integer(ack_msg.ack_offset());
+        let pop_time = cheetah_from_integer(ack_msg.pop_time());
+        CheetahString::concat(&[
             ack_msg.topic(),
             PopAckConstants::SPLIT,
-            ack_msg.queue_id(),
+            &queue_id,
             PopAckConstants::SPLIT,
-            ack_msg.ack_offset(),
+            &ack_offset,
             PopAckConstants::SPLIT,
             ack_msg.consumer_group(),
             PopAckConstants::SPLIT,
-            ack_msg.pop_time(),
+            &pop_time,
             PopAckConstants::SPLIT,
             ack_msg.broker_name(),
             PopAckConstants::SPLIT,
-            PopAckConstants::ACK_TAG
-        )
+            PopAckConstants::ACK_TAG,
+        ])
     }
 
-    pub fn gen_batch_ack_unique_id(batch_ack_msg: &BatchAckMsg) -> String {
-        format!(
-            "{}{}{}{}{:?}{}{}{}{}{}{}",
-            batch_ack_msg.ack_msg.topic,
+    /// Returns `topic@queueId@[offset, ...]@group@popTime@bAck`; the offset list is written as
+    /// Java's `List.toString()` writes it.
+    pub fn gen_batch_ack_unique_id(batch_ack_msg: &BatchAckMsg) -> CheetahString {
+        let mut offsets = String::with_capacity(2 + batch_ack_msg.ack_offset_list.len() * 12);
+        offsets.push('[');
+        for (index, offset) in batch_ack_msg.ack_offset_list.iter().enumerate() {
+            if index > 0 {
+                offsets.push_str(", ");
+            }
+            offsets.push_str(&cheetah_from_integer(*offset));
+        }
+        offsets.push(']');
+        let queue_id = cheetah_from_integer(batch_ack_msg.ack_msg.queue_id);
+        let pop_time = cheetah_from_integer(batch_ack_msg.ack_msg.pop_time);
+        CheetahString::concat(&[
+            &batch_ack_msg.ack_msg.topic,
             PopAckConstants::SPLIT,
-            batch_ack_msg.ack_msg.queue_id,
+            &queue_id,
             PopAckConstants::SPLIT,
-            batch_ack_msg.ack_offset_list,
+            &offsets,
             PopAckConstants::SPLIT,
-            batch_ack_msg.ack_msg.consumer_group,
+            &batch_ack_msg.ack_msg.consumer_group,
             PopAckConstants::SPLIT,
-            batch_ack_msg.ack_msg.pop_time,
+            &pop_time,
             PopAckConstants::SPLIT,
-            PopAckConstants::BATCH_ACK_TAG
-        )
+            PopAckConstants::BATCH_ACK_TAG,
+        ])
     }
 
-    pub fn gen_ck_unique_id(ck: &PopCheckPoint) -> String {
-        format!(
-            "{}{}{}{}{}{}{}{}{}{}{}{}{}",
-            ck.topic,
+    /// Returns `topic@queueId@startOffset@cid@popTime@brokerName@ck`, with `null` for a missing
+    /// broker name as Java writes it.
+    pub fn gen_ck_unique_id(ck: &PopCheckPoint) -> CheetahString {
+        let queue_id = cheetah_from_integer(ck.queue_id);
+        let start_offset = cheetah_from_integer(ck.start_offset);
+        let pop_time = cheetah_from_integer(ck.pop_time);
+        CheetahString::concat(&[
+            &ck.topic,
             PopAckConstants::SPLIT,
-            ck.queue_id,
+            &queue_id,
             PopAckConstants::SPLIT,
-            ck.start_offset,
+            &start_offset,
             PopAckConstants::SPLIT,
-            ck.cid,
+            &ck.cid,
             PopAckConstants::SPLIT,
-            ck.pop_time,
+            &pop_time,
             PopAckConstants::SPLIT,
-            ck.broker_name.as_ref().map_or("null".to_string(), |x| x.to_string()),
+            ck.broker_name.as_deref().unwrap_or("null"),
             PopAckConstants::SPLIT,
-            PopAckConstants::CK_TAG
-        )
+            PopAckConstants::CK_TAG,
+        ])
     }
 
     pub fn pop_buffer_merge_service(&self) -> &Arc<PopBufferMergeService<MS>> {
@@ -1033,16 +1053,18 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         msg.set_topic(revive_topic);
         msg.set_body(Bytes::from(ck.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = revive_qid;
-        msg.set_tags(CheetahString::from_static_str(PopAckConstants::CK_TAG));
         msg.message_ext_inner.born_timestamp = current_millis() as i64;
         msg.message_ext_inner.born_host = store_host;
         msg.message_ext_inner.store_host = store_host;
-        msg.set_deliver_time_ms((ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL) as u64);
-        msg.put_property(
+        // Set the properties on the inner message and encode them once.
+        let properties = &mut msg.message_ext_inner;
+        properties.set_tags(CheetahString::from_static_str(PopAckConstants::CK_TAG));
+        properties.set_deliver_time_ms((ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL) as u64);
+        properties.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from_string(PopMessageProcessor::<MS>::gen_ck_unique_id(ck)),
+            PopMessageProcessor::<MS>::gen_ck_unique_id(ck),
         );
-        msg.properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
+        msg.refresh_properties_string();
         msg
     }
 }
@@ -1374,6 +1396,94 @@ mod tests {
         let result = PopMessageProcessor::<LocalFileMessageStore>::gen_ck_unique_id(&ck);
         let expected = "test_topic@1@456@test_cid@789@test_broker@ck";
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn unique_ids_match_the_formatted_java_text() {
+        type Processor = PopMessageProcessor<LocalFileMessageStore>;
+        for (topic, group, broker, number) in [
+            ("t", "g", "b", 0_i64),
+            ("%RETRY%订单-group_topic", "消费组", "broker-a", -1),
+            ("a-topic-name-longer-than-twenty-three-bytes", "g", "", i64::MAX),
+        ] {
+            let ack_msg = || AckMsg {
+                ack_offset: number,
+                start_offset: number,
+                consumer_group: CheetahString::from(group),
+                topic: CheetahString::from(topic),
+                queue_id: number as i32,
+                pop_time: number,
+                broker_name: CheetahString::from(broker),
+            };
+            assert_eq!(
+                Processor::gen_ack_unique_id(&ack_msg()),
+                format!("{topic}@{}@{number}@{group}@{number}@{broker}@ack", number as i32)
+            );
+            for offsets in [vec![], vec![number], vec![1, -2, number]] {
+                let expected = format!("{topic}@{}@{offsets:?}@{group}@{number}@bAck", number as i32);
+                let batch = BatchAckMsg {
+                    ack_msg: ack_msg(),
+                    ack_offset_list: offsets,
+                };
+                assert_eq!(Processor::gen_batch_ack_unique_id(&batch), expected);
+            }
+            for broker_name in [Some(CheetahString::from(broker)), None] {
+                let expected = format!(
+                    "{topic}@{}@{number}@{group}@{number}@{}@ck",
+                    number as i32,
+                    broker_name.as_deref().unwrap_or("null")
+                );
+                let ck = PopCheckPoint {
+                    topic: CheetahString::from(topic),
+                    queue_id: number as i32,
+                    start_offset: number,
+                    cid: CheetahString::from(group),
+                    pop_time: number,
+                    broker_name,
+                    ..Default::default()
+                };
+                assert_eq!(Processor::gen_ck_unique_id(&ck), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn checkpoint_message_encodes_its_properties_once_and_completely() {
+        let ck = PopCheckPoint {
+            topic: CheetahString::from("test_topic"),
+            queue_id: 1,
+            start_offset: 456,
+            cid: CheetahString::from("test_cid"),
+            pop_time: 1_000,
+            invisible_time: 60_000,
+            broker_name: Some(CheetahString::from("test_broker")),
+            ..Default::default()
+        };
+        let store_host = "127.0.0.1:10911".parse().unwrap();
+        let message = PopMessageProcessor::<LocalFileMessageStore>::build_ck_msg(
+            store_host,
+            &ck,
+            3,
+            CheetahString::from_static_str("rmq_sys_REVIVE_LOG_test"),
+        );
+
+        assert_eq!(
+            message.properties_string(),
+            MessageDecoder::message_properties_to_string(message.get_properties()).as_str()
+        );
+        let property = |name: &str| message.property(name).map(|value| value.to_string());
+        assert_eq!(
+            property(MessageConst::PROPERTY_TAGS).as_deref(),
+            Some(PopAckConstants::CK_TAG)
+        );
+        assert_eq!(
+            property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX).as_deref(),
+            Some("test_topic@1@456@test_cid@1000@test_broker@ck")
+        );
+        assert_eq!(
+            property(MessageConst::PROPERTY_TIMER_DELIVER_MS),
+            Some((ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL).to_string())
+        );
     }
 
     #[test]

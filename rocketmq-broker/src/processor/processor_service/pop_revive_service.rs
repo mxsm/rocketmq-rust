@@ -27,7 +27,6 @@ use futures::FutureExt;
 use parking_lot::Mutex;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::key_builder::KeyBuilder;
-use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
@@ -38,7 +37,7 @@ use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
 use rocketmq_model::common::TopicFilterType;
 use rocketmq_model::utils::data_converter::DataConverter;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::AckMessage;
@@ -128,29 +127,28 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
             msg_inner.set_body(bytes);
         }
         msg_inner.message_ext_inner.queue_id = 0;
-        if let Some(tags) = message_ext.tags() {
-            msg_inner.set_tags(tags);
-        } else {
-            MessageAccessor::set_properties(&mut msg_inner, HashMap::new());
-        }
         msg_inner.message_ext_inner.born_timestamp = message_ext.born_timestamp;
         msg_inner.set_flag(message_ext.get_flag());
         msg_inner.message_ext_inner.sys_flag = message_ext.sys_flag;
         msg_inner.message_ext_inner.born_host = message_ext.born_host;
         msg_inner.message_ext_inner.store_host = message_ext.store_host;
         msg_inner.message_ext_inner.reconsume_times = message_ext.reconsume_times + 1;
-        MessageAccessor::set_properties(&mut msg_inner, message_ext.properties().clone());
+        // The copied properties already carry the original tags. They are set on the inner
+        // message and encoded once.
+        msg_inner
+            .message_ext_inner
+            .set_properties(message_ext.properties().clone());
         if message_ext.reconsume_times() == 0
             || msg_inner
                 .property(&CheetahString::from_static_str(MessageConst::PROPERTY_FIRST_POP_TIME))
                 .is_none()
         {
-            msg_inner.put_property(
+            msg_inner.message_ext_inner.put_property(
                 CheetahString::from_static_str(MessageConst::PROPERTY_FIRST_POP_TIME),
-                CheetahString::from(pop_check_point.pop_time.to_string()),
+                cheetah_from_integer(pop_check_point.pop_time),
             );
         }
-        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
+        msg_inner.refresh_properties_string();
         let retry_topic = msg_inner.get_topic().clone();
         self.add_retry_topic_if_not_exist(&retry_topic, &pop_check_point.cid)
             .await;

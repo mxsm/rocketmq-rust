@@ -26,18 +26,11 @@ use rocketmq_proxy_core::ProxyMessageExt;
 pub(crate) fn message_ext_to_core(message: &MessageExt) -> ProxyMessageExt {
     let inner = message.message_inner();
     let mut core = ProxyMessage::default();
-    core.set_topic(inner.topic().to_string());
+    core.set_topic(inner.topic().clone());
     core.set_body_bytes(inner.body());
     core.set_flag(inner.flag());
-    core.set_properties(
-        inner
-            .properties()
-            .as_map()
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
-    );
-    core.set_transaction_id(inner.transaction_id().map(str::to_owned));
+    core.set_properties(inner.properties().as_map().clone());
+    core.set_transaction_id(inner.transaction_id());
 
     ProxyMessageExt {
         message: core,
@@ -59,11 +52,7 @@ pub(crate) fn message_ext_to_core(message: &MessageExt) -> ProxyMessageExt {
 }
 
 pub(crate) fn message_properties_from_core(message: &ProxyMessage) -> HashMap<CheetahString, CheetahString> {
-    message
-        .properties()
-        .iter()
-        .map(|(key, value)| (CheetahString::from(key.as_str()), CheetahString::from(value.as_str())))
-        .collect()
+    message.properties().clone()
 }
 
 pub(crate) fn message_from_core(message: &ProxyMessage) -> Result<Message, CanonicalError> {
@@ -74,7 +63,7 @@ pub(crate) fn message_from_core(message: &ProxyMessage) -> Result<Message, Canon
         )
     })?;
     let mut model = Message::builder()
-        .topic(message.topic())
+        .topic(message.topic().clone())
         .body(body)
         .flag_bits(message.flag())
         .build()?;

@@ -166,7 +166,7 @@ fn send_request(message_group: Option<&str>) -> SendMessageRequest {
     if let Some(group) = message_group {
         message
             .properties_mut()
-            .insert(MessageConst::PROPERTY_SHARDING_KEY.to_owned(), group.to_owned());
+            .insert(MessageConst::PROPERTY_SHARDING_KEY.into(), group.into());
     }
     SendMessageRequest {
         messages: vec![SendMessageEntry {
