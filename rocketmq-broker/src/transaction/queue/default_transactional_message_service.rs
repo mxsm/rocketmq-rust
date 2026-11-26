@@ -26,7 +26,6 @@ use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use futures::StreamExt;
 use rocketmq_model::common::config::TopicConfig;
-use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::message_queue::MessageQueue;
@@ -35,7 +34,6 @@ use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_protocol::code::response_code::ResponseCode;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BlockingExecutor;
@@ -1369,8 +1367,7 @@ fn to_message_ext_broker_inner(topic_config: &TopicConfig, msg_ext: &MessageExt)
         inner.set_body(body.clone());
     }
     inner.set_flag(msg_ext.get_flag());
-    MessageAccessor::set_properties(&mut inner, msg_ext.get_properties().clone());
-    inner.properties_string = MessageDecoder::message_properties_to_string(msg_ext.get_properties());
+    inner.message_ext_inner.set_properties(msg_ext.get_properties().clone());
     inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str());
     inner.message_ext_inner.queue_id = 0;
     inner.message_ext_inner.sys_flag = msg_ext.sys_flag();
@@ -1380,13 +1377,15 @@ fn to_message_ext_broker_inner(topic_config: &TopicConfig, msg_ext: &MessageExt)
     inner.message_ext_inner.store_host = msg_ext.store_host;
     inner.message_ext_inner.msg_id = msg_ext.msg_id().clone();
     inner.message_ext_inner.reconsume_times = msg_ext.reconsume_times();
-    inner.set_wait_store_msg_ok(false);
+    inner.message_ext_inner.set_wait_store_msg_ok(false);
+    inner.refresh_properties_string();
     inner
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
     use rocketmq_store::BrokerReadStore;
 
     async fn transaction_runtime() -> (tempfile::TempDir, crate::broker_runtime::BrokerRuntime) {
