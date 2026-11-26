@@ -233,6 +233,7 @@ pub use crate::transfer::segment::FileRangeTransferHandle;
 pub use crate::transfer::segment::SegmentLease;
 pub use crate::transfer::segment::TransferCacheState;
 pub use rocketmq_store_api::FlushBacklog;
+pub use rocketmq_store_api::StoreHealthScope;
 pub use rocketmq_store_api::StoreHealthSnapshot;
 pub use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
 

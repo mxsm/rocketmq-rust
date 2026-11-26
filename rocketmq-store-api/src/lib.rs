@@ -635,6 +635,42 @@ pub struct FlushBacklog {
     pub oldest_wait_millis: u64,
 }
 
+/// Optional parts of a [`StoreHealthSnapshot`] that a caller needs.
+///
+/// The core fields (`writable`, `last_error`, `page_cache_busy`, `transient_pool_deficient` and
+/// `shutdown`) are always filled. A part that is not requested keeps its [`Default`] value, so a
+/// per-request caller such as send admission does not read the flush, replication, dispatch and
+/// offset state that its policy does not consult.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StoreHealthScope {
+    /// Fill `flush_backlog`.
+    pub flush_backlog: bool,
+    /// Fill `replication_pending_count` and `replication_oldest_wait_millis`.
+    pub replication: bool,
+    /// Fill `dispatch_behind_bytes`.
+    pub dispatch_lag: bool,
+    /// Fill `appended_watermark` and `durable_watermark`.
+    pub watermarks: bool,
+}
+
+impl StoreHealthScope {
+    /// Every part of the snapshot.
+    pub const FULL: Self = Self {
+        flush_backlog: true,
+        replication: true,
+        dispatch_lag: true,
+        watermarks: true,
+    };
+
+    /// Only the core fields.
+    pub const CORE: Self = Self {
+        flush_backlog: false,
+        replication: false,
+        dispatch_lag: false,
+        watermarks: false,
+    };
+}
+
 /// Canonical backend-neutral health projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreHealthSnapshot {

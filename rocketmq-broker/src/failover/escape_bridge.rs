@@ -42,6 +42,7 @@ use rocketmq_store::PutMessageStatus;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
+use rocketmq_store::StoreHealthScope;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::TimerRecallRegistration;
@@ -184,8 +185,12 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
         self.message_store.with_store(operation)
     }
 
-    pub(crate) fn send_message_store_health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
-        self.message_store.health_snapshot()
+    pub(crate) fn send_message_store_health_snapshot(
+        &self,
+        scope: StoreHealthScope,
+    ) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
+        self.message_store
+            .with_store(|store| BrokerReadStore::scoped_health_snapshot(store, scope))
     }
 
     pub(crate) async fn send_append_message(

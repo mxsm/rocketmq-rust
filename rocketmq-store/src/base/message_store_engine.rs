@@ -33,6 +33,7 @@ use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerI
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::FlushBacklog;
+use rocketmq_store_api::StoreHealthScope;
 use rocketmq_store_api::StoreHealthSnapshot;
 use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
@@ -213,6 +214,9 @@ pub(crate) fn build_store_health_snapshot(
 pub(crate) struct StoreHealthRecorder {
     running_flags: Arc<RunningFlags>,
     last_flush_error: Arc<StdMutex<Option<&'static rocketmq_error::ErrorDescriptor>>>,
+    /// Set once the first flush failure is stored, so readers skip the mutex (a write to a
+    /// shared cache line on every send) while no failure has been recorded.
+    has_flush_error: Arc<AtomicBool>,
 }
 
 impl StoreHealthRecorder {
@@ -220,6 +224,7 @@ impl StoreHealthRecorder {
         Self {
             running_flags,
             last_flush_error: Arc::new(StdMutex::new(None)),
+            has_flush_error: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -229,6 +234,7 @@ impl StoreHealthRecorder {
             .last_flush_error
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.descriptor());
+        self.has_flush_error.store(true, Ordering::Release);
     }
 
     pub(crate) fn writeable(&self) -> bool {
@@ -236,6 +242,9 @@ impl StoreHealthRecorder {
     }
 
     pub(crate) fn last_flush_error(&self) -> Option<&'static rocketmq_error::ErrorDescriptor> {
+        if !self.has_flush_error.load(Ordering::Acquire) {
+            return None;
+        }
         *self
             .last_flush_error
             .lock()
@@ -493,6 +502,15 @@ pub trait MessageStoreEngine: MessageStoreReader + Send + Sync + 'static {
                 .map_or(0, |info| info.pending_group_transfer_oldest_wait_millis),
         };
         build_store_health_snapshot(health_indicators, self.get_max_phy_offset(), self.get_flushed_where())
+    }
+
+    /// Get a health snapshot with only the parts in `scope`; the other parts keep their defaults.
+    ///
+    /// The default builds the full snapshot. Stores override it so that per-request callers do not
+    /// read state they do not need.
+    fn scoped_health_snapshot(&self, scope: StoreHealthScope) -> StoreHealthSnapshot {
+        let _ = scope;
+        self.health_snapshot()
     }
 
     /// Get lock time in milliseconds of the store.

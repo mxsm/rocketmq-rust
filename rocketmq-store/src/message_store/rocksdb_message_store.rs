@@ -815,6 +815,13 @@ impl MessageStoreEngine for RocksDBMessageStore {
         self.local_file_store.health_snapshot()
     }
 
+    fn scoped_health_snapshot(
+        &self,
+        scope: rocketmq_store_api::StoreHealthScope,
+    ) -> rocketmq_store_api::StoreHealthSnapshot {
+        self.local_file_store.scoped_health_snapshot(scope)
+    }
+
     fn lock_time_millis(&self) -> i64 {
         self.local_file_store.lock_time_millis()
     }

@@ -16,17 +16,34 @@ use super::*;
 
 impl LocalFileMessageStore {
     pub(super) fn collect_health_indicators(&self) -> StoreHealthIndicators {
-        let ha_runtime_info = self
-            .ha_service
-            .as_ref()
-            .map_or_else(Default::default, GeneralHAService::group_transfer_runtime_info);
+        self.collect_scoped_health_indicators(StoreHealthScope::FULL)
+    }
+
+    /// Reads the core indicators and only the optional ones in `scope`. Send admission calls this
+    /// for every request, and the optional parts read state that other threads keep writing.
+    pub(super) fn collect_scoped_health_indicators(&self, scope: StoreHealthScope) -> StoreHealthIndicators {
+        let ha_runtime_info = if scope.replication {
+            self.ha_service
+                .as_ref()
+                .map_or_else(Default::default, GeneralHAService::group_transfer_runtime_info)
+        } else {
+            Default::default()
+        };
         StoreHealthIndicators {
             writeable: self.store_health_recorder.writeable(),
             last_flush_error: self.store_health_recorder.last_flush_error(),
             os_page_cache_busy: self.is_os_page_cache_busy(),
             transient_store_pool_deficient: self.is_transient_store_pool_deficient(),
-            sync_flush: self.sync_flush_runtime_info(),
-            dispatch_behind_bytes: self.dispatch_behind_bytes(),
+            sync_flush: if scope.flush_backlog {
+                self.sync_flush_runtime_info()
+            } else {
+                Default::default()
+            },
+            dispatch_behind_bytes: if scope.dispatch_lag {
+                self.dispatch_behind_bytes()
+            } else {
+                0
+            },
             shutdown: self.is_shutdown(),
             ha_pending_request_count: ha_runtime_info.pending_request_count,
             ha_pending_oldest_wait_millis: ha_runtime_info.pending_request_oldest_wait_millis,
