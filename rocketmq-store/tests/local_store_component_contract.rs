@@ -50,7 +50,7 @@ fn core_facade_operations_delegate_to_capability_modules() {
         "self.initialize_store().await",
         "self.shutdown_store_gracefully().await",
         "self.append_replica_bytes(",
-        "self.collect_health_indicators()",
+        "self.collect_scoped_health_indicators(scope)",
     ] {
         assert!(
             FACADE.contains(delegation),
@@ -76,7 +76,7 @@ fn core_facade_operations_delegate_to_capability_modules() {
     assert!(WRITE_PATH.contains("async fn append_replica_bytes("));
     assert!(DISPATCH.contains("struct ReputMessageService"));
     assert!(RECOVERY.contains("async fn recover("));
-    assert!(HEALTH.contains("fn collect_health_indicators("));
+    assert!(HEALTH.contains("fn collect_scoped_health_indicators("));
     assert!(LIFECYCLE.contains("async fn shutdown_store_gracefully("));
 }
 
