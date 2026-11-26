@@ -4005,8 +4005,42 @@ fn failed_canonical_flush_marks_store_unwriteable_and_legacy_flush_keeps_waterma
     let health = store.health_snapshot();
     assert!(!health.writable);
     assert_eq!(health.last_error, Some(&rocketmq_error::STORAGE_IO_FAILED));
+    let core = store.scoped_health_snapshot(rocketmq_store_api::StoreHealthScope::CORE);
+    assert!(!core.writable);
+    assert_eq!(core.last_error, Some(&rocketmq_error::STORAGE_IO_FAILED));
     assert_eq!(store.flush(), durable_before);
     assert_eq!(store.get_flushed_where(), durable_before);
+}
+
+#[test]
+fn core_scoped_health_snapshot_leaves_optional_parts_unread() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_test_store(&temp_dir);
+    let payload = b"scoped-health-message";
+    assert!(crate::runtime::test_runtime_owner()
+        .block_on(store.append_to_commit_log(0, payload, 0, payload.len() as i32))
+        .unwrap());
+
+    let full = store.health_snapshot();
+    let core = store.scoped_health_snapshot(rocketmq_store_api::StoreHealthScope::CORE);
+
+    assert!(full.appended_watermark > 0);
+    assert_eq!(
+        core,
+        rocketmq_store_api::StoreHealthSnapshot {
+            appended_watermark: 0,
+            durable_watermark: 0,
+            flush_backlog: rocketmq_store_api::FlushBacklog::default(),
+            dispatch_behind_bytes: 0,
+            replication_pending_count: 0,
+            replication_oldest_wait_millis: 0,
+            ..full.clone()
+        }
+    );
+    assert_eq!(
+        store.scoped_health_snapshot(rocketmq_store_api::StoreHealthScope::FULL),
+        full
+    );
 }
 
 #[tokio::test]

@@ -537,6 +537,13 @@ macro_rules! message_store_methods {
         delegate_store!(self, health_snapshot())
     }
 
+    fn scoped_health_snapshot(
+        &self,
+        scope: rocketmq_store_api::StoreHealthScope,
+    ) -> rocketmq_store_api::StoreHealthSnapshot {
+        delegate_store!(self, scoped_health_snapshot(scope))
+    }
+
     fn lock_time_millis(&self) -> i64 {
         delegate_store!(self, lock_time_millis())
     }

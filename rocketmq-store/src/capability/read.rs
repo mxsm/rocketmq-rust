@@ -287,6 +287,11 @@ pub trait BrokerReadStore: MessageStoreAccess {
         MessageStoreEngine::health_snapshot(self.message_store())
     }
 
+    /// Health snapshot with only the parts in `scope`, for per-request callers.
+    fn scoped_health_snapshot(&self, scope: rocketmq_store_api::StoreHealthScope) -> StoreHealthSnapshot {
+        MessageStoreEngine::scoped_health_snapshot(self.message_store(), scope)
+    }
+
     fn lock_time_millis(&self) -> i64 {
         MessageStoreEngine::lock_time_millis(self.message_store())
     }

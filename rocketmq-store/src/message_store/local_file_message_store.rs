@@ -81,6 +81,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
+use rocketmq_store_api::StoreHealthScope;
 use rocketmq_store_api::TimerRecallRegistration;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
@@ -2007,10 +2008,19 @@ impl MessageStoreEngine for LocalFileMessageStore {
     }
 
     fn health_snapshot(&self) -> rocketmq_store_api::StoreHealthSnapshot {
+        self.scoped_health_snapshot(StoreHealthScope::FULL)
+    }
+
+    fn scoped_health_snapshot(&self, scope: StoreHealthScope) -> rocketmq_store_api::StoreHealthSnapshot {
+        let (appended_watermark, durable_watermark) = if scope.watermarks {
+            (self.get_max_phy_offset(), self.get_flushed_where())
+        } else {
+            (0, 0)
+        };
         build_store_health_snapshot(
-            self.collect_health_indicators(),
-            self.get_max_phy_offset(),
-            self.get_flushed_where(),
+            self.collect_scoped_health_indicators(scope),
+            appended_watermark,
+            durable_watermark,
         )
     }
 

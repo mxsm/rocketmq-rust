@@ -44,6 +44,7 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::StoreAppendReceipt;
+use rocketmq_store::StoreHealthScope;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
@@ -252,7 +253,7 @@ impl SendMessagePolicyState {
 }
 
 trait SendMessageStorePort: Send + Sync {
-    fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable>;
+    fn health_snapshot(&self, scope: StoreHealthScope) -> Result<StoreHealthSnapshot, MessageStoreUnavailable>;
     fn now(&self) -> Result<u64, MessageStoreUnavailable>;
     fn append_progress(&self) -> Result<(i64, i64), MessageStoreUnavailable>;
     fn look_message_by_offset(&self, offset: i64) -> Result<Option<MessageExt>, MessageStoreUnavailable>;
@@ -271,8 +272,8 @@ trait SendMessageStorePort: Send + Sync {
 }
 
 impl<MS: BrokerWriteStore> SendMessageStorePort for EscapeBridge<MS> {
-    fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
-        self.send_message_store_health_snapshot()
+    fn health_snapshot(&self, scope: StoreHealthScope) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
+        self.send_message_store_health_snapshot(scope)
     }
 
     fn now(&self) -> Result<u64, MessageStoreUnavailable> {
@@ -334,8 +335,11 @@ impl SendMessageStoreCapability {
         self.provider.upgrade().ok_or(MessageStoreUnavailable)
     }
 
-    pub(crate) fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
-        self.provider()?.health_snapshot()
+    pub(crate) fn health_snapshot(
+        &self,
+        scope: StoreHealthScope,
+    ) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
+        self.provider()?.health_snapshot(scope)
     }
 
     pub(crate) fn now(&self) -> Result<u64, MessageStoreUnavailable> {

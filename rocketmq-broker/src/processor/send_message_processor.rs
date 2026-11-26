@@ -76,6 +76,7 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
 use rocketmq_store::StoreAppendReceipt;
+use rocketmq_store::StoreHealthScope;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
@@ -223,7 +224,12 @@ where
                     ),
             );
         }
-        let snapshot = match self.inner.context.store.health_snapshot() {
+        let snapshot = match self
+            .inner
+            .context
+            .store
+            .health_snapshot(send_health_scope(policy.as_ref()))
+        {
             Ok(snapshot) => snapshot,
             Err(_) => {
                 return Some(
@@ -1618,6 +1624,18 @@ fn map_store_api_error(error: rocketmq_store_api::StoreError) -> StoreApiErrorPr
     }
 }
 
+/// The parts of the store health snapshot that [`store_health_reject_remark`] consults under
+/// `policy`: a reason whose thresholds are all disabled does not need its store state.
+fn send_health_scope(policy: &impl SendBackpressurePolicy) -> StoreHealthScope {
+    StoreHealthScope {
+        flush_backlog: policy.sync_flush_backlog_reject_depth() > 0
+            || policy.sync_flush_backlog_reject_wait_millis() > 0,
+        replication: policy.ha_pending_reject_count() > 0 || policy.ha_pending_reject_wait_millis() > 0,
+        dispatch_lag: policy.reput_lag_reject_bytes() > 0,
+        watermarks: false,
+    }
+}
+
 fn store_health_reject_remark(policy: &impl SendBackpressurePolicy, snapshot: StoreHealthSnapshot) -> Option<String> {
     if snapshot.shutdown {
         return Some("store_backpressure reason=store_shutdown".to_string());
@@ -2256,6 +2274,7 @@ mod tests {
     use rocketmq_store::PutMessageResult;
     use rocketmq_store::PutMessageStatus;
     use rocketmq_store::StoreAppendReceipt;
+    use rocketmq_store::StoreHealthScope;
     use rocketmq_store::StoreHealthSnapshot;
     use rocketmq_store::SyncFlushRuntimeInfo;
     use rocketmq_store_api::MessageAppender;
@@ -2275,6 +2294,7 @@ mod tests {
     use super::message_body_limit_violation;
     use super::message_store_not_initialized;
     use super::no_retry_queue_response;
+    use super::send_health_scope;
     use super::store_health_reject_remark;
     use super::sync_flush_backlog_reject_remark;
     use super::StoreApiRetryDisposition;
@@ -2908,6 +2928,27 @@ mod tests {
                 "legacy status {legacy:?}"
             );
         }
+    }
+
+    #[test]
+    fn send_health_scope_reads_only_enabled_backpressure_state() {
+        assert_eq!(send_health_scope(&BrokerConfig::default()), StoreHealthScope::CORE);
+
+        let broker_config = BrokerConfig {
+            sync_flush_backlog_reject_wait_millis: 100,
+            ha_pending_reject_count: 4,
+            reput_lag_reject_bytes: 1024,
+            ..BrokerConfig::default()
+        };
+        assert_eq!(
+            send_health_scope(&broker_config),
+            StoreHealthScope {
+                flush_backlog: true,
+                replication: true,
+                dispatch_lag: true,
+                watermarks: false,
+            }
+        );
     }
 
     #[test]
