@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    future::Future,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::{
@@ -66,19 +63,11 @@ impl DashboardMetricsAdmin for AdminSession {
 }
 
 // This seam tests the actual sampling loop and its RPC budget, including high-fanout Topics.
+#[trait_variant::make(Send)]
 trait TopicRateSource: Sync {
-    fn masters<'a>(&'a self, topic: &'a str) -> impl Future<Output = Option<Vec<Option<CheetahString>>>> + Send + 'a;
-    fn groups<'a>(
-        &'a self,
-        address: CheetahString,
-        topic: &'a str,
-    ) -> impl Future<Output = Option<Vec<CheetahString>>> + Send + 'a;
-    fn stats<'a>(
-        &'a self,
-        address: CheetahString,
-        metric: &'static str,
-        key: CheetahString,
-    ) -> impl Future<Output = Option<BrokerStatsData>> + Send + 'a;
+    async fn masters(&self, topic: &str) -> Option<Vec<Option<CheetahString>>>;
+    async fn groups(&self, address: CheetahString, topic: &str) -> Option<Vec<CheetahString>>;
+    async fn stats(&self, address: CheetahString, metric: &'static str, key: CheetahString) -> Option<BrokerStatsData>;
 }
 
 impl TopicRateSource for DefaultMQAdminExt {
@@ -283,6 +272,28 @@ mod tests {
             let item = BrokerStatsItem::new(30, tps, 0.0);
             Some(BrokerStatsData::new(item.clone(), item.clone(), item))
         }
+    }
+
+    fn require_send_future<'a, T>(_: impl std::future::Future<Output = T> + Send + 'a) {}
+
+    /// A caller borrowing the source for `'a` can rely on every query returning
+    /// a `Send + 'a` future with the declared output.
+    fn assert_topic_rate_source_futures_are_send<'a, S: TopicRateSource>(source: &'a S, topic: &'a str) {
+        require_send_future::<'a, Option<Vec<Option<CheetahString>>>>(source.masters(topic));
+        require_send_future::<'a, Option<Vec<CheetahString>>>(source.groups("broker-0".into(), topic));
+        require_send_future::<'a, Option<BrokerStatsData>>(source.stats(
+            "broker-0".into(),
+            "TOPIC_PUT_NUMS",
+            topic.into(),
+        ));
+    }
+
+    #[test]
+    fn topic_rate_source_futures_are_send_for_generic_callers() {
+        let source = Source::new(1);
+        assert_topic_rate_source_futures_are_send(&source, "Topic");
+        // The futures are only constructed, never polled.
+        assert!(source.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
