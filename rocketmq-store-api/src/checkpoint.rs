@@ -254,7 +254,7 @@ pub struct CheckpointRestoreVerification {
     pub offsets_verified: bool,
     /// Whether storage identity verified.
     pub storage_identity_verified: bool,
-    /// Whether wal retained.
+    /// Whether the write-ahead log (WAL) was retained.
     pub wal_retained: bool,
     /// Whether persistent volume retained.
     pub persistent_volume_retained: bool,
