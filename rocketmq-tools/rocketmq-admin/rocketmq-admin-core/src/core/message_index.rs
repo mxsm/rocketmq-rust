@@ -95,7 +95,9 @@ pub struct FindMessagesByKeyResult {
     pub topic: String,
     /// The matches, newest first, at most [`MAX_MESSAGE_KEY_MATCHES`].
     pub matches: Vec<MessageKeyMatch>,
-    /// Whether more messages match than were returned.
+    /// `true` if any broker returned more than [`MAX_MESSAGE_KEY_MATCHES`] candidates
+    /// before store-time filtering, or if the combined matches within the requested
+    /// store-time window exceeded that limit.
     pub truncated: bool,
     pub queried_broker_count: usize,
     /// Logical names of the Brokers that host the Topic and did not answer, in ascending order.
