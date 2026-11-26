@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(any(feature = "client-adapter", test))]
-use std::future::Future;
-
 use cheetah_string::CheetahString;
 use rocketmq_error::fields;
 use rocketmq_error::Error;
@@ -143,21 +140,18 @@ impl DeleteTopicResult {
 /// The SDK adapter owns metadata decoding and safe failure projection. This
 /// use case owns target normalization and when route deletion is permitted.
 #[cfg(any(feature = "client-adapter", test))]
+#[trait_variant::make(Send)]
 pub(crate) trait TopicDeletionOperations {
     /// Discovers the Master Broker addresses of `cluster`.
-    fn master_targets(&mut self, cluster: &CheetahString) -> impl Future<Output = Result<Vec<CheetahString>>> + Send;
+    async fn master_targets(&mut self, cluster: &CheetahString) -> Result<Vec<CheetahString>>;
     /// Deletes `topic` on the selected `broker`.
-    fn delete_broker(
+    async fn delete_broker(
         &mut self,
         topic: &CheetahString,
         broker: &CheetahString,
-    ) -> impl Future<Output = std::result::Result<(), TopicOperationFailure>> + Send;
+    ) -> std::result::Result<(), TopicOperationFailure>;
     /// Removes the NameServer route of `topic` for `cluster`.
-    fn delete_route(
-        &mut self,
-        topic: &CheetahString,
-        cluster: &CheetahString,
-    ) -> impl Future<Output = Result<()>> + Send;
+    async fn delete_route(&mut self, topic: &CheetahString, cluster: &CheetahString) -> Result<()>;
 }
 
 #[cfg(any(feature = "client-adapter", test))]
