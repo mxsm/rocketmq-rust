@@ -194,7 +194,7 @@ impl DefaultMQAdminExtImpl {
             if queue.topic() == &topic {
                 has_consumed = true;
                 rollback_stats.push(
-                    self.mutation_reset_queue_offset(
+                    self.reset_queue_offset(
                         broker_addr.clone(),
                         consumer_group.clone(),
                         queue.clone(),
@@ -229,7 +229,7 @@ impl DefaultMQAdminExtImpl {
                 offset_wrapper.set_broker_offset(topic_offset.get_max_offset());
                 offset_wrapper.set_consumer_offset(topic_offset.get_min_offset());
                 rollback_stats.push(
-                    self.mutation_reset_queue_offset(
+                    self.reset_queue_offset(
                         broker_addr.clone(),
                         consumer_group.clone(),
                         queue,
@@ -244,7 +244,7 @@ impl DefaultMQAdminExtImpl {
         Ok(rollback_stats)
     }
 
-    async fn mutation_reset_queue_offset(
+    pub(super) async fn reset_queue_offset(
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
@@ -372,7 +372,7 @@ impl DefaultMQAdminExtImpl {
         for (queue, wrapper) in queues {
             let queue_id = queue.queue_id();
             match self
-                .mutation_reset_queue_offset(
+                .reset_queue_offset(
                     broker_addr.clone(),
                     consumer_group.clone(),
                     queue,
@@ -1870,6 +1870,56 @@ mod detailed_offset_tests {
         );
         response.make_custom_header_to_net();
         response
+    }
+
+    #[tokio::test]
+    async fn legacy_offset_reset_only_moves_a_queue_forward_when_forced() {
+        let harness = ProductionAdminHarness::new("legacy-queue-reset").await;
+        let queue = MessageQueue::from_parts("orders", "broker-a", 0);
+        let queue_data = QueueData::new("broker-a".into(), 1, 1, 6, 0);
+        #[cfg(feature = "admin-full")]
+        let reset_on_broker = DefaultMQAdminExtImpl::reset_offset_by_timestamp_old_on_broker;
+        #[cfg(not(feature = "admin-full"))]
+        let reset_on_broker = DefaultMQAdminExtImpl::mutation_reset_offset_on_broker;
+
+        for (timestamp, force, lookup) in [
+            (-1, false, RequestCode::GetMaxOffset),
+            (100, true, RequestCode::SearchOffsetByTimestamp),
+        ] {
+            harness.ledger.push(
+                RequestCode::GetConsumeStats,
+                consume_stats_response(vec![queue.clone()]),
+            );
+            harness
+                .ledger
+                .push(lookup, response_with_offset_header(ResponseCode::Success, 5));
+            if force {
+                harness.ledger.push(
+                    RequestCode::UpdateConsumerOffset,
+                    RemotingCommand::create_success_response_command(),
+                );
+            }
+            let before = harness.ledger.snapshot();
+            let stats = reset_on_broker(
+                &harness.admin,
+                harness.broker_addr.clone(),
+                &queue_data,
+                "group".into(),
+                "orders".into(),
+                timestamp,
+                force,
+            )
+            .await
+            .unwrap();
+            assert_eq!(stats.len(), 1);
+            assert_eq!(stats[0].timestamp_offset, 5);
+            assert_eq!(stats[0].rollback_offset, if force { 5 } else { 0 });
+            assert_eq!(
+                request_delta(&before, &harness.ledger.snapshot(), RequestCode::UpdateConsumerOffset),
+                usize::from(force)
+            );
+        }
+        harness.shutdown().await;
     }
 
     fn request_mode_success_response() -> RemotingCommand {

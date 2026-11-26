@@ -187,7 +187,7 @@ impl DefaultMQAdminExtImpl {
             if queue.topic() == &topic {
                 has_consumed = true;
                 rollback_stats_list.push(
-                    self.reset_offset_consume_offset(
+                    self.reset_queue_offset(
                         broker_addr.clone(),
                         consumer_group.clone(),
                         queue.clone(),
@@ -224,7 +224,7 @@ impl DefaultMQAdminExtImpl {
                 offset_wrapper.set_broker_offset(topic_offset.get_max_offset());
                 offset_wrapper.set_consumer_offset(topic_offset.get_min_offset());
                 rollback_stats_list.push(
-                    self.reset_offset_consume_offset(
+                    self.reset_queue_offset(
                         broker_addr.clone(),
                         consumer_group.clone(),
                         queue,
@@ -238,60 +238,6 @@ impl DefaultMQAdminExtImpl {
         }
 
         Ok(rollback_stats_list)
-    }
-
-    pub(super) async fn reset_offset_consume_offset(
-        &self,
-        broker_addr: CheetahString,
-        consumer_group: CheetahString,
-        queue: MessageQueue,
-        offset_wrapper: &OffsetWrapper,
-        timestamp: i64,
-        force: bool,
-    ) -> crate::ClientResult<RollbackStats> {
-        let reset_offset = if timestamp == -1 {
-            self.mq_client_api()?
-                .get_max_offset(broker_addr.as_str(), &queue, self.remoting_timeout_millis()?)
-                .await?
-        } else {
-            self.mq_client_api()?
-                .search_offset_by_timestamp(
-                    broker_addr.as_str(),
-                    &queue,
-                    timestamp,
-                    rocketmq_model::common::boundary_type::BoundaryType::Lower,
-                    self.remoting_timeout_millis()?,
-                )
-                .await?
-        };
-
-        let mut rollback_stats = RollbackStats {
-            broker_name: queue.broker_name().clone(),
-            queue_id: queue.queue_id() as i64,
-            broker_offset: offset_wrapper.get_broker_offset(),
-            consumer_offset: offset_wrapper.get_consumer_offset(),
-            timestamp_offset: reset_offset,
-            rollback_offset: offset_wrapper.get_consumer_offset(),
-        };
-
-        if force || reset_offset <= offset_wrapper.get_consumer_offset() {
-            rollback_stats.rollback_offset = reset_offset;
-            self.mq_client_api()?
-                .update_consumer_offset(
-                    &broker_addr,
-                    UpdateConsumerOffsetRequestHeader {
-                        consumer_group,
-                        topic: queue.topic().clone(),
-                        queue_id: queue.queue_id(),
-                        commit_offset: reset_offset,
-                        topic_request_header: None,
-                    },
-                    self.remoting_timeout_millis()?,
-                )
-                .await?;
-        }
-
-        Ok(rollback_stats)
     }
 
     pub(super) async fn message_consumed_by_group(
