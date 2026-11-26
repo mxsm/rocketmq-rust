@@ -45,6 +45,7 @@ sysinfo.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util.workspace = true
+trait-variant.workspace = true
 tracing.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
