@@ -40,6 +40,7 @@ use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -2504,31 +2505,34 @@ fn attach_pop_receipt_handles(
             .unwrap_or(&CheetahString::from_slice("")),
     )?;
     let sort_map = build_queue_offset_sorted_map(topic, messages.as_slice())?;
-    let mut cached_extra = HashMap::with_capacity(5);
+    // Every message of one response gets the same first-pop time and topic.
+    let first_pop_time = cheetah_from_integer(response_header.pop_time);
+    let topic_name = CheetahString::from_slice(topic);
+    let mut cached_extra: HashMap<(CheetahString, i32), CheetahString> = HashMap::with_capacity(5);
+    // Lookup keys for the sorted offset and order count tables, reused per message.
+    let mut queue_id_key = String::new();
+    let mut queue_offset_key = String::new();
     for message in messages {
         if start_offset_info.is_empty() {
-            let key = CheetahString::from_string(format!("{}{}", message.topic(), message.queue_id() as i64));
-            if !cached_extra.contains_key(&key) {
-                let extra_info = ExtraInfoUtil::build_extra_info(
-                    message.queue_offset(),
-                    response_header.pop_time as i64,
-                    response_header.invisible_time as i64,
-                    response_header.revive_qid as i32,
-                    message.topic(),
-                    broker_name,
-                    message.queue_id(),
-                );
-                cached_extra.insert(key.clone(), CheetahString::from_string(extra_info));
-            }
-            message.put_property(
-                CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
-                CheetahString::from_string(format!(
-                    "{}{}{}",
-                    cached_extra.get(&key).cloned().unwrap_or_default(),
-                    MessageConst::KEY_SEPARATOR,
-                    message.queue_offset()
-                )),
-            );
+            let extra_info = cached_extra
+                .entry((message.topic().clone(), message.queue_id()))
+                .or_insert_with(|| {
+                    ExtraInfoUtil::build_extra_info_cheetah(
+                        message.queue_offset(),
+                        response_header.pop_time as i64,
+                        response_header.invisible_time as i64,
+                        response_header.revive_qid as i32,
+                        message.topic(),
+                        broker_name,
+                        message.queue_id(),
+                    )
+                });
+            let pop_ck = CheetahString::concat(&[
+                extra_info.as_str(),
+                MessageConst::KEY_SEPARATOR,
+                cheetah_from_integer(message.queue_offset()).as_str(),
+            ]);
+            message.put_property(CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK), pop_ck);
         } else if message
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
             .is_none()
@@ -2538,7 +2542,7 @@ fn attach_pop_receipt_handles(
                     MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
                 ))
                 .unwrap_or_default();
-            let (queue_offset_key, queue_id_key) = if mix_all::is_lmq(Some(topic)) && !dispatch.is_empty() {
+            if mix_all::is_lmq(Some(topic)) && !dispatch.is_empty() {
                 let queues: Vec<&str> = dispatch.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
                 let data = message
                     .property(&CheetahString::from_static_str(
@@ -2553,9 +2557,13 @@ fn attach_pop_receipt_handles(
                     .and_then(|value| value.parse::<i64>().ok())
                     .filter(|offset| *offset >= 0)
                     .unwrap_or_default();
-                let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
-                let queue_offset_key =
-                    ExtraInfoUtil::get_queue_offset_map_key(topic, mix_all::LMQ_QUEUE_ID as i64, offset);
+                ExtraInfoUtil::write_start_offset_info_map_key(&mut queue_id_key, topic, mix_all::LMQ_QUEUE_ID as i64);
+                ExtraInfoUtil::write_queue_offset_map_key(
+                    &mut queue_offset_key,
+                    topic,
+                    mix_all::LMQ_QUEUE_ID as i64,
+                    offset,
+                );
                 let index = sort_map
                     .get(&queue_id_key)
                     .and_then(|offsets| offsets.iter().position(|queue_offset| *queue_offset == offset as u64))
@@ -2565,7 +2573,7 @@ fn attach_pop_receipt_handles(
                     .and_then(|offsets| offsets.get(index))
                     .copied()
                     .unwrap_or_default();
-                let extra_info = ExtraInfoUtil::build_extra_info(
+                let extra_info = ExtraInfoUtil::build_extra_info_cheetah(
                     message.queue_offset(),
                     response_header.pop_time as i64,
                     response_header.invisible_time as i64,
@@ -2576,13 +2584,16 @@ fn attach_pop_receipt_handles(
                 );
                 message.put_property(
                     CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
-                    CheetahString::from_string(extra_info),
+                    extra_info,
                 );
-                (queue_offset_key, queue_id_key)
             } else {
-                let queue_id_key =
-                    ExtraInfoUtil::get_start_offset_info_map_key(message.topic(), message.queue_id() as i64);
-                let queue_offset_key = ExtraInfoUtil::get_queue_offset_map_key(
+                ExtraInfoUtil::write_start_offset_info_map_key(
+                    &mut queue_id_key,
+                    message.topic(),
+                    message.queue_id() as i64,
+                );
+                ExtraInfoUtil::write_queue_offset_map_key(
+                    &mut queue_offset_key,
                     message.topic(),
                     message.queue_id() as i64,
                     message.queue_offset(),
@@ -2600,7 +2611,7 @@ fn attach_pop_receipt_handles(
                     .and_then(|offsets| offsets.get(index))
                     .copied()
                     .unwrap_or_default();
-                let extra_info = ExtraInfoUtil::build_extra_info(
+                let extra_info = ExtraInfoUtil::build_extra_info_cheetah(
                     message.queue_offset(),
                     response_header.pop_time as i64,
                     response_header.invisible_time as i64,
@@ -2611,10 +2622,9 @@ fn attach_pop_receipt_handles(
                 );
                 message.put_property(
                     CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
-                    CheetahString::from_string(extra_info),
+                    extra_info,
                 );
-                (queue_offset_key, queue_id_key)
-            };
+            }
             if is_order && !order_count_info.is_empty() {
                 let count = order_count_info
                     .get(&queue_offset_key)
@@ -2626,10 +2636,10 @@ fn attach_pop_receipt_handles(
         }
         message.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_FIRST_POP_TIME),
-            CheetahString::from(response_header.pop_time.to_string()),
+            first_pop_time.clone(),
         );
         message.broker_name = broker_name.clone();
-        message.set_topic(CheetahString::from(topic));
+        message.set_topic(topic_name.clone());
     }
     Ok(())
 }
@@ -2970,6 +2980,55 @@ mod tests {
     use super::MessageDecoder;
     use super::MessageIdDecodeError;
     use crate::LocalConfig;
+
+    #[test]
+    fn receipt_handles_without_start_offsets_reuse_extra_info_per_topic_queue() {
+        let header = PopMessageResponseHeader {
+            pop_time: 1_700_000_000_123,
+            invisible_time: 30_000,
+            revive_qid: 2,
+            ..Default::default()
+        };
+        // ("TopicA1", 2) and ("TopicA", 12) once shared one formatted cache key.
+        let queues = [("TopicA", 1, 5), ("TopicA", 1, 6), ("TopicA1", 2, 7), ("TopicA", 12, 8)];
+        let mut messages = queues
+            .iter()
+            .map(|&(topic, queue_id, queue_offset)| {
+                let mut message = MessageExt::default();
+                message.set_topic(topic.into());
+                message.set_queue_id(queue_id);
+                message.set_queue_offset(queue_offset);
+                message
+            })
+            .collect::<Vec<_>>();
+
+        attach_pop_receipt_handles(&mut messages, "TopicA", &"broker-a".into(), &header, false)
+            .expect("receipt handles should attach");
+
+        let extra_info = |topic, queue_id, first_offset| {
+            ExtraInfoUtil::build_extra_info(first_offset, 1_700_000_000_123, 30_000, 2, topic, "broker-a", queue_id)
+        };
+        let expected = [
+            format!("{} 5", extra_info("TopicA", 1, 5)),
+            format!("{} 6", extra_info("TopicA", 1, 5)),
+            format!("{} 7", extra_info("TopicA1", 2, 7)),
+            format!("{} 8", extra_info("TopicA", 12, 8)),
+        ];
+        for (message, expected) in messages.iter().zip(expected) {
+            assert_eq!(
+                message.property(&MessageConst::PROPERTY_POP_CK.into()).as_deref(),
+                Some(expected.as_str())
+            );
+            assert_eq!(
+                message
+                    .property(&MessageConst::PROPERTY_FIRST_POP_TIME.into())
+                    .as_deref(),
+                Some("1700000000123")
+            );
+            assert_eq!(message.topic().as_str(), "TopicA");
+            assert_eq!(message.broker_name.as_str(), "broker-a");
+        }
+    }
 
     #[test]
     fn multi_dispatch_offsets_default_only_for_malformed_properties() {

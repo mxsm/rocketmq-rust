@@ -31,7 +31,6 @@ use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::batch_ack::BatchAck;
 use rocketmq_protocol::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader;
@@ -683,30 +682,31 @@ where
         let mut inner = MessageExtBrokerInner::default();
         inner.set_topic(self.context.policy.revive_topic.clone());
         inner.message_ext_inner.queue_id = qid;
+        // Properties are set on the inner message and encoded once below.
         if let Some(batch_ack) = ack_msg.as_any().downcast_ref::<BatchAckMsg>() {
             inner.set_body(batch_ack.encode()?.into());
-            inner.set_tags(CheetahString::from_static_str(PopAckConstants::BATCH_ACK_TAG));
-            inner.put_property(
-                CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-                CheetahString::from(PopMessageProcessor::<MS>::gen_batch_ack_unique_id(batch_ack)),
-            );
+            inner
+                .message_ext_inner
+                .set_tags(CheetahString::from_static_str(PopAckConstants::BATCH_ACK_TAG));
         } else if let Some(ack_msg) = ack_msg.as_any().downcast_ref::<AckMsg>() {
             inner.set_body(ack_msg.encode()?.into());
-            inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
-            inner.put_property(
-                CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-                CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(ack_msg as &dyn AckMessage)),
-            );
+            inner
+                .message_ext_inner
+                .set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
         }
         inner.message_ext_inner.born_timestamp = current_millis() as i64;
         inner.message_ext_inner.store_host = self.context.policy.store_host;
         inner.message_ext_inner.born_host = self.context.policy.store_host;
-        inner.set_deliver_time_ms((pop_time + invisible_time) as u64);
-        inner.put_property(
+        inner
+            .message_ext_inner
+            .set_deliver_time_ms((pop_time + invisible_time) as u64);
+        // Both branches store the ack ID as the unique key. A batch ack's own ID was always
+        // overwritten by this write, so it is no longer computed.
+        inner.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(ack_msg.as_ref())),
+            PopMessageProcessor::<MS>::gen_ack_unique_id(ack_msg.as_ref()),
         );
-        inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
+        inner.refresh_properties_string();
         let put_message_result = match self.context.message_store.put_message(inner).await {
             Ok(result) => result,
             Err(MessageStoreUnavailable) => {

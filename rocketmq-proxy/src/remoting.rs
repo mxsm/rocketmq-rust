@@ -2027,11 +2027,11 @@ where
         }
 
         let mut body = GetParentTopicInfoResponseBody::new();
-        body.set_topic(CheetahString::from(topic.to_string()));
+        body.set_topic(topic.to_cheetah_string());
         body.set_groups(
             subscriptions
                 .iter()
-                .map(|subscription| CheetahString::from(subscription.group.to_string()))
+                .map(|subscription| subscription.group.to_cheetah_string())
                 .collect(),
         );
         let unique_lite_topics = unique_lite_topics(subscriptions.as_slice());
@@ -2051,7 +2051,7 @@ where
         }
 
         let mut body = GetLiteTopicInfoResponseBody::new();
-        body.with_parent_topic(CheetahString::from(topic.to_string()))
+        body.with_parent_topic(topic.to_cheetah_string())
             .with_lite_topic(CheetahString::from(lite_topic))
             .with_subscriber(
                 subscriptions
@@ -2059,7 +2059,7 @@ where
                     .map(|subscription| {
                         ClientGroup::from_parts(
                             CheetahString::from(subscription.client_id.clone()),
-                            CheetahString::from(subscription.group.to_string()),
+                            subscription.group.to_cheetah_string(),
                         )
                     })
                     .collect(),
@@ -2077,8 +2077,8 @@ where
         let first = subscriptions.first()?;
 
         let mut body = GetLiteGroupInfoResponseBody::new();
-        body.with_group(CheetahString::from(group.to_string()))
-            .with_parent_topic(CheetahString::from(first.topic.to_string()))
+        body.with_group(group.to_cheetah_string())
+            .with_parent_topic(first.topic.to_cheetah_string())
             .with_lite_topic(CheetahString::from(lite_topic))
             .with_total_lag_count(0)
             .with_earliest_unconsumed_timestamp(0);
@@ -2334,11 +2334,12 @@ fn build_send_message_request(
             .into());
         }
 
+        let topic_name = topic.to_cheetah_string();
         let entries = messages
             .into_iter()
             .enumerate()
             .map(|(index, mut message)| {
-                message.set_topic(CheetahString::from(topic.to_string()));
+                message.set_topic(topic_name.clone());
                 attach_transaction_producer_group(&mut message, header.producer_group.as_str());
                 let client_message_id = message
                     .property_ref(&CheetahString::from_static_str(
@@ -2366,7 +2367,7 @@ fn build_send_message_request(
     }
 
     let mut message = Message::builder()
-        .topic(topic.to_string())
+        .topic(topic.to_cheetah_string())
         .body(body)
         .flag_bits(header.flag)
         .build_unchecked();

@@ -16,19 +16,24 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 
 /// Provider-neutral message payload passed across the Proxy Core boundary.
+///
+/// Text is held as [`CheetahString`], the representation Broker messages use, so moving a
+/// message between the remoting, gRPC and Broker sides clones its topic and properties instead
+/// of copying them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProxyMessage {
-    topic: String,
+    topic: CheetahString,
     flag: i32,
-    properties: HashMap<String, String>,
+    properties: HashMap<CheetahString, CheetahString>,
     body: Option<Bytes>,
-    transaction_id: Option<String>,
+    transaction_id: Option<CheetahString>,
 }
 
 impl ProxyMessage {
-    pub fn new(topic: impl Into<String>, body: impl Into<Bytes>) -> Self {
+    pub fn new(topic: impl Into<CheetahString>, body: impl Into<Bytes>) -> Self {
         Self {
             topic: topic.into(),
             body: Some(body.into()),
@@ -36,11 +41,11 @@ impl ProxyMessage {
         }
     }
 
-    pub fn topic(&self) -> &str {
-        self.topic.as_str()
+    pub fn topic(&self) -> &CheetahString {
+        &self.topic
     }
 
-    pub fn set_topic(&mut self, topic: impl Into<String>) {
+    pub fn set_topic(&mut self, topic: impl Into<CheetahString>) {
         self.topic = topic.into();
     }
 
@@ -52,23 +57,23 @@ impl ProxyMessage {
         self.flag = flag;
     }
 
-    pub fn properties(&self) -> &HashMap<String, String> {
+    pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
         &self.properties
     }
 
-    pub fn properties_mut(&mut self) -> &mut HashMap<String, String> {
+    pub fn properties_mut(&mut self) -> &mut HashMap<CheetahString, CheetahString> {
         &mut self.properties
     }
 
-    pub fn set_properties(&mut self, properties: HashMap<String, String>) {
+    pub fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.properties = properties;
     }
 
     pub fn property(&self, key: &str) -> Option<&str> {
-        self.properties.get(key).map(String::as_str)
+        self.properties.get(key).map(CheetahString::as_str)
     }
 
-    pub fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>) {
+    pub fn put_property(&mut self, key: impl Into<CheetahString>, value: impl Into<CheetahString>) {
         self.properties.insert(key.into(), value.into());
     }
 
@@ -93,18 +98,20 @@ impl ProxyMessage {
     }
 
     /// Estimates owned storage retained by this message for ingress admission accounting.
+    ///
+    /// Text is counted by length. A value shared with another message is counted for each
+    /// message that holds it, so the estimate errs high.
     pub fn retained_bytes(&self) -> usize {
-        let property_table_bytes = self
-            .properties
-            .capacity()
-            .saturating_mul(std::mem::size_of::<(String, String)>().saturating_add(2 * std::mem::size_of::<usize>()));
+        let property_table_bytes = self.properties.capacity().saturating_mul(
+            std::mem::size_of::<(CheetahString, CheetahString)>().saturating_add(2 * std::mem::size_of::<usize>()),
+        );
         self.properties.iter().fold(
             std::mem::size_of_val(self)
-                .saturating_add(self.topic.capacity())
+                .saturating_add(self.topic.len())
                 .saturating_add(self.body.as_ref().map_or(0, Bytes::len))
-                .saturating_add(self.transaction_id.as_ref().map_or(0, String::capacity))
+                .saturating_add(self.transaction_id.as_ref().map_or(0, CheetahString::len))
                 .saturating_add(property_table_bytes),
-            |retained, (key, value)| retained.saturating_add(key.capacity()).saturating_add(value.capacity()),
+            |retained, (key, value)| retained.saturating_add(key.len()).saturating_add(value.len()),
         )
     }
 
@@ -112,8 +119,8 @@ impl ProxyMessage {
         self.transaction_id.as_deref()
     }
 
-    pub fn set_transaction_id(&mut self, transaction_id: Option<String>) {
-        self.transaction_id = transaction_id;
+    pub fn set_transaction_id(&mut self, transaction_id: Option<impl Into<CheetahString>>) {
+        self.transaction_id = transaction_id.map(Into::into);
     }
 }
 
@@ -160,7 +167,7 @@ impl Default for ProxyMessageExt {
 }
 
 impl ProxyMessageExt {
-    pub fn topic(&self) -> &str {
+    pub fn topic(&self) -> &CheetahString {
         self.message.topic()
     }
 
@@ -172,7 +179,7 @@ impl ProxyMessageExt {
         self.message.body_bytes()
     }
 
-    pub fn properties(&self) -> &HashMap<String, String> {
+    pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
         self.message.properties()
     }
 

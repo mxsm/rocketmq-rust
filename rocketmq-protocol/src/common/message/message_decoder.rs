@@ -202,6 +202,19 @@ pub fn decode_client(
     })
 }
 
+/// Decodes one stored message frame from the front of `byte_buffer` and advances past it.
+///
+/// - `read_body` keeps the body, as a slice of `byte_buffer` unless it is decompressed.
+/// - `de_compress_body` decompresses a body whose system flag marks it compressed.
+/// - `is_client` lets the properties share the frame with a retained wire body instead of copying
+///   them. Use it only where the message owns the reply frame, as client Pull and POP decoding do.
+///   The frame then stays alive as long as the message or any clone of its properties; call
+///   `MessageProperties::detach_from_frame` on a clone that is cached independently. Taking or
+///   replacing the body detaches the properties automatically.
+/// - `is_set_properties_string` also stores the raw property text under `propertiesString`.
+/// - `check_crc` rejects a read body whose CRC32 differs from the stored one.
+///
+/// Returns `None` if the frame is malformed, the CRC check fails or decompression fails.
 pub fn decode(
     byte_buffer: &mut Bytes,
     read_body: bool,
@@ -374,7 +387,8 @@ pub fn decodes_batch(byte_buffer: &mut Bytes, read_body: bool, decompress_body: 
 }
 
 /// Decodes client Pull or POP messages. Only a body kept as a slice of the reply
-/// permits its properties to share the frame. Broker and metadata-filtered reads stay detached.
+/// permits its properties to share the frame. Broker reads stay detached; see
+/// [`decodes_batch_with_metadata_filter`] for tag-filtered Pull replies.
 pub fn decode_client_batch(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageExt> {
     decode_batch(byte_buffer, read_body, decompress_body, true, std::convert::identity)
 }
@@ -425,6 +439,35 @@ fn split_next_message_frame(byte_buffer: &mut Bytes) -> Option<Bytes> {
     Some(byte_buffer.split_to(store_size as usize))
 }
 
+/// Moves the body out of a client-decoded message for the metadata filter without detaching its
+/// properties from the frame.
+///
+/// `Message::take_body` copies frame-backed properties because a message without its wire body
+/// must not keep the frame alive. Here the body is either put back unchanged through
+/// [`restore_body_keeping_properties`] or the whole message is dropped, so the frame never
+/// outlives both.
+fn take_body_keeping_properties(msg_ext: &mut MessageExt) -> Option<Bytes> {
+    let properties = std::mem::take(msg_ext.message.properties_mut());
+    let body = msg_ext.message.take_body();
+    *msg_ext.message.properties_mut() = properties;
+    body
+}
+
+/// Returns the wire body taken by [`take_body_keeping_properties`], keeping frame-backed properties.
+fn restore_body_keeping_properties(msg_ext: &mut MessageExt, body: Bytes) {
+    let properties = std::mem::take(msg_ext.message.properties_mut());
+    msg_ext.message.set_body(Some(body));
+    *msg_ext.message.properties_mut() = properties;
+}
+
+/// Decodes client Pull messages and keeps those accepted by `should_decode_body`.
+///
+/// The filter sees each message's metadata and properties without its body. Accepted messages get
+/// their body back and, when `decompress_body` is set, decompressed. As with
+/// [`decode_client_batch`], an accepted message whose body stays a slice of the reply shares the
+/// reply frame with its properties, and adjacent messages with the same topic share one topic
+/// value. A filter that keeps a clone of the properties it inspects must call
+/// `MessageProperties::detach_from_frame` on that clone.
 pub fn decodes_batch_with_metadata_filter<F>(
     byte_buffer: &mut Bytes,
     read_body: bool,
@@ -442,15 +485,18 @@ where
         // Decode each frame once. The filter still sees the message without its body; only an
         // accepted message gets its body back and, when asked, decompressed.
         let mut frame = frame;
-        let Some(mut msg_ext) = decode(&mut frame, read_body, false, false, false, false) else {
+        let previous_topic = messages.last().map(MessageTrait::topic);
+        let Some(mut msg_ext) =
+            decode_with_previous_topic(&mut frame, read_body, false, true, false, false, previous_topic)
+        else {
             break;
         };
-        let body = msg_ext.message.take_body();
+        let body = take_body_keeping_properties(&mut msg_ext);
         if !should_decode_body(&msg_ext) {
             continue;
         }
         if let Some(body) = body {
-            msg_ext.message.set_body(Some(body));
+            restore_body_keeping_properties(&mut msg_ext, body);
             if decompress_body && !decompress_message_body(&mut msg_ext) {
                 break;
             }
@@ -1132,6 +1178,50 @@ mod tests {
             assert_eq!(decoded.get_properties(), reference.get_properties());
             assert_eq!(decoded.sys_flag(), reference.sys_flag());
         }
+    }
+
+    #[test]
+    fn metadata_filter_shares_the_reply_frame_with_accepted_wire_bodies() {
+        use std::sync::Arc;
+
+        let topic = "%RETRY%payments-long-consumer-group-a";
+        let mut payload = BytesMut::new();
+        for (queue_offset, tag) in [(0, "Skip"), (1, "Keep"), (2, "Skip"), (3, "Keep")] {
+            let mut message = message_ext_with_tag(queue_offset, tag, 32);
+            message.set_topic(CheetahString::from_slice(topic));
+            payload.put_slice(&encode(&message, false).expect("message should encode"));
+        }
+        let wire: Arc<[u8]> = Arc::from(payload.as_ref());
+        let range = wire.as_ptr_range();
+        let owner = Arc::downgrade(&wire);
+        let mut input = Bytes::from_owner(wire);
+
+        let messages = decodes_batch_with_metadata_filter(&mut input, true, false, |metadata| {
+            assert!(metadata.get_body().is_none(), "the filter sees metadata only");
+            metadata.tags().as_deref() == Some("Keep")
+        });
+        drop(input);
+
+        assert_eq!(
+            messages.iter().map(|message| message.queue_offset).collect::<Vec<_>>(),
+            [1, 3]
+        );
+        for message in &messages {
+            assert_eq!(message.get_body().map(Bytes::len), Some(32));
+            assert_eq!(message.topic().as_str(), topic);
+            let tag = message.message.properties().get_str("TAGS").expect("tag should decode");
+            assert_eq!(tag, "Keep");
+            assert!(
+                range.contains(&tag.as_ptr()),
+                "accepted properties share the reply frame"
+            );
+        }
+        assert_eq!(messages[0].topic().as_ptr(), messages[1].topic().as_ptr());
+        drop(messages);
+        assert!(
+            owner.upgrade().is_none(),
+            "rejected and dropped messages release the reply frame"
+        );
     }
 
     #[test]
