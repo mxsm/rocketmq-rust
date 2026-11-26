@@ -867,15 +867,21 @@ impl TopicService {
         }
     }
 
-    /// Query message queues allocated for a topic on specific IPs
+    /// Returns a topic-wide route summary and includes the requested IPs for reference.
+    ///
+    /// The route lookup uses only the topic, so the result is not narrowed to the
+    /// requested IPs: a caller supplying one IP can still see several broker names.
     ///
     /// # Arguments
     /// * `admin` - Admin client instance
     /// * `topic` - Topic name
-    /// * `ip_list` - Comma-separated IP addresses
+    /// * `ip_list` - Comma-separated IP addresses, echoed back trimmed and with empty entries
+    ///   removed in `requested_ips`
     ///
     /// # Returns
-    /// Allocation summary for CLI/TUI rendering
+    /// Route summary for CLI/TUI rendering. `total_queues` is the number of entries in
+    /// `route.queue_datas`, not the number of queues they describe: a route with one
+    /// queue-data entry describing eight readable queues reports `total_queues == 1`.
     pub async fn query_allocated_mq(
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
