@@ -1936,9 +1936,9 @@ dependencies = [
 
 [[package]]
 name = "jsonschema"
-version = "0.63.0"
+version = "0.63.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4d2afab27172a0073112ce84a64ec7fd06f3b8bdad37d46e86c53c933ed232b"
+checksum = "f048e101172edb2c5f0351d7e3bc3796ac89b7f150e64b0cbd20dd82215b2160"
 dependencies = [
  "ahash",
  "bytecount",
