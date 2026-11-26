@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(any(feature = "client-adapter", test))]
-use std::future::Future;
-
 use cheetah_string::CheetahString;
 use rocketmq_error::fields;
 use rocketmq_error::Error;
@@ -143,21 +140,18 @@ impl DeleteTopicResult {
 /// The SDK adapter owns metadata decoding and safe failure projection. This
 /// use case owns target normalization and when route deletion is permitted.
 #[cfg(any(feature = "client-adapter", test))]
+#[trait_variant::make(Send)]
 pub(crate) trait TopicDeletionOperations {
     /// Discovers the Master Broker addresses of `cluster`.
-    fn master_targets(&mut self, cluster: &CheetahString) -> impl Future<Output = Result<Vec<CheetahString>>> + Send;
+    async fn master_targets(&mut self, cluster: &CheetahString) -> Result<Vec<CheetahString>>;
     /// Deletes `topic` on the selected `broker`.
-    fn delete_broker(
+    async fn delete_broker(
         &mut self,
         topic: &CheetahString,
         broker: &CheetahString,
-    ) -> impl Future<Output = std::result::Result<(), TopicOperationFailure>> + Send;
+    ) -> std::result::Result<(), TopicOperationFailure>;
     /// Removes the NameServer route of `topic` for `cluster`.
-    fn delete_route(
-        &mut self,
-        topic: &CheetahString,
-        cluster: &CheetahString,
-    ) -> impl Future<Output = Result<()>> + Send;
+    async fn delete_route(&mut self, topic: &CheetahString, cluster: &CheetahString) -> Result<()>;
 }
 
 #[cfg(any(feature = "client-adapter", test))]
@@ -254,6 +248,24 @@ mod tests {
             self.calls.push("route".into());
             Ok(())
         }
+    }
+
+    #[test]
+    fn deletion_operations_futures_are_send() {
+        fn assert_send_future<T, F: std::future::Future<Output = T> + Send>(_: F) {}
+
+        fn assert_methods<O: TopicDeletionOperations>(
+            ops: &mut O,
+            topic: &CheetahString,
+            cluster: &CheetahString,
+            broker: &CheetahString,
+        ) {
+            assert_send_future::<Result<Vec<CheetahString>>, _>(ops.master_targets(cluster));
+            assert_send_future::<std::result::Result<(), TopicOperationFailure>, _>(ops.delete_broker(topic, broker));
+            assert_send_future::<Result<()>, _>(ops.delete_route(topic, cluster));
+        }
+
+        let _ = assert_methods::<FakeTopicDeletionOperations>;
     }
 
     #[tokio::test]

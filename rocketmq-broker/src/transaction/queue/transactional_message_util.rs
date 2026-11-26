@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
@@ -21,7 +20,6 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_model::common::topic::TopicValidator;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 
 pub struct TransactionalMessageUtil;
 
@@ -46,7 +44,6 @@ impl TransactionalMessageUtil {
 
     pub fn build_transactional_message_from_half_message(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         let mut msg_inner = MessageExtBrokerInner::default();
-        msg_inner.set_wait_store_msg_ok(false);
         msg_inner.message_ext_inner.set_msg_id(msg_ext.msg_id().clone());
         msg_inner.set_topic(
             msg_ext
@@ -56,7 +53,9 @@ impl TransactionalMessageUtil {
         if let Some(body) = msg_ext.get_body() {
             msg_inner.set_body(body.clone());
         }
-        if let Some(real_queue_id_str) = msg_ext.property(&CheetahString::from_static_str("REAL_QUEUE_ID")) {
+        if let Some(real_queue_id_str) =
+            msg_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+        {
             if let Ok(value) = real_queue_id_str.parse::<i32>() {
                 msg_inner.message_ext_inner.set_queue_id(value);
             }
@@ -73,15 +72,17 @@ impl TransactionalMessageUtil {
             msg_inner.set_transaction_id(transaction_id);
         }
 
-        MessageAccessor::set_properties(&mut msg_inner, msg_ext.get_properties().clone());
-        MessageAccessor::put_property(
-            &mut msg_inner,
+        // The half message's properties replace the map, as in Java, so no wait flag is set
+        // earlier. The edits go to the map and the string is encoded once.
+        let ext = &mut msg_inner.message_ext_inner;
+        ext.set_properties(msg_ext.get_properties().clone());
+        ext.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED),
             CheetahString::from_static_str("true"),
         );
-        MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET);
-        MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
-        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
+        ext.clear_property(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET);
+        ext.clear_property(MessageConst::PROPERTY_REAL_QUEUE_ID);
+        msg_inner.refresh_properties_string();
 
         let mut sys_flag = msg_ext.sys_flag();
         sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
@@ -153,6 +154,35 @@ mod tests {
                 ))
                 .as_ref()
         );
+    }
+
+    #[test]
+    fn transactional_message_from_half_message_stores_the_edited_properties() {
+        let mut msg_ext = MessageExt::default();
+        for (name, value) in [
+            (MessageConst::PROPERTY_TAGS, "TagA"),
+            (MessageConst::PROPERTY_REAL_TOPIC, "orders"),
+            (MessageConst::PROPERTY_REAL_QUEUE_ID, "3"),
+            (MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET, "7"),
+        ] {
+            msg_ext.put_property(
+                CheetahString::from_static_str(name),
+                CheetahString::from_static_str(value),
+            );
+        }
+
+        let msg_inner = TransactionalMessageUtil::build_transactional_message_from_half_message(&msg_ext);
+
+        let stored = rocketmq_protocol::common::message::message_decoder::string_to_message_properties(Some(
+            &msg_inner.properties_string,
+        ));
+        assert_eq!(&stored, msg_inner.get_properties());
+        assert_eq!(stored[MessageConst::PROPERTY_TRANSACTION_PREPARED], "true");
+        assert_eq!(stored[MessageConst::PROPERTY_TAGS], "TagA");
+        assert!(!stored.contains_key(MessageConst::PROPERTY_REAL_QUEUE_ID));
+        assert!(!stored.contains_key(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET));
+        assert_eq!(msg_inner.get_topic(), "orders");
+        assert_eq!(msg_inner.message_ext_inner.queue_id, 3);
     }
 
     #[test]

@@ -38,7 +38,6 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::utils::data_converter::DataConverter;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
@@ -1003,17 +1002,19 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         msg.set_topic(self.revive_topic.clone());
         msg.set_body(Bytes::from(batch_ack_msg.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
-        msg.set_tags(CheetahString::from_static_str(PopAckConstants::BATCH_ACK_TAG));
+        msg.message_ext_inner
+            .set_tags(CheetahString::from_static_str(PopAckConstants::BATCH_ACK_TAG));
         msg.message_ext_inner.born_timestamp = current_millis() as i64;
         let store_host = self.context.policy.snapshot().store_host;
         msg.message_ext_inner.born_host = store_host;
         msg.message_ext_inner.store_host = store_host;
-        msg.set_deliver_time_ms(point.get_revive_time() as u64);
-        msg.put_property(
+        msg.message_ext_inner
+            .set_deliver_time_ms(point.get_revive_time() as u64);
+        msg.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from_string(PopMessageProcessor::<MS>::gen_batch_ack_unique_id(&batch_ack_msg)),
+            PopMessageProcessor::<MS>::gen_batch_ack_unique_id(&batch_ack_msg),
         );
-        msg.properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
+        msg.refresh_properties_string();
 
         let Ok(put_message_result) = self.context.store.put_specific(msg).await else {
             return false;
@@ -1041,17 +1042,19 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         msg.set_topic(self.revive_topic.clone());
         msg.set_body(Bytes::from(ack_msg.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
-        msg.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
+        msg.message_ext_inner
+            .set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
         msg.message_ext_inner.born_timestamp = current_millis() as i64;
         let store_host = self.context.policy.snapshot().store_host;
         msg.message_ext_inner.born_host = store_host;
         msg.message_ext_inner.store_host = store_host;
-        msg.set_deliver_time_ms(point.get_revive_time() as u64);
-        msg.put_property(
+        msg.message_ext_inner
+            .set_deliver_time_ms(point.get_revive_time() as u64);
+        msg.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from_string(PopMessageProcessor::<MS>::gen_ack_unique_id(&ack_msg)),
+            PopMessageProcessor::<MS>::gen_ack_unique_id(&ack_msg),
         );
-        msg.properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
+        msg.refresh_properties_string();
 
         let Ok(put_message_result) = self.context.store.put_specific(msg).await else {
             return false;

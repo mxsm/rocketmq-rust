@@ -4433,6 +4433,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "trait-variant",
 ]
 
 [[package]]
@@ -4951,6 +4952,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "trait-variant",
  "trybuild",
  "uuid",
  "windows-sys 0.61.2",

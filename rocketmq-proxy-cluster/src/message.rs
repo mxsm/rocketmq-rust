@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
@@ -42,15 +40,9 @@ pub(crate) fn message_ext_to_core(message: &MessageExt) -> ProxyMessageExt {
 
 pub(crate) fn message_from_core(message: &ProxyMessage) -> Message {
     let mut client = Message::default();
-    client.set_topic(CheetahString::from(message.topic()));
+    client.set_topic(message.topic().clone());
     client.set_flag(message.flag());
-    client.set_properties(
-        message
-            .properties()
-            .iter()
-            .map(|(key, value)| (CheetahString::from(key.as_str()), CheetahString::from(value.as_str())))
-            .collect::<HashMap<_, _>>(),
-    );
+    client.set_properties(message.properties().clone());
     client.set_body(message.body_bytes().cloned());
     *client.transaction_id_mut() = message.transaction_id().map(CheetahString::from);
     client
@@ -58,17 +50,10 @@ pub(crate) fn message_from_core(message: &ProxyMessage) -> Message {
 
 fn message_to_core(message: &Message) -> ProxyMessage {
     let mut core = ProxyMessage::default();
-    core.set_topic(message.topic().to_string());
+    core.set_topic(message.topic().clone());
     core.set_body_bytes(message.body());
     core.set_flag(message.flag());
-    core.set_properties(
-        message
-            .properties()
-            .as_map()
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
-    );
-    core.set_transaction_id(message.transaction_id().map(str::to_owned));
+    core.set_properties(message.properties().as_map().clone());
+    core.set_transaction_id(message.transaction_id());
     core
 }

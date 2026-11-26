@@ -20,7 +20,6 @@ use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::config::TopicConfig;
-use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -29,6 +28,7 @@ use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::utils::string_utils::cheetah_from_integer;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -229,77 +229,71 @@ where
     /// 6. **Queue Reset**: Sets queue ID to 0 (all half messages go to queue 0)
     /// 7. **Properties Serialization**: Updates the properties string representation
     pub fn parse_half_message_inner(message: &mut MessageExtBrokerInner) {
-        let uniq_id = message.user_property(&CheetahString::from_static_str(
+        // Properties go into the map and are encoded once at the end:
+        // `MessageExtBrokerInner::put_property` would re-encode the whole string per call.
+        let ext = &mut message.message_ext_inner;
+        if let Some(uniq_id) = ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-        ));
-        if let Some(uniq_id) = uniq_id {
-            MessageAccessor::put_property(
-                message,
+        )) {
+            ext.put_property(
                 CheetahString::from_static_str(TransactionalMessageUtil::TRANSACTION_ID),
                 uniq_id,
             );
         }
-        let topic = message.get_topic().clone();
-        MessageAccessor::put_property(
-            message,
-            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
-            topic,
-        );
-        MessageAccessor::put_property(
-            message,
+        let topic = ext.topic().clone();
+        ext.put_property(CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC), topic);
+        ext.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
-            CheetahString::from_string(message.message_ext_inner.queue_id.to_string()),
+            cheetah_from_integer(ext.queue_id),
         );
-        message.message_ext_inner.sys_flag = MessageSysFlag::reset_transaction_value(
-            message.message_ext_inner.sys_flag,
-            MessageSysFlag::TRANSACTION_NOT_TYPE,
-        );
-        message.set_topic(CheetahString::from_static_str(
+        ext.sys_flag = MessageSysFlag::reset_transaction_value(ext.sys_flag, MessageSysFlag::TRANSACTION_NOT_TYPE);
+        ext.set_topic(CheetahString::from_static_str(
             TransactionalMessageUtil::build_half_topic(),
         ));
 
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC topic is a special topic for half messages
         // write queue number is always 1, read queue number is always 1
-        message.message_ext_inner.queue_id = 0;
-        let properties_to_string = MessageDecoder::message_properties_to_string(message.get_properties());
-        message.properties_string = properties_to_string;
+        ext.queue_id = 0;
+        message.refresh_properties_string();
     }
 
     pub fn renew_immunity_half_message_inner(msg_ext: &MessageExt) -> MessageExtBrokerInner {
-        let mut message_inner = Self::renew_half_message_inner(msg_ext);
-        let queue_offset_from_prepare = msg_ext.user_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
-        ));
-        if let Some(queue_offset_from_prepare) = queue_offset_from_prepare {
-            MessageAccessor::put_property(
-                &mut message_inner,
-                CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET),
-                queue_offset_from_prepare,
-            );
-        } else {
-            MessageAccessor::put_property(
-                &mut message_inner,
-                CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET),
-                CheetahString::from_string(msg_ext.queue_offset.to_string()),
-            );
-        }
-        let properties_to_string = MessageDecoder::message_properties_to_string(message_inner.get_properties());
-        message_inner.properties_string = properties_to_string;
+        let mut message_inner = Self::renewed_half_message(msg_ext);
+        let queue_offset_from_prepare = msg_ext
+            .user_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
+            ))
+            .unwrap_or_else(|| cheetah_from_integer(msg_ext.queue_offset));
+        message_inner.message_ext_inner.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET),
+            queue_offset_from_prepare,
+        );
+        // As in Java, the re-encoded properties include the wait flag the renewal cleared.
+        message_inner.refresh_properties_string();
         message_inner
     }
 
     #[inline]
     pub fn renew_half_message_inner(msg_ext: &MessageExt) -> MessageExtBrokerInner {
+        let mut inner = Self::renewed_half_message(msg_ext);
+        // As in Java, the stored properties are the half message's own; the cleared wait flag only
+        // tells this put not to wait for flush or replication.
+        inner.properties_string = MessageDecoder::message_properties_to_string(msg_ext.get_properties());
+        inner
+    }
+
+    /// Copies a half message for re-append, with the wait flag cleared in its property map and
+    /// `properties_string` left for the caller to fill.
+    fn renewed_half_message(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         let mut inner = MessageExtBrokerInner {
             message_ext_inner: msg_ext.clone(),
-            properties_string: MessageDecoder::message_properties_to_string(msg_ext.get_properties()),
+            properties_string: CheetahString::empty(),
             tags_code: MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str()),
             encoded_buff: None,
             encode_completed: false,
             version: Default::default(),
         };
-        inner.set_wait_store_msg_ok(false);
-        MessageAccessor::set_properties(&mut inner, msg_ext.get_properties().clone());
+        inner.message_ext_inner.set_wait_store_msg_ok(false);
         inner
     }
 
@@ -310,13 +304,12 @@ where
         msg_inner.tags_code =
             MessageExtBrokerInner::tags_string_to_tags_code(msg_inner.tags().unwrap_or_default().as_str());
         msg_inner.message_ext_inner.sys_flag = 0;
-        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
-
         msg_inner.message_ext_inner.born_timestamp = current_millis() as i64;
         msg_inner.message_ext_inner.born_host = self.store_host;
         msg_inner.message_ext_inner.store_host = self.store_host;
-        msg_inner.set_wait_store_msg_ok(false);
-        MessageClientIDSetter::set_uniq_id(&mut msg_inner);
+        msg_inner.message_ext_inner.set_wait_store_msg_ok(false);
+        MessageClientIDSetter::set_uniq_id(&mut msg_inner.message_ext_inner);
+        msg_inner.refresh_properties_string();
         msg_inner
     }
 
@@ -371,4 +364,90 @@ pub(crate) async fn resolve_op_queue(
 #[inline]
 fn get_op_queue_by_half(queue_id: i32, broker_name: CheetahString) -> MessageQueue {
     MessageQueue::from_parts(TransactionalMessageUtil::build_op_topic(), broker_name, queue_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_store::MessageStore;
+
+    use super::*;
+
+    type Bridge = TransactionalMessageBridge<MessageStore>;
+
+    fn key(name: &'static str) -> CheetahString {
+        CheetahString::from_static_str(name)
+    }
+
+    fn stored_properties(message: &MessageExtBrokerInner) -> HashMap<CheetahString, CheetahString> {
+        MessageDecoder::string_to_message_properties(Some(&message.properties_string))
+    }
+
+    fn half_message_ext() -> MessageExt {
+        let mut msg_ext = MessageExt::default();
+        msg_ext.set_topic(key(TransactionalMessageUtil::build_half_topic()));
+        msg_ext.queue_offset = 42;
+        for (name, value) in [
+            (MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX, "uniq-1"),
+            (MessageConst::PROPERTY_TAGS, "TagA"),
+            (MessageConst::PROPERTY_WAIT_STORE_MSG_OK, "true"),
+            (MessageConst::PROPERTY_REAL_TOPIC, "orders"),
+            (MessageConst::PROPERTY_REAL_QUEUE_ID, "3"),
+        ] {
+            msg_ext.put_property(key(name), key(value));
+        }
+        msg_ext
+    }
+
+    #[test]
+    fn half_message_properties_are_encoded_from_the_final_map() {
+        let mut message = MessageExtBrokerInner::default();
+        message.set_topic(CheetahString::from("orders"));
+        message.message_ext_inner.queue_id = 3;
+        message
+            .message_ext_inner
+            .put_property(key(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX), key("uniq-1"));
+        message.refresh_properties_string();
+
+        Bridge::parse_half_message_inner(&mut message);
+
+        let stored = stored_properties(&message);
+        assert_eq!(&stored, message.get_properties());
+        assert_eq!(stored[TransactionalMessageUtil::TRANSACTION_ID], "uniq-1");
+        assert_eq!(stored[MessageConst::PROPERTY_REAL_TOPIC], "orders");
+        assert_eq!(stored[MessageConst::PROPERTY_REAL_QUEUE_ID], "3");
+        assert_eq!(message.get_topic(), TransactionalMessageUtil::build_half_topic());
+        assert_eq!(message.message_ext_inner.queue_id, 0);
+    }
+
+    #[test]
+    fn renewed_half_message_skips_the_store_wait_and_keeps_its_stored_properties() {
+        let msg_ext = half_message_ext();
+
+        let renewed = Bridge::renew_half_message_inner(&msg_ext);
+
+        assert!(!renewed.is_wait_store_msg_ok());
+        assert_eq!(&stored_properties(&renewed), msg_ext.get_properties());
+        assert_eq!(
+            renewed.tags_code,
+            MessageExtBrokerInner::tags_string_to_tags_code("TagA")
+        );
+    }
+
+    #[test]
+    fn renewed_immunity_half_message_stores_the_prepared_offset() {
+        let mut msg_ext = half_message_ext();
+
+        let renewed = Bridge::renew_immunity_half_message_inner(&msg_ext);
+        let stored = stored_properties(&renewed);
+        assert_eq!(&stored, renewed.get_properties());
+        assert_eq!(stored[MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET], "42");
+        assert_eq!(stored[MessageConst::PROPERTY_WAIT_STORE_MSG_OK], "false");
+
+        msg_ext.put_property(key(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET), key("7"));
+        let renewed = Bridge::renew_immunity_half_message_inner(&msg_ext);
+        assert_eq!(
+            stored_properties(&renewed)[MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET],
+            "7"
+        );
+    }
 }

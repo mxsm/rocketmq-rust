@@ -19,7 +19,6 @@ use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
-use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
@@ -28,7 +27,6 @@ use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_model::common::TopicFilterType;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
@@ -370,7 +368,6 @@ where
                     msg_inner.message_ext_inner.prepared_transaction_offset = request_header.commit_log_offset;
                     msg_inner.message_ext_inner.store_timestamp =
                         result.prepare_message.as_ref().unwrap().store_timestamp;
-                    MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_TRANSACTION_PREPARED);
 
                     // Save topic and born_timestamp before sending (msg_inner is moved)
                     let topic = msg_inner.get_topic().clone();
@@ -675,7 +672,6 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
     msg_inner.message_ext_inner.born_host = msg_ext.born_host;
     msg_inner.message_ext_inner.store_host = msg_ext.store_host;
     msg_inner.message_ext_inner.reconsume_times = msg_ext.reconsume_times;
-    msg_inner.set_wait_store_msg_ok(false);
     if let Some(transaction_id) = msg_ext.user_property(&CheetahString::from_static_str(
         MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
     )) {
@@ -694,10 +690,15 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
         0
     };
     msg_inner.tags_code = tags_code_value;
-    MessageAccessor::set_properties(&mut msg_inner, msg_ext.get_properties().clone());
-    msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_ext.get_properties());
-    MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_TOPIC);
-    MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
+    // The half message's properties replace the map, as in Java, so no wait flag is set
+    // earlier. The routing and prepared markers are dropped from the map and the string is
+    // encoded once, instead of being encoded and then edited three times.
+    let ext = &mut msg_inner.message_ext_inner;
+    ext.set_properties(msg_ext.get_properties().clone());
+    ext.clear_property(MessageConst::PROPERTY_REAL_TOPIC);
+    ext.clear_property(MessageConst::PROPERTY_REAL_QUEUE_ID);
+    ext.clear_property(MessageConst::PROPERTY_TRANSACTION_PREPARED);
+    msg_inner.refresh_properties_string();
     msg_inner
 }
 
@@ -707,6 +708,7 @@ mod tests {
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
+    use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
     use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_security_api::AuthenticatedRequestContext;
@@ -923,6 +925,32 @@ mod tests {
             msg_inner.properties_string,
             MessageDecoder::message_properties_to_string(msg_ext.get_properties())
         );
+    }
+
+    #[test]
+    fn end_message_transaction_stores_properties_without_the_half_message_markers() {
+        let mut msg_ext = MessageExt::default();
+        for (name, value) in [
+            (MessageConst::PROPERTY_TAGS, "TagA"),
+            (MessageConst::PROPERTY_REAL_TOPIC, "orders"),
+            (MessageConst::PROPERTY_REAL_QUEUE_ID, "3"),
+            (MessageConst::PROPERTY_TRANSACTION_PREPARED, "true"),
+        ] {
+            msg_ext.put_property(
+                CheetahString::from_static_str(name),
+                CheetahString::from_static_str(value),
+            );
+        }
+
+        let msg_inner = end_message_transaction(&mut msg_ext);
+
+        let stored = MessageDecoder::string_to_message_properties(Some(&msg_inner.properties_string));
+        assert_eq!(&stored, msg_inner.get_properties());
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[MessageConst::PROPERTY_TAGS], "TagA");
+        assert_eq!(msg_inner.get_topic(), "orders");
+        assert_eq!(msg_inner.message_ext_inner.queue_id, 3);
+        assert_eq!(msg_ext.get_properties().len(), 4);
     }
 
     #[test]

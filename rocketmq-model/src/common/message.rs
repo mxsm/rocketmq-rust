@@ -282,7 +282,7 @@ pub trait MessageTrait: Any + Display + Debug {
     fn set_deliver_time_ms(&mut self, time_ms: u64) {
         self.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
-            CheetahString::from_string(time_ms.to_string()),
+            crate::utils::string_utils::cheetah_from_integer(time_ms),
         );
     }
 
