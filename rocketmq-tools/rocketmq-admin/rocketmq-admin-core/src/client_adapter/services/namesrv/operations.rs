@@ -360,7 +360,7 @@ impl NameServerService {
     /// * `broker_name` - Broker name
     ///
     /// # Returns
-    /// Number of affected brokers
+    /// The number of topics with queue data for the specified broker on this NameServer.
     pub async fn add_write_perm_of_broker(
         admin: &mut DefaultMQAdminExt,
         namesrv_addr: impl Into<CheetahString>,
