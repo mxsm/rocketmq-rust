@@ -82,7 +82,7 @@ pub(crate) fn classify_snapshot_persistence(observation: MetadataIoCommitObserva
         } => SnapshotPersistence::NotWritten(AuthServiceError::metadata_io(error)),
         MetadataIoCommitObservation::Settled {
             generation,
-            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
+            outcome: MetadataWritePersistenceStatus::DurabilityUnconfirmed(error),
         } => SnapshotPersistence::Unconfirmed {
             generation,
             error: AuthServiceError::metadata_io(error),
@@ -168,7 +168,7 @@ mod tests {
 
         let unknown = classify_snapshot_persistence(MetadataIoCommitObservation::Settled {
             generation: MetadataGeneration::new(3),
-            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(runtime_error()),
+            outcome: MetadataWritePersistenceStatus::DurabilityUnconfirmed(runtime_error()),
         });
         assert!(unknown.may_have_written());
         assert!(matches!(
