@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,6 +33,7 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::AckPolicy;
 use rocketmq_store_api::ReplicationDecision;
+use rocketmq_store_api::WriteAuthority;
 use tracing::error;
 use tracing::warn;
 
@@ -168,7 +170,7 @@ impl GroupTransferServiceInner {
         }
     }
 
-    fn drain_new_requests(&self, active: &mut Vec<ActiveGroupTransfer>) {
+    fn drain_new_requests(&self, active: &mut ActiveTransfers) {
         while let Some(budgeted) = self.pending_requests.try_pop_budgeted() {
             let (mut pending, permit, _) = budgeted.into_parts();
             let policy = match AckPolicy::try_from_legacy(
@@ -185,11 +187,11 @@ impl GroupTransferServiceInner {
                     continue;
                 }
             };
-            active.push(ActiveGroupTransfer::admitted(pending, policy, permit));
+            active.admit(ActiveGroupTransfer::admitted(pending, policy, permit));
         }
     }
 
-    async fn evaluate_pending(&self, active: &mut Vec<ActiveGroupTransfer>) -> Option<Instant> {
+    async fn evaluate_pending(&self, active: &mut ActiveTransfers) -> Option<Instant> {
         self.drain_new_requests(active);
         if active.is_empty() {
             return None;
@@ -208,30 +210,178 @@ impl GroupTransferServiceInner {
             }
             None => AckFrontier::from_snapshots(None, None, 0, &[], false),
         };
-        Self::resolve_pending(active, &frontier, Instant::now());
-        active.iter().map(ActiveGroupTransfer::deadline).min()
+        active.resolve(&frontier, Instant::now());
+        active.earliest_deadline()
+    }
+}
+
+/// Admitted waits, by the authority they were appended under and their ACK policy.
+///
+/// For one authority and policy, [`AckFrontier::decide`] is monotone in the offset: it rejects
+/// only for reasons that do not depend on the offset (or for a negative offset), and when it
+/// acknowledges an offset it acknowledges every smaller one. Each group therefore keeps its
+/// waits in offset order and settles them with a constant number of decisions per evaluation,
+/// instead of deciding every waiting append each time an ACK or a new append wakes the service.
+#[derive(Default)]
+struct ActiveTransfers {
+    groups: Vec<TransferGroup>,
+}
+
+impl ActiveTransfers {
+    fn admit(&mut self, transfer: ActiveGroupTransfer) {
+        let authority = transfer.requested_authority();
+        let policy = transfer.policy;
+        match self
+            .groups
+            .iter_mut()
+            .find(|group| group.authority == authority && group.policy == policy)
+        {
+            Some(group) => group.admit(transfer),
+            None => self.groups.push(TransferGroup::new(authority, policy, transfer)),
+        }
     }
 
-    fn resolve_pending(active: &mut Vec<ActiveGroupTransfer>, frontier: &AckFrontier, now: Instant) {
-        active.retain_mut(|pending| {
-            if now >= pending.deadline() {
-                pending.complete(PutMessageStatus::FlushSlaveTimeout);
+    fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.groups.iter().map(|group| group.waits.len()).sum()
+    }
+
+    #[cfg(test)]
+    fn offsets(&self) -> Vec<i64> {
+        self.groups
+            .iter()
+            .flat_map(|group| group.waits.iter().map(ActiveGroupTransfer::next_offset))
+            .collect()
+    }
+
+    fn resolve(&mut self, frontier: &AckFrontier, now: Instant) {
+        for group in &mut self.groups {
+            group.resolve(frontier, now);
+        }
+        self.groups.retain(|group| !group.waits.is_empty());
+    }
+
+    /// No admitted wait expires before the returned instant.
+    fn earliest_deadline(&self) -> Option<Instant> {
+        self.groups.iter().map(|group| group.earliest_deadline).min()
+    }
+}
+
+/// Waits of one authority and ACK policy, in offset order.
+struct TransferGroup {
+    authority: Option<WriteAuthority>,
+    policy: AckPolicy,
+    waits: VecDeque<ActiveGroupTransfer>,
+    /// A lower bound of the waits' deadlines. Settled waits leave it low until the next expiry
+    /// scan, which then only comes early.
+    earliest_deadline: Instant,
+}
+
+impl TransferGroup {
+    fn new(authority: Option<WriteAuthority>, policy: AckPolicy, first: ActiveGroupTransfer) -> Self {
+        let earliest_deadline = first.deadline();
+        Self {
+            authority,
+            policy,
+            waits: VecDeque::from([first]),
+            earliest_deadline,
+        }
+    }
+
+    fn admit(&mut self, transfer: ActiveGroupTransfer) {
+        self.earliest_deadline = self.earliest_deadline.min(transfer.deadline());
+        let offset = transfer.next_offset();
+        // Appends usually wait in offset order; concurrent appends may arrive slightly out of it.
+        let index = if self.waits.back().is_none_or(|last| last.next_offset() <= offset) {
+            self.waits.len()
+        } else {
+            self.waits.partition_point(|wait| wait.next_offset() <= offset)
+        };
+        self.waits.insert(index, transfer);
+    }
+
+    fn resolve(&mut self, frontier: &AckFrontier, now: Instant) {
+        if now >= self.earliest_deadline {
+            self.expire(now);
+        }
+        // A negative offset is rejected on its own and decides nothing for the other waits.
+        while self.waits.front().is_some_and(|wait| wait.next_offset() < 0) {
+            if let Some(mut wait) = self.waits.pop_front() {
+                warn!("HA group-transfer request was rejected by the canonical decision");
+                wait.complete(PutMessageStatus::FlushSlaveTimeout);
+            }
+        }
+        let Some(front) = self.waits.front() else {
+            return;
+        };
+        match self.decide(frontier, front.next_offset()) {
+            // Every later wait of the group waits too.
+            ReplicationDecision::Wait { .. } => return,
+            ReplicationDecision::Reject(_reason) => {
+                // The rejection does not depend on the offset: it holds for the whole group.
+                warn!(
+                    requests = self.waits.len(),
+                    "HA group-transfer requests were rejected by the canonical decision"
+                );
+                for mut wait in self.waits.drain(..) {
+                    wait.complete(PutMessageStatus::FlushSlaveTimeout);
+                }
+                return;
+            }
+            ReplicationDecision::Acknowledge(_) => {}
+        }
+        // Acknowledge up to the policy frontier: confirming the last of these acknowledges the
+        // earlier ones too.
+        let frontier_offset = frontier.policy_frontier(self.policy);
+        let mut acknowledged = self
+            .waits
+            .partition_point(|wait| wait.next_offset() <= frontier_offset)
+            .max(1);
+        let last_acknowledged = self
+            .waits
+            .get(acknowledged - 1)
+            .map(|wait| self.decide(frontier, wait.next_offset()));
+        if acknowledged > 1 && !matches!(last_acknowledged, Some(ReplicationDecision::Acknowledge(_))) {
+            // The frontier and the canonical decision disagree: settle the waits one by one.
+            acknowledged = 1 + self
+                .waits
+                .iter()
+                .take(acknowledged)
+                .skip(1)
+                .take_while(|wait| {
+                    matches!(
+                        self.decide(frontier, wait.next_offset()),
+                        ReplicationDecision::Acknowledge(_)
+                    )
+                })
+                .count();
+        }
+        for mut wait in self.waits.drain(..acknowledged) {
+            wait.complete(PutMessageStatus::PutOk);
+        }
+    }
+
+    fn decide(&self, frontier: &AckFrontier, offset: i64) -> ReplicationDecision {
+        frontier.decide(self.authority, self.policy, offset)
+    }
+
+    /// Times out the expired waits and resets the deadline bound to the earliest remaining one.
+    fn expire(&mut self, now: Instant) {
+        let mut earliest: Option<Instant> = None;
+        self.waits.retain_mut(|wait| {
+            if now >= wait.deadline() {
+                wait.complete(PutMessageStatus::FlushSlaveTimeout);
                 warn!("HA group-transfer request timed out");
                 return false;
             }
-            match frontier.decide(pending.requested_authority(), pending.policy, pending.next_offset()) {
-                ReplicationDecision::Acknowledge(_) => {
-                    pending.complete(PutMessageStatus::PutOk);
-                    false
-                }
-                ReplicationDecision::Wait { .. } => true,
-                ReplicationDecision::Reject(_reason) => {
-                    warn!("HA group-transfer request was rejected by the canonical decision");
-                    pending.complete(PutMessageStatus::FlushSlaveTimeout);
-                    false
-                }
-            }
+            earliest = Some(earliest.map_or(wait.deadline(), |earliest| earliest.min(wait.deadline())));
+            true
         });
+        self.earliest_deadline = earliest.unwrap_or(now);
     }
 }
 
@@ -271,7 +421,7 @@ impl ActiveGroupTransfer {
         self.pending.request.get_ack_nums()
     }
 
-    fn requested_authority(&self) -> Option<rocketmq_store_api::WriteAuthority> {
+    fn requested_authority(&self) -> Option<WriteAuthority> {
         self.pending.request.requested_authority()
     }
 
@@ -317,7 +467,7 @@ impl ServiceTask for GroupTransferServiceInner {
     }
 
     async fn run(&self, context: &ServiceTaskContext) {
-        let mut active = Vec::new();
+        let mut active = ActiveTransfers::default();
         while !context.is_stopped() {
             let next_deadline = self.evaluate_pending(&mut active).await;
             if context.is_stopped() {
@@ -475,7 +625,7 @@ mod tests {
                 inner.put_request(request).await;
             }
             assert_eq!(inner.runtime_info().pending_request_count, 2, "round {round}");
-            let mut active = Vec::new();
+            let mut active = ActiveTransfers::default();
             inner.drain_new_requests(&mut active);
             assert_eq!(active.len(), 2);
             drop(active);
@@ -492,7 +642,7 @@ mod tests {
         let (request, mut response) = GroupCommitRequest::with_ack_nums(128, 0, 2);
 
         inner.put_request(request).await;
-        let mut active = Vec::new();
+        let mut active = ActiveTransfers::default();
         inner.evaluate_pending(&mut active).await;
 
         assert_eq!(
@@ -510,7 +660,7 @@ mod tests {
         let (request, mut response) = GroupCommitRequest::with_ack_nums(0, 5_000, 0);
 
         inner.put_request(request).await;
-        let mut active = Vec::new();
+        let mut active = ActiveTransfers::default();
         inner.evaluate_pending(&mut active).await;
 
         assert_eq!(
@@ -518,6 +668,138 @@ mod tests {
             PutMessageStatus::FlushSlaveTimeout
         );
         assert_eq!(inner.runtime_info().pending_request_count, 0);
+    }
+
+    fn authority(epoch: i32) -> rocketmq_store_api::WriteAuthority {
+        rocketmq_store_api::WriteAuthority::try_new(
+            0,
+            rocketmq_store_api::MasterEpoch::try_from(epoch).expect("positive epoch"),
+        )
+        .expect("valid authority")
+    }
+
+    fn two_replicas() -> AckPolicy {
+        AckPolicy::ReplicaCount(rocketmq_store_api::ReplicaCount::try_new(2).expect("two replicas"))
+    }
+
+    /// A frontier of master 0 with its replica 1 acknowledged up to `replica_ack`.
+    fn frontier_with_replica_ack(epoch: i32, replica_ack: i64) -> AckFrontier {
+        AckFrontier::from_snapshots(
+            Some(authority(epoch)),
+            Some(std::collections::HashSet::from([0, 1])),
+            1_000,
+            &[crate::ha::ha_service::HAAckedReplicaSnapshot {
+                slave_broker_id: Some(1),
+                slave_ack_offset: replica_ack,
+            }],
+            true,
+        )
+    }
+
+    fn admit_waits(
+        active: &mut ActiveTransfers,
+        offsets: &[i64],
+        timeout_millis: u64,
+        requested_authority: rocketmq_store_api::WriteAuthority,
+    ) -> Vec<(i64, crate::log_file::group_commit_request::GroupCommitResponse)> {
+        offsets
+            .iter()
+            .map(|offset| {
+                let (request, response) =
+                    GroupCommitRequest::with_ack_nums_and_authority(*offset, timeout_millis, 2, requested_authority);
+                active.admit(ActiveGroupTransfer::unadmitted(
+                    PendingGroupTransfer::new(request),
+                    two_replicas(),
+                ));
+                (*offset, response)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn one_evaluation_acknowledges_every_wait_up_to_the_frontier() {
+        let mut active = ActiveTransfers::default();
+        // Concurrent appends may wait slightly out of offset order.
+        let responses = admit_waits(&mut active, &[300, 100, 500, 200, 400], 5_000, authority(1));
+
+        active.resolve(&frontier_with_replica_ack(1, 300), Instant::now());
+
+        assert_eq!(active.offsets(), vec![400, 500]);
+        for (offset, mut response) in responses.into_iter().filter(|(offset, _)| *offset <= 300) {
+            assert_eq!(
+                response.wait_for_result_with_timeout().await.expect("status"),
+                PutMessageStatus::PutOk,
+                "offset {offset}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_authority_rejects_every_wait_of_its_group() {
+        let mut active = ActiveTransfers::default();
+        let stale = admit_waits(&mut active, &[100, 900], 5_000, authority(1));
+        let current = admit_waits(&mut active, &[200], 5_000, authority(2));
+
+        active.resolve(&frontier_with_replica_ack(2, 300), Instant::now());
+
+        assert!(active.is_empty());
+        for (offset, mut response) in stale {
+            assert_eq!(
+                response.wait_for_result_with_timeout().await.expect("status"),
+                PutMessageStatus::FlushSlaveTimeout,
+                "offset {offset}"
+            );
+        }
+        for (_, mut response) in current {
+            assert_eq!(
+                response.wait_for_result_with_timeout().await.expect("status"),
+                PutMessageStatus::PutOk
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn negative_offset_is_rejected_without_deciding_for_later_waits() {
+        let mut active = ActiveTransfers::default();
+        let mut responses = admit_waits(&mut active, &[-1, 100], 5_000, authority(1));
+
+        active.resolve(&frontier_with_replica_ack(1, 300), Instant::now());
+
+        assert!(active.is_empty());
+        let (_, mut acknowledged) = responses.pop().expect("offset 100");
+        let (_, mut rejected) = responses.pop().expect("offset -1");
+        assert_eq!(
+            rejected.wait_for_result_with_timeout().await.expect("status"),
+            PutMessageStatus::FlushSlaveTimeout
+        );
+        assert_eq!(
+            acknowledged.wait_for_result_with_timeout().await.expect("status"),
+            PutMessageStatus::PutOk
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_wait_times_out_while_an_earlier_offset_keeps_waiting() {
+        let mut active = ActiveTransfers::default();
+        admit_waits(&mut active, &[400], 60_000, authority(1));
+        let mut expired = admit_waits(&mut active, &[500], 50, authority(1));
+        let frontier = frontier_with_replica_ack(1, 300);
+
+        active.resolve(&frontier, Instant::now());
+        assert_eq!(active.offsets(), vec![400, 500]);
+        active.resolve(&frontier, Instant::now() + Duration::from_secs(1));
+
+        assert_eq!(active.offsets(), vec![400]);
+        let (_, mut expired) = expired.pop().expect("offset 500");
+        assert_eq!(
+            expired.wait_for_result_with_timeout().await.expect("status"),
+            PutMessageStatus::FlushSlaveTimeout
+        );
+        let earliest = active.earliest_deadline().expect("a wait remains");
+        assert!(
+            earliest > Instant::now() + Duration::from_secs(30),
+            "the bound follows the remaining wait"
+        );
     }
 
     #[tokio::test]
@@ -541,15 +823,19 @@ mod tests {
         let policy = AckPolicy::ReplicaCount(ReplicaCount::try_new(2).expect("two replicas"));
         let (high_request, _high_response) = GroupCommitRequest::with_ack_nums_and_authority(180, 5_000, 2, authority);
         let (low_request, mut low_response) = GroupCommitRequest::with_ack_nums_and_authority(120, 5_000, 2, authority);
-        let mut active = vec![
-            ActiveGroupTransfer::unadmitted(PendingGroupTransfer::new(high_request), policy),
-            ActiveGroupTransfer::unadmitted(PendingGroupTransfer::new(low_request), policy),
-        ];
+        let mut active = ActiveTransfers::default();
+        active.admit(ActiveGroupTransfer::unadmitted(
+            PendingGroupTransfer::new(high_request),
+            policy,
+        ));
+        active.admit(ActiveGroupTransfer::unadmitted(
+            PendingGroupTransfer::new(low_request),
+            policy,
+        ));
 
-        GroupTransferServiceInner::resolve_pending(&mut active, &frontier, Instant::now());
+        active.resolve(&frontier, Instant::now());
 
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].next_offset(), 180);
+        assert_eq!(active.offsets(), vec![180]);
         assert_eq!(
             low_response
                 .wait_for_result_with_timeout()
