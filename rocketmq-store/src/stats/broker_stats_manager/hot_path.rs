@@ -233,6 +233,11 @@ impl BrokerStatsManager {
     /// The statistics are the same as those of `inc_topic_put_nums(topic, msg_num, 1)`,
     /// `inc_topic_put_size`, `inc_broker_put_nums` and `inc_topic_put_latency`. The topic's items
     /// are cached per thread, so a put normally takes no lock and no shared lookup.
+    ///
+    /// When idle eviction is enabled (`maxStatsIdleTimeInMinutes` is not negative), the topic's
+    /// put count and size are updated through their sets instead. A cached item can be evicted
+    /// between the check that it is still in its set and the update, which would then be lost;
+    /// the set updates the item under the lock that eviction takes.
     pub fn record_put_success(&self, topic: &str, queue_id: i32, msg_num: i32, wrote_bytes: i32, latency_ms: i32) {
         let hot = &self.hot_sets;
         match (
@@ -240,7 +245,7 @@ impl BrokerStatsManager {
             hot.topic_put_size.as_ref(),
             hot.topic_put_latency.as_ref(),
         ) {
-            (Some(nums), Some(size), Some(latency)) => {
+            (Some(nums), Some(size), Some(latency)) if !self.idle_eviction_enabled() => {
                 let sets = TopicPutSets { nums, size, latency };
                 let sample = PutSample {
                     topic,

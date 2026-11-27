@@ -33,6 +33,7 @@ use rocketmq_observability::stats::stats_item::StatsItem;
 use rocketmq_observability::stats::stats_item_set::StatsItemSet;
 use rocketmq_observability::stats::with_stats_key;
 use rocketmq_observability::stats::Stats;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -181,7 +182,7 @@ impl BrokerStatsManager {
             move || {
                 let stats_table = Arc::clone(&stats_table);
                 async move {
-                    Self::clean_all_resource(&stats_table, max_stats_idle_time_in_minutes);
+                    Self::clean_all_resource(&stats_table, max_stats_idle_time_in_minutes, current_millis());
                 }
             },
         );
@@ -232,14 +233,27 @@ impl BrokerStatsManager {
         }
     }
 
-    fn clean_all_resource(stats_table: &DashMap<String, StatsItemSet>, max_stats_idle_time_in_minutes: i32) {
+    /// Whether the cleanup task evicts idle items, which the put path has to coordinate with.
+    fn idle_eviction_enabled(&self) -> bool {
+        self.broker_config
+            .as_ref()
+            .is_some_and(|config| config.max_stats_idle_time_in_minutes >= 0)
+    }
+
+    /// Evicts the items of [`Self::NEED_CLEAN_STATS_SET`] that, at `now_ms`, have been idle for
+    /// longer than the limit `maxStatsIdleTimeInMinutes` maps to.
+    fn clean_all_resource(
+        stats_table: &DashMap<String, StatsItemSet>,
+        max_stats_idle_time_in_minutes: i32,
+        now_ms: u64,
+    ) {
         let Some(max_idle_minutes) = Self::effective_max_stats_idle_minutes(max_stats_idle_time_in_minutes) else {
             return;
         };
         info!("Cleaning statistics items idle for more than {max_idle_minutes} minutes");
         for stats_name in Self::NEED_CLEAN_STATS_SET {
             if let Some(stats_item_set) = stats_table.get(stats_name) {
-                stats_item_set.clean_resource(max_idle_minutes);
+                stats_item_set.clean_resource_at(now_ms, max_idle_minutes);
             }
         }
     }
@@ -1327,24 +1341,151 @@ mod tests {
         }
     }
 
+    /// Waits until the millisecond clock moves past `after_ms`, so items updated next have a
+    /// later timestamp than items updated before.
+    fn tick_past(after_ms: u64) {
+        while current_millis() <= after_ms {
+            std::thread::yield_now();
+        }
+    }
+
+    const MINUTE_MS: u64 = 60 * 1000;
+
     #[test]
-    fn clean_all_resource_keeps_recently_updated_items() {
+    fn clean_all_resource_evicts_only_stale_items_of_the_cleaned_sets() {
+        // Two sets that are not cleaned: the queue-level put count and the Broker-wide put count.
+        let excluded = [Stats::QUEUE_PUT_NUMS, Stats::BROKER_PUT_NUMS];
         let stats_table = DashMap::new();
-        for stats_name in BrokerStatsManager::NEED_CLEAN_STATS_SET {
+        for stats_name in BrokerStatsManager::NEED_CLEAN_STATS_SET.iter().chain(&excluded) {
             let set = StatsItemSet::new(stats_name.to_string());
-            set.add_value("TopicA@GroupA", 1, 1);
+            set.add_value("Stale", 1, 1);
             stats_table.insert(stats_name.to_string(), set);
         }
+        let stale_ms = stats_table
+            .get(Stats::TOPIC_PUT_NUMS)
+            .and_then(|set| set.get_stats_item("Stale"))
+            .map(|item| item.get_last_update_timestamp())
+            .expect("stale item");
+        tick_past(
+            stats_table
+                .iter()
+                .filter_map(|set| set.get_stats_item("Stale"))
+                .map(|item| item.get_last_update_timestamp())
+                .max()
+                .unwrap_or(stale_ms),
+        );
+        for set in stats_table.iter() {
+            set.add_value("Fresh", 1, 1);
+        }
+        let fresh_ms = stats_table
+            .iter()
+            .filter_map(|set| set.get_stats_item("Fresh"))
+            .map(|item| item.get_last_update_timestamp())
+            .min()
+            .expect("fresh items");
+        // At this time the fresh items have been idle exactly 30 minutes, which is kept, and the
+        // stale items longer.
+        let sweep_ms = fresh_ms + 30 * MINUTE_MS;
+        let keys = |stats_name: &str| {
+            let set = stats_table.get(stats_name).expect("stats set");
+            ["Stale", "Fresh"].map(|key| set.get_stats_item(key).is_some())
+        };
 
-        BrokerStatsManager::clean_all_resource(&stats_table, -1);
-        BrokerStatsManager::clean_all_resource(&stats_table, 0);
-
+        // A negative limit disables eviction.
+        BrokerStatsManager::clean_all_resource(&stats_table, -1, sweep_ms);
         for stats_name in BrokerStatsManager::NEED_CLEAN_STATS_SET {
-            assert_eq!(
-                1,
-                stats_table.get(stats_name).expect("stats set").size(),
-                "{stats_name}"
-            );
+            assert_eq!([true, true], keys(stats_name), "{stats_name} with eviction disabled");
+        }
+
+        // 0 is raised to 30 minutes.
+        BrokerStatsManager::clean_all_resource(&stats_table, 0, sweep_ms);
+        for stats_name in BrokerStatsManager::NEED_CLEAN_STATS_SET {
+            assert_eq!([false, true], keys(stats_name), "{stats_name}");
+        }
+        for stats_name in excluded {
+            assert_eq!([true, true], keys(stats_name), "{stats_name} is not cleaned");
+        }
+    }
+
+    fn evicting_manager() -> BrokerStatsManager {
+        static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+        let task_group = OWNER
+            .get_or_init(|| RuntimeOwner::new().expect("test runtime owner should start"))
+            .root_context()
+            .component("broker-stats-idle-eviction-test")
+            .task_group()
+            .clone();
+        let config = StoreRuntimeConfig {
+            max_stats_idle_time_in_minutes: 30,
+            ..StoreRuntimeConfig::default()
+        };
+        BrokerStatsManager::new(Arc::new(config), task_group)
+    }
+
+    fn put_totals(manager: &BrokerStatsManager, topic: &str) -> [Option<(u64, u64)>; 2] {
+        [Stats::TOPIC_PUT_NUMS, Stats::TOPIC_PUT_SIZE].map(|stats_name| {
+            manager
+                .get_stats_item(stats_name, topic)
+                .map(|item| (item.get_value(), item.get_times()))
+        })
+    }
+
+    #[tokio::test]
+    async fn first_put_after_an_idle_eviction_is_reported() {
+        let manager = evicting_manager();
+        manager.record_put_success("TopicA", 0, 1, 10, 1);
+        manager.record_put_success("TopicA", 0, 1, 10, 1);
+        assert_eq!([Some((2, 2)), Some((20, 2))], put_totals(&manager, "TopicA"));
+
+        let last_put_ms = manager
+            .get_stats_item(Stats::TOPIC_PUT_NUMS, "TopicA")
+            .map(|item| item.get_last_update_timestamp())
+            .expect("put item");
+        BrokerStatsManager::clean_all_resource(&manager.stats_table, 30, last_put_ms + 31 * MINUTE_MS);
+        assert_eq!([None, None], put_totals(&manager, "TopicA"), "idle topic evicted");
+
+        manager.record_put_success("TopicA", 0, 1, 10, 1);
+        assert_eq!([Some((1, 1)), Some((10, 1))], put_totals(&manager, "TopicA"));
+    }
+
+    #[test]
+    fn puts_racing_an_idle_eviction_are_never_lost() {
+        // Each round, one thread puts while another evicts everything the put has not refreshed:
+        // the put has to end up either in the kept item or in a new one, never in an evicted
+        // item that is no longer reported.
+        let manager = Arc::new(evicting_manager());
+        for round in 0..200 {
+            let topic = format!("Topic{round}");
+            manager.record_put_success(&topic, 0, 2, 20, 1);
+            let idle_ms = manager
+                .get_stats_item(Stats::TOPIC_PUT_NUMS, &topic)
+                .map(|item| item.get_last_update_timestamp())
+                .expect("put item");
+            tick_past(idle_ms);
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let put = {
+                let (manager, barrier, topic) = (Arc::clone(&manager), Arc::clone(&barrier), topic.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    manager.record_put_success(&topic, 0, 1, 10, 1);
+                })
+            };
+            barrier.wait();
+            // A zero idle limit just after the first put: only an item the racing put has
+            // refreshed survives. `effective_max_stats_idle_minutes` never maps to zero, so the
+            // set is swept directly.
+            for stats_name in [Stats::TOPIC_PUT_NUMS, Stats::TOPIC_PUT_SIZE] {
+                manager
+                    .stats_table
+                    .get(stats_name)
+                    .expect("stats set")
+                    .clean_resource_at(idle_ms + 1, 0);
+            }
+            put.join().expect("put thread");
+
+            let [nums, size] = put_totals(&manager, &topic);
+            assert!(matches!(nums, Some((3, 2)) | Some((1, 1))), "round {round}: {nums:?}");
+            assert!(matches!(size, Some((30, 2)) | Some((10, 1))), "round {round}: {size:?}");
         }
     }
 
