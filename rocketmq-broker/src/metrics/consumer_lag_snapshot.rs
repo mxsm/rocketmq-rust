@@ -148,12 +148,12 @@ async fn await_pop_refreshes(
 ) -> HashSet<CheetahString> {
     let deadline = Instant::now() + timeout;
     let completions = completions.into_iter().map(|(topic_group, completion)| async move {
-        let outcome = tokio::time::timeout_at(deadline, completion).await;
-        (topic_group, outcome)
+        let pop_wakeup_wait_result = tokio::time::timeout_at(deadline, completion).await;
+        (topic_group, pop_wakeup_wait_result)
     });
     let mut failed = HashSet::new();
-    for (topic_group, outcome) in join_all(completions).await {
-        match outcome {
+    for (topic_group, pop_wakeup_wait_result) in join_all(completions).await {
+        match pop_wakeup_wait_result {
             Ok(Ok(PopWakeupCompletionStatus::ProcessingCompleted)) => {}
             Ok(Ok(other)) => {
                 warn!(?other, topic_group = %topic_group, "POP lag refresh wake-up did not complete");
