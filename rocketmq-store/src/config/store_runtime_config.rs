@@ -28,6 +28,10 @@ pub struct StoreRuntimeConfig {
     pub duplication_enable: bool,
     pub enable_slave_acting_master: bool,
     pub auto_delete_unused_stats: bool,
+    /// Evict topic and group statistics that have not been updated for this many
+    /// minutes. A negative value disables eviction, and values from 0 to 10 are
+    /// raised to 30.
+    pub max_stats_idle_time_in_minutes: i32,
     pub recover_concurrently: bool,
     pub long_polling_enable: bool,
     pub enable_detail_stat: bool,
@@ -42,6 +46,7 @@ impl Default for StoreRuntimeConfig {
             duplication_enable: false,
             enable_slave_acting_master: false,
             auto_delete_unused_stats: false,
+            max_stats_idle_time_in_minutes: -1,
             recover_concurrently: false,
             long_polling_enable: true,
             enable_detail_stat: true,

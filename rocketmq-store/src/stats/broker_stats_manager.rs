@@ -169,13 +169,20 @@ impl BrokerStatsManager {
         Self::track_sampling_task(registration, "sample_stats_table_in_hours");
 
         // Task 4: Clean up expired stats every 10 minutes
+        let stats_table = Arc::clone(&self.stats_table);
+        let max_stats_idle_time_in_minutes = self
+            .broker_config
+            .as_ref()
+            .map_or(-1, |config| config.max_stats_idle_time_in_minutes);
         let registration = sampling.schedule(
             ScheduledTaskConfig::fixed_rate_no_overlap("broker.stats.cleanup-expired", Duration::from_secs(600))
                 .with_initial_delay(Duration::from_secs(600)),
             ScheduledExecutionPolicy::default(),
-            || async {
-                info!("Cleaning expired statistics items");
-                // TODO: Implement cleanup logic based on last access time
+            move || {
+                let stats_table = Arc::clone(&stats_table);
+                async move {
+                    Self::clean_all_resource(&stats_table, max_stats_idle_time_in_minutes);
+                }
             },
         );
         Self::track_sampling_task(registration, "cleanup_expired_stats");
@@ -201,6 +208,39 @@ impl BrokerStatsManager {
     fn sample_stats_table_in_minutes(stats_table: &DashMap<String, StatsItemSet>) {
         for entry in stats_table.iter() {
             entry.value().sampling_in_minutes();
+        }
+    }
+
+    /// Stats sets whose items are keyed by topic or group, so they keep growing as topics
+    /// and groups come and go unless idle items are evicted.
+    const NEED_CLEAN_STATS_SET: [&'static str; 6] = [
+        Stats::TOPIC_PUT_NUMS,
+        Stats::TOPIC_PUT_SIZE,
+        Stats::GROUP_GET_NUMS,
+        Stats::GROUP_GET_SIZE,
+        Stats::SNDBCK_PUT_NUMS,
+        Stats::GROUP_GET_LATENCY,
+    ];
+
+    /// Maps `maxStatsIdleTimeInMinutes` to the idle limit used for eviction: `None` when
+    /// eviction is disabled (a negative value), and at least 30 minutes otherwise.
+    fn effective_max_stats_idle_minutes(max_stats_idle_time_in_minutes: i32) -> Option<u64> {
+        match max_stats_idle_time_in_minutes {
+            minutes if minutes < 0 => None,
+            0..=10 => Some(30),
+            minutes => Some(minutes as u64),
+        }
+    }
+
+    fn clean_all_resource(stats_table: &DashMap<String, StatsItemSet>, max_stats_idle_time_in_minutes: i32) {
+        let Some(max_idle_minutes) = Self::effective_max_stats_idle_minutes(max_stats_idle_time_in_minutes) else {
+            return;
+        };
+        info!("Cleaning statistics items idle for more than {max_idle_minutes} minutes");
+        for stats_name in Self::NEED_CLEAN_STATS_SET {
+            if let Some(stats_item_set) = stats_table.get(stats_name) {
+                stats_item_set.clean_resource(max_idle_minutes);
+            }
         }
     }
 
@@ -1265,6 +1305,47 @@ mod tests {
     fn build_account_stat_key_with_flowlimit_creates_correct_key() {
         let key = build_account_stat_key_with_flowlimit("owner1", "id1", "topic1", "group1", "type1", "limit1");
         assert_eq!(key, "owner1|id1|topic1|group1|type1|limit1");
+    }
+
+    #[test]
+    fn max_stats_idle_time_follows_the_java_broker_rules() {
+        // A negative value disables eviction, values from 0 to 10 are raised to 30, and larger
+        // values are used as is.
+        for (configured, effective) in [
+            (-1, None),
+            (-30, None),
+            (0, Some(30)),
+            (10, Some(30)),
+            (11, Some(11)),
+            (120, Some(120)),
+        ] {
+            assert_eq!(
+                BrokerStatsManager::effective_max_stats_idle_minutes(configured),
+                effective,
+                "maxStatsIdleTimeInMinutes={configured}"
+            );
+        }
+    }
+
+    #[test]
+    fn clean_all_resource_keeps_recently_updated_items() {
+        let stats_table = DashMap::new();
+        for stats_name in BrokerStatsManager::NEED_CLEAN_STATS_SET {
+            let set = StatsItemSet::new(stats_name.to_string());
+            set.add_value("TopicA@GroupA", 1, 1);
+            stats_table.insert(stats_name.to_string(), set);
+        }
+
+        BrokerStatsManager::clean_all_resource(&stats_table, -1);
+        BrokerStatsManager::clean_all_resource(&stats_table, 0);
+
+        for stats_name in BrokerStatsManager::NEED_CLEAN_STATS_SET {
+            assert_eq!(
+                1,
+                stats_table.get(stats_name).expect("stats set").size(),
+                "{stats_name}"
+            );
+        }
     }
 
     #[test]
