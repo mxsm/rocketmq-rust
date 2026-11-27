@@ -121,16 +121,16 @@ pub(crate) fn conclude_metadata_write(
 ) -> MetadataWriteConclusion {
     match observation {
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataWritePersistenceStatus::Durable(generation),
+            persistence_status: MetadataWritePersistenceStatus::Durable(generation),
             ..
         } => MetadataWriteConclusion::Durable(generation),
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
+            persistence_status: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
             ..
         } => MetadataWriteConclusion::FailedBeforeCommit(broker_error::internal("metadata_io", error)),
         MetadataIoCommitObservation::Settled {
             generation,
-            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
+            persistence_status: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
         } => record_unconfirmed(resource, generation, UnconfirmedReason::CommitUnconfirmed, error),
         MetadataIoCommitObservation::Unobserved { generation } => record_unconfirmed(
             resource,
@@ -205,10 +205,10 @@ mod tests {
 
     use super::*;
 
-    fn observation(outcome: MetadataWritePersistenceStatus) -> MetadataIoCommitObservation {
+    fn observation(persistence_status: MetadataWritePersistenceStatus) -> MetadataIoCommitObservation {
         MetadataIoCommitObservation::Settled {
             generation: MetadataGeneration::new(4),
-            outcome,
+            persistence_status,
         }
     }
 

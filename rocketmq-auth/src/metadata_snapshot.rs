@@ -73,16 +73,16 @@ impl SnapshotPersistence {
 pub(crate) fn classify_snapshot_persistence(observation: MetadataIoCommitObservation) -> SnapshotPersistence {
     match observation {
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataWritePersistenceStatus::Durable(generation),
+            persistence_status: MetadataWritePersistenceStatus::Durable(generation),
             ..
         } => SnapshotPersistence::Durable { generation },
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
+            persistence_status: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
             ..
         } => SnapshotPersistence::NotWritten(AuthServiceError::metadata_io(error)),
         MetadataIoCommitObservation::Settled {
             generation,
-            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
+            persistence_status: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
         } => SnapshotPersistence::Unconfirmed {
             generation,
             error: AuthServiceError::metadata_io(error),
@@ -154,21 +154,21 @@ mod tests {
     fn only_a_definite_pre_commit_failure_blocks_publication() {
         let durable = classify_snapshot_persistence(MetadataIoCommitObservation::Settled {
             generation: MetadataGeneration::new(3),
-            outcome: MetadataWritePersistenceStatus::Durable(MetadataGeneration::new(3)),
+            persistence_status: MetadataWritePersistenceStatus::Durable(MetadataGeneration::new(3)),
         });
         assert!(durable.may_have_written());
         assert!(durable.into_error().is_none());
 
         let failed = classify_snapshot_persistence(MetadataIoCommitObservation::Settled {
             generation: MetadataGeneration::new(3),
-            outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(runtime_error()),
+            persistence_status: MetadataWritePersistenceStatus::FailedBeforeCommit(runtime_error()),
         });
         assert!(!failed.may_have_written());
         assert!(failed.into_error().is_some());
 
         let unknown = classify_snapshot_persistence(MetadataIoCommitObservation::Settled {
             generation: MetadataGeneration::new(3),
-            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(runtime_error()),
+            persistence_status: MetadataWritePersistenceStatus::CommitOutcomeUnknown(runtime_error()),
         });
         assert!(unknown.may_have_written());
         assert!(matches!(

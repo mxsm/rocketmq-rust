@@ -31,6 +31,7 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataFileSystem;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoCommitObservation;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataIoPlan;
@@ -504,7 +505,13 @@ async fn queued_generations_coalesce_without_losing_waiters() {
 
     file_system.gate.release();
     assert_eq!(first.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
-    assert_eq!(second.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
+    assert!(matches!(
+        second.observe_until(deadline).await,
+        MetadataIoCommitObservation::Settled {
+            generation,
+            persistence_status: MetadataWritePersistenceStatus::Durable(durable_generation),
+        } if generation == MetadataGeneration::new(2) && durable_generation == MetadataGeneration::new(3)
+    ));
     assert_eq!(third.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
     assert_eq!(
         *file_system.writes.lock().unwrap(),

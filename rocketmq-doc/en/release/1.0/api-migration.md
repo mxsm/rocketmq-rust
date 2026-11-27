@@ -318,6 +318,12 @@ generation ordering, and reconciliation behavior are unchanged;
 `MetadataIoCommitObservation::Unobserved` still allows accepted work to complete
 later and is not a definite persistence failure
 ([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
+
+In named constructors and patterns for `MetadataIoCommitObservation::Settled`, change `outcome`
+to `persistence_status`: for example, `Settled { outcome, .. }` becomes
+`Settled { persistence_status, .. }`. The observed generation is unchanged, even when the
+persistence status reports a newer coalesced generation. The `settled()` accessor is unchanged.
+
 ### Scheduled-task registration status
 
 `ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.
