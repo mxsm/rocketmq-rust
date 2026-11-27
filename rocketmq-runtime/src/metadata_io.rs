@@ -793,10 +793,10 @@ impl MetadataIoCommitObservation {
 /// The private receipt conclusion that keeps the coordinator-abort case
 /// distinct from a deadline expiry.
 ///
-/// [`MetadataIoReceipt::wait_until_outcome`] reports a stopped coordinator as
-/// an unavailable context, while [`MetadataIoReceipt::observe_until`] folds it
-/// into an unobserved generation. Both mappings are derived from this single
-/// classification so the receipt channel is interpreted in exactly one place.
+/// [`MetadataIoReceipt::wait_for_persistence_status_until`] reports a stopped
+/// coordinator as an unavailable context, while [`MetadataIoReceipt::observe_until`]
+/// folds it into an unobserved generation. Both mappings are derived from this
+/// single classification so the receipt channel is interpreted in exactly one place.
 enum ReceiptConclusion {
     /// The receipt channel delivered the actor's result. That is either a
     /// terminal persistence conclusion or the worker-stopped error, which the
@@ -822,16 +822,22 @@ impl MetadataIoReceipt {
         self.generation
     }
 
-    /// Waits for this generation, or a newer coalesced generation, to become
-    /// durable without extending the caller's absolute deadline.
+    /// Waits until the absolute `deadline` for the actor to report the terminal
+    /// persistence status of this generation or a newer coalesced generation.
     ///
-    /// Expiry abandons this observation. Accepted writes retain their ordering
-    /// and byte charge until actual completion, and may still become durable.
+    /// The status can confirm durability, report a failure before target
+    /// replacement, or leave durability unconfirmed. An admitted write can
+    /// still finish after the caller's wait expires.
     ///
     /// # Errors
     ///
-    /// Returns an operational runtime failure if persistence cannot complete.
-    pub async fn wait_until_outcome(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataWritePersistenceStatus> {
+    /// An elapsed deadline returns a [`WaitForDurableMetadata`](crate::RuntimeOperation::WaitForDurableMetadata)
+    /// timeout. A stopped worker or a coordinator channel that closes before
+    /// delivering a status yields a [`MetadataWorkerStopped`](crate::RuntimeOperation::MetadataWorkerStopped) error.
+    pub async fn wait_for_persistence_status_until(
+        self,
+        deadline: MetadataDeadline,
+    ) -> RuntimeResult<MetadataWritePersistenceStatus> {
         if deadline.is_expired() {
             return Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata));
         }
@@ -895,7 +901,7 @@ impl MetadataIoReceipt {
     ///
     /// Returns an operational runtime failure if persistence cannot complete.
     pub async fn wait_until(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataGeneration> {
-        match self.wait_until_outcome(deadline).await? {
+        match self.wait_for_persistence_status_until(deadline).await? {
             MetadataWritePersistenceStatus::Durable(generation) => Ok(generation),
             MetadataWritePersistenceStatus::FailedBeforeCommit(source)
             | MetadataWritePersistenceStatus::CommitOutcomeUnknown(source) => Err(source),
@@ -1294,7 +1300,7 @@ impl MetadataIoActor {
     ) -> RuntimeResult<MetadataWriteCompletionStatus> {
         match self.submit(request, deadline)? {
             MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
-                .wait_until_outcome(deadline)
+                .wait_for_persistence_status_until(deadline)
                 .await
                 .map(MetadataWriteCompletionStatus::Completed),
             MetadataWriteSubmissionStatus::TargetConflict(request) => {
@@ -1339,7 +1345,7 @@ impl MetadataIoActor {
     ) -> RuntimeResult<MetadataWriteCompletionStatus> {
         match self.submit_next(resource, target, bytes, deadline)? {
             MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
-                .wait_until_outcome(deadline)
+                .wait_for_persistence_status_until(deadline)
                 .await
                 .map(MetadataWriteCompletionStatus::Completed),
             MetadataWriteSubmissionStatus::TargetConflict(request) => {

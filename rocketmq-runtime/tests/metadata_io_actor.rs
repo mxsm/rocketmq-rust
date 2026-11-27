@@ -405,7 +405,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     let deadline = MetadataDeadline::after(Duration::from_secs(3));
     let receipt = accepted(failed.submit(request("fenced", 1, b"one"), deadline).unwrap());
     assert!(matches!(
-        receipt.wait_until_outcome(deadline).await.unwrap(),
+        receipt.wait_for_persistence_status_until(deadline).await.unwrap(),
         MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
     ));
     assert!(!failed.shutdown_until(deadline).await.timed_out);
@@ -1371,7 +1371,7 @@ async fn unconfirmed_commit_fences_a_target_that_still_has_queued_work() {
 
     assert!(
         matches!(
-            first.wait_until_outcome(deadline).await.unwrap(),
+            first.wait_for_persistence_status_until(deadline).await.unwrap(),
             MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
         ),
         "generation 1 must be reported as an unconfirmed replacement"

@@ -318,6 +318,16 @@ generation ordering, and reconciliation behavior are unchanged;
 `MetadataIoCommitObservation::Unobserved` still allows accepted work to complete
 later and is not a definite persistence failure
 ([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
+
+The rename of `MetadataIoReceipt::wait_until_outcome` to
+`wait_for_persistence_status_until` is source-breaking. Downstream Rust callers
+must update the method name when waiting for a persistence status.
+
+```diff
+-let status = receipt.wait_until_outcome(deadline).await?;
++let status = receipt.wait_for_persistence_status_until(deadline).await?;
+```
+
 ### Scheduled-task registration status
 
 `ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.
