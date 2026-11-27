@@ -312,12 +312,33 @@ group and `RuntimeError::kind()`.
 `MetadataIoCommitOutcome` is now `MetadataWritePersistenceStatus`. This is an
 `approved-break`: external callers must update imports and type references to
 `rocketmq_runtime::MetadataWritePersistenceStatus`. No compatibility alias or
-wrapper is provided. The variants (`Durable`, `FailedBeforeCommit`, and
-`CommitOutcomeUnknown`) and their payloads are unchanged. Receipt completion,
+wrapper is provided. The type rename did not change the variants or their payloads. Receipt completion,
 generation ordering, and reconciliation behavior are unchanged;
 `MetadataIoCommitObservation::Unobserved` still allows accepted work to complete
 later and is not a definite persistence failure
 ([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
+
+In constructors and match arms, replace `MetadataWritePersistenceStatus::CommitOutcomeUnknown(error)`
+with `MetadataWritePersistenceStatus::DurabilityUnconfirmed(error)`. The payload is the original
+`RuntimeError`: the replacement may already be visible, but its durability was not confirmed.
+Callers must still reconcile before publishing or retrying.
+
+
+In named constructors and patterns for `MetadataIoCommitObservation::Settled`, change `outcome`
+to `persistence_status`: for example, `Settled { outcome, .. }` becomes
+`Settled { persistence_status, .. }`. The observed generation is unchanged, even when the
+persistence status reports a newer coalesced generation. The `settled()` accessor is unchanged.
+
+
+The rename of `MetadataIoReceipt::wait_until_outcome` to
+`wait_for_persistence_status_until` is source-breaking. Downstream Rust callers
+must update the method name when waiting for a persistence status.
+
+```diff
+-let status = receipt.wait_until_outcome(deadline).await?;
++let status = receipt.wait_for_persistence_status_until(deadline).await?;
+```
+
 ### Scheduled-task registration status
 
 `ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.

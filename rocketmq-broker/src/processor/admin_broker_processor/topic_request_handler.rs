@@ -506,9 +506,9 @@ impl TopicRequestHandler {
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await;
         let (conclusion, succeeded) = match outcome {
-            Ok(outcome) => {
-                let succeeded = outcome.is_ok();
-                (outcome.conclusion, succeeded)
+            Ok(topic_config_command_report) => {
+                let succeeded = topic_config_command_report.is_ok();
+                (topic_config_command_report.conclusion, succeeded)
             }
             // A command that was never admitted, or that failed before the
             // target was replaced, is a definite pre-commit failure.

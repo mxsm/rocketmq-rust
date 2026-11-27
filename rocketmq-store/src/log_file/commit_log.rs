@@ -4215,10 +4215,19 @@ mod tests {
         let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
         assert!(commit_log
             .install_controller_write_lease(WriteLeaseToken::try_new(authority, 1).unwrap(), Duration::from_secs(60)));
-        let (first, second, third) = tokio::join!(
+        // Holding the writer lock makes all three appends queue, so the worker takes them as one
+        // micro-batch instead of letting them run in their callers.
+        let held = commit_log.release_checkpoint_write_lock().lock_owned().await;
+        let (first, second, third, ()) = tokio::join!(
             commit_log.put_message(append_test_message("append-sequencer-rollover", b"first-message-body")),
             commit_log.put_message(append_test_message("append-sequencer-rollover", b"second-message-body")),
             commit_log.put_message(append_test_message("append-sequencer-rollover", b"third-message-body")),
+            async {
+                while commit_log.append_sequencer_runtime_info().reserved_count < 3 {
+                    tokio::task::yield_now().await;
+                }
+                drop(held);
+            },
         );
         let results = [first, second, third];
         let statuses = results
@@ -4268,6 +4277,57 @@ mod tests {
         assert_eq!(queue.depth, 0);
         assert_eq!(queue.reserved_count, 0);
         assert_eq!(commit_log.put_message_lock_runtime_info().acquire_total, 1);
+
+        store.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn caller_append_does_not_overtake_a_queued_append() {
+        let temp_dir = tempfile::tempdir().expect("create append ordering temp dir");
+        let mut store = new_test_message_store_with_policy(
+            temp_dir.path(),
+            MessageStoreConfig {
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ha_listen_port: 0,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::AsyncMaster,
+            false,
+            MicroBatchPolicy::try_new(8, 64 * 1024, Duration::from_secs(1)).expect("valid batching policy"),
+        );
+        store.init().await.expect("init append ordering store");
+        assert!(store.load().await, "load append ordering store");
+        store.start().await.expect("start append ordering store");
+
+        let commit_log = store.get_commit_log();
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        assert!(commit_log
+            .install_controller_write_lease(WriteLeaseToken::try_new(authority, 1).unwrap(), Duration::from_secs(60)));
+        let held = commit_log.release_checkpoint_write_lock().lock_owned().await;
+        let (queued, caller) = tokio::join!(
+            commit_log.put_message(append_test_message("append-order", b"queued-first")),
+            async {
+                // The first append found the writer lock held and waits in the worker queue.
+                while commit_log.append_sequencer_runtime_info().reserved_count == 0 {
+                    tokio::task::yield_now().await;
+                }
+                // Released without yielding: the worker has not taken the lock when the next
+                // append finds it free, and that append must still queue behind the first.
+                drop(held);
+                commit_log
+                    .put_message(append_test_message("append-order", b"caller-second"))
+                    .await
+            },
+        );
+
+        let appended = [&queued, &caller].map(|result| {
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+            let append = result.append_message_result().expect("successful append result");
+            (append.logics_offset, append.wrote_offset)
+        });
+        assert_eq!(appended[0].0, 0);
+        assert_eq!(appended[1].0, 1);
+        assert!(appended[0].1 < appended[1].1, "appends out of order: {appended:?}");
 
         store.shutdown().await;
     }
