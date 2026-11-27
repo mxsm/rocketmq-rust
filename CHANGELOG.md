@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(ci):** Use a unique outer idempotency key in the SRE malformed execution-receipt fixture so repeated database tests do not collide ([#12717](https://github.com/mxsm/rocketmq-rust/issues/12717)).
 - **fix(mcp-query):** Refresh catalog and protocol snapshots for the optional Store pressure diagnostics schema, restoring query and control contract checks ([#12668](https://github.com/mxsm/rocketmq-rust/issues/12668)).
 - **fix(ci):** Synchronize late replies in the Transport `GO_AWAY` deadline tests and verify typed deadline rejections without replaying the request ([#12465](https://github.com/mxsm/rocketmq-rust/issues/12465)).
+- Wait for inline request permits to be released before comparing Transport deferred admission snapshots in tests ([#13092](https://github.com/mxsm/rocketmq-rust/issues/13092)).
 - **fix(client):** Restore the original topic for v2 POP retry messages delivered to concurrent Push listeners ([#12921](https://github.com/mxsm/rocketmq-rust/issues/12921)).
 - **fix(broker):** Preserve quoted text and UTF-8 broker names when decoding Java static-topic mappings with unquoted numeric keys ([#12890](https://github.com/mxsm/rocketmq-rust/issues/12890)).
 - **fix(ci):** Avoid animated hit targets when preparing the retained payload in the GPUI message logout test ([#12413](https://github.com/mxsm/rocketmq-rust/issues/12413)).
