@@ -1729,7 +1729,11 @@ mod tests {
             Some(mapping_item),
         );
         let request_header = PullMessageRequestHeader::default();
-        let mut response_header = PullMessageResponseHeader::default();
+        let mut response_header = PullMessageResponseHeader {
+            next_begin_offset: 5,
+            max_offset: 10,
+            ..PullMessageResponseHeader::default()
+        };
 
         let result = rewrite_response_for_static_topic(
             &application_remoting_command_factory(),
@@ -1740,6 +1744,7 @@ mod tests {
         );
 
         assert!(matches!(result, Ok(None)));
+        assert_eq!(response_header.next_begin_offset, 5);
         assert_eq!(response_header.offset_delta, Some(0));
     }
 

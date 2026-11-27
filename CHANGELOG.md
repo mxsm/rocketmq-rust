@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(protocol):** Translate physical offsets within a static topic queue mapping so pull responses return the advancing logical offset ([#13103](https://github.com/mxsm/rocketmq-rust/issues/13103)).
 - Restore `--locked` builds of the standalone MCP Query workspace by updating its `jsonschema` lockfile entry to 0.63.1 ([#13058](https://github.com/mxsm/rocketmq-rust/issues/13058)).
 - Fix the `rocketmq-store` Clippy failure caused by an unused import after `MessageStoreReadPort` switched to `async fn` ([#13033](https://github.com/mxsm/rocketmq-rust/issues/13033)).
 - **fix(protocol):** Separate offsets within a POP queue with commas so clients can decode multi-message responses ([#12984](https://github.com/mxsm/rocketmq-rust/issues/12984)).

@@ -51,7 +51,7 @@ impl Default for LogicQueueMappingItem {
 
 impl LogicQueueMappingItem {
     pub fn compute_static_queue_offset_strictly(&self, physical_queue_offset: i64) -> i64 {
-        if physical_queue_offset > self.start_offset {
+        if physical_queue_offset < self.start_offset {
             return self.logic_offset;
         }
         self.logic_offset + (physical_queue_offset - self.start_offset)
@@ -133,10 +133,11 @@ mod tests {
         let item = LogicQueueMappingItem {
             start_offset: 100,
             logic_offset: 500,
+            end_offset: 200,
             ..Default::default()
         };
-        assert_eq!(item.compute_static_queue_offset_strictly(150), 500);
-        assert_eq!(item.compute_static_queue_offset_strictly(50), 450);
+        let translated = [50, 100, 150, 250].map(|offset| item.compute_static_queue_offset_strictly(offset));
+        assert_eq!(translated, [500, 500, 550, 650]);
     }
 
     #[test]
