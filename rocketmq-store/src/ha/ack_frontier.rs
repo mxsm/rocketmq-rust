@@ -159,7 +159,9 @@ impl AckFrontier {
         }
     }
 
-    fn policy_frontier(&self, policy: AckPolicy) -> i64 {
+    /// Returns the highest offset `policy` can acknowledge, or -1 when the frontier rejects.
+    /// [`Self::decide`] waits for every offset above it.
+    pub(crate) fn policy_frontier(&self, policy: AckPolicy) -> i64 {
         let Self::Ready {
             authority,
             local_durable_watermark,
