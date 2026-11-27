@@ -793,7 +793,7 @@ impl MetadataIoCommitObservation {
 /// The private receipt conclusion that keeps the coordinator-abort case
 /// distinct from a deadline expiry.
 ///
-/// [`MetadataIoReceipt::wait_until_outcome`] reports a stopped coordinator as
+/// [`MetadataIoReceipt::wait_for_persistence_status_until`] reports a stopped coordinator as
 /// an unavailable context, while [`MetadataIoReceipt::observe_until`] folds it
 /// into an unobserved generation. Both mappings are derived from this single
 /// classification so the receipt channel is interpreted in exactly one place.
@@ -822,16 +822,26 @@ impl MetadataIoReceipt {
         self.generation
     }
 
-    /// Waits for this generation, or a newer coalesced generation, to become
-    /// durable without extending the caller's absolute deadline.
+    /// Waits until the actor delivers a terminal persistence status for this
+    /// generation, without extending the caller's absolute deadline.
     ///
-    /// Expiry abandons this observation. Accepted writes retain their ordering
+    /// `Ok(status)` can report a durable generation, a failure before the
+    /// target was replaced, or unconfirmed durability. A newer coalesced
+    /// generation can settle this receipt, so a durable status may carry a
+    /// later generation than [`Self::generation`].
+    ///
+    /// Expiry abandons this wait only. Accepted writes retain their ordering
     /// and byte charge until actual completion, and may still become durable.
     ///
     /// # Errors
     ///
-    /// Returns an operational runtime failure if persistence cannot complete.
-    pub async fn wait_until_outcome(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataWritePersistenceStatus> {
+    /// Returns a `WaitForDurableMetadata` timeout error if the deadline elapses
+    /// first, and a `MetadataWorkerStopped` error if the worker stopped before
+    /// running this generation or the coordinator channel closed.
+    pub async fn wait_for_persistence_status_until(
+        self,
+        deadline: MetadataDeadline,
+    ) -> RuntimeResult<MetadataWritePersistenceStatus> {
         if deadline.is_expired() {
             return Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata));
         }
@@ -895,7 +905,7 @@ impl MetadataIoReceipt {
     ///
     /// Returns an operational runtime failure if persistence cannot complete.
     pub async fn wait_until(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataGeneration> {
-        match self.wait_until_outcome(deadline).await? {
+        match self.wait_for_persistence_status_until(deadline).await? {
             MetadataWritePersistenceStatus::Durable(generation) => Ok(generation),
             MetadataWritePersistenceStatus::FailedBeforeCommit(source)
             | MetadataWritePersistenceStatus::CommitOutcomeUnknown(source) => Err(source),
@@ -1294,7 +1304,7 @@ impl MetadataIoActor {
     ) -> RuntimeResult<MetadataWriteCompletionStatus> {
         match self.submit(request, deadline)? {
             MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
-                .wait_until_outcome(deadline)
+                .wait_for_persistence_status_until(deadline)
                 .await
                 .map(MetadataWriteCompletionStatus::Completed),
             MetadataWriteSubmissionStatus::TargetConflict(request) => {
@@ -1339,7 +1349,7 @@ impl MetadataIoActor {
     ) -> RuntimeResult<MetadataWriteCompletionStatus> {
         match self.submit_next(resource, target, bytes, deadline)? {
             MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
-                .wait_until_outcome(deadline)
+                .wait_for_persistence_status_until(deadline)
                 .await
                 .map(MetadataWriteCompletionStatus::Completed),
             MetadataWriteSubmissionStatus::TargetConflict(request) => {
