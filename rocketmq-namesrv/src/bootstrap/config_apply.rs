@@ -116,17 +116,17 @@ pub(crate) async fn apply_runtime_updates(
         .map_err(crate::namesrv_error::storage_write)?
     {
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataWritePersistenceStatus::Durable(generation),
+            persistence_status: MetadataWritePersistenceStatus::Durable(generation),
             ..
         } => generation.get(),
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
+            persistence_status: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
             ..
         } => {
             return Err(crate::namesrv_error::storage_write(error));
         }
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataWritePersistenceStatus::DurabilityUnconfirmed(error),
+            persistence_status: MetadataWritePersistenceStatus::DurabilityUnconfirmed(error),
             ..
         } => {
             runtime.config_generations.write().reconciliation_required = true;

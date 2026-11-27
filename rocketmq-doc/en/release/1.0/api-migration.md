@@ -323,6 +323,12 @@ with `MetadataWritePersistenceStatus::DurabilityUnconfirmed(error)`. The payload
 `RuntimeError`: the replacement may already be visible, but its durability was not confirmed.
 Callers must still reconcile before publishing or retrying.
 
+
+In named constructors and patterns for `MetadataIoCommitObservation::Settled`, change `outcome`
+to `persistence_status`: for example, `Settled { outcome, .. }` becomes
+`Settled { persistence_status, .. }`. The observed generation is unchanged, even when the
+persistence status reports a newer coalesced generation. The `settled()` accessor is unchanged.
+
 ### Scheduled-task registration status
 
 `ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.

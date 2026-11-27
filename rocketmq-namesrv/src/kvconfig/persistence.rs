@@ -514,11 +514,11 @@ async fn process_batch(
             .await
         {
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataWritePersistenceStatus::Durable(_),
+                persistence_status: MetadataWritePersistenceStatus::Durable(_),
                 ..
             }) => {}
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
+                persistence_status: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
                 ..
             }) => {
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
@@ -527,7 +527,7 @@ async fn process_batch(
                 return;
             }
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataWritePersistenceStatus::DurabilityUnconfirmed(error),
+                persistence_status: MetadataWritePersistenceStatus::DurabilityUnconfirmed(error),
                 ..
             }) => {
                 inner.reconciliation_required.store(true, Ordering::Release);
