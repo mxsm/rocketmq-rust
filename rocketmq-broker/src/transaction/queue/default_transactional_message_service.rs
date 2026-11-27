@@ -42,7 +42,6 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::MissedTickPolicy;
 use rocketmq_runtime::ProcessMemoryLimit;
-use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ScheduledExecutionPolicy;
@@ -193,13 +192,10 @@ where
     ) -> Result<Self> {
         let queue_count = 20_000.min(parent_budget.limit().capacity.count);
         let queue_bytes = (parent_budget.limit().capacity.bytes / 16).max(1);
-        let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX).max(1);
         let operation_queue_budget = parent_budget
             .child(
                 "transaction-operations",
-                BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject)
-                    .with_rate(RateLimit::new(queue_rate, queue_rate))
-                    .with_max_age(Duration::from_secs(30)),
+                operation_queue_limit(queue_count, queue_bytes),
             )
             .map_err(|_error| crate::broker_error::configuration_invalid("broker.transaction.operationQueue"))?;
         Ok(Self {
@@ -1382,11 +1378,29 @@ fn to_message_ext_broker_inner(topic_config: &TopicConfig, msg_ext: &MessageExt)
     inner
 }
 
+/// Budget for pending transaction operations: bounded by count, bytes and age, not by
+/// admission rate, so commits and rollbacks are not refused above some per-second count.
+fn operation_queue_limit(queue_count: usize, queue_bytes: usize) -> BudgetLimit {
+    BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject).with_max_age(Duration::from_secs(30))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
     use rocketmq_store::BrokerReadStore;
+
+    #[test]
+    fn operation_queue_admission_is_not_rate_limited() {
+        let tree = rocketmq_runtime::ResourceBudgetTree::new("transaction-operations", operation_queue_limit(4, 4096))
+            .expect("operation queue budget");
+        let budget = tree.root();
+        // A burst of three times the count, released in between, must all be admitted: a rate limit
+        // equal to the count refused everything after the first count in a second.
+        for _ in 0..12 {
+            drop(budget.try_acquire_data(1).expect("admitted while the queue has room"));
+        }
+    }
 
     async fn transaction_runtime() -> (tempfile::TempDir, crate::broker_runtime::BrokerRuntime) {
         transaction_runtime_with(BrokerConfig::default(), rocketmq_store::MessageStoreConfig::default()).await

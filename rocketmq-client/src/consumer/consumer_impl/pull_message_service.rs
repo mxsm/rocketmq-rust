@@ -35,7 +35,6 @@ use rocketmq_runtime::BudgetedItem;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::QueueEnqueueStatus;
-use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourcePermit;
 use serde::Serialize;
@@ -922,14 +921,13 @@ impl PullMessageService {
     ) -> Result<BudgetedQueue<T>, ClientError> {
         let queue_count = self.queue_capacity.max(1);
         let queue_bytes = (self.resource_budget.limit().capacity.bytes / 16).max(1);
-        let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX).max(1);
+        // Count, bytes and age bound the queue; an admission rate would refuse pull requests
+        // above some per-second count while there is still room for them.
         let budget = self
             .resource_budget
             .child(
                 name,
-                BudgetLimit::new(queue_count, queue_bytes, policy)
-                    .with_rate(RateLimit::new(queue_rate, queue_rate))
-                    .with_max_age(Duration::from_secs(300)),
+                BudgetLimit::new(queue_count, queue_bytes, policy).with_max_age(Duration::from_secs(300)),
             )
             .map_err(|error| ClientError::config_invalid_source("client.pull.requestQueue", true, error))?;
         Ok(BudgetedQueue::new(budget))
@@ -1350,6 +1348,23 @@ mod tests {
         assert_eq!(request.get_message_queue().queue_id(), 1);
         assert!(tx.is_some());
         assert_eq!(queue.snapshot().depth, 1);
+    }
+
+    #[test]
+    fn drained_request_queue_admits_requests_beyond_its_capacity_per_second() {
+        let service = PullMessageService::with_capacity_and_shards(2, 1);
+        let queue = service
+            .build_request_queue::<u64>("pull-worker-burst", FullPolicy::Reject)
+            .expect("request queue");
+        // A burst of three times the count, released in between, must all be admitted: a rate limit
+        // equal to the count refused everything after the first count in a second.
+        for request in 0..6_u64 {
+            assert!(matches!(
+                queue.try_push_data(request, 8),
+                rocketmq_runtime::QueueEnqueueStatus::Enqueued
+            ));
+            assert_eq!(queue.try_pop(), Some(request));
+        }
     }
 
     #[test]

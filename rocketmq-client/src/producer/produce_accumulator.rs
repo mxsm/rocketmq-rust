@@ -44,7 +44,6 @@ use rocketmq_runtime::BudgetedItem;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourcePermit;
 use serde::Serialize;
@@ -188,12 +187,12 @@ impl ProduceAccumulator {
         const ACCUMULATED_MESSAGE_LIMIT: usize = 262_144;
         let parent_capacity = resource_budget.limit().capacity;
         let message_count = ACCUMULATED_MESSAGE_LIMIT.min(parent_capacity.count).max(1);
-        let message_rate = u64::try_from(message_count).unwrap_or(u64::MAX).max(1);
+        // Count, bytes and age bound the accumulation; an admission rate would fail sends above
+        // some per-second count while there is still room for them.
         let message_budget = resource_budget
             .child(
                 "accumulated-messages",
                 BudgetLimit::new(message_count, parent_capacity.bytes.max(1), FullPolicy::Reject)
-                    .with_rate(RateLimit::new(message_rate, message_rate))
                     .with_max_age(Duration::from_secs(60)),
             )
             .expect("clamped accumulated-message limits fit the client resource root");
@@ -1048,6 +1047,25 @@ mod tests {
     }
 
     #[test]
+    fn accumulation_and_schedule_budgets_are_not_rate_limited() {
+        let tree = rocketmq_runtime::ResourceBudgetTree::new(
+            "produce-accumulator-burst",
+            BudgetLimit::new(4, 1 << 20, FullPolicy::Reject),
+        )
+        .expect("client budget");
+        let accumulator = ProduceAccumulator::with_resource_budget(test_context(), "burst", tree.root());
+        let schedules = rocketmq_runtime::ResourceBudgetTree::new("schedules", guard_schedule_queue_limit(4, 4096))
+            .expect("schedule budget");
+        // A burst of three times the count, released in between, must all be admitted: a rate limit
+        // equal to the count refused everything after the first count in a second.
+        for budget in [&accumulator.message_budget, &schedules.root()] {
+            for _ in 0..12 {
+                drop(budget.try_acquire_data(1).expect("admitted while the budget has room"));
+            }
+        }
+    }
+
+    #[test]
     fn try_add_message_counts_body_size() {
         let accumulator = ProduceAccumulator::new(test_context(), "test");
         let message = Message::builder()
@@ -1132,7 +1150,7 @@ mod tests {
             .child(
                 "accumulated-messages",
                 BudgetLimit::new(1, 1024, FullPolicy::Reject)
-                    .with_rate(RateLimit::new(1, 1))
+                    .with_rate(rocketmq_runtime::RateLimit::new(1, 1))
                     .with_max_age(Duration::from_secs(60)),
             )
             .expect("message budget");
@@ -2090,6 +2108,11 @@ async fn wait_guard_deadline_or_schedule(
     }
 }
 
+/// Budget for batch deadline schedules: bounded by count, bytes and age, not by admission rate.
+fn guard_schedule_queue_limit(capacity: usize, queue_bytes: usize) -> BudgetLimit {
+    BudgetLimit::new(capacity, queue_bytes, FullPolicy::Reject).with_max_age(Duration::from_secs(300))
+}
+
 fn build_guard_schedule_queue(
     parent_budget: &ResourceBudget,
     queue_name: &'static str,
@@ -2097,12 +2120,7 @@ fn build_guard_schedule_queue(
     const SCHEDULE_CAPACITY: usize = 65_536;
     let queue_bytes = (parent_budget.limit().capacity.bytes / 64).max(1);
     let budget = parent_budget
-        .child(
-            queue_name,
-            BudgetLimit::new(SCHEDULE_CAPACITY, queue_bytes, FullPolicy::Reject)
-                .with_rate(RateLimit::new(SCHEDULE_CAPACITY as u64, SCHEDULE_CAPACITY as u64))
-                .with_max_age(Duration::from_secs(300)),
-        )
+        .child(queue_name, guard_schedule_queue_limit(SCHEDULE_CAPACITY, queue_bytes))
         .map_err(|error| ClientError::config_invalid_source("client.producer.accumulatorScheduleQueue", true, error))?;
     Ok(BudgetedQueue::new(budget))
 }

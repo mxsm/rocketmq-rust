@@ -57,7 +57,6 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::QueueSnapshot;
-use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_transport::api::RPCHook;
 use serde::Serialize;
@@ -647,12 +646,11 @@ impl DefaultLitePullConsumerImpl {
         let queue_count = usize::try_from(consumer_config.pull_threshold_for_all)
             .unwrap_or(DEFAULT_CONSUME_REQUEST_CAPACITY)
             .clamp(1, MAX_CONSUME_REQUEST_CAPACITY);
-        let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX);
-        let limit = BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject)
-            .with_rate(RateLimit::new(queue_rate, queue_rate))
-            .with_max_age(CONSUME_REQUEST_MAX_AGE);
         let budget = parent_budget
-            .child("lite-pull-consume-requests", limit)
+            .child(
+                "lite-pull-consume-requests",
+                consume_request_queue_limit(queue_count, queue_bytes),
+            )
             .map_err(|error| ClientError::config_invalid_source("client.litePull.consumeRequestQueue", true, error))?;
         Ok(BudgetedQueue::new(budget))
     }
@@ -3598,6 +3596,12 @@ pub async fn run_lite_pull_assignment_registry_probe(iterations: usize) -> LiteP
     }
 }
 
+/// Budget for buffered consume requests: bounded by count, bytes and age, not by admission
+/// rate, so pulled messages are not refused above some per-second count.
+fn consume_request_queue_limit(queue_count: usize, queue_bytes: usize) -> BudgetLimit {
+    BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject).with_max_age(CONSUME_REQUEST_MAX_AGE)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::test_support::error_assertions::client_exception;
@@ -3610,6 +3614,18 @@ mod tests {
 
     use super::*;
     use crate::base::access_channel::AccessChannel;
+
+    #[test]
+    fn consume_request_admission_is_not_rate_limited() {
+        let tree = rocketmq_runtime::ResourceBudgetTree::new("lite-pull", consume_request_queue_limit(4, 4096))
+            .expect("consume request budget");
+        let budget = tree.root();
+        // A burst of three times the count, released in between, must all be admitted: a rate limit
+        // equal to the count refused everything after the first count in a second.
+        for _ in 0..12 {
+            drop(budget.try_acquire_data(1).expect("admitted while the queue has room"));
+        }
+    }
 
     #[test]
     fn classic_pull_contract_preserves_filter_and_suspend_wire_fields() {
