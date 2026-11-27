@@ -328,14 +328,14 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         let append = self
             .shared_append()
             .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append))?;
-        let outcome = append
+        let shared_store_append_report = append
             .put_message(message)
             .await
             .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append))?;
         Ok(store_append_receipt(
-            outcome.result,
-            outcome.appended_watermark,
-            outcome.durable_watermark,
+            shared_store_append_report.result,
+            shared_store_append_report.appended_watermark,
+            shared_store_append_report.durable_watermark,
         ))
     }
 
@@ -346,14 +346,14 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         let append = self
             .shared_append()
             .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append))?;
-        let outcome = append
+        let shared_store_append_report = append
             .put_messages(batch)
             .await
             .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Append))?;
         Ok(store_append_receipt(
-            outcome.result,
-            outcome.appended_watermark,
-            outcome.durable_watermark,
+            shared_store_append_report.result,
+            shared_store_append_report.appended_watermark,
+            shared_store_append_report.durable_watermark,
         ))
     }
 
