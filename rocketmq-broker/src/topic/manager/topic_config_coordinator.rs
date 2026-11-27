@@ -438,7 +438,7 @@ impl TopicConfigCoordinator {
             .map(|_| "failed to enqueue final persistence".to_string());
         let final_persist_succeeded = if detail.is_none() {
             match tokio::time::timeout(deadline.remaining(), receiver).await {
-                Ok(Ok(outcome)) => match outcome.error() {
+                Ok(Ok(topic_config_command_report)) => match topic_config_command_report.error() {
                     Some(error) => {
                         detail = Some(error.to_string());
                         false
@@ -497,14 +497,14 @@ async fn run_topic_config_worker(
                 completion,
                 _pending,
             } => {
-                let mut outcome = TopicConfigCommandReport::persisted(
+                let mut topic_config_command_report = TopicConfigCommandReport::persisted(
                     persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
                 );
-                if outcome.conclusion.is_durable() {
+                if topic_config_command_report.conclusion.is_durable() {
                     if let Some(registration) = registration {
                         match registration().await {
                             Ok(()) => {
-                                outcome = TopicConfigCommandReport::persisted(
+                                topic_config_command_report = TopicConfigCommandReport::persisted(
                                     persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
                                 );
                             }
@@ -513,28 +513,28 @@ async fn run_topic_config_worker(
                                 // The snapshot was already written, so this is
                                 // not a persistence failure. The conclusion
                                 // keeps describing the durable file.
-                                outcome.registration_error = Some(error);
+                                topic_config_command_report.registration_error = Some(error);
                             }
                         }
                     }
                 }
-                if !outcome.is_ok() {
+                if !topic_config_command_report.is_ok() {
                     persist_failures.fetch_add(1, Ordering::AcqRel);
                 }
                 if let Some(completion) = completion {
-                    let _ = completion.send(outcome);
-                } else if let Some(error) = outcome.error() {
+                    let _ = completion.send(topic_config_command_report);
+                } else if let Some(error) = topic_config_command_report.error() {
                     warn!(?error, "asynchronous topic config command failed");
                 }
             }
             TopicConfigCommand::Finalize { completion } => {
-                let outcome = TopicConfigCommandReport::persisted(
+                let topic_config_command_report = TopicConfigCommandReport::persisted(
                     persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
                 );
-                if !outcome.is_ok() {
+                if !topic_config_command_report.is_ok() {
                     persist_failures.fetch_add(1, Ordering::AcqRel);
                 }
-                let _ = completion.send(outcome);
+                let _ = completion.send(topic_config_command_report);
                 break;
             }
         }
@@ -790,21 +790,21 @@ mod tests {
         let failed: TopicRegistrationAction =
             Box::new(|| Box::pin(async { Err(crate::broker_error::service_failed("registration")) }));
 
-        let outcome = coordinator
+        let topic_config_command_report = coordinator
             .persist_and_register_wait(failed)
             .await
             .expect("the command is admitted and reports an outcome");
 
         // The snapshot reached the file before the callback ran, so the
         // durability of this topic is known even though the command failed.
-        assert!(!outcome.is_ok());
+        assert!(!topic_config_command_report.is_ok());
         assert!(
-            outcome.conclusion.is_durable(),
+            topic_config_command_report.conclusion.is_durable(),
             "a registration failure must not be reported as a persistence failure"
         );
-        assert!(!outcome.conclusion.retains_dirty_marker());
-        assert!(outcome.registration_error.is_some());
-        assert!(outcome.error().is_some());
+        assert!(!topic_config_command_report.conclusion.retains_dirty_marker());
+        assert!(topic_config_command_report.registration_error.is_some());
+        assert!(topic_config_command_report.error().is_some());
         assert_eq!(coordinator.registration_failure_count(), 1);
 
         let report = coordinator
@@ -824,22 +824,22 @@ mod tests {
             .manager()
             .update_topic_config(TopicConfig::with_queues("UnconfirmedTopic", 1, 1), 0);
 
-        let outcome = coordinator
+        let topic_config_command_report = coordinator
             .persist_and_wait()
             .await
             .expect("the command is admitted and reports an outcome");
 
-        assert!(!outcome.is_ok());
+        assert!(!topic_config_command_report.is_ok());
         assert!(
-            !outcome.conclusion.is_durable(),
+            !topic_config_command_report.conclusion.is_durable(),
             "an unconfirmed replacement is not a durable conclusion"
         );
         assert!(
-            outcome.conclusion.retains_dirty_marker(),
+            topic_config_command_report.conclusion.retains_dirty_marker(),
             "the supervised topic must stay marked while its durability is unknown"
         );
         assert!(matches!(
-            outcome.conclusion,
+            topic_config_command_report.conclusion,
             MetadataWriteConclusion::Unconfirmed {
                 reason: crate::broker::metadata_reconciliation::UnconfirmedReason::CommitUnconfirmed,
                 ..
@@ -880,15 +880,15 @@ mod tests {
                 )))
             })
         });
-        let outcome = coordinator
+        let topic_config_command_report = coordinator
             .persist_and_register_wait(failed)
             .await
             .expect("the command is admitted and reports an outcome");
         assert!(
-            !outcome.is_ok(),
+            !topic_config_command_report.is_ok(),
             "a registration failure is reported through the command outcome"
         );
-        assert!(outcome.registration_error.is_some());
+        assert!(topic_config_command_report.registration_error.is_some());
         assert_eq!(coordinator.registration_failure_count(), 1);
 
         let retried = Arc::new(AtomicBool::new(false));

@@ -196,7 +196,7 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
             Ok(result) => result,
             Err(_) => {
                 return match coordination_result {
-                    Ok(outcome) => match outcome.error() {
+                    Ok(topic_config_command_report) => match topic_config_command_report.error() {
                         // The coordination itself failed, so the registration
                         // result never arrived.
                         Some(error) => Err(BrokerRegistrationError::coordination(error)),
