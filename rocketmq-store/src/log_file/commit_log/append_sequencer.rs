@@ -15,6 +15,9 @@
 //! Store-owned CommitLog append worker and per-request result projection.
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,10 +92,20 @@ pub(super) struct SequencedBatchAppend {
 }
 
 /// Cloneable admission port shared by normal and internal CommitLog producers.
+///
+/// A single-message append runs in the caller when it can take the writer lock at once and no
+/// queued request is waiting; otherwise it goes through the worker queue. Running in the caller
+/// keeps the message on the core that encoded it and saves two task wake-ups per append.
 #[derive(Clone)]
 pub(super) struct CommitLogAppendPort {
     sender: AppendSequencerSender<QueuedAppend>,
     queue_offsets: ConsumeQueueLookupHandle,
+    processor: Arc<CommitLogAppendProcessor>,
+    /// Requests submitted to the worker queue and not yet appended. An append runs in the caller
+    /// only while this is zero, so it never overtakes an earlier queued request.
+    queued: Arc<AtomicUsize>,
+    /// Set when admission closes; no append runs in the caller after that.
+    closed: Arc<AtomicBool>,
 }
 
 /// Whether appending a message with `sys_flag` assigns and advances its queue offset. Prepared
@@ -112,17 +125,31 @@ impl CommitLogAppendPort {
         prepared: PreparedPayload,
         assign_queue_offset: bool,
     ) -> SequencedMessageAppend {
-        let (completion, response) = oneshot::channel();
         let queue_offset = self.resolve_queue_offset(&message);
+        if let Some(guard) = self.inline_append_guard() {
+            let request = AppendRequest::Message {
+                message,
+                prepared,
+                assign_queue_offset,
+                queue_offset,
+                completion: MessageCompletion::Inline,
+            };
+            return self.processor.append_inline(request, guard);
+        }
+        let (completion, response) = oneshot::channel();
         let request = Box::new(AppendRequest::Message {
             message,
             prepared,
             assign_queue_offset,
             queue_offset,
-            completion,
+            completion: MessageCompletion::Queued(completion),
         });
         let retained_bytes = request.retained_bytes();
+        // Counted before submission and uncounted by the worker after the append, so an
+        // inline append that sees zero under the writer lock has no earlier request waiting.
+        self.queued.fetch_add(1, Ordering::AcqRel);
         if let AppendAdmissionResult::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
+            self.queued.fetch_sub(1, Ordering::AcqRel);
             (*request).reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
@@ -150,7 +177,11 @@ impl CommitLogAppendPort {
             completion,
         });
         let retained_bytes = request.retained_bytes();
+        // Counted before submission and uncounted by the worker after the append, so an
+        // inline append that sees zero under the writer lock has no earlier request waiting.
+        self.queued.fetch_add(1, Ordering::AcqRel);
         if let AppendAdmissionResult::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
+            self.queued.fetch_sub(1, Ordering::AcqRel);
             (*request).reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
@@ -160,6 +191,18 @@ impl CommitLogAppendPort {
                 result: PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
             }
         })
+    }
+
+    /// Returns the writer lock when an append may run in the caller: admission is open, the lock
+    /// is free and no queued request is waiting. Both checks of the queued count are needed: the
+    /// first skips the lock while requests wait, and the second, under the lock, sees every
+    /// request whose submission finished before the lock was taken.
+    fn inline_append_guard(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        if self.closed.load(Ordering::Acquire) || self.queued.load(Ordering::Acquire) != 0 {
+            return None;
+        }
+        let guard = self.processor.put_message_lock.try_lock().ok()?;
+        (self.queued.load(Ordering::Acquire) == 0).then_some(guard)
     }
 
     /// Resolves the queue offset slot in the caller's task, so the writer lock only reads and
@@ -173,10 +216,12 @@ impl CommitLogAppendPort {
     }
 
     pub(super) fn close(&self) {
+        self.closed.store(true, Ordering::Release);
         self.sender.close();
     }
 
     fn close_and_discard_pending(&self) -> usize {
+        self.closed.store(true, Ordering::Release);
         self.sender.close_and_discard_pending()
     }
 
@@ -205,9 +250,14 @@ impl CommitLogAppendRuntime {
         processor: CommitLogAppendProcessor,
     ) -> Result<Self, CommitLogAppendStartError> {
         let (sender, receiver) = AppendSequencer::bounded(config)?;
+        let queued = Arc::new(AtomicUsize::new(0));
+        let processor = Arc::new(processor.with_queued_count(Arc::clone(&queued)));
         let port = CommitLogAppendPort {
             sender,
             queue_offsets: processor.consume_queue_store.lookup_handle(),
+            processor: Arc::clone(&processor),
+            queued,
+            closed: Arc::new(AtomicBool::new(false)),
         };
         let task_group = runtime_scope.task_group(APPEND_WORKER_NAME);
         let cancellation = task_group.cancellation_token();
@@ -241,13 +291,29 @@ impl CommitLogAppendRuntime {
 /// queue moves an item several times on the way in and out, so the moves copy a pointer.
 type QueuedAppend = Box<AppendRequest>;
 
+/// Where the result of a single-message append goes.
+enum MessageCompletion {
+    /// A queued request: the worker sends the result to the waiting caller.
+    Queued(oneshot::Sender<SequencedMessageAppend>),
+    /// An append that runs in the caller, which takes the result directly.
+    Inline,
+}
+
+impl MessageCompletion {
+    fn send(self, append: SequencedMessageAppend) {
+        if let Self::Queued(sender) = self {
+            let _ = sender.send(append);
+        }
+    }
+}
+
 enum AppendRequest {
     Message {
         message: MessageExtBrokerInner,
         prepared: PreparedPayload,
         assign_queue_offset: bool,
         queue_offset: Option<QueueOffsetHandle>,
-        completion: oneshot::Sender<SequencedMessageAppend>,
+        completion: MessageCompletion,
     },
     Batch {
         batch: MessageExtBatch,
@@ -272,9 +338,7 @@ impl AppendRequest {
         match self {
             Self::Message {
                 message, completion, ..
-            } => {
-                let _ = completion.send(SequencedMessageAppend { message, result });
-            }
+            } => completion.send(SequencedMessageAppend { message, result }),
             Self::Batch { batch, completion, .. } => {
                 let _ = completion.send(SequencedBatchAppend { batch, result });
             }
@@ -339,7 +403,7 @@ enum ReadyAppend {
         assign_queue_offset: bool,
         queue_offset: Option<QueueOffsetHandle>,
         message_count: i16,
-        completion: oneshot::Sender<SequencedMessageAppend>,
+        completion: MessageCompletion,
     },
     Batch {
         batch: MessageExtBatch,
@@ -355,7 +419,7 @@ enum CompletedAppend {
     Message {
         message: MessageExtBrokerInner,
         result: PutMessageResult,
-        completion: oneshot::Sender<SequencedMessageAppend>,
+        completion: MessageCompletion,
         unlock_segment: Option<Arc<DefaultMappedFile>>,
     },
     Batch {
@@ -421,9 +485,7 @@ impl CompletedAppend {
                 result,
                 completion,
                 ..
-            } => {
-                let _ = completion.send(SequencedMessageAppend { message, result });
-            }
+            } => completion.send(SequencedMessageAppend { message, result }),
             Self::Batch {
                 batch,
                 result,
@@ -450,6 +512,8 @@ pub(super) struct CommitLogAppendDependencies {
 }
 
 pub(super) struct CommitLogAppendProcessor {
+    /// The port's count of queued, not yet appended requests; the worker uncounts each batch.
+    queued: Arc<AtomicUsize>,
     append: MappedFileQueueAppendHandle,
     message_store_config: Arc<MessageStoreConfig>,
     store_context: CommitLogStoreContext,
@@ -475,6 +539,7 @@ impl CommitLogAppendProcessor {
             store_metrics,
         } = dependencies;
         Self {
+            queued: Arc::new(AtomicUsize::new(0)),
             append,
             message_store_config,
             store_context,
@@ -484,6 +549,77 @@ impl CommitLogAppendProcessor {
             consume_queue_store,
             flush,
             store_metrics,
+        }
+    }
+
+    fn with_queued_count(mut self, queued: Arc<AtomicUsize>) -> Self {
+        self.queued = queued;
+        self
+    }
+
+    /// Appends one single-message request in the caller, which holds the writer lock with no
+    /// queued request waiting, with the same steps as the worker's batches.
+    fn append_inline(&self, request: AppendRequest, guard: tokio::sync::MutexGuard<'_, ()>) -> SequencedMessageAppend {
+        let request = request.bind_sequencer_fields(
+            self.append_callback.as_ref(),
+            self.message_store_config.duplication_enable,
+        );
+        let lock_started = self.begin_lock_hold();
+        let mut completions = [self.append_ready(request)];
+        self.end_lock_hold(guard, 0, lock_started, 1, 0);
+        self.publish_appends(&mut completions);
+        let [completion] = completions;
+        match completion {
+            CompletedAppend::Message { message, result, .. } => SequencedMessageAppend { message, result },
+            CompletedAppend::Batch { batch, .. } => {
+                error!("CommitLog inline append received a batch request");
+                SequencedMessageAppend {
+                    message: batch.message_ext_broker_inner,
+                    result: PutMessageResult::new_default(PutMessageStatus::UnknownError),
+                }
+            }
+        }
+    }
+
+    fn begin_lock_hold(&self) -> std::time::Instant {
+        self.runtime_state
+            .set_begin_time_in_lock(rocketmq_runtime::common::time_utils::current_millis());
+        std::time::Instant::now()
+    }
+
+    fn end_lock_hold(
+        &self,
+        guard: tokio::sync::MutexGuard<'_, ()>,
+        lock_wait_millis: u64,
+        lock_started: std::time::Instant,
+        request_count: usize,
+        retained_bytes: usize,
+    ) {
+        let lock_hold_millis = lock_started.elapsed().as_millis() as u64;
+        self.runtime_state
+            .record_put_message_lock(lock_wait_millis, lock_hold_millis);
+        drop(guard);
+        self.runtime_state.clear_begin_time_in_lock();
+        self.store_metrics.record_append_latency(lock_hold_millis);
+        if lock_hold_millis > 500 {
+            warn!(
+                lock_hold_millis,
+                request_count, retained_bytes, "CommitLog append micro-batch held the writer lock for too long"
+            );
+        }
+    }
+
+    /// Post-lock work for appended requests: segment unlock, stats, flush and HA wake-ups.
+    fn publish_appends(&self, completions: &mut [CompletedAppend]) {
+        for completion in completions.iter_mut() {
+            completion.finish_post_lock(self);
+        }
+        let committed_requests = completions.iter().filter(|completion| completion.committed()).count();
+        self.flush.wakeup_after_append_batch(committed_requests);
+        if committed_requests > 0 {
+            if let Some(ha_service) = self.store_context.ha_service() {
+                ha_service.get_wait_notify_object().notify_waiters();
+            }
         }
     }
 
@@ -507,38 +643,18 @@ impl CommitLogAppendProcessor {
         let wait_started = std::time::Instant::now();
         let guard = self.put_message_lock.lock().await;
         let lock_wait_millis = wait_started.elapsed().as_millis() as u64;
-        let lock_started = std::time::Instant::now();
-        self.runtime_state
-            .set_begin_time_in_lock(rocketmq_runtime::common::time_utils::current_millis());
+        let lock_started = self.begin_lock_hold();
 
         let mut completions = Vec::with_capacity(request_count);
         for request in requests {
             completions.push(self.append_ready(request));
         }
+        // Uncounted under the lock: an inline append that takes the lock next must see these
+        // requests as appended.
+        self.queued.fetch_sub(request_count, Ordering::AcqRel);
 
-        let lock_hold_millis = lock_started.elapsed().as_millis() as u64;
-        self.runtime_state
-            .record_put_message_lock(lock_wait_millis, lock_hold_millis);
-        drop(guard);
-        self.runtime_state.clear_begin_time_in_lock();
-        self.store_metrics.record_append_latency(lock_hold_millis);
-        if lock_hold_millis > 500 {
-            warn!(
-                lock_hold_millis,
-                request_count, retained_bytes, "CommitLog append micro-batch held the writer lock for too long"
-            );
-        }
-
-        for completion in &mut completions {
-            completion.finish_post_lock(self);
-        }
-        let committed_requests = completions.iter().filter(|completion| completion.committed()).count();
-        self.flush.wakeup_after_append_batch(committed_requests);
-        if committed_requests > 0 {
-            if let Some(ha_service) = self.store_context.ha_service() {
-                ha_service.get_wait_notify_object().notify_waiters();
-            }
-        }
+        self.end_lock_hold(guard, lock_wait_millis, lock_started, request_count, retained_bytes);
+        self.publish_appends(&mut completions);
         // Release each request's admission permit before its result wakes the
         // caller. A caller that submits its next append after receiving this
         // result must never find its own reservation still held, or a
@@ -806,7 +922,7 @@ impl CommitLogAppendProcessor {
 
 async fn run_append_worker(
     mut receiver: AppendSequencerReceiver<QueuedAppend>,
-    processor: CommitLogAppendProcessor,
+    processor: Arc<CommitLogAppendProcessor>,
     cancellation: tokio_util::sync::CancellationToken,
     port: CommitLogAppendPort,
 ) {

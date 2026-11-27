@@ -4517,9 +4517,22 @@ async fn shared_put_message_micro_batches_concurrent_appends() {
         .expect("wire micro-batch test store");
     let topic = CheetahString::from_static_str("shared-put-message-topic");
 
+    // Holding the writer lock makes both appends queue, so the worker takes them as one
+    // micro-batch instead of letting them run in their callers.
+    let held = store
+        .get_commit_log()
+        .release_checkpoint_write_lock()
+        .lock_owned()
+        .await;
     let first = store.put_message_shared(build_test_message(&topic, Bytes::from_static(b"first")));
     let second = store.put_message_shared(build_test_message(&topic, Bytes::from_static(b"second")));
-    let (first, second) = tokio::join!(first, second);
+    let release = async {
+        while store.get_commit_log().append_sequencer_runtime_info().reserved_count < 2 {
+            tokio::task::yield_now().await;
+        }
+        drop(held);
+    };
+    let (first, second, ()) = tokio::join!(first, second, release);
 
     assert_eq!(first.put_message_status(), PutMessageStatus::PutOk);
     assert_eq!(second.put_message_status(), PutMessageStatus::PutOk);
