@@ -780,6 +780,9 @@ impl ClusterClientIo for ClientInstanceHandle {
     }
 }
 
+/// Makes send handles of one started producer for any task.
+type SharedProducerHandles = Arc<dyn Fn() -> Box<dyn ClusterProducerIo> + Send + Sync>;
+
 #[async_trait]
 trait ClusterProducerIo: Send {
     fn set_topics(&mut self, topics: Vec<CheetahString>);
@@ -793,6 +796,12 @@ trait ClusterProducerIo: Send {
     /// Returns a handle that sends through this producer from another task, or `None`
     /// when sends must stay on the owning lane.
     fn concurrent_handle(&self) -> Option<Box<dyn ClusterProducerIo>> {
+        None
+    }
+
+    /// Returns a factory of [`Self::concurrent_handle`]s that requesting tasks may share, so
+    /// steady-state sends do not have to visit the owning lane. `None` keeps every send on it.
+    fn shared_handle_factory(&self) -> Option<SharedProducerHandles> {
         None
     }
 
@@ -848,6 +857,13 @@ impl ClusterProducerIo for DefaultMQProducer {
     fn concurrent_handle(&self) -> Option<Box<dyn ClusterProducerIo>> {
         // Clones share the started producer; its sends take `&self` and may overlap.
         Some(Box::new(self.clone()))
+    }
+
+    fn shared_handle_factory(&self) -> Option<SharedProducerHandles> {
+        let template = self.clone();
+        Some(Arc::new(move || {
+            Box::new(template.clone()) as Box<dyn ClusterProducerIo>
+        }))
     }
 
     async fn start(&mut self) -> Result<(), CanonicalError> {
@@ -3921,6 +3937,7 @@ mod tests {
             CancellationToken::new(),
             service,
             lanes,
+            Arc::default(),
         )
         .await;
         let error = receiver
