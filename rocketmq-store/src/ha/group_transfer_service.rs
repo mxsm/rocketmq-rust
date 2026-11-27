@@ -25,7 +25,7 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ProcessMemoryLimit;
-use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::ShutdownDeadline;
@@ -101,6 +101,22 @@ impl GroupTransferService {
     }
 }
 
+/// Budget for pending replica-ack waits: bounded by count, bytes and age, not by admission rate.
+///
+/// Every append that needs replica acks registers exactly one wait after it was appended, so an
+/// admission-rate limit would refuse appended writes above that rate with `FlushSlaveTimeout`
+/// while the queue still has room.
+fn group_transfer_queue_budget(queue_count: usize, queue_bytes: usize) -> Result<ResourceBudget, HAError> {
+    let tree = ResourceBudgetTree::new("store", BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject))
+        .map_err(HAError::budget)?;
+    tree.root()
+        .child(
+            "ha-group-transfer",
+            BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject).with_max_age(Duration::from_secs(30)),
+        )
+        .map_err(HAError::budget)
+}
+
 struct GroupTransferServiceInner {
     ha_service: GeneralHAServiceReference,
     ack_notify_count: AtomicU64,
@@ -115,21 +131,10 @@ impl GroupTransferServiceInner {
         let queue_bytes = usize::try_from((managed_bytes / 2).max(1)).unwrap_or(usize::MAX);
         let request_bytes = std::mem::size_of::<PendingGroupTransfer>().max(1);
         let queue_count = (queue_bytes / request_bytes).clamp(1, 65_536);
-        let tree = ResourceBudgetTree::new("store", BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject))
-            .map_err(HAError::budget)?;
-        let queue_budget = tree
-            .root()
-            .child(
-                "ha-group-transfer",
-                BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject)
-                    .with_rate(RateLimit::new(queue_count as u64, queue_count as u64))
-                    .with_max_age(Duration::from_secs(30)),
-            )
-            .map_err(HAError::budget)?;
         Ok(GroupTransferServiceInner {
             ha_service,
             ack_notify_count: AtomicU64::new(0),
-            pending_requests: BudgetedQueue::new(queue_budget),
+            pending_requests: BudgetedQueue::new(group_transfer_queue_budget(queue_count, queue_bytes)?),
         })
     }
 
@@ -423,24 +428,12 @@ mod tests {
         let reference = GeneralHAServiceReference::new();
         reference.bind(&ha_service).expect("bind general ha service");
         let retained_bytes = std::mem::size_of::<PendingGroupTransfer>().max(1);
-        let tree = ResourceBudgetTree::new(
-            "store-overload-test",
-            BudgetLimit::new(2, retained_bytes * 2, FullPolicy::Reject),
-        )
-        .expect("root budget");
-        let queue_budget = tree
-            .root()
-            .child(
-                "ha-group-transfer",
-                BudgetLimit::new(2, retained_bytes * 2, FullPolicy::Reject)
-                    .with_rate(RateLimit::new(4, 4))
-                    .with_max_age(Duration::from_secs(30)),
-            )
-            .expect("queue budget");
         let inner = GroupTransferServiceInner {
             ha_service: reference,
             ack_notify_count: AtomicU64::new(0),
-            pending_requests: BudgetedQueue::new(queue_budget),
+            pending_requests: BudgetedQueue::new(
+                group_transfer_queue_budget(2, retained_bytes * 2).expect("queue budget"),
+            ),
         };
         let mut responses = Vec::new();
 
@@ -458,6 +451,36 @@ mod tests {
             );
         }
         assert_eq!(inner.pending_requests.snapshot().rejected_count, 2);
+    }
+
+    #[tokio::test]
+    async fn admission_rate_is_not_limited_while_the_queue_has_room() {
+        let ha_service = new_test_ha_service();
+        let reference = GeneralHAServiceReference::new();
+        reference.bind(&ha_service).expect("bind general ha service");
+        let retained_bytes = std::mem::size_of::<PendingGroupTransfer>().max(1);
+        let inner = GroupTransferServiceInner {
+            ha_service: reference,
+            ack_notify_count: AtomicU64::new(0),
+            pending_requests: BudgetedQueue::new(
+                group_transfer_queue_budget(2, retained_bytes * 2).expect("queue budget"),
+            ),
+        };
+
+        // Three times the queue capacity within well under a second: a queue that is drained
+        // between bursts must admit every wait.
+        for round in 0..3 {
+            for offset in 0..2 {
+                let (request, _response) = GroupCommitRequest::with_ack_nums(round * 2 + offset, 5_000, 2);
+                inner.put_request(request).await;
+            }
+            assert_eq!(inner.runtime_info().pending_request_count, 2, "round {round}");
+            let mut active = Vec::new();
+            inner.drain_new_requests(&mut active);
+            assert_eq!(active.len(), 2);
+            drop(active);
+        }
+        assert_eq!(inner.pending_requests.snapshot().rejected_count, 0);
     }
 
     #[tokio::test]
