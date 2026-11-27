@@ -128,7 +128,9 @@ impl OffsetStore {
     /// Asynchronously reads the current offset for the given queue according to the
     /// specified read strategy.
     ///
-    /// Returns `0` if no offset has been recorded for the queue.
+    /// Zero is a valid offset. A memory-only lookup returns `-1` when the queue has no entry.
+    /// A local file lookup returns `-1` if the offset is absent or the file cannot be read.
+    /// A broker lookup returns `-1` for `QueryNotFound` and `-2` for other lookup errors.
     pub async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64 {
         match self {
             Self::Remote(store) => store.read_offset(mq, type_).await,
@@ -307,7 +309,9 @@ pub(crate) trait OffsetStoreTrait {
     /// Asynchronously reads the current offset for the given queue according to the
     /// specified read strategy.
     ///
-    /// Returns `0` if no offset has been recorded for the queue.
+    /// Zero is a valid offset. A memory-only lookup returns `-1` when the queue has no entry.
+    /// A local file lookup returns `-1` if the offset is absent or the file cannot be read.
+    /// A broker lookup returns `-1` for `QueryNotFound` and `-2` for other lookup errors.
     async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64;
 
     /// Asynchronously persists the offsets for all queues in `mqs` to the underlying storage.
