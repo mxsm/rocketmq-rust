@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(runtime)!:** Rename `MetadataWritePersistenceStatus::CommitOutcomeUnknown` to `DurabilityUnconfirmed`; the `RuntimeError` payload and reconciliation behavior are unchanged. Source code using the old variant name no longer compiles ([#13090](https://github.com/mxsm/rocketmq-rust/issues/13090)).
 - **deps:** Update `ahash` to 0.8.13 and `anyhow` to 1.0.105 in the root workspace ([#13088](https://github.com/mxsm/rocketmq-rust/issues/13088)).
 - **deps:** Update `form_urlencoded` to 1.2.3 for HTTP discovery query parameters and form bodies ([#13001](https://github.com/mxsm/rocketmq-rust/issues/13001)).
 - **refactor(client):** Share per-queue offset lookup, rollback reporting and conditional updates across the legacy admin reset paths ([#13029](https://github.com/mxsm/rocketmq-rust/issues/13029)).

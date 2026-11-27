@@ -406,7 +406,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     let receipt = accepted(failed.submit(request("fenced", 1, b"one"), deadline).unwrap());
     assert!(matches!(
         receipt.wait_until_outcome(deadline).await.unwrap(),
-        MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
+        MetadataWritePersistenceStatus::DurabilityUnconfirmed(_)
     ));
     assert!(!failed.shutdown_until(deadline).await.timed_out);
     assert_eq!(
@@ -849,7 +849,7 @@ async fn commit_outcome_distinguishes_unknown_durability() {
         .unwrap();
     assert!(matches!(
         unknown,
-        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
+        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::DurabilityUnconfirmed(_))
     ));
     let blocked = unknown_actor
         .submit_next_commit("unknown-resource", PathBuf::from("unknown.json"), b"retry", deadline)
@@ -1210,7 +1210,7 @@ async fn observed_submission_classifies_every_settled_conclusion() {
     assert_eq!(observed.unobserved_generation(), None);
     assert!(matches!(
         observed.settled(),
-        Some(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
+        Some(MetadataWritePersistenceStatus::DurabilityUnconfirmed(_))
     ));
 }
 
@@ -1372,7 +1372,7 @@ async fn unconfirmed_commit_fences_a_target_that_still_has_queued_work() {
     assert!(
         matches!(
             first.wait_until_outcome(deadline).await.unwrap(),
-            MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
+            MetadataWritePersistenceStatus::DurabilityUnconfirmed(_)
         ),
         "generation 1 must be reported as an unconfirmed replacement"
     );

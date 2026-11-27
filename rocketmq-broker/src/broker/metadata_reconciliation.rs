@@ -130,7 +130,7 @@ pub(crate) fn conclude_metadata_write(
         } => MetadataWriteConclusion::FailedBeforeCommit(broker_error::internal("metadata_io", error)),
         MetadataIoCommitObservation::Settled {
             generation,
-            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
+            outcome: MetadataWritePersistenceStatus::DurabilityUnconfirmed(error),
         } => record_unconfirmed(resource, generation, UnconfirmedReason::CommitUnconfirmed, error),
         MetadataIoCommitObservation::Unobserved { generation } => record_unconfirmed(
             resource,
@@ -242,7 +242,9 @@ mod tests {
 
         let unknown = conclude_metadata_write(
             "broker.topic-config",
-            observation(MetadataWritePersistenceStatus::CommitOutcomeUnknown(sync_parent_error())),
+            observation(MetadataWritePersistenceStatus::DurabilityUnconfirmed(
+                sync_parent_error(),
+            )),
         );
         assert!(unknown.retains_dirty_marker());
         assert!(conclusion_error(&unknown).is_some());

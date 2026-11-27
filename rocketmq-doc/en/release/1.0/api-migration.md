@@ -318,6 +318,14 @@ generation ordering, and reconciliation behavior are unchanged;
 `MetadataIoCommitObservation::Unobserved` still allows accepted work to complete
 later and is not a definite persistence failure
 ([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
+
+The `CommitOutcomeUnknown` variant is now `DurabilityUnconfirmed`. This is a
+source-breaking rename with no alias: update constructors and `match` arms from
+`MetadataWritePersistenceStatus::CommitOutcomeUnknown(error)` to
+`MetadataWritePersistenceStatus::DurabilityUnconfirmed(error)`. The
+`RuntimeError` payload, reconciliation requirement, and write blocking are
+unchanged ([#13090](https://github.com/mxsm/rocketmq-rust/issues/13090)).
+
 ### Scheduled-task registration status
 
 `ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.
