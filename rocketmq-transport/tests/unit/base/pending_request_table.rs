@@ -378,7 +378,7 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
     let table = PendingRequestTable::with_limits(PendingRequestLimits {
         max_count: 2,
         max_bytes: 8,
-        admission_rate_per_second: 2,
+        admission_rate_per_second: Some(2),
         max_request_age: Duration::from_secs(3),
     });
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
@@ -416,11 +416,25 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
 }
 
 #[test]
+fn default_limits_do_not_cap_the_registration_rate() {
+    let table = PendingRequestTable::with_limits(PendingRequestLimits::default());
+    // Three times the table capacity in one burst: a default admission rate equal to the
+    // capacity refused registrations here and capped one connection near 65k requests/s.
+    let registrations = PendingRequestLimits::default().max_count * 3;
+    for opaque in 0..registrations {
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let guard = registered(table.register(opaque as i32, RequestDeadline::from_timeout_millis(3_000), sender));
+        assert!(guard.complete(PendingRequestCompletion::SessionClosed));
+    }
+    assert_eq!(table.usage().count, 0);
+}
+
+#[test]
 fn pending_request_deadline_is_capped_by_the_configured_maximum_age() {
     let table = PendingRequestTable::try_with_limits(PendingRequestLimits {
         max_count: 1,
         max_bytes: 1024,
-        admission_rate_per_second: 1,
+        admission_rate_per_second: Some(1),
         max_request_age: Duration::from_millis(50),
     })
     .expect("pending request limits");
@@ -697,7 +711,7 @@ async fn waiting_registration_retries_when_the_admission_rate_refills() {
     let table = PendingRequestTable::with_limits(PendingRequestLimits {
         max_count: 1_000,
         max_bytes: 1 << 20,
-        admission_rate_per_second: RATE,
+        admission_rate_per_second: Some(RATE),
         max_request_age: Duration::from_secs(30),
     });
     let owner = table.new_owner();

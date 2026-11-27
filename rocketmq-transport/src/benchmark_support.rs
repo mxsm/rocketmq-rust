@@ -219,10 +219,7 @@ pub struct PendingHotPathHarness {
 impl PendingHotPathHarness {
     #[must_use]
     pub fn new() -> Self {
-        let table = PendingRequestTable::with_limits(PendingRequestLimits {
-            admission_rate_per_second: 1_000_000_000,
-            ..PendingRequestLimits::default()
-        });
+        let table = PendingRequestTable::with_limits(PendingRequestLimits::default());
         let owner = table.new_owner();
         Self {
             table,

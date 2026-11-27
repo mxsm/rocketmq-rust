@@ -294,7 +294,9 @@ struct PendingRequestTableInner {
 pub struct PendingRequestLimits {
     pub max_count: usize,
     pub max_bytes: usize,
-    pub admission_rate_per_second: u64,
+    /// Registrations admitted per second, or `None` (the default) for no rate limit. The table
+    /// is always bounded by `max_count`, `max_bytes` and `max_request_age`.
+    pub admission_rate_per_second: Option<u64>,
     pub max_request_age: Duration,
 }
 
@@ -303,7 +305,7 @@ impl Default for PendingRequestLimits {
         Self {
             max_count: PendingRequestTable::DEFAULT_CAPACITY,
             max_bytes: PendingRequestTable::DEFAULT_MAX_BYTES,
-            admission_rate_per_second: PendingRequestTable::DEFAULT_CAPACITY as u64,
+            admission_rate_per_second: None,
             max_request_age: Duration::from_secs(300),
         }
     }
@@ -449,16 +451,15 @@ impl PendingRequestTable {
         let process_capacity = process_budget.limit().capacity;
         let max_count = limits.max_count.max(1).min(process_capacity.count);
         let max_bytes = limits.max_bytes.max(1).min(process_capacity.bytes);
-        let request_rate = limits.admission_rate_per_second.max(1);
         let max_request_age = limits.max_request_age;
         let table_id = NEXT_TABLE_ID.fetch_add(1, Ordering::Relaxed);
+        let mut limit = BudgetLimit::new(max_count, max_bytes, FullPolicy::Reject).with_max_age(max_request_age);
+        if let Some(rate) = limits.admission_rate_per_second {
+            let rate = rate.max(1);
+            limit = limit.with_rate(RateLimit::new(rate, rate));
+        }
         let budget = process_budget
-            .child(
-                format!("pending-request-table-{table_id}"),
-                BudgetLimit::new(max_count, max_bytes, FullPolicy::Reject)
-                    .with_rate(RateLimit::new(request_rate, request_rate))
-                    .with_max_age(max_request_age),
-            )
+            .child(format!("pending-request-table-{table_id}"), limit)
             .map_err(|error| configuration_invalid_caused_by("transport.pendingRequest", error))?;
         Ok(Self {
             inner: Arc::new(PendingRequestTableInner {
