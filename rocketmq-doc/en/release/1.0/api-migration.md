@@ -318,6 +318,14 @@ generation ordering, and reconciliation behavior are unchanged;
 `MetadataIoCommitObservation::Unobserved` still allows accepted work to complete
 later and is not a definite persistence failure
 ([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
+
+The `outcome` field of `MetadataIoCommitObservation::Settled` is now
+`persistence_status`. This is a source-breaking rename with no alias: update
+named constructors and patterns, for example `Settled { outcome, .. }` becomes
+`Settled { persistence_status, .. }`. The field type, the `generation` field,
+and the receipt and observation method names are unchanged
+([#13091](https://github.com/mxsm/rocketmq-rust/issues/13091)).
+
 ### Scheduled-task registration status
 
 `ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.
