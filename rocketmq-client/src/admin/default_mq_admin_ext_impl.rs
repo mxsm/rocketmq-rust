@@ -42,8 +42,6 @@ use crate::consumer::pull_status::PullStatus;
 use crate::factory::mq_client_instance::MQClientInstance;
 #[cfg(feature = "admin-full")]
 use crate::implementation::communication_mode::CommunicationMode;
-#[cfg(feature = "admin-full")]
-use crate::implementation::mq_client_api_impl::encode_topic_attributes;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::implementation::mq_client_manager::ClientPool;
 use crate::implementation::mq_client_manager::ClientPoolToken;
@@ -167,8 +165,6 @@ use rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeW
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 #[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
-#[cfg(feature = "admin-full")]
-use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 #[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 #[cfg(feature = "admin-full")]

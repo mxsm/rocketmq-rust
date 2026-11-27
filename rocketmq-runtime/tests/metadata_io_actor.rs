@@ -31,6 +31,7 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataFileSystem;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoCommitObservation;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataIoPlan;
@@ -406,7 +407,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     let receipt = accepted(failed.submit(request("fenced", 1, b"one"), deadline).unwrap());
     assert!(matches!(
         receipt.wait_for_persistence_status_until(deadline).await.unwrap(),
-        MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
+        MetadataWritePersistenceStatus::DurabilityUnconfirmed(_)
     ));
     assert!(!failed.shutdown_until(deadline).await.timed_out);
     assert_eq!(
@@ -504,7 +505,13 @@ async fn queued_generations_coalesce_without_losing_waiters() {
 
     file_system.gate.release();
     assert_eq!(first.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
-    assert_eq!(second.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
+    assert!(matches!(
+        second.observe_until(deadline).await,
+        MetadataIoCommitObservation::Settled {
+            generation,
+            persistence_status: MetadataWritePersistenceStatus::Durable(durable_generation),
+        } if generation == MetadataGeneration::new(2) && durable_generation == MetadataGeneration::new(3)
+    ));
     assert_eq!(third.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
     assert_eq!(
         *file_system.writes.lock().unwrap(),
@@ -849,7 +856,7 @@ async fn commit_outcome_distinguishes_unknown_durability() {
         .unwrap();
     assert!(matches!(
         unknown,
-        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
+        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::DurabilityUnconfirmed(_))
     ));
     let blocked = unknown_actor
         .submit_next_commit("unknown-resource", PathBuf::from("unknown.json"), b"retry", deadline)
@@ -1210,7 +1217,7 @@ async fn observed_submission_classifies_every_settled_conclusion() {
     assert_eq!(observed.unobserved_generation(), None);
     assert!(matches!(
         observed.settled(),
-        Some(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
+        Some(MetadataWritePersistenceStatus::DurabilityUnconfirmed(_))
     ));
 }
 
@@ -1372,7 +1379,7 @@ async fn unconfirmed_commit_fences_a_target_that_still_has_queued_work() {
     assert!(
         matches!(
             first.wait_for_persistence_status_until(deadline).await.unwrap(),
-            MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
+            MetadataWritePersistenceStatus::DurabilityUnconfirmed(_)
         ),
         "generation 1 must be reported as an unconfirmed replacement"
     );

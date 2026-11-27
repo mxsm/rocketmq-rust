@@ -122,28 +122,7 @@ impl TopicAdmin for DefaultMQAdminExtImpl {
         addr: CheetahString,
         config: TopicConfig,
     ) -> crate::ClientResult<()> {
-        let topic = config
-            .topic_name
-            .clone()
-            .ok_or_else(|| crate::ClientError::illegal_argument("Topic name is required"))?;
-        let attributes = encode_topic_attributes(&config.attributes);
-        let request_header = CreateTopicRequestHeader {
-            topic,
-            default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
-            read_queue_nums: config.read_queue_nums as i32,
-            write_queue_nums: config.write_queue_nums as i32,
-            perm: config.perm as i32,
-            topic_filter_type: CheetahString::from_static_str(config.topic_filter_type.as_str()),
-            topic_sys_flag: Some(config.topic_sys_flag as i32),
-            order: config.order,
-            attributes,
-            force: Some(false),
-            topic_request_header: None,
-        };
-
-        self.mq_client_api()?
-            .update_or_create_topic(&addr, request_header, self.remoting_timeout_millis()?)
-            .await
+        crate::admin::MQAdminMutationExt::upsert_topic_config(self, addr, config).await
     }
 
     async fn create_and_update_topic_config_list(

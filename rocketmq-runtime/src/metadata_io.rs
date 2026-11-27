@@ -695,9 +695,9 @@ pub enum MetadataWritePersistenceStatus {
     Durable(MetadataGeneration),
     /// The target file was not replaced.
     FailedBeforeCommit(RuntimeError),
-    /// The target may have been replaced, but the durability protocol did not
-    /// complete. The caller must reconcile before publishing or retrying.
-    CommitOutcomeUnknown(RuntimeError),
+    /// The replacement may be visible, but its durability was not confirmed.
+    /// Reconcile before publishing or retrying.
+    DurabilityUnconfirmed(RuntimeError),
 }
 
 /// Reports the persistence conclusion for an accepted write or a target conflict.
@@ -730,8 +730,8 @@ pub enum MetadataIoCommitObservation {
     Settled {
         /// The generation the caller observed.
         generation: MetadataGeneration,
-        /// The conclusion the actor delivered.
-        outcome: MetadataWritePersistenceStatus,
+        /// The persistence status of the write, which may cover a newer coalesced generation.
+        persistence_status: MetadataWritePersistenceStatus,
     },
     /// The caller stopped observing first. The generation identifies the
     /// change whose durability was not confirmed.
@@ -753,8 +753,11 @@ impl MetadataIoCommitObservation {
     #[must_use]
     pub fn requires_reconciliation(&self) -> bool {
         match self {
-            MetadataIoCommitObservation::Settled { outcome, .. } => {
-                matches!(outcome, MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
+            MetadataIoCommitObservation::Settled { persistence_status, .. } => {
+                matches!(
+                    persistence_status,
+                    MetadataWritePersistenceStatus::DurabilityUnconfirmed(_)
+                )
             }
             MetadataIoCommitObservation::Unobserved { .. } => true,
             MetadataIoCommitObservation::TargetConflict(_) => false,
@@ -765,7 +768,7 @@ impl MetadataIoCommitObservation {
     #[must_use]
     pub fn settled(self) -> Option<MetadataWritePersistenceStatus> {
         match self {
-            MetadataIoCommitObservation::Settled { outcome, .. } => Some(outcome),
+            MetadataIoCommitObservation::Settled { persistence_status, .. } => Some(persistence_status),
             MetadataIoCommitObservation::Unobserved { .. } | MetadataIoCommitObservation::TargetConflict(_) => None,
         }
     }
@@ -865,13 +868,16 @@ impl MetadataIoReceipt {
     pub async fn observe_until(self, deadline: MetadataDeadline) -> MetadataIoCommitObservation {
         let generation = self.generation;
         match self.conclude(deadline).await {
-            ReceiptConclusion::Delivered(Ok(outcome)) => MetadataIoCommitObservation::Settled { generation, outcome },
+            ReceiptConclusion::Delivered(Ok(persistence_status)) => MetadataIoCommitObservation::Settled {
+                generation,
+                persistence_status,
+            },
             // The actor delivered the worker-stopped error, which it only
             // produces for a generation that never ran. That is a definite
             // pre-commit failure rather than an unconfirmed replacement.
             ReceiptConclusion::Delivered(Err(error)) => MetadataIoCommitObservation::Settled {
                 generation,
-                outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
+                persistence_status: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
             },
             // A stopped coordinator and an elapsed deadline are both
             // "no conclusion observed": a submitted closure may still be
@@ -904,7 +910,7 @@ impl MetadataIoReceipt {
         match self.wait_for_persistence_status_until(deadline).await? {
             MetadataWritePersistenceStatus::Durable(generation) => Ok(generation),
             MetadataWritePersistenceStatus::FailedBeforeCommit(source)
-            | MetadataWritePersistenceStatus::CommitOutcomeUnknown(source) => Err(source),
+            | MetadataWritePersistenceStatus::DurabilityUnconfirmed(source) => Err(source),
         }
     }
 }
@@ -1774,7 +1780,7 @@ fn finish_request(
     result: RuntimeResult<()>,
 ) -> bool {
     let mut completed_waiters = Vec::new();
-    let (has_queued, outcome) = {
+    let (has_queued, persistence_status) = {
         let mut state = inner.state.lock();
         let Some(mut resource_state) = state.resources.remove(resource) else {
             return false;
@@ -1789,8 +1795,8 @@ fn finish_request(
         // The closure has already released its payload charge. Local pending
         // counters settle here; they may briefly lag the shared byte ledger.
 
-        let outcome = commit_outcome(generation, result);
-        if matches!(outcome, MetadataWritePersistenceStatus::Durable(_)) {
+        let persistence_status = classify_persistence_result(generation, result);
+        if matches!(persistence_status, MetadataWritePersistenceStatus::Durable(_)) {
             resource_state.durable_generation = Some(
                 resource_state
                     .durable_generation
@@ -1811,20 +1817,23 @@ fn finish_request(
             resource_state.target_registration = None;
         }
         state.resources.insert(resource.clone(), resource_state);
-        (has_queued, outcome)
+        (has_queued, persistence_status)
     };
 
     for waiter in completed_waiters {
-        let _ = waiter.sender.send(Ok(outcome.clone()));
+        let _ = waiter.sender.send(Ok(persistence_status.clone()));
     }
     has_queued
 }
 
-fn commit_outcome(generation: MetadataGeneration, result: RuntimeResult<()>) -> MetadataWritePersistenceStatus {
+fn classify_persistence_result(
+    generation: MetadataGeneration,
+    result: RuntimeResult<()>,
+) -> MetadataWritePersistenceStatus {
     match result {
         Ok(()) => MetadataWritePersistenceStatus::Durable(generation),
         Err(error) if error.operation() == crate::RuntimeOperation::MetadataSyncParent => {
-            MetadataWritePersistenceStatus::CommitOutcomeUnknown(error)
+            MetadataWritePersistenceStatus::DurabilityUnconfirmed(error)
         }
         Err(error) => MetadataWritePersistenceStatus::FailedBeforeCommit(error),
     }
@@ -1983,11 +1992,11 @@ mod tests {
         let confirmed = [
             MetadataIoCommitObservation::Settled {
                 generation: MetadataGeneration::new(7),
-                outcome: MetadataWritePersistenceStatus::Durable(MetadataGeneration::new(7)),
+                persistence_status: MetadataWritePersistenceStatus::Durable(MetadataGeneration::new(7)),
             },
             MetadataIoCommitObservation::Settled {
                 generation: MetadataGeneration::new(7),
-                outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(step_error()),
+                persistence_status: MetadataWritePersistenceStatus::FailedBeforeCommit(step_error()),
             },
         ];
         for observation in confirmed {
@@ -2001,7 +2010,7 @@ mod tests {
 
         let unconfirmed = MetadataIoCommitObservation::Settled {
             generation: MetadataGeneration::new(7),
-            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(step_error()),
+            persistence_status: MetadataWritePersistenceStatus::DurabilityUnconfirmed(step_error()),
         };
         assert!(unconfirmed.requires_reconciliation());
         assert_eq!(unconfirmed.generation(), Some(MetadataGeneration::new(7)));

@@ -1047,7 +1047,7 @@ mod tests {
         let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
         let sync_state_set = HashSet::from([2_i64, 3_i64]);
 
-        let outcome = manager
+        let role_change_report = manager
             .change_broker_role(
                 Some("127.0.0.2:9878".into()),
                 Some(2),
@@ -1058,18 +1058,21 @@ mod tests {
             )
             .expect("role change should succeed");
 
-        assert_eq!(outcome.role, Some(BrokerReplicaRole::Master));
-        assert_eq!(outcome.master_broker_id, Some(2));
-        assert_eq!(outcome.master_address, Some(CheetahString::from("127.0.0.1:10911")));
-        assert_eq!(outcome.master_epoch, 3);
-        assert_eq!(outcome.sync_state_set_epoch, 4);
-        assert_eq!(outcome.sync_state_set, sync_state_set);
-        assert_eq!(outcome.local_broker_id, MASTER_ID);
-        assert!(outcome.should_start_special_service);
-        assert!(outcome.should_register_to_namesrv);
-        assert_eq!(outcome.target_broker_role(), Some(BrokerRole::SyncMaster));
-        assert!(outcome.should_clear_slave_master_address());
-        assert!(!outcome.should_sync_master_online());
+        assert_eq!(role_change_report.role, Some(BrokerReplicaRole::Master));
+        assert_eq!(role_change_report.master_broker_id, Some(2));
+        assert_eq!(
+            role_change_report.master_address,
+            Some(CheetahString::from("127.0.0.1:10911"))
+        );
+        assert_eq!(role_change_report.master_epoch, 3);
+        assert_eq!(role_change_report.sync_state_set_epoch, 4);
+        assert_eq!(role_change_report.sync_state_set, sync_state_set);
+        assert_eq!(role_change_report.local_broker_id, MASTER_ID);
+        assert!(role_change_report.should_start_special_service);
+        assert!(role_change_report.should_register_to_namesrv);
+        assert_eq!(role_change_report.target_broker_role(), Some(BrokerRole::SyncMaster));
+        assert!(role_change_report.should_clear_slave_master_address());
+        assert!(!role_change_report.should_sync_master_online());
         assert_eq!(
             manager.controller_leader_address(),
             Some(&CheetahString::from("127.0.0.2:9878"))
@@ -1083,7 +1086,7 @@ mod tests {
         let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
         let sync_state_set = HashSet::from([1_i64, 2_i64]);
 
-        let outcome = manager
+        let role_change_report = manager
             .change_broker_role(
                 Some("127.0.0.3:9878".into()),
                 Some(1),
@@ -1094,21 +1097,24 @@ mod tests {
             )
             .expect("role change should succeed");
 
-        assert_eq!(outcome.role, Some(BrokerReplicaRole::Slave));
-        assert_eq!(outcome.master_broker_id, Some(1));
-        assert_eq!(outcome.master_address, Some(CheetahString::from("127.0.0.9:10911")));
-        assert_eq!(outcome.master_epoch, 5);
-        assert_eq!(outcome.sync_state_set_epoch, 6);
-        assert_eq!(outcome.sync_state_set, sync_state_set);
-        assert_eq!(outcome.local_broker_id, 2);
-        assert!(!outcome.should_start_special_service);
-        assert!(outcome.should_register_to_namesrv);
-        assert_eq!(outcome.target_broker_role(), Some(BrokerRole::Slave));
+        assert_eq!(role_change_report.role, Some(BrokerReplicaRole::Slave));
+        assert_eq!(role_change_report.master_broker_id, Some(1));
         assert_eq!(
-            outcome.slave_master_address(),
+            role_change_report.master_address,
+            Some(CheetahString::from("127.0.0.9:10911"))
+        );
+        assert_eq!(role_change_report.master_epoch, 5);
+        assert_eq!(role_change_report.sync_state_set_epoch, 6);
+        assert_eq!(role_change_report.sync_state_set, sync_state_set);
+        assert_eq!(role_change_report.local_broker_id, 2);
+        assert!(!role_change_report.should_start_special_service);
+        assert!(role_change_report.should_register_to_namesrv);
+        assert_eq!(role_change_report.target_broker_role(), Some(BrokerRole::Slave));
+        assert_eq!(
+            role_change_report.slave_master_address(),
             Some(&CheetahString::from("127.0.0.9:10911"))
         );
-        assert!(outcome.should_sync_master_online());
+        assert!(role_change_report.should_sync_master_online());
         assert_eq!(
             manager.controller_leader_address(),
             Some(&CheetahString::from("127.0.0.3:9878"))
