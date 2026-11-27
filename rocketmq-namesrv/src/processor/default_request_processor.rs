@@ -83,7 +83,7 @@ pub struct DefaultRequestProcessor {
 impl RequestProcessor for DefaultRequestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<ResponseAction> {
         let response = self.handle_request(request).await?;
-        crate::processor::response_outcome(response)
+        crate::processor::try_into_reply_action(response)
     }
 }
 
