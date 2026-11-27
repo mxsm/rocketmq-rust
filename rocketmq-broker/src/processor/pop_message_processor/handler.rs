@@ -104,8 +104,8 @@ where
                 return self.invalid_reply(request.original_identity().original_opaque());
             }
         };
-        let outcome = self.execute_pop_initial(request.command_mut(), effective_peer).await?;
-        match outcome {
+        let pop_initial_request_decision = self.execute_pop_initial(request.command_mut(), effective_peer).await?;
+        match pop_initial_request_decision {
             PopInitialRequestDecision::Reply(parts) => parts.into_response_action(),
             PopInitialRequestDecision::Suspend(suspension) => {
                 let suspension = *suspension;
