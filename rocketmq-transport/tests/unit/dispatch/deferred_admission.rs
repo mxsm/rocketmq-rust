@@ -423,6 +423,15 @@ async fn deferred_permit_is_independent_from_real_session_execution_and_baseline
     let controller = AdmissionController::try_new_with_budget(limits, &service.process_budget())
         .expect("lifecycle-owned admission controller");
     let baseline_before = controller.snapshot();
+    let wait_for_baseline = || async {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while controller.snapshot() != baseline_before {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("request admission did not drain: {:?}", controller.snapshot()));
+    };
     let size = retained(5);
     let admission = DeferredAdmission::try_configure(&controller, DeferredWaitLimits::new(4, size.bytes() * 4))
         .expect("independent deferred admission");
@@ -454,20 +463,7 @@ async fn deferred_permit_is_independent_from_real_session_execution_and_baseline
     let deferred = permit_rx
         .await
         .expect("first task must execute and transfer its permit");
-    assert!(
-        executor
-            .operation_context()
-            .wait(service.task_group(), Duration::from_secs(1))
-            .await
-            .expect("wait for first session task"),
-        "first session task must finish"
-    );
-
-    let after_first = controller.snapshot();
-    assert_eq!(after_first.queued.current_count, 0);
-    assert_eq!(after_first.inflight.current_count, 0);
-    assert_eq!(after_first.processors.current_count, 0);
-    assert_eq!(after_first, baseline_before);
+    wait_for_baseline().await;
     assert_eq!(admission.snapshot().waiting_count(), 1);
 
     let (second_tx, second_rx) = tokio::sync::oneshot::channel();
@@ -485,15 +481,7 @@ async fn deferred_permit_is_independent_from_real_session_execution_and_baseline
         .expect("second real session task must be admitted with processor capacity one");
     assert!(matches!(second_attempt, SessionDispatchAttempt::Accepted));
     second_rx.await.expect("second real session task must execute");
-    assert!(
-        executor
-            .operation_context()
-            .wait(service.task_group(), Duration::from_secs(1))
-            .await
-            .expect("wait for second session task"),
-        "second session task must finish"
-    );
-    assert_eq!(controller.snapshot(), baseline_before);
+    wait_for_baseline().await;
     assert_eq!(admission.snapshot().waiting_count(), 1);
 
     deferred.release();

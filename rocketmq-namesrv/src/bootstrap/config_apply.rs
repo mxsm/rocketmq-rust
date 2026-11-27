@@ -126,7 +126,7 @@ pub(crate) async fn apply_runtime_updates(
             return Err(crate::namesrv_error::storage_write(error));
         }
         MetadataIoCommitObservation::Settled {
-            persistence_status: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
+            persistence_status: MetadataWritePersistenceStatus::DurabilityUnconfirmed(error),
             ..
         } => {
             runtime.config_generations.write().reconciliation_required = true;

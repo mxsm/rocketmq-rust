@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Restore Client library tests when `admin-mutation` is enabled on its own ([#13093](https://github.com/mxsm/rocketmq-rust/issues/13093)).
 - Restore `--locked` builds of the standalone MCP Query workspace by updating its `jsonschema` lockfile entry to 0.63.1 ([#13058](https://github.com/mxsm/rocketmq-rust/issues/13058)).
 - Fix the `rocketmq-store` Clippy failure caused by an unused import after `MessageStoreReadPort` switched to `async fn` ([#13033](https://github.com/mxsm/rocketmq-rust/issues/13033)).
 - **fix(protocol):** Separate offsets within a POP queue with commas so clients can decode multi-message responses ([#12984](https://github.com/mxsm/rocketmq-rust/issues/12984)).
@@ -25,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(ci):** Use a unique outer idempotency key in the SRE malformed execution-receipt fixture so repeated database tests do not collide ([#12717](https://github.com/mxsm/rocketmq-rust/issues/12717)).
 - **fix(mcp-query):** Refresh catalog and protocol snapshots for the optional Store pressure diagnostics schema, restoring query and control contract checks ([#12668](https://github.com/mxsm/rocketmq-rust/issues/12668)).
 - **fix(ci):** Synchronize late replies in the Transport `GO_AWAY` deadline tests and verify typed deadline rejections without replaying the request ([#12465](https://github.com/mxsm/rocketmq-rust/issues/12465)).
+- Wait for inline request permits to be released before comparing Transport deferred admission snapshots in tests ([#13092](https://github.com/mxsm/rocketmq-rust/issues/13092)).
 - **fix(client):** Restore the original topic for v2 POP retry messages delivered to concurrent Push listeners ([#12921](https://github.com/mxsm/rocketmq-rust/issues/12921)).
 - **fix(broker):** Preserve quoted text and UTF-8 broker names when decoding Java static-topic mappings with unquoted numeric keys ([#12890](https://github.com/mxsm/rocketmq-rust/issues/12890)).
 - **fix(ci):** Avoid animated hit targets when preparing the retained payload in the GPUI message logout test ([#12413](https://github.com/mxsm/rocketmq-rust/issues/12413)).
@@ -50,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **deps:** Update `ahash` to 0.8.13 and `anyhow` to 1.0.105 in the root workspace ([#13088](https://github.com/mxsm/rocketmq-rust/issues/13088)).
 - **deps:** Update `form_urlencoded` to 1.2.3 for HTTP discovery query parameters and form bodies ([#13001](https://github.com/mxsm/rocketmq-rust/issues/13001)).
 - **refactor(client):** Share per-queue offset lookup, rollback reporting and conditional updates across the legacy admin reset paths ([#13029](https://github.com/mxsm/rocketmq-rust/issues/13029)).
+- **refactor(runtime)!:** Rename `MetadataWritePersistenceStatus::CommitOutcomeUnknown` to `DurabilityUnconfirmed`. Update constructors and match arms; the `RuntimeError` payload is unchanged ([#13090](https://github.com/mxsm/rocketmq-rust/issues/13090)).
 - **refactor(runtime)!:** Rename the `outcome` field of `MetadataIoCommitObservation::Settled` to `persistence_status` in named constructors and patterns ([#13091](https://github.com/mxsm/rocketmq-rust/issues/13091)).
 - **refactor(client):** Share topic attribute encoding across full admin, mutation-only admin, and low-level create-topic requests ([#12943](https://github.com/mxsm/rocketmq-rust/issues/12943)).
 - **refactor(client):** Share ordered-topic configuration merging between the full and mutation-only admin APIs ([#12922](https://github.com/mxsm/rocketmq-rust/issues/12922)).
