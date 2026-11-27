@@ -423,6 +423,7 @@ fn supervised_consume_stats_decoder_is_bounded_and_fail_closed() {
 #[cfg(feature = "admin-mutation")]
 #[test]
 fn supervised_consume_stats_header_binds_exact_topic() {
+    use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
     use rocketmq_protocol::protocol::CommandCustomHeader;
 
     let fields = GetConsumeStatsRequestHeader {
