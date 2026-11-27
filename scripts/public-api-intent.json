@@ -6162,6 +6162,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use rocketmq_store_api::StoreHealthScope",
+          "identity": "rocketmq-store/src/public_api.rs:pub use rocketmq_store_api::StoreHealthScope",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "lets callers select the optional indicators collected in a store health snapshot",
+          "removal_condition": "retain while the public store API supports scoped health snapshots"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use rocketmq_store_api::StoreHealthSnapshot",
           "identity": "rocketmq-store/src/public_api.rs:pub use rocketmq_store_api::StoreHealthSnapshot",
           "owner": "store",
@@ -6188,7 +6197,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 215
+      "maximum_exports": 216
     },
     "rocketmq-store-local": {
       "entries": [

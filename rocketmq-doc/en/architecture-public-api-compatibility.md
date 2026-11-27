@@ -22,7 +22,7 @@ paths removed by the architecture migration.
   | `rocketmq-model` | 20 |
   | `rocketmq-protocol` | 21 |
   | `rocketmq-runtime` | 145 |
-  | `rocketmq-store` | 204 |
+  | `rocketmq-store` | 216 |
   | `rocketmq-store-local` | 19 |
   | `rocketmq-store-rocksdb` | 27 |
   | `rocketmq-transport` | 193 |
