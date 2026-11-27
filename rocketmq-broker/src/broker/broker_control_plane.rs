@@ -304,7 +304,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         sync_state_set: std::collections::HashSet<i64>,
     ) -> crate::broker_error::BrokerResult<bool> {
         let _operation_guard = self.controller.lock_operation().await;
-        let (outcome, controller_broker_id) = self
+        let (role_change_report, controller_broker_id) = self
             .controller
             .with_replicas_mut(|replicas_manager| {
                 replicas_manager
@@ -316,7 +316,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         sync_state_set_epoch,
                         Some(&sync_state_set),
                     )
-                    .map(|outcome| (outcome, replicas_manager.broker_controller_id()))
+                    .map(|role_change_report| (role_change_report, replicas_manager.broker_controller_id()))
             })
             .ok_or_else(|| {
                 crate::broker_error::invalid_argument(
@@ -331,8 +331,8 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         // id even when promotion reports `MASTER_ID` as its role id.
         let _ = self
             .store
-            .sync_controller_sync_state_set(controller_broker_id as i64, &outcome.sync_state_set);
-        let Some(role) = outcome.role else {
+            .sync_controller_sync_state_set(controller_broker_id as i64, &role_change_report.sync_state_set);
+        let Some(role) = role_change_report.role else {
             return Ok(true);
         };
 
@@ -342,13 +342,13 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         let _ = self.store.fence_controller_writes();
         self.escape_policy.fence_controller_role();
         let previous_store_role = self.config.store_snapshot().broker_role;
-        let target_store_role = outcome.target_broker_role().unwrap_or(previous_store_role);
+        let target_store_role = role_change_report.target_broker_role().unwrap_or(previous_store_role);
         // Demotion publishes the non-master policy before waiting on Store.
         // Promotion keeps the old non-master policy until Store accepts the
         // role, while the write fence prevents premature master writes.
         let generation = if role == BrokerReplicaRole::Slave {
             Some(
-                self.commit_controller_role_generation(outcome.local_broker_id, target_store_role)
+                self.commit_controller_role_generation(role_change_report.local_broker_id, target_store_role)
                     .await?,
             )
         } else {
@@ -356,8 +356,11 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         };
 
         // After the fence: this waits for the new master to finish its own promotion.
-        let master_log = match outcome.slave_master_address() {
-            Some(master_address) => self.fetch_master_log(master_address, outcome.master_epoch).await,
+        let master_log = match role_change_report.slave_master_address() {
+            Some(master_address) => {
+                self.fetch_master_log(master_address, role_change_report.master_epoch)
+                    .await
+            }
             None => None,
         };
 
@@ -371,9 +374,9 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     .apply_controller_role(
                         previous_store_role,
                         role,
-                        outcome.local_broker_id,
-                        outcome.slave_master_address(),
-                        outcome.master_epoch,
+                        role_change_report.local_broker_id,
+                        role_change_report.slave_master_address(),
+                        role_change_report.master_epoch,
                         master_log.as_ref(),
                     )
                     .await
@@ -386,9 +389,9 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             .apply_controller_role(
                 previous_store_role,
                 role,
-                outcome.local_broker_id,
-                outcome.slave_master_address(),
-                outcome.master_epoch,
+                role_change_report.local_broker_id,
+                role_change_report.slave_master_address(),
+                role_change_report.master_epoch,
                 master_log.as_ref(),
             )
             .await
@@ -400,12 +403,12 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         let generation = match generation {
             Some(generation) => generation,
             None => {
-                self.commit_controller_role_generation(outcome.local_broker_id, target_store_role)
+                self.commit_controller_role_generation(role_change_report.local_broker_id, target_store_role)
                     .await?
             }
         };
 
-        self.role_state.set_local_broker_id(outcome.local_broker_id);
+        self.role_state.set_local_broker_id(role_change_report.local_broker_id);
         self.send_policy.update_broker_config(generation.broker());
         self.send_policy.update_message_store_config(generation.store());
         self.pull_policy.update_broker_config(generation.broker());
@@ -421,26 +424,27 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         match role {
             BrokerReplicaRole::Master => {
                 self.special_services
-                    .change_status(outcome.should_start_special_service)
+                    .change_status(role_change_report.should_start_special_service)
                     .await?;
                 self.slave_master_addr.store(None);
             }
             BrokerReplicaRole::Slave => {
                 self.special_services
-                    .change_status(outcome.should_start_special_service)
+                    .change_status(role_change_report.should_start_special_service)
                     .await?;
-                if let Some(master_address) = outcome.slave_master_address() {
+                if let Some(master_address) = role_change_report.slave_master_address() {
                     self.slave_master_addr.store(Some(master_address));
-                    if outcome.should_sync_master_online() {
+                    if role_change_report.should_sync_master_online() {
                         self.on_master_online(Some(master_address.clone()), None).await;
                     }
                 }
             }
         }
 
-        self.escape_policy.update_controller_role(role, outcome.master_epoch);
+        self.escape_policy
+            .update_controller_role(role, role_change_report.master_epoch);
         self.role_state.set_isolated(false);
-        if outcome.should_register_to_namesrv && self.registration.register().await.is_err() {
+        if role_change_report.should_register_to_namesrv && self.registration.register().await.is_err() {
             tracing::warn!("failed to register broker after controller role transition");
         }
         Ok(true)
