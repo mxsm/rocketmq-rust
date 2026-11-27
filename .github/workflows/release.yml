@@ -299,7 +299,7 @@ jobs:
           cache: true
       - name: Install image signing tool
         if: ${{ !inputs.dry_run }}
-        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
         with:
           cosign-release: v3.1.2
       - name: Authenticate Cosign registry access
