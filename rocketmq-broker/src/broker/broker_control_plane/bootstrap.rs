@@ -702,8 +702,8 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             }
         });
         let mut installed_lease = false;
-        for outcome in futures::future::join_all(futures).await.into_iter().flatten() {
-            let (_, sent_at, result) = outcome;
+        for heartbeat_attempt in futures::future::join_all(futures).await.into_iter().flatten() {
+            let (_, sent_at, result) = heartbeat_attempt;
             match result {
                 Ok(Some(grant)) => installed_lease |= self.install_controller_write_lease(grant, sent_at).await,
                 Ok(None) => {}
