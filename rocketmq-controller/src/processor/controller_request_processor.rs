@@ -291,7 +291,7 @@ impl ControllerRequestProcessor {
         }
     }
 
-    fn response_outcome(mut response: RemotingCommand) -> ControllerResult<ResponseAction> {
+    fn try_into_reply_action(mut response: RemotingCommand) -> ControllerResult<ResponseAction> {
         let body = response.take_body();
         let response = match body {
             Some(body) => RemotingResponse::bytes(response, body),
@@ -314,7 +314,7 @@ impl RequestProcessor for ControllerRequestProcessor {
         let request_name = RequestCode::from(request.command().code()).get_controller_request_name();
         let dispatch = self.handle_request(session, &channel_identity, request.command_mut());
         let response = self.complete_request(request_name, dispatch).await.map_err(Arc::new)?;
-        Self::response_outcome(response).map_err(Arc::new)
+        Self::try_into_reply_action(response).map_err(Arc::new)
     }
 }
 
