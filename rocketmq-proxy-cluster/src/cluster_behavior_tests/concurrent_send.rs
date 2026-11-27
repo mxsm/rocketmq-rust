@@ -99,6 +99,19 @@ impl ClusterProducerIo for GatedProducer {
         }))
     }
 
+    fn shared_handle_factory(&self) -> Option<SharedProducerHandles> {
+        let sends = self.sends.clone();
+        let group = self.group.clone();
+        let topics = self.topics.clone();
+        Some(Arc::new(move || {
+            Box::new(GatedProducer {
+                sends: sends.clone(),
+                group: group.clone(),
+                topics: topics.clone(),
+            }) as Box<dyn ClusterProducerIo>
+        }))
+    }
+
     async fn start(&mut self) -> Result<(), CanonicalError> {
         Ok(())
     }
@@ -289,4 +302,133 @@ async fn idle_lane_keeps_its_producer_while_a_dispatched_send_runs() {
         cancellation.cancel();
     })
     .await;
+}
+
+#[tokio::test]
+async fn steady_normal_sends_skip_the_lane() {
+    let (client, sends, factory) = gated_worker_parts();
+
+    run_test_worker(client, factory, |executor, cancellation| async move {
+        // The first send starts the producer in its lane, which opens the fast path.
+        let first = executor.send_message(send_request(None), Some("client-a".to_owned()), "r1".to_owned());
+        let release_first = async {
+            wait_until(|| sends.active.load(Ordering::Acquire) == 1).await;
+            sends.gate.add_permits(1);
+        };
+        let (first, ()) = tokio::join!(first, release_first);
+        assert!(first.expect("first send")[0].status.is_ok());
+
+        let second = executor.send_message(send_request(None), Some("client-a".to_owned()), "r2".to_owned());
+        let observe = async {
+            wait_until(|| sends.active.load(Ordering::Acquire) == 1).await;
+            let lanes = executor.lanes.snapshot();
+            assert_eq!(lanes.queued_and_active, 0, "the send must not wait in or hold the lane");
+            assert_eq!(
+                lanes.current_inflight, 1,
+                "the send must still hold an in-flight permit"
+            );
+            sends.gate.add_permits(1);
+        };
+        let (second, ()) = tokio::join!(second, observe);
+        assert!(second.expect("second send")[0].status.is_ok());
+        assert_eq!(executor.lanes.snapshot().current_inflight, 0);
+        cancellation.cancel();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn message_group_sends_keep_the_lane_order_after_a_fast_path_opens() {
+    let (client, sends, factory) = gated_worker_parts();
+
+    run_test_worker(client, factory, |executor, cancellation| async move {
+        let normal = executor.send_message(send_request(None), Some("client-a".to_owned()), "r0".to_owned());
+        let release_normal = async {
+            wait_until(|| sends.active.load(Ordering::Acquire) == 1).await;
+            sends.gate.add_permits(1);
+        };
+        let (normal, ()) = tokio::join!(normal, release_normal);
+        assert!(normal.expect("normal send")[0].status.is_ok());
+
+        let first = executor.send_message(
+            send_request(Some("group-a")),
+            Some("client-a".to_owned()),
+            "r1".to_owned(),
+        );
+        let second = executor.send_message(
+            send_request(Some("group-a")),
+            Some("client-a".to_owned()),
+            "r2".to_owned(),
+        );
+        let observe = async {
+            wait_until(|| {
+                sends.entered.load(Ordering::Acquire) == 2 && executor.lanes.snapshot().queued_and_active == 2
+            })
+            .await;
+            sends.gate.add_permits(1);
+            wait_until(|| sends.entered.load(Ordering::Acquire) == 3).await;
+            sends.gate.add_permits(1);
+        };
+        let (first, second, ()) = tokio::join!(first, second, observe);
+        assert!(first.expect("first ordered send")[0].status.is_ok());
+        assert!(second.expect("second ordered send")[0].status.is_ok());
+        assert_eq!(sends.max_active.load(Ordering::Acquire), 1);
+        cancellation.cancel();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn idle_lane_withdraws_its_fast_path_after_running_sends_finish() {
+    let (client, sends, factory) = gated_worker_parts();
+    let state = ClusterWorkerState::with_test_runtime(client, factory);
+    let policy = ClusterExecutionPolicy {
+        lane_idle_timeout: Duration::from_millis(20),
+        ..ClusterExecutionPolicy::default()
+    };
+
+    run_scripted_worker_with_policy(
+        ClusterConfig::default(),
+        state,
+        policy,
+        |executor, cancellation| async move {
+            let first = executor.send_message(send_request(None), Some("client-a".to_owned()), "r1".to_owned());
+            let release_first = async {
+                wait_until(|| sends.active.load(Ordering::Acquire) == 1).await;
+                sends.gate.add_permits(1);
+            };
+            let (first, ()) = tokio::join!(first, release_first);
+            assert!(first.expect("first send")[0].status.is_ok());
+
+            // A fast-path send never reaches the lane's queue, yet keeps the lane and its producer
+            // through several idle periods while it runs.
+            let second = executor.send_message(send_request(None), Some("client-a".to_owned()), "r2".to_owned());
+            let observe = async {
+                wait_until(|| sends.active.load(Ordering::Acquire) == 1).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert!(!sends.events().contains(&"producer.shutdown"), "{:?}", sends.events());
+                assert_eq!(executor.send_fast_path_count(), 1);
+                sends.gate.add_permits(1);
+            };
+            let (second, ()) = tokio::join!(second, observe);
+            assert!(second.expect("fast-path send")[0].status.is_ok());
+
+            // Once idle, the lane withdraws the fast path before it shuts the producer down.
+            wait_on_lane_clock(|| sends.events().contains(&"producer.shutdown")).await;
+            assert_eq!(executor.send_fast_path_count(), 0);
+            cancellation.cancel();
+        },
+    )
+    .await;
+}
+
+/// Waits on the real clock: lanes run on the shared test runtime, outside a test's paused clock.
+async fn wait_on_lane_clock(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the lane reached the condition");
 }
