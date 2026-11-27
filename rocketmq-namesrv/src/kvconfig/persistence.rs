@@ -527,7 +527,7 @@ async fn process_batch(
                 return;
             }
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
+                outcome: MetadataWritePersistenceStatus::DurabilityUnconfirmed(error),
                 ..
             }) => {
                 inner.reconciliation_required.store(true, Ordering::Release);
