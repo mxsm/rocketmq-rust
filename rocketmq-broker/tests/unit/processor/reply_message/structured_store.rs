@@ -316,10 +316,10 @@ impl RequestProcessor for ReplyProbeProcessor {
         })
         .await
         .map_err(|_| crate::broker_error::invariant_violated("structured Reply conversion failed"))?;
-        let (outcome, completion) = reply.into_parts();
+        let (response_action, completion) = reply.into_parts();
         assert_eq!(completion, StoreHookCompletion::BeforeReply);
         self.state.events.lock().push("after_hook");
-        Ok(outcome)
+        Ok(response_action)
     }
 
     fn observe_response(&self, observation: ResponseObservation) {
