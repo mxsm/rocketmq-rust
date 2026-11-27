@@ -329,6 +329,16 @@ to `persistence_status`: for example, `Settled { outcome, .. }` becomes
 `Settled { persistence_status, .. }`. The observed generation is unchanged, even when the
 persistence status reports a newer coalesced generation. The `settled()` accessor is unchanged.
 
+
+The rename of `MetadataIoReceipt::wait_until_outcome` to
+`wait_for_persistence_status_until` is source-breaking. Downstream Rust callers
+must update the method name when waiting for a persistence status.
+
+```diff
+-let status = receipt.wait_until_outcome(deadline).await?;
++let status = receipt.wait_for_persistence_status_until(deadline).await?;
+```
+
 ### Scheduled-task registration status
 
 `ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.
