@@ -2098,11 +2098,11 @@ mod tests {
             fixture.service.task_group().clone(),
             Principal::new("namesrv-layered-test"),
         );
-        let outcome = harness
+        let dispatch_result = harness
             .dispatch(None, request)
             .await
             .expect("layered dispatch should return a response");
-        match outcome {
+        match dispatch_result {
             EmbeddedDispatchResult::Reply(plan) => plan,
             _ => panic!("layered NameServer request must reply"),
         }
