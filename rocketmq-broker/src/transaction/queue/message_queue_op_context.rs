@@ -22,7 +22,6 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::QueueSnapshot;
-use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourcePermit;
 use tokio::sync::Mutex as AsyncMutex;
@@ -97,9 +96,7 @@ impl MessageQueueOpContext {
         let budget = parent_budget
             .child(
                 format!("queue-{queue_id}"),
-                BudgetLimit::new(queue_length, queue_bytes, FullPolicy::Reject)
-                    .with_rate(RateLimit::new(queue_length as u64, queue_length as u64))
-                    .with_max_age(Duration::from_secs(30)),
+                BudgetLimit::new(queue_length, queue_bytes, FullPolicy::Reject).with_max_age(Duration::from_secs(30)),
             )
             .map_err(|_error| crate::broker_error::configuration_invalid("broker.transaction.operationQueue"))?;
         Ok(Self {
@@ -222,6 +219,22 @@ mod tests {
         ResourceBudgetTree::new("transaction-batches", BudgetLimit::new(16, 4096, FullPolicy::Reject))
             .unwrap()
             .root()
+    }
+
+    #[tokio::test]
+    async fn drained_queue_admits_operations_beyond_its_length_per_second() {
+        let root = test_budget();
+        let queue = MessageQueueOpContext::try_new(0, 4, 0, &root).unwrap();
+        // A burst of three times the count, released in between, must all be admitted: a rate limit
+        // equal to the count refused everything after the first count in a second.
+        for round in 0..3 {
+            for operation in 0..4 {
+                queue
+                    .push(format!("op-{round}-{operation}"))
+                    .expect("admitted while the queue has room");
+            }
+            while queue.pending_operations.try_pop().is_some() {}
+        }
     }
 
     #[tokio::test]

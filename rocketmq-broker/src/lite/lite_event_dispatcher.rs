@@ -28,7 +28,6 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetSnapshot;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
@@ -238,19 +237,16 @@ impl LiteEventDispatcher {
         // ceiling avoids introducing an unrelated per-item size limit when
         // the configured count limit is intentionally small.
         let event_bytes = parent_budget.limit().capacity.bytes;
-        let event_rate = u64::try_from(max_pending_event_count).unwrap_or(u64::MAX).max(1);
+        // Count, bytes and age bound these budgets; an admission rate would drop events and
+        // client records under load while there is still room for them.
         let event_budget = parent_budget.child(
             "lite-events",
-            BudgetLimit::new(max_pending_event_count, event_bytes, FullPolicy::DropStale)
-                .with_rate(RateLimit::new(event_rate, event_rate))
-                .with_max_age(MAX_EVENT_AGE),
+            BudgetLimit::new(max_pending_event_count, event_bytes, FullPolicy::DropStale).with_max_age(MAX_EVENT_AGE),
         )?;
         let client_access_bytes = parent_budget.limit().capacity.bytes;
-        let client_rate = u64::try_from(max_tracked_client_count).unwrap_or(u64::MAX).max(1);
         let client_access_budget = parent_budget.child(
             "lite-client-access",
             BudgetLimit::new(max_tracked_client_count, client_access_bytes, FullPolicy::DropStale)
-                .with_rate(RateLimit::new(client_rate, client_rate))
                 .with_max_age(MAX_CLIENT_IDLE_AGE),
         )?;
         Ok(Self {
@@ -729,6 +725,19 @@ mod tests {
     impl MonotonicClock for ManualClock {
         fn now(&self) -> Duration {
             Duration::from_millis(self.millis.load(Ordering::Acquire))
+        }
+    }
+
+    #[test]
+    fn event_and_client_budgets_are_not_rate_limited() {
+        let dispatcher = LiteEventDispatcher::default();
+        // A burst of three times the count, released in between, must all be admitted: a rate limit
+        // equal to the count refused everything after the first count in a second.
+        for budget in [&dispatcher.event_budget, &dispatcher.client_access_budget] {
+            let burst = budget.limit().capacity.count.saturating_mul(3);
+            for _ in 0..burst {
+                drop(budget.try_acquire_data(1).expect("admitted while the budget has room"));
+            }
         }
     }
 
