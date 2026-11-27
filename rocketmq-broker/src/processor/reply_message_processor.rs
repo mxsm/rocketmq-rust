@@ -498,8 +498,8 @@ where
         })
         .await
         .map_err(|error| crate::broker_error::internal("reply-message-store", error))?;
-        let (outcome, _) = reply.into_parts();
-        Ok(outcome)
+        let (response_action, _) = reply.into_parts();
+        Ok(response_action)
     }
 
     fn finish_reply(

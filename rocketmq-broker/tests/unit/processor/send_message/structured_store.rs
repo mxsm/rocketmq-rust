@@ -280,7 +280,7 @@ impl RequestProcessor for StoreProbeProcessor {
         })
         .await
         .map_err(|_| crate::broker_error::invariant_violated("structured Send reply conversion failed"))?;
-        let (outcome, completion) = reply.into_parts();
+        let (response_action, completion) = reply.into_parts();
         if !original_one_way {
             assert!(
                 self.state.built_replies.lock().insert(request_id),
@@ -298,7 +298,7 @@ impl RequestProcessor for StoreProbeProcessor {
             StoreHookCompletion::BeforeReply => self.state.events.lock().push("after_hook"),
             StoreHookCompletion::NoAfterHook => {}
         }
-        Ok(outcome)
+        Ok(response_action)
     }
 
     fn observe_response(&self, observation: ResponseObservation) {

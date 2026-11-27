@@ -72,13 +72,13 @@ pub(crate) enum StoreHookCompletion {
 }
 
 pub(crate) struct StructuredStoreReply {
-    outcome: ResponseAction,
+    response_action: ResponseAction,
     hook_completion: StoreHookCompletion,
 }
 
 impl StructuredStoreReply {
     pub(crate) fn into_parts(self) -> (ResponseAction, StoreHookCompletion) {
-        (self.outcome, self.hook_completion)
+        (self.response_action, self.hook_completion)
     }
 }
 
@@ -100,11 +100,11 @@ where
         .await
         .map_err(|StoreAwaitStopped| StructuredStoreReplyError::Cancelled)?;
     let (response, hook_completion) = build_response(result);
-    let outcome = RemotingResponse::command(response)
+    let response_action = RemotingResponse::command(response)
         .map(ResponseAction::Reply)
         .map_err(StructuredStoreReplyError::from)?;
     Ok(StructuredStoreReply {
-        outcome,
+        response_action,
         hook_completion,
     })
 }
