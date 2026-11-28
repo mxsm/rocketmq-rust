@@ -2152,29 +2152,8 @@ impl OffsetAdmin for DefaultMQAdminExtImpl {
         topic: CheetahString,
         is_offline: bool,
     ) -> crate::ClientResult<()> {
-        let retry_topic: CheetahString = mix_all::get_retry_topic(src_group.as_str()).into();
-        let topic_route_data = self
-            .examine_topic_route_info(retry_topic.clone())
-            .await?
-            .ok_or_else(|| mq_client_err!(format!("Topic route not found for retry topic: {retry_topic}")))?;
-        let timeout = self.remoting_timeout_millis()?;
-        let api = self.mq_client_api()?;
-
-        for broker_data in &topic_route_data.broker_datas {
-            if let Some(addr) = broker_data.select_broker_addr() {
-                api.clone_group_offset(
-                    &addr,
-                    src_group.clone(),
-                    dest_group.clone(),
-                    topic.clone(),
-                    is_offline,
-                    timeout,
-                )
-                .await?;
-            }
-        }
-
-        Ok(())
+        crate::admin::MQAdminMutationExt::clone_consumer_group_offset(self, src_group, dest_group, topic, is_offline)
+            .await
     }
 
     async fn update_consume_offset(
