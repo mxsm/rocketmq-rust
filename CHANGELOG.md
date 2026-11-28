@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **deps:** Update `clap` and `clap_builder` to 4.6.10 in the root workspace ([#13164](https://github.com/mxsm/rocketmq-rust/issues/13164)).
 - **refactor(runtime)!:** Rename `MetadataIoReceipt::wait_until_outcome` to `MetadataIoReceipt::wait_for_persistence_status_until` ([#13095](https://github.com/mxsm/rocketmq-rust/issues/13095)).
 - **deps:** Update `ahash` to 0.8.13 and `anyhow` to 1.0.105 in the root workspace ([#13088](https://github.com/mxsm/rocketmq-rust/issues/13088)).
 - **deps:** Update `form_urlencoded` to 1.2.3 for HTTP discovery query parameters and form bodies ([#13001](https://github.com/mxsm/rocketmq-rust/issues/13001)).
