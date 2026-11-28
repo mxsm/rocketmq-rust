@@ -148,10 +148,13 @@ impl ExprNode {
                 Some(value) => Value::Boolean(!value),
                 None => Value::Null,
             }),
-            ExprNode::Logical { op, left, right } => Ok(match op.eval(left, right, context)? {
-                Some(value) => Value::Boolean(value),
-                None => Value::Null,
-            }),
+            ExprNode::Logical { op, left, right } => {
+                let left = left.evaluate_bool(context)?;
+                Ok(match op.eval(left, || right.evaluate_bool(context))? {
+                    Some(value) => Value::Boolean(value),
+                    None => Value::Null,
+                })
+            }
             ExprNode::Compare { op, left, right } => {
                 let left = left.evaluate(context)?;
                 let right = right.evaluate(context)?;
@@ -188,27 +191,15 @@ impl ExprNode {
                 negated,
             } => {
                 let value = expr.evaluate(context)?;
-                let low = low.evaluate(context)?;
-                let high = high.evaluate(context)?;
-
-                let result = if *negated {
-                    let lower = eval_compare_values(CompareOp::Lt, &value, &low)?;
-                    let upper = eval_compare_values(CompareOp::Gt, &value, &high)?;
-                    match (lower, upper) {
-                        (Some(true), _) | (_, Some(true)) => Some(true),
-                        (Some(false), Some(false)) => Some(false),
-                        _ => None,
-                    }
+                let (logical, lower_op, upper_op) = if *negated {
+                    (LogicalOp::Or, CompareOp::Lt, CompareOp::Gt)
                 } else {
-                    let lower = eval_compare_values(CompareOp::Gte, &value, &low)?;
-                    let upper = eval_compare_values(CompareOp::Lte, &value, &high)?;
-                    match (lower, upper) {
-                        (Some(false), _) | (_, Some(false)) => Some(false),
-                        (Some(true), Some(true)) => Some(true),
-                        _ => None,
-                    }
+                    (LogicalOp::And, CompareOp::Gte, CompareOp::Lte)
                 };
-
+                let lower = eval_compare_values(lower_op, &value, &low.evaluate(context)?)?;
+                let result = logical.eval(lower, || {
+                    eval_compare_values(upper_op, &value, &high.evaluate(context)?)
+                })?;
                 Ok(match result {
                     Some(value) => Value::Boolean(value),
                     None => Value::Null,
@@ -256,17 +247,15 @@ enum LogicalOp {
 impl LogicalOp {
     fn eval(
         self,
-        left: &ExprNode,
-        right: &ExprNode,
-        context: &dyn EvaluationContext,
+        left: Option<bool>,
+        evaluate_right: impl FnOnce() -> Result<Option<bool>, EvaluationError>,
     ) -> Result<Option<bool>, EvaluationError> {
-        let left = left.evaluate_bool(context)?;
         match self {
             LogicalOp::And => {
                 if left == Some(false) {
                     return Ok(Some(false));
                 }
-                let right = right.evaluate_bool(context)?;
+                let right = evaluate_right()?;
                 Ok(match (left, right) {
                     (Some(true), Some(false)) | (None, Some(false)) => Some(false),
                     (Some(true), Some(true)) => Some(true),
@@ -278,7 +267,7 @@ impl LogicalOp {
                 if left == Some(true) {
                     return Ok(Some(true));
                 }
-                let right = right.evaluate_bool(context)?;
+                let right = evaluate_right()?;
                 Ok(match (left, right) {
                     (Some(false), Some(true)) | (None, Some(true)) => Some(true),
                     (Some(false), Some(false)) => Some(false),
@@ -1154,6 +1143,37 @@ mod tests {
 
         let value = evaluate("price NOT BETWEEN 10 AND 20", &[("price", "25")]).expect("evaluation should succeed");
         assert_eq!(value, Value::Boolean(true));
+    }
+
+    #[test]
+    fn range_predicates_only_compare_the_upper_bound_when_needed() {
+        for (selector, expected) in [
+            ("price BETWEEN 10 AND upper", false),
+            ("price NOT BETWEEN 10 AND upper", true),
+        ] {
+            assert_eq!(
+                evaluate(selector, &[("price", "5"), ("upper", "bad")]).unwrap(),
+                Value::Boolean(expected),
+                "{selector}"
+            );
+            assert!(matches!(
+                evaluate(selector, &[("price", "12"), ("upper", "bad")]),
+                Err(EvaluationError::InvalidOperation(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn range_predicates_combine_unknown_lower_bounds_with_the_upper_bound() {
+        let properties = [("price", "5")];
+        for (selector, expected) in [
+            ("price BETWEEN missing AND 4", Value::Boolean(false)),
+            ("price NOT BETWEEN missing AND 4", Value::Boolean(true)),
+            ("price BETWEEN missing AND 6", Value::Null),
+            ("price NOT BETWEEN missing AND 6", Value::Null),
+        ] {
+            assert_eq!(evaluate(selector, &properties).unwrap(), expected, "{selector}");
+        }
     }
 
     #[test]
