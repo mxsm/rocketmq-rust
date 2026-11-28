@@ -2103,7 +2103,7 @@ mod tests {
             .await
             .expect("layered dispatch should return a response");
         match dispatch_result {
-            EmbeddedDispatchResult::Reply(plan) => plan,
+            EmbeddedDispatchResult::Reply(response) => response,
             _ => panic!("layered NameServer request must reply"),
         }
     }
