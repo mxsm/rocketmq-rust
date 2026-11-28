@@ -287,7 +287,10 @@ pub trait AssignmentControl: Send + Sync {
     /// # Arguments
     ///
     /// * `topic` - The topic for which the filter expression applies.
-    /// * `sub_expression` - A tag expression or SQL-92 predicate used to filter messages.
+    /// * `sub_expression` - A tag expression such as `TagA || TagB`. Use `*` to match all tags.
+    ///
+    /// For SQL-92 filtering in subscription mode, pass a selector created with
+    /// [`MessageSelector::by_sql`] to [`SubscriptionControl::subscribe_with_selector`].
     ///
     /// # Errors
     ///
