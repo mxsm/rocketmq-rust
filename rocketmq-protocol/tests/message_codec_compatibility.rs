@@ -64,6 +64,10 @@ fn message_frame(magic: i32, body_crc: u32, sys_flag: i32, body: &[u8], topic: &
 fn canonical_and_legacy_decoders_match_frozen_frame() {
     let frame = frozen_message_frame();
     let canonical = message_codec::decode_message_frame(&mut frame.clone()).unwrap();
+    assert_eq!(
+        message_decoder::decode_properties(&mut frame.clone()).as_ref(),
+        Some(&canonical.properties)
+    );
     let legacy = message_decoder::decode(&mut frame.clone(), true, false, false, false, false).unwrap();
 
     assert_eq!(canonical.topic.as_str(), legacy.topic().as_str());
@@ -73,6 +77,29 @@ fn canonical_and_legacy_decoders_match_frozen_frame() {
     assert_eq!(canonical.commit_log_offset, legacy.commit_log_offset);
     assert_eq!(canonical.born_host, legacy.born_host);
     assert_eq!(canonical.store_host, legacy.store_host);
+}
+
+#[test]
+fn properties_decoder_preserves_the_topic_cursor_with_a_following_frame() {
+    let first = frozen_message_frame();
+    let next = frozen_message_frame();
+    let mut input = Bytes::from([first.as_ref(), next.as_ref()].concat());
+    let properties = message_decoder::decode_properties(&mut input).unwrap();
+    assert_eq!(properties.get("k").map(CheetahString::as_str), Some("value"));
+
+    let topic_tail = b"topic\x00\x08k\x01value\x02";
+    assert_eq!(input.as_ref(), [topic_tail.as_slice(), next.as_ref()].concat());
+}
+
+#[test]
+fn properties_decoder_rejects_a_length_extending_into_the_following_frame() {
+    let first = frozen_message_frame();
+    let mut input = BytesMut::from(first.as_ref());
+    let properties_len = b"k\x01value\x02".len();
+    let length_offset = first.len() - properties_len - 2;
+    input[length_offset..length_offset + 2].copy_from_slice(&((properties_len + 1) as i16).to_be_bytes());
+    input.extend_from_slice(&frozen_message_frame());
+    assert!(message_decoder::decode_properties(&mut input.freeze()).is_none());
 }
 
 #[test]
@@ -134,6 +161,10 @@ fn v2_topic_and_properties_string_match_canonical_frame() {
         properties,
     );
     let canonical = message_codec::decode_message_frame(&mut frame.clone()).unwrap();
+    assert_eq!(
+        message_decoder::decode_properties(&mut frame.clone()).as_ref(),
+        Some(&canonical.properties)
+    );
     let legacy = message_decoder::decode(&mut frame.clone(), true, false, false, true, true).unwrap();
 
     assert_eq!(canonical.topic.as_str(), legacy.topic().as_str());
