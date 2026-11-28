@@ -772,12 +772,15 @@ mod tests {
         let request = RemotingCommand::create_request_command(RequestCode::GetConsumerListByGroup, EmptyHeader {})
             .set_opaque(4_204);
 
-        let EmbeddedDispatchResult::Reply(plan) = dispatch_request(processor, request).await else {
+        let EmbeddedDispatchResult::Reply(response) = dispatch_request(processor, request).await else {
             panic!("consumer manager must return an inline remoting response");
         };
 
-        assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::InvalidParameter);
-        assert_eq!(plan.body_len(), 0);
+        assert_eq!(
+            ResponseCode::from(response.response_code()),
+            ResponseCode::InvalidParameter
+        );
+        assert_eq!(response.body_len(), 0);
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
