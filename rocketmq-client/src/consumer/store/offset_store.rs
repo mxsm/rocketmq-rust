@@ -129,7 +129,8 @@ impl OffsetStore {
     /// specified read strategy.
     ///
     /// Zero is a valid offset. A memory-only lookup returns `-1` when the queue has no entry.
-    /// A local file lookup returns `-1` if the offset is absent or the file cannot be read.
+    /// A local file lookup falls back to the backup if the primary file cannot be loaded. It returns
+    /// `-1` if the queue is absent or neither file can be loaded.
     /// A broker lookup returns `-1` for `QueryNotFound` and `-2` for other lookup errors.
     pub async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64 {
         match self {
@@ -310,7 +311,8 @@ pub(crate) trait OffsetStoreTrait {
     /// specified read strategy.
     ///
     /// Zero is a valid offset. A memory-only lookup returns `-1` when the queue has no entry.
-    /// A local file lookup returns `-1` if the offset is absent or the file cannot be read.
+    /// A local file lookup falls back to the backup if the primary file cannot be loaded. It returns
+    /// `-1` if the queue is absent or neither file can be loaded.
     /// A broker lookup returns `-1` for `QueryNotFound` and `-2` for other lookup errors.
     async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64;
 
