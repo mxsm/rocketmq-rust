@@ -442,7 +442,18 @@ impl MappedFileQueueReadHandle {
                 return None;
             }
             let take = readable.min(remaining);
-            let result = mapped_file.try_file_range_selection(position, take).ok().flatten()?;
+            // Committed bytes are borrowed from the mapping, so a vectored write sends them
+            // without first copying the range on a blocking thread; the selection still carries
+            // the file range for sendfile.
+            let mut result = mapped_file
+                .try_select_committed_range(
+                    i32::try_from(position).ok()?,
+                    i32::try_from(take).ok()?,
+                    ResidencyCheck::AssumeResident,
+                )
+                .ok()
+                .flatten()?;
+            result.try_attach_mapped_file(mapped_file);
             results.push(result);
             current_offset = current_offset.checked_add(take as i64)?;
             remaining -= take;
