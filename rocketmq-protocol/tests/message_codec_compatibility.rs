@@ -80,6 +80,29 @@ fn canonical_and_legacy_decoders_match_frozen_frame() {
 }
 
 #[test]
+fn properties_decoder_preserves_the_topic_cursor_with_a_following_frame() {
+    let first = frozen_message_frame();
+    let next = frozen_message_frame();
+    let mut input = Bytes::from([first.as_ref(), next.as_ref()].concat());
+    let properties = message_decoder::decode_properties(&mut input).unwrap();
+    assert_eq!(properties.get("k").map(CheetahString::as_str), Some("value"));
+
+    let topic_tail = b"topic\x00\x08k\x01value\x02";
+    assert_eq!(input.as_ref(), [topic_tail.as_slice(), next.as_ref()].concat());
+}
+
+#[test]
+fn properties_decoder_rejects_a_length_extending_into_the_following_frame() {
+    let first = frozen_message_frame();
+    let mut input = BytesMut::from(first.as_ref());
+    let properties_len = b"k\x01value\x02".len();
+    let length_offset = first.len() - properties_len - 2;
+    input[length_offset..length_offset + 2].copy_from_slice(&((properties_len + 1) as i16).to_be_bytes());
+    input.extend_from_slice(&frozen_message_frame());
+    assert!(message_decoder::decode_properties(&mut input.freeze()).is_none());
+}
+
+#[test]
 fn canonical_and_legacy_decoders_reject_truncated_frame() {
     let mut canonical = frozen_message_frame().slice(..24);
     let mut legacy = canonical.clone();

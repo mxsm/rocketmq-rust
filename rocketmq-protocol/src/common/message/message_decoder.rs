@@ -912,9 +912,11 @@ pub fn create_crc32(mut input: &mut [u8], crc32: u32) {
     input.put_u8(PROPERTY_SEPARATOR as u8);
 }
 
+/// Reads the properties of the first CommitLog record. On success the input cursor points to
+/// that record's topic, even if additional records follow.
 pub fn decode_properties(bytes: &mut Bytes) -> Option<HashMap<CheetahString, CheetahString>> {
-    // Ensure we have enough bytes to read SYSFLAG and MAGICCODE.
-    if bytes.len() < SYSFLAG_POSITION + 4 {
+    let frame_size = usize::try_from(i32::from_be_bytes(*bytes.first_chunk()?)).ok()?;
+    if frame_size < SYSFLAG_POSITION + 4 || frame_size > bytes.len() {
         return None;
     }
 
@@ -954,21 +956,21 @@ pub fn decode_properties(bytes: &mut Bytes) -> Option<HashMap<CheetahString, Che
         + 4   // RECONSUMETIMES
         + 8; // Prepared Transaction Offset
 
-    if bytes.len() < body_size_position + 4 {
+    if frame_size < body_size_position + 4 {
         return None;
     }
 
     // Read the body size stored as an int.
     let body_size = usize::try_from(BigEndian::read_i32(&bytes[body_size_position..body_size_position + 4])).ok()?;
     let topic_length_position = body_size_position + 4 + body_size;
-    if bytes.len() < topic_length_position + version.get_topic_length_size() {
-        return None;
-    }
+    let topic_and_properties_size = frame_size.checked_sub(topic_length_position + version.get_topic_length_size())?;
     bytes.advance(topic_length_position);
     let topic_length = version.get_topic_length(bytes);
 
     // The cursor now points to the topic, followed by the properties length and payload.
-    let (length, properties) = bytes.get(topic_length..)?.split_first_chunk::<2>()?;
+    let (length, properties) = bytes
+        .get(topic_length..topic_and_properties_size)?
+        .split_first_chunk::<2>()?;
     let length = usize::try_from(i16::from_be_bytes(*length)).ok()?;
     if length == 0 {
         return None;
@@ -1524,75 +1526,45 @@ mod tests {
         assert!(!bytes.is_empty());
     }
 
+    // With two IPv4 hosts and an empty body, the V1 topic-length byte is at offset 88.
+    const EMPTY_BODY_TOPIC_LENGTH_OFFSET: usize = 88;
+
+    fn partial_properties_frame(size: usize, magic: i32) -> Bytes {
+        let mut frame = BytesMut::zeroed(size);
+        frame[..4].copy_from_slice(&(size as i32).to_be_bytes());
+        frame[4..8].copy_from_slice(&magic.to_be_bytes());
+        frame.freeze()
+    }
+
     #[test]
     fn decode_properties_returns_none_if_bytes_length_is_insufficient() {
-        let mut bytes = Bytes::from(vec![0; SYSFLAG_POSITION + 3]);
+        let mut bytes = partial_properties_frame(SYSFLAG_POSITION + 3, MESSAGE_MAGIC_CODE);
         assert!(decode_properties(&mut bytes).is_none());
     }
 
     #[test]
     fn decode_properties_returns_none_if_magic_code_is_invalid() {
-        let mut bytes = BytesMut::from_iter(vec![0u8; SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4]);
-        BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
-        BigEndian::write_i32(
-            &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
-            -1,
-        );
-        assert!(decode_properties(&mut bytes.freeze()).is_none());
+        let mut bytes = partial_properties_frame(SYSFLAG_POSITION + 4, -1);
+        assert!(decode_properties(&mut bytes).is_none());
     }
 
     #[test]
     fn decode_properties_returns_none_if_body_size_is_insufficient() {
-        let mut bytes = BytesMut::from_iter(vec![0u8; SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4]);
-        BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
-        BigEndian::write_i32(
-            &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
-            MESSAGE_MAGIC_CODE,
-        );
-        assert!(decode_properties(&mut bytes.freeze()).is_none());
+        let mut bytes = partial_properties_frame(EMPTY_BODY_TOPIC_LENGTH_OFFSET - 1, MESSAGE_MAGIC_CODE);
+        assert!(decode_properties(&mut bytes).is_none());
     }
 
     #[test]
     fn decode_properties_returns_none_if_topic_length_is_insufficient() {
-        let mut bytes = BytesMut::from_iter(vec![
-            0u8;
-            SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4 + 4
-        ]);
-        BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
-        BigEndian::write_i32(
-            &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
-            MESSAGE_MAGIC_CODE,
-        );
-        BigEndian::write_i32(
-            &mut bytes[SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4
-                ..SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4],
-            0,
-        );
-        assert!(decode_properties(&mut bytes.freeze()).is_none());
+        let mut bytes = partial_properties_frame(EMPTY_BODY_TOPIC_LENGTH_OFFSET, MESSAGE_MAGIC_CODE);
+        assert!(decode_properties(&mut bytes).is_none());
     }
 
     #[test]
     fn decode_properties_returns_none_if_properties_length_is_insufficient() {
-        let mut bytes = BytesMut::from_iter(vec![
-            0u8;
-            SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4 + 4 + 2
-        ]);
-        BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
-        BigEndian::write_i32(
-            &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
-            MESSAGE_MAGIC_CODE,
-        );
-        BigEndian::write_i32(
-            &mut bytes[SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4
-                ..SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4],
-            0,
-        );
-        BigEndian::write_i16(
-            &mut bytes[SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4 + 4
-                ..SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4 + 4 + 2],
-            1,
-        );
-        assert!(decode_properties(&mut bytes.freeze()).is_none());
+        // One byte for the empty topic's length and only one byte for the two-byte properties length.
+        let mut bytes = partial_properties_frame(EMPTY_BODY_TOPIC_LENGTH_OFFSET + 2, MESSAGE_MAGIC_CODE);
+        assert!(decode_properties(&mut bytes).is_none());
     }
 
     #[test]
