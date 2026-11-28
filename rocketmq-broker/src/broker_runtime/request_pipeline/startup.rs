@@ -371,10 +371,10 @@ mod tests {
         )
         .await
         .expect("coarse ingress should continue to Broker ACL");
-        let EmbeddedDispatchResult::Reply(plan) = allowed else {
+        let EmbeddedDispatchResult::Reply(response) = allowed else {
             panic!("explicitly disabled Broker ACL should reach the leaf")
         };
-        assert_eq!(plan.response_code(), ResponseCode::Success as i32);
+        assert_eq!(response.response_code(), ResponseCode::Success as i32);
         assert_eq!(allowed_calls.load(Ordering::SeqCst), 1);
 
         let denied_calls = Arc::new(AtomicUsize::new(0));
@@ -399,10 +399,10 @@ mod tests {
         )
         .await
         .expect("Broker ACL denial should be a remoting response");
-        let EmbeddedDispatchResult::Reply(plan) = denied else {
+        let EmbeddedDispatchResult::Reply(response) = denied else {
             panic!("unconfigured Broker ACL should fail closed with one reply")
         };
-        assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);
+        assert_eq!(response.response_code(), ResponseCode::NoPermission as i32);
         assert_eq!(denied_calls.load(Ordering::SeqCst), 0);
 
         assert!(owner.shutdown_tasks().await.is_healthy());
