@@ -490,24 +490,30 @@ impl ReadSocketService {
     pub async fn run(mut self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
         info!("HA read service started");
 
+        // One timer for the whole connection: a timeout per read would register and cancel a
+        // timer for every ACK frame. Housekeeping below uses the last read time either way.
+        let housekeeping = tokio::time::sleep(SELECT_TIMEOUT);
+        tokio::pin!(housekeeping);
         loop {
             let select_result = select! {
                 _ = shutdown_rx.recv() => {
                     info!("Received shutdown signal");
                     break;
                 }
-                select_result = timeout(SELECT_TIMEOUT, self.reader.next()) => {
-                    select_result
+                () = &mut housekeeping => {
+                    housekeeping.as_mut().reset(tokio::time::Instant::now() + SELECT_TIMEOUT);
+                    None
                 }
+                next = self.reader.next() => Some(next),
             };
             match select_result {
-                // Nothing arrived; still run housekeeping so that a silent replica expires.
-                Err(_elapsed) => {}
-                Ok(None) => {
+                // Nothing to read; still run housekeeping so that a silent replica expires.
+                None => {}
+                Some(None) => {
                     info!("Stream closed by peer");
                     break;
                 }
-                Ok(Some(Ok(OffsetFrame { offset, broker_id }))) => {
+                Some(Some(Ok(OffsetFrame { offset, broker_id }))) => {
                     self.last_read_timestamp.store(current_millis(), Ordering::Relaxed);
                     self.slave_ack_offset.store(offset, Ordering::Relaxed);
 
@@ -526,7 +532,7 @@ impl ReadSocketService {
                         .handle_runtime_connection_ack(&self.connection_runtime, offset);
                     self.connection_context.notify_transfer_some(offset).await;
                 }
-                Ok(Some(Err(_error))) => {
+                Some(Some(Err(_error))) => {
                     error!(source_present = true, "HA replica stream read failed");
                     break;
                 }
