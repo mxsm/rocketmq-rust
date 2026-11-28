@@ -56,7 +56,10 @@ impl StatsItemSet {
             item.add(inc_value, inc_times);
             return;
         }
-        self.get_or_create_stats_item(stats_key).add(inc_value, inc_times);
+        self.items
+            .entry(stats_key.to_owned())
+            .or_insert_with(|| Arc::new(StatsItem::new(&self.stats_name, stats_key)))
+            .add(inc_value, inc_times);
     }
 
     /// Add RT (Response Time) value for latency metrics.

@@ -223,8 +223,8 @@ impl BrokerStatsManager {
         Stats::GROUP_GET_LATENCY,
     ];
 
-    /// Maps `maxStatsIdleTimeInMinutes` to the idle limit used for eviction: `None` when
-    /// eviction is disabled (a negative value), and at least 30 minutes otherwise.
+    /// Negative values disable eviction. Values from 0 through 10 select 30 minutes.
+    /// Larger values are used as configured.
     fn effective_max_stats_idle_minutes(max_stats_idle_time_in_minutes: i32) -> Option<u64> {
         match max_stats_idle_time_in_minutes {
             minutes if minutes < 0 => None,
