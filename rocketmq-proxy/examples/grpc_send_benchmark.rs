@@ -210,7 +210,14 @@ async fn phase(
         .map(|(index, sender)| {
             let sender = sender.clone();
             let first = first_sequence + (index * per_connection) as u64;
-            tokio::spawn(async move { sender.run(first, per_connection, inflight).await })
+            // One task polls all of a connection's sends. Under Tokio's cooperative budget, the
+            // sends polled after the budget runs out would see their channel reservation or
+            // response as not ready and be requeued behind newer sends, so requests would reach
+            // the connection out of order and the client's own scheduling would show up as
+            // latency. The loop still yields whenever no send is ready.
+            tokio::spawn(tokio::task::unconstrained(async move {
+                sender.run(first, per_connection, inflight).await
+            }))
         })
         .collect();
     let mut outcomes = Vec::with_capacity(tasks.len());
