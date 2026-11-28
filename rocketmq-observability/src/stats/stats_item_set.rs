@@ -56,7 +56,10 @@ impl StatsItemSet {
             item.add(inc_value, inc_times);
             return;
         }
-        self.get_or_create_stats_item(stats_key).add(inc_value, inc_times);
+        self.items
+            .entry(stats_key.to_owned())
+            .or_insert_with(|| Arc::new(StatsItem::new(&self.stats_name, stats_key)))
+            .add(inc_value, inc_times);
     }
 
     /// Add RT (Response Time) value for latency metrics.
@@ -154,8 +157,19 @@ impl StatsItemSet {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let threshold_ms = max_idle_minutes * 60 * 1000;
-        self.retain_items(|_, item| now.saturating_sub(item.get_last_update_timestamp()) <= threshold_ms);
+        self.clean_resource_at(now, max_idle_minutes);
+    }
+
+    /// Evict items that, at `now_ms` (milliseconds since the UNIX epoch), have not been updated
+    /// for longer than `max_idle_minutes`.
+    ///
+    /// The idle check and the removal of an item run under its shard's write lock, and
+    /// [`add_value`](Self::add_value) updates an existing item under the shard's read lock, so
+    /// such an update either refreshes the item before the check or goes to a new item after the
+    /// removal; it never lands in an evicted item.
+    pub fn clean_resource_at(&self, now_ms: u64, max_idle_minutes: u64) {
+        let threshold_ms = max_idle_minutes.saturating_mul(60 * 1000);
+        self.retain_items(|_, item| now_ms.saturating_sub(item.get_last_update_timestamp()) <= threshold_ms);
     }
 
     /// Keeps the items `keep` accepts and retires the rest, so holders of a removed item can tell

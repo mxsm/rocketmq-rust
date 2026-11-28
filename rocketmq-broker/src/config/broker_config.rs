@@ -282,6 +282,10 @@ mod defaults {
         64
     }
 
+    pub fn max_stats_idle_time_in_minutes() -> i32 {
+        -1
+    }
+
     pub fn forward_timeout() -> u64 {
         3 * 1000
     }
@@ -1101,6 +1105,9 @@ pub struct BrokerConfig {
     #[serde(default)]
     pub auto_delete_unused_stats: bool,
 
+    #[serde(default = "defaults::max_stats_idle_time_in_minutes")]
+    pub max_stats_idle_time_in_minutes: i32,
+
     #[serde(default = "defaults::forward_timeout")]
     pub forward_timeout: u64,
 
@@ -1542,6 +1549,7 @@ impl Default for BrokerConfig {
             validate_system_topic_when_update_topic: true,
             enable_mixed_message_type: false,
             auto_delete_unused_stats: false,
+            max_stats_idle_time_in_minutes: -1,
             store_reply_message_enable: true,
             lock_in_strict_mode: false,
             transaction_timeout: 6_000,
@@ -1655,6 +1663,7 @@ impl BrokerConfig {
             duplication_enable: self.duplication_enable,
             enable_slave_acting_master: self.enable_slave_acting_master,
             auto_delete_unused_stats: self.auto_delete_unused_stats,
+            max_stats_idle_time_in_minutes: self.max_stats_idle_time_in_minutes,
             recover_concurrently: self.recover_concurrently,
             long_polling_enable: self.long_polling_enable,
             enable_detail_stat: self.enable_detail_stat,
@@ -2110,6 +2119,10 @@ impl BrokerConfig {
         properties.insert(
             "autoDeleteUnusedStats".into(),
             self.auto_delete_unused_stats.to_string().into(),
+        );
+        properties.insert(
+            "maxStatsIdleTimeInMinutes".into(),
+            self.max_stats_idle_time_in_minutes.to_string().into(),
         );
         properties.insert("forwardTimeout".into(), self.forward_timeout.to_string().into());
         properties.insert("authConfigPath".into(), self.auth_config_path.clone());
