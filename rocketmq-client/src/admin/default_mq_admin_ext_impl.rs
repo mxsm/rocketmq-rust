@@ -180,8 +180,6 @@ use rocketmq_protocol::protocol::header::get_topic_stats_info_request_header::Ge
 #[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 #[cfg(feature = "admin-full")]
-use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
-#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 #[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;

@@ -224,24 +224,7 @@ impl TopicAdmin for DefaultMQAdminExtImpl {
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
     ) -> crate::ClientResult<()> {
-        let request_header = DeleteTopicRequestHeader {
-            topic: topic.clone(),
-            topic_request_header: None,
-        };
-        let api = self.mq_client_api()?;
-        let timeout = self.remoting_timeout_millis()?;
-        for addr in addrs {
-            api.delete_topic_in_broker(
-                &addr,
-                DeleteTopicRequestHeader {
-                    topic: request_header.topic.clone(),
-                    topic_request_header: None,
-                },
-                timeout,
-            )
-            .await?;
-        }
-        Ok(())
+        crate::admin::MQAdminMutationExt::remove_topic_from_brokers(self, addrs, topic).await
     }
 
     async fn delete_topic_in_broker_list(
@@ -263,14 +246,7 @@ impl TopicAdmin for DefaultMQAdminExtImpl {
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
     ) -> crate::ClientResult<()> {
-        let request_header = DeleteTopicFromNamesrvRequestHeader::new(topic, cluster_name);
-        let api = self.mq_client_api()?;
-        let timeout = self.remoting_timeout_millis()?;
-        for addr in addrs {
-            api.delete_topic_in_nameserver(&addr, request_header.clone(), timeout)
-                .await?;
-        }
-        Ok(())
+        crate::admin::MQAdminMutationExt::remove_topic_from_name_servers(self, addrs, cluster_name, topic).await
     }
 
     async fn create_or_update_order_conf(
