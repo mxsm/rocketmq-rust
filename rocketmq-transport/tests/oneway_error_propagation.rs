@@ -38,6 +38,7 @@ use rocketmq_transport::test_support::Connection;
 use socket2::SockRef;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
+use tokio::net::TcpSocket;
 
 fn argument_invalid() -> SharedError {
     Arc::new(
@@ -61,17 +62,20 @@ fn request(opaque: i32) -> RemotingCommand {
     RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo).set_opaque(opaque)
 }
 
-async fn unused_loopback_address() -> CheetahString {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("reserve address");
-    let address = listener.local_addr().expect("reserved address");
-    drop(listener);
-    CheetahString::from_string(address.to_string())
+fn reserved_loopback_address() -> (TcpSocket, CheetahString) {
+    // Keep the port bound without listening so another test cannot accept this client's connection.
+    let socket = TcpSocket::new_v4().expect("create reservation socket");
+    socket
+        .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("bind reservation socket");
+    let address = socket.local_addr().expect("reserved address");
+    (socket, CheetahString::from_string(address.to_string()))
 }
 
 #[tokio::test]
 async fn connection_refusal_is_returned() {
     let client = test_client("oneway-connection-refused");
-    let target = unused_loopback_address().await;
+    let (_reservation, target) = reserved_loopback_address();
     let result = client.invoke_request_oneway(&target, request(1), 200).await;
     assert!(result.is_err());
     client.shutdown();
@@ -80,7 +84,7 @@ async fn connection_refusal_is_returned() {
 #[tokio::test]
 async fn expired_absolute_deadline_is_returned_before_connect() {
     let client = test_client("oneway-expired-deadline");
-    let target = unused_loopback_address().await;
+    let (_reservation, target) = reserved_loopback_address();
     let result = client
         .invoke_request_oneway_with_deadline(&target, request(2), RequestDeadline::after(Duration::ZERO))
         .await;
@@ -207,7 +211,7 @@ async fn peer_close_is_returned_by_the_next_oneway_send() {
 async fn client_shutdown_is_returned_without_reconnecting() {
     let client = test_client("oneway-client-shutdown");
     client.shutdown();
-    let target = unused_loopback_address().await;
+    let (_reservation, target) = reserved_loopback_address();
     let result = client.invoke_request_oneway(&target, request(7), 200).await;
     assert!(result.is_err_and(|error| error.descriptor() == &rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
