@@ -20,13 +20,13 @@ This file applies to `rocketmq-ai/rocketmq-sre/ui/`.
 - Never display credentials, tokens, message bodies, ACL/TLS material, or whole configurations.
 - Do not commit `dist/`, logs, or local environment files.
 
-## Native WebMCP for new pages
+## Native WebMCP
 
 Use the [WebMCP draft](https://webmachinelearning.github.io/webmcp/) from the W3C Web Machine
 Learning Community Group. The 24 November 2026 publication is a Draft Community Group Report
 outside the W3C Standards Track. Its imperative API is the baseline for this UI.
 
-- Each new page with a useful read-only task must expose that task as a native WebMCP tool.
+- Each SRE UI page with a useful read-only task must expose that task as a native WebMCP tool.
   For a page limited to sign-in, approval, or execution, keep the consequential action in its
   existing human workflow. Expose a read-only summary only when the page already offers one.
 - Feature-detect `document.modelContext?.registerTool` in a secure context. Register after the
