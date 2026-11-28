@@ -24,9 +24,11 @@ import {
 } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { ApiError } from "@/api/client";
 import type {
   ConversationStreamEvent,
   ConversationTurnStatus,
+  IncidentView,
   InspectionReport,
   InspectionTemplate,
   InvestigationStatus,
@@ -51,12 +53,19 @@ import { Button } from "@/components/ui/button";
 import { useSreData } from "@/data/SreDataContext";
 import { DiagnosisRevisionList } from "@/features/incidents/DiagnosisRevisionList";
 import {
-  IncidentInboxCards,
+  IncidentInboxTimeline,
   IncidentInboxFilters,
 } from "@/features/incidents/IncidentInbox";
+import { useIncidentListTool } from "@/features/incidents/useIncidentListTool";
+import { useWorkspaceScope } from "@/context/WorkspaceScopeContext";
+import { useAuth } from "@/auth/AuthContext";
+import { useIncidentInboxMessages } from "@/i18n/incidentInboxMessages";
+import { useOperatorPreferences } from "@/preferences/OperatorPreferences";
 import { IncidentTopology } from "@/features/incidents/IncidentTopology";
 import {
-  filterAndSortIncidents,
+  filterIncidentInbox,
+  incidentDateKey,
+  type IncidentFilters,
   incidentOwnerOptions,
   incidentStatusLabels,
 } from "@/features/incidents/incidentPresentation";
@@ -163,7 +172,6 @@ export function AskSrePage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="ASK ROCKETMQ SRE"
         title="Ask SRE"
         description="把运维问题转换为集群范围内的只读调查；AI 只能请求证据和生成诊断，不能触发副作用。"
         actions={
@@ -422,7 +430,6 @@ export function ConversationDetailPage() {
         </Link>
       </Button>
       <PageHeader
-        eyebrow="CONVERSATION"
         title="对话式指标诊断"
         description="自然语言只会映射到已注册的只读工具；回答必须引用真实 Evidence。"
         actions={
@@ -840,7 +847,6 @@ export function InvestigationDetailPage() {
     <ObjectScopeBoundary object={resource.data?.investigation}>
     <div className="page">
       <PageHeader
-        eyebrow="INVESTIGATION"
         title={resource.data?.investigation.title ?? "调查详情"}
         description="展示只读采集、规则诊断、缺失证据与 Incident 关联。"
         actions={<LiveTransport transport={progress.transport} />}
@@ -1056,103 +1062,168 @@ export function InvestigationDetailPage() {
 
 export function IncidentsPage() {
   const { api } = useSreData();
+  const { status: authStatus, session } = useAuth();
   const scope = useClusterScope();
-  const [severity, setSeverity] = useState("all");
-  const [status, setStatus] = useState("all");
-  const [owner, setOwner] = useState("all");
-  const [query, setQuery] = useState("");
+  const workspace = useWorkspaceScope();
+  const m = useIncidentInboxMessages();
+  const { locale, timeZone } = useOperatorPreferences();
+  const [filters, setFilters] = useState<IncidentFilters>({
+    severity: "all",
+    status: "all",
+    owner: "all",
+    query: "",
+  });
+  const [day, setDay] = useState("");
+  const calendar = useMemo(
+    () =>
+      new Intl.DateTimeFormat("sv-SE", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }),
+    [timeZone],
+  );
+  const dateLabel = useMemo(
+    () =>
+      new Intl.DateTimeFormat(locale, { timeZone: "UTC", dateStyle: "long" }),
+    [locale],
+  );
+  const tenantId = session?.tenantId;
+  const allowed =
+    authStatus === "authenticated" &&
+    !!tenantId &&
+    !!scope.clusterId &&
+    !!session?.clusterIds.includes(scope.clusterId) &&
+    !workspace.invalid;
   const load = useCallback(
-    (signal: AbortSignal) =>
-      scope.clusterId
-        ? api.listIncidents(scope.clusterId, signal)
-        : Promise.resolve({
-            items: [],
-            partial: false,
-            warnings: [],
-            observed_at: new Date().toISOString(),
-          }),
-    [api, scope.clusterId],
+    async (signal: AbortSignal) => {
+      if (!allowed) {
+        throw new ApiError(403, "cluster_not_allowed", "Incident scope is unavailable.");
+      }
+      const result = await api.listIncidents(scope.clusterId, signal);
+      const items = result.items.filter(
+        ({ incident }) =>
+          incident.tenant_id === tenantId &&
+          incident.cluster_id === scope.clusterId,
+      );
+      return {
+        ...result,
+        items,
+        partial: result.partial || items.length !== result.items.length,
+      };
+    },
+    [allowed, api, scope.clusterId, tenantId],
   );
   const resource = useAsyncResource(load);
-  const progress = useWorkflowProgress(scope.clusterId, resource.reload);
+  const envelope = resource.error ? undefined : resource.data;
+  const progress = useWorkflowProgress(allowed ? scope.clusterId : "", resource.reload);
+  const selectVisible = useCallback(
+    (items: IncidentView[]) =>
+      filterIncidentInbox(items, filters, day, calendar),
+    [filters, day, calendar],
+  );
+  useIncidentListTool(
+    allowed ? workspace.scopeKey : undefined,
+    load,
+    selectVisible,
+  );
   const incidents = useMemo(
-    () =>
-      filterAndSortIncidents(resource.data?.items ?? [], {
-        severity,
-        status,
-        owner,
-        query,
-      }),
-    [owner, query, resource.data?.items, severity, status],
+    () => selectVisible(envelope?.items ?? []),
+    [envelope, selectVisible],
   );
   const owners = useMemo(
-    () => incidentOwnerOptions(resource.data?.items ?? []),
-    [resource.data?.items],
+    () => incidentOwnerOptions(envelope?.items ?? []),
+    [envelope],
   );
+  const days = useMemo(
+    () =>
+      [
+        ...new Set(
+          (envelope?.items ?? [])
+            .map(({ incident }) =>
+              incidentDateKey(incident.updated_at, calendar),
+            )
+            .filter(Boolean),
+        ),
+      ]
+        .sort()
+        .reverse(),
+    [envelope, calendar],
+  );
+  const visibleDays = incidents
+    .map(({ incident }) => incidentDateKey(incident.updated_at, calendar))
+    .filter(Boolean)
+    .sort();
+  const firstDay = visibleDays[0];
+  const lastDay = visibleDays.at(-1);
+  const dateRange =
+    firstDay && lastDay
+      ? dateLabel.formatRange(
+          new Date(firstDay + "T00:00:00Z"),
+          new Date(lastDay + "T00:00:00Z"),
+        )
+      : undefined;
   const now = useMemo(
-    () => new Date(resource.data?.observed_at ?? Date.now()),
-    [resource.data?.observed_at],
+    () => new Date(envelope?.observed_at ?? Date.now()),
+    [envelope?.observed_at],
   );
 
   return (
-    <div className="page">
-      <PageHeader
-        eyebrow="INCIDENT WORKSPACE"
-        title="Incident"
-        description="按状态跟踪已确认的运维事件、诊断 revision 和证据缺口。"
-        actions={
+    <div className="page incident-inbox-page">
+      <header className="incident-inbox-heading">
+        <h1>{m.incidents}</h1>
+        {dateRange && (
+          <div className="incident-inbox-heading-date">
+            <small>{m.dates}</small>
+            <strong>{dateRange}</strong>
+            <span>/ {timeZone}</span>
+          </div>
+        )}
+      </header>
+      <IncidentInboxFilters
+        filters={filters}
+        change={(key, value) =>
+          setFilters((current) => ({ ...current, [key]: value }))
+        }
+        owners={owners}
+        day={day}
+        days={days}
+        setDay={setDay}
+        clusterSelect={
+          <ClusterScopeSelect
+            clusters={scope.clusters}
+            value={scope.clusterId}
+            onChange={scope.setClusterId}
+          />
+        }
+        meta={
           <>
+            {envelope && <span>{incidents.length} / {envelope.items.length} {m.matched}</span>}
             <LiveTransport transport={progress.transport} />
-            <ClusterScopeSelect
-              clusters={scope.clusters}
-              value={scope.clusterId}
-              onChange={scope.setClusterId}
-            />
           </>
         }
       />
-      <ReadOnlyBoundary compact />
-      <PartialNotice envelope={resource.data} />
-      <DataSurface
-        title="事件列表"
-        description="严重度优先、最近更新次之；终态事件不可重新进入运行态。"
-        meta={
-          <span>
-            {incidents.length} / {resource.data?.items.length ?? 0} 个
-          </span>
-        }
-      >
-        <IncidentInboxFilters
-          severity={severity}
-          status={status}
-          owner={owner}
-          query={query}
-          owners={owners}
-          onSeverityChange={setSeverity}
-          onStatusChange={setStatus}
-          onOwnerChange={setOwner}
-          onQueryChange={setQuery}
-        />
-        <DataState
-          loading={resource.loading}
-          error={resource.error}
-          empty={!resource.loading && (resource.data?.items.length ?? 0) === 0}
-          onRetry={resource.reload}
-          emptyTitle="当前没有 Incident"
-          emptyDescription="可从 Ask SRE 调查或 Inspection recommendation 升级为 Incident。"
-        />
-        {resource.data &&
-          resource.data.items.length > 0 &&
-          incidents.length === 0 && (
-            <div className="empty-state compact">
-              <h3>没有匹配当前筛选的 Incident</h3>
-              <p>调整严重度、状态、Owner 或关键词后重试。</p>
-            </div>
-          )}
-        {incidents.length > 0 && (
-          <IncidentInboxCards incidents={incidents} now={now} />
+      <PartialNotice envelope={envelope} />
+      <DataState
+        loading={resource.loading && !envelope}
+        error={resource.error}
+        empty={!resource.loading && (envelope?.items.length ?? 0) === 0}
+        onRetry={resource.reload}
+        emptyTitle={m.empty}
+        emptyDescription={m.emptyHint}
+      />
+      {envelope &&
+        envelope.items.length > 0 &&
+        incidents.length === 0 && (
+          <div className="empty-state compact">
+            <h3>{m.noMatch}</h3>
+            <p>{m.clearHint}</p>
+          </div>
         )}
-      </DataSurface>
+      {incidents.length > 0 && (
+        <IncidentInboxTimeline incidents={incidents} now={now} />
+      )}
     </div>
   );
 }
@@ -1211,7 +1282,6 @@ export function IncidentDetailPage() {
         </Link>
       </Button>
       <PageHeader
-        eyebrow="INCIDENT DETAIL"
         title={resource.data?.incident.title ?? "Incident 详情"}
         description="诊断 revision、假设、反证和时间线均绑定稳定 Evidence 引用。"
         actions={
@@ -1371,7 +1441,6 @@ export function InspectionsPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="READ-ONLY INSPECTIONS"
         title="检查与建议"
         description="运行有界只读检查，并把发现转成可分派、可升级的建议；不提供自动修复。"
         actions={
@@ -1604,7 +1673,6 @@ export function InspectionDetailPage() {
         </Link>
       </Button>
       <PageHeader
-        eyebrow="INSPECTION DETAIL"
         title={
           resource.data
             ? `${templateLabels[resource.data.run.template]}检查`

@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -8,45 +7,12 @@ import type {
 } from "@/api/types";
 
 import {
-  ChangeWorkspaceNav,
   ConflictPanel,
   RunbookDiff,
   ScheduleStatusBadge,
 } from "./ChangeWorkspace";
 
 describe("change management workspace", () => {
-  it("exposes the desktop change workflow as first-class navigation", () => {
-    render(
-      <MemoryRouter initialEntries={["/changes/calendar"]}>
-        <ChangeWorkspaceNav />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByRole("link", { name: "变更中心" })).toHaveAttribute(
-      "href",
-      "/changes",
-    );
-    expect(screen.getByRole("link", { name: "Runbook" })).toHaveAttribute(
-      "href",
-      "/changes/runbooks",
-    );
-    expect(screen.getByRole("link", { name: "变更日历" })).toHaveClass(
-      "active",
-    );
-    expect(screen.getByRole("link", { name: "排程" })).toHaveAttribute(
-      "href",
-      "/changes/schedules",
-    );
-    expect(screen.getByRole("link", { name: "发布护航" })).toHaveAttribute(
-      "href",
-      "/changes/releases",
-    );
-    expect(screen.getByRole("link", { name: "外部集成" })).toHaveAttribute(
-      "href",
-      "/changes/integrations",
-    );
-  });
-
   it("renders typed runbook differences and blocking conflicts as text", () => {
     const before = runbook("1.0.0", [
       actionStep(1, "扩容 Proxy", "proxy.scale_out_one.v1"),

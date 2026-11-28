@@ -11,9 +11,8 @@
   margin-bottom: 14px;
   padding: 11px 14px;
   color: var(--foreground);
-  border: 1px solid #214c27;
-  border-radius: var(--radius);
-  background: var(--success-muted);
+  border-left: 3px solid var(--success);
+  background: var(--card);
 }
 
 .model-governance-boundary > svg {
@@ -34,18 +33,18 @@
 
 .model-governance-boundary p {
   margin: 0;
-  color: #a8c9ac;
-  font-size: 10px;
+  color: var(--muted-foreground);
+  font-size: 0.93rem;
   line-height: 1.5;
 }
 
 .model-governance-boundary code {
   padding: 5px 8px;
   color: var(--success);
-  border: 1px solid #2d6234;
+  border: 1px solid var(--success-border);
   border-radius: calc(var(--radius) - 2px);
-  background: #0d2111;
-  font-size: 9px;
+  background: var(--success-muted);
+  font-size: 0.85rem;
 }
 
 .model-governance-summary {
@@ -53,9 +52,7 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 14px;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
+  border-block: 1px solid var(--border);
 }
 
 .model-governance-summary article {
@@ -69,14 +66,6 @@
 
 .model-governance-summary article:last-child {
   border-right: 0;
-}
-
-.model-governance-summary article.tone-success {
-  background: #0c1710;
-}
-
-.model-governance-summary article.tone-warning {
-  background: var(--warning-muted);
 }
 
 .model-summary-icon {
@@ -93,14 +82,14 @@
 
 .model-governance-summary article.tone-success .model-summary-icon {
   color: var(--success);
-  border-color: #214c27;
+  border-color: var(--success-border);
   background: var(--success-muted);
 }
 
 .model-governance-summary article.tone-warning .model-summary-icon {
   color: var(--warning);
-  border-color: #4b4118;
-  background: #211d0d;
+  border-color: var(--warning-border);
+  background: var(--warning-muted);
 }
 
 .model-governance-summary article > div {
@@ -111,12 +100,13 @@
 .model-governance-summary article > div > span,
 .model-governance-summary small {
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: 0.93rem;
 }
 
 .model-governance-summary strong {
   color: var(--foreground);
-  font-size: 26px;
+  font-family: var(--font-mono);
+  font-size: 1.8rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.04em;
 }
@@ -135,7 +125,7 @@
 
 .model-governance-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 390px;
+  grid-template-columns: minmax(0, 1fr) clamp(20rem, 23vw, 27rem);
   align-items: start;
   gap: 14px;
   min-width: 0;
@@ -152,7 +142,7 @@
 
 .model-lifecycle-table {
   width: 100%;
-  min-width: 820px;
+  min-width: 51rem;
   border-collapse: collapse;
 }
 
@@ -161,17 +151,16 @@
   padding: 11px 12px;
   text-align: left;
   border-bottom: 1px solid var(--border-subtle);
-  font-size: 10px;
+  font-size: 0.93rem;
   vertical-align: middle;
 }
 
 .model-lifecycle-table th {
   color: var(--muted-foreground);
-  background: #0c0c0c;
-  font-size: 8px;
+  background: var(--card);
+  font-size: 0.85rem;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: normal;
 }
 
 .model-lifecycle-table tbody tr {
@@ -179,28 +168,28 @@
 }
 
 .model-lifecycle-table tbody tr:hover {
-  background: #121212;
+  background: var(--card);
 }
 
 .model-lifecycle-table tbody tr.selected {
-  background: #171717;
-  box-shadow: inset 2px 0 0 var(--info);
+  background: var(--accent);
+  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .model-lifecycle-table td:nth-child(3) {
-  display: grid;
-  min-width: 180px;
-  gap: 4px;
+  min-width: 11rem;
 }
 
 .model-lifecycle-table td:nth-child(3) > span {
+  display: block;
+  margin-top: 4px;
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 0.85rem;
 }
 
 .model-lifecycle-table td:last-child code {
   color: var(--info);
-  font-size: 9px;
+  font-size: 0.85rem;
 }
 
 .model-profile-select {
@@ -218,26 +207,27 @@
 
 .model-profile-select strong {
   color: var(--foreground);
-  font-size: 10px;
+  font-family: var(--font-editorial);
+  font-size: 1.15rem;
 }
 
 .model-profile-select span {
-  color: #737373;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
 }
 
 .model-smoke-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 9px;
+  font-size: 0.85rem;
   white-space: nowrap;
 }
 
 .model-smoke-status small {
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 0.85rem;
 }
 
 .model-smoke-status.passed {
@@ -280,14 +270,15 @@
 .model-governance-panel > header span,
 .provider-checks > header > span {
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.09em;
 }
 
 .model-governance-panel h2 {
   margin: 0;
-  font-size: 14px;
+  font-family: var(--font-editorial);
+  font-size: 1.45rem;
 }
 
 .model-governance-panel > .phase1-definition-grid {
@@ -322,8 +313,8 @@
   padding: 7px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: calc(var(--radius) - 2px);
-  background: #0c0c0c;
-  font-size: 9px;
+  background: var(--card);
+  font-size: 0.85rem;
 }
 
 .provider-checks .passed {
@@ -337,7 +328,7 @@
 .provider-checks > code {
   overflow: hidden;
   color: var(--destructive);
-  font-size: 8px;
+  font-size: 0.85rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -353,7 +344,7 @@
 
 .model-panel-toolbar > span {
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 0.85rem;
 }
 
 .model-governance-panel > .inline-alert {
@@ -373,10 +364,8 @@
 
 .model-lifecycle-form > label > span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 0.85rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .model-lifecycle-form .select-trigger,
@@ -392,9 +381,9 @@
   color: var(--foreground);
   border: 1px solid var(--input);
   border-radius: calc(var(--radius) - 2px);
-  background: #0c0c0c;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  background: var(--card);
+  font-family: var(--font-mono);
+  font-size: 0.93rem;
 }
 
 .model-lifecycle-form input[aria-invalid="true"] {
@@ -403,7 +392,7 @@
 
 .model-lifecycle-form small {
   color: var(--destructive);
-  font-size: 8px;
+  font-size: 0.85rem;
 }
 
 .model-confirmation {
@@ -413,19 +402,19 @@
   padding: 9px;
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 2px);
-  background: #0c0c0c;
+  background: var(--card);
 }
 
 .model-confirmation input {
   width: 14px;
   height: 14px;
   margin: 1px 0 0;
-  accent-color: var(--success);
+  accent-color: var(--action-fill);
 }
 
 .model-confirmation > span {
   color: var(--foreground) !important;
-  font-size: 9px !important;
+  font-size: 0.85rem !important;
   font-weight: 500 !important;
   line-height: 1.45;
   letter-spacing: 0 !important;
@@ -451,7 +440,7 @@
   color: var(--muted-foreground);
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 2px);
-  background: #0c0c0c;
+  background: var(--card);
 }
 
 .model-terminal-state > div {
@@ -461,11 +450,11 @@
 
 .model-terminal-state strong {
   color: var(--foreground);
-  font-size: 10px;
+  font-size: 0.93rem;
 }
 
 .model-terminal-state span {
-  font-size: 9px;
+  font-size: 0.85rem;
 }
 
 @media (max-width: 1360px) {

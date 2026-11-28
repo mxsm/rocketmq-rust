@@ -1,16 +1,9 @@
 import {
   AlertTriangle,
-  CalendarRange,
-  Cable,
   CheckCircle2,
-  GitCompareArrows,
-  ListTree,
   LoaderCircle,
-  Rocket,
-  Route,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { NavLink } from "react-router-dom";
 
 import type {
   ChangeConflict,
@@ -34,39 +27,6 @@ import {
   scheduleStatusLabel,
   scheduleStatusTone,
 } from "./changePresentation";
-
-const workspaceLinks = [
-  { to: "/changes", label: "变更中心", icon: ListTree, end: true },
-  {
-    to: "/changes/runbooks",
-    label: "Runbook",
-    icon: GitCompareArrows,
-  },
-  { to: "/changes/calendar", label: "变更日历", icon: CalendarRange },
-  { to: "/changes/schedules", label: "排程", icon: Route },
-  { to: "/changes/releases", label: "发布护航", icon: Rocket },
-  { to: "/changes/integrations", label: "外部集成", icon: Cable },
-];
-
-export function ChangeWorkspaceNav() {
-  return (
-    <nav className="change-workspace-nav" aria-label="变更工作台">
-      {workspaceLinks.map(({ to, label, icon: Icon, end }) => (
-        <NavLink
-          className={({ isActive }) =>
-            `change-workspace-link${isActive ? " active" : ""}`
-          }
-          end={end}
-          key={to}
-          to={to}
-        >
-          <Icon aria-hidden="true" size={15} />
-          {label}
-        </NavLink>
-      ))}
-    </nav>
-  );
-}
 
 export function ChangeClusterSelect({
   clusters,
@@ -152,7 +112,6 @@ export function RunbookDiff({
     <section className="runbook-diff-panel" aria-label="Runbook 版本差异">
       <header>
         <div>
-          <span className="section-kicker">VERSION DIFF</span>
           <h2>
             {before.version} → {after.version}
           </h2>

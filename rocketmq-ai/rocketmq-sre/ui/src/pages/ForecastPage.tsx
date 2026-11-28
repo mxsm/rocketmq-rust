@@ -152,7 +152,6 @@ export function ForecastPage() {
   return (
     <div className="page forecast-page">
       <PageHeader
-        eyebrow="P2-06 · PREVENTION"
         title="容量预测与 Readiness"
         description="用可解释趋势、季节基线和确定性 What-if 提前识别容量、积压与到期风险。所有结果仅供诊断，不触发自动扩容或 RocketMQ 变更。"
         actions={

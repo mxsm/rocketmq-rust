@@ -41,7 +41,6 @@ import { createMockReleaseManagementApi } from "@/data/phase3ReleaseDemo";
 import {
   ChangeClusterSelect,
   ChangeStatePanel,
-  ChangeWorkspaceNav,
 } from "@/features/change-management/ChangeWorkspace";
 import {
   DeliveryStatusBadge,
@@ -232,7 +231,6 @@ export function IntegrationManagementPage() {
   return (
     <div className="page change-page release-page">
       <PageHeader
-        eyebrow="P3-12 · ITSM / CHATOPS / PAGER"
         title="外部协作集成"
         description="管理版本化 adapter、集群范围、outbox 投递和外部审批入口。Secret、token 与目标凭据不会显示在工作台。"
         actions={
@@ -253,7 +251,6 @@ export function IntegrationManagementPage() {
           </div>
         }
       />
-      <ChangeWorkspaceNav />
       <ReleaseSafetyBanner />
 
       {loading && (
@@ -307,7 +304,6 @@ export function IntegrationManagementPage() {
         <section className="integration-target-panel">
           <header>
             <div>
-              <span className="section-kicker">REGISTERED TARGETS</span>
               <h2>集群集成目标</h2>
               <p>页面只展示能力与投递状态，不展示 endpoint 或 Secret 引用。</p>
             </div>
@@ -373,7 +369,6 @@ export function IntegrationManagementPage() {
               <Plus aria-hidden="true" size={17} />
             </span>
             <div>
-              <span className="section-kicker">VERSIONED ADAPTER</span>
               <h2>登记集成目标</h2>
               <p>只接受结构化字段和 Secret 引用；不接受凭据正文。</p>
             </div>
@@ -465,7 +460,6 @@ export function IntegrationManagementPage() {
       <section className="integration-delivery-panel">
         <header>
           <div>
-            <span className="section-kicker">IDEMPOTENT OUTBOX</span>
             <h2>协作事件投递</h2>
             <p>重试只重放同一幂等事件，不会重复审批或执行。</p>
           </div>

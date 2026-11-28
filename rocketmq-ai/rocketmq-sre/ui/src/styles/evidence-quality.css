@@ -29,7 +29,8 @@
 }
 .evidence-drawer-header h2 {
   margin: 4px 0 0;
-  font-size: 20px;
+  font-family: var(--font-editorial);
+  font-size: 1.8rem;
 }
 .evidence-drawer-body {
   min-height: 0;
@@ -79,7 +80,8 @@
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: 14px;
+  font-family: var(--font-editorial);
+  font-size: 1.35rem;
 }
 .evidence-content-section p {
   color: var(--muted-foreground);

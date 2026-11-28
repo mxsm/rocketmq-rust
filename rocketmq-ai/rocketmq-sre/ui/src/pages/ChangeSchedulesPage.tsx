@@ -28,7 +28,6 @@ import { useSreData } from "@/data/SreDataContext";
 import {
   ChangeClusterSelect,
   ChangeStatePanel,
-  ChangeWorkspaceNav,
   ScheduleStatusBadge,
 } from "@/features/change-management/ChangeWorkspace";
 import { ScheduleComposer } from "@/features/change-management/ScheduleComposer";
@@ -115,7 +114,6 @@ export function ChangeSchedulesPage() {
   return (
     <div className="page change-page">
       <PageHeader
-        eyebrow="P3-11 · CONTROLLED SCHEDULING"
         title="变更排程与冲突预演"
         description="每个动作步骤必须绑定同集群、未过期且已批准的不可变 Plan。排程器只负责编排，实际写入仍经过 Executor 与 Agent。"
         actions={
@@ -126,7 +124,6 @@ export function ChangeSchedulesPage() {
           />
         }
       />
-      <ChangeWorkspaceNav />
 
       <section className="schedule-safety-banner">
         <ShieldCheck aria-hidden="true" size={18} />
@@ -143,7 +140,6 @@ export function ChangeSchedulesPage() {
         <section className="schedule-list-panel">
           <header>
             <div>
-              <span className="section-kicker">SCHEDULE QUEUE</span>
               <h2>排程队列</h2>
             </div>
             <Select

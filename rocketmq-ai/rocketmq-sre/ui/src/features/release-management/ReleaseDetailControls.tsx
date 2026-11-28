@@ -70,7 +70,6 @@ export function ReleaseDetailControls({
     <aside className="release-control-stack" aria-label="发布护航控制">
       <header className="release-control-heading">
         <div>
-          <span className="section-kicker">SUPERVISED CONTROL</span>
           <h2>护航控制台</h2>
           <p>每个操作都会重新验证不可变 Plan、审批、租约和 fencing token。</p>
         </div>

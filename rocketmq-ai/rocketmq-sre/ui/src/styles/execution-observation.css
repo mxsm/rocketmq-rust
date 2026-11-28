@@ -20,7 +20,8 @@
 .execution-layer-grid h2,
 .execution-fact-grid h3 {
   margin: 0 0 10px;
-  font-size: 14px;
+  font-family: var(--font-editorial);
+  font-size: 1.3rem;
 }
 
 .execution-layer-grid p,
@@ -51,7 +52,8 @@
 
 .execution-record-order {
   font-family: var(--font-mono);
-  font-size: 11px;
+  color: var(--primary);
+  font-size: 1rem;
 }
 
 .execution-record-list strong,
@@ -68,7 +70,8 @@
 .execution-record-list time,
 .execution-record-list code {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
 }
 
 .execution-observation-steps > li {

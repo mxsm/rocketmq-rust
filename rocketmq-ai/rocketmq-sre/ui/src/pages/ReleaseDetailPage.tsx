@@ -34,7 +34,6 @@ import { createMockReleaseManagementApi } from "@/data/phase3ReleaseDemo";
 import { ObjectScopeBoundary } from "@/features/scope/ObjectScopeBoundary";
 import {
   ChangeStatePanel,
-  ChangeWorkspaceNav,
 } from "@/features/change-management/ChangeWorkspace";
 import {
   type ReleaseDetailActions,
@@ -170,7 +169,6 @@ export function ReleaseDetailPage() {
     <ObjectScopeBoundary object={workflow}>
     <div className="page change-page release-detail-page">
       <PageHeader
-        eyebrow="P3-12 · RELEASE ESCORT"
         title={workflow?.release_ref ?? "发布护航详情"}
         description={
           workflow
@@ -197,7 +195,6 @@ export function ReleaseDetailPage() {
           </div>
         }
       />
-      <ChangeWorkspaceNav />
       <ReleaseSafetyBanner />
 
       {loading && (
@@ -232,7 +229,6 @@ export function ReleaseDetailPage() {
                 <Rocket aria-hidden="true" size={22} />
               </span>
               <div>
-                <span className="section-kicker">WORKFLOW CONTROL</span>
                 <h2>{workflow.release_ref}</h2>
                 <p>
                   {workflow.change_id} · {workflow.created_by} ·{" "}
@@ -288,9 +284,6 @@ export function ReleaseDetailPage() {
               <section className="release-panel">
                 <header>
                   <div>
-                    <span className="section-kicker">
-                      DETERMINISTIC READINESS
-                    </span>
                     <h2>发布准备门禁</h2>
                   </div>
                   <Badge
@@ -316,9 +309,6 @@ export function ReleaseDetailPage() {
               <section className="release-panel">
                 <header>
                   <div>
-                    <span className="section-kicker">
-                      BOUNDED OBSERVATIONS
-                    </span>
                     <h2>发布观察时间线</h2>
                   </div>
                   <Badge
@@ -406,7 +396,6 @@ function ReleaseReportView({
     <section className="release-panel release-report-panel">
       <header>
         <div>
-          <span className="section-kicker">IMMUTABLE REPORT</span>
           <h2>发布结果报告</h2>
           <p>
             {shortId(reportId)} · {formatReleaseTime(generatedAt)}

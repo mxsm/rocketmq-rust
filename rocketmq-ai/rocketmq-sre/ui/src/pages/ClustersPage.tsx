@@ -12,7 +12,6 @@ export function ClustersPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="CLUSTER ONBOARDING"
         title="集群接入"
         description="展示只读身份、MCP 契约和数据源握手结果。"
         actions={

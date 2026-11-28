@@ -1,5 +1,4 @@
 import {
-  ArrowRight,
   CheckCircle2,
   Fingerprint,
   Search,
@@ -16,7 +15,6 @@ import {
   ClusterScopeSelect,
   DataState,
   DataSurface,
-  formatTime,
 } from "@/components/Phase1Primitives";
 import { ReadOnlyBoundary } from "@/components/ReadOnlyBoundary";
 import { Badge } from "@/components/ui/badge";
@@ -24,12 +22,14 @@ import { Button } from "@/components/ui/button";
 import { useSreData } from "@/data/SreDataContext";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useClusterScope } from "@/hooks/useClusterScope";
+import { useOperatorPreferences } from "@/preferences/OperatorPreferences";
 
 export { EvidenceExplorerPage } from "./EvidenceExplorerPage";
 export { KnowledgePage } from "./KnowledgePage";
 
 export function MessageJourneyPage() {
   const { api } = useSreData();
+  const { formatDateTime } = useOperatorPreferences();
   const scope = useClusterScope();
   const [query, setQuery] = useState(
     "7F00000100002A9F0000000000008C21",
@@ -51,7 +51,6 @@ export function MessageJourneyPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="MESSAGE JOURNEY"
         title="消息旅程"
         description="仅使用 Message ID/Trace ID 关联生产、代理、Broker、Store 与消费证据；永不读取或展示消息正文。"
         actions={
@@ -117,8 +116,9 @@ export function MessageJourneyPage() {
             description="missing hop 明确显示，不以成功状态补齐。"
           >
             <ol className="journey-timeline">
-              {resource.data.hops.map((hop, index) => (
+              {resource.data.hops.map((hop) => (
                 <li key={`${hop.stage}-${hop.observed_at}`}>
+                  <time dateTime={hop.observed_at}>{formatDateTime(hop.observed_at)}</time>
                   <div className={`journey-marker ${hop.status}`}>
                     {hop.status === "observed" ? (
                       <CheckCircle2 size={15} />
@@ -143,18 +143,10 @@ export function MessageJourneyPage() {
                     </header>
                     <span>{hop.component}</span>
                     <p>{hop.detail}</p>
-                    <footer>
-                      <span>{formatTime(hop.observed_at)}</span>
-                      <span>
-                        {hop.latency_ms == null
-                          ? "latency missing"
-                          : `${hop.latency_ms}ms`}
-                      </span>
-                    </footer>
                   </div>
-                  {index < (resource.data?.hops.length ?? 0) - 1 && (
-                    <ArrowRight className="journey-arrow" size={16} />
-                  )}
+                  <span className="journey-latency">
+                    {hop.latency_ms == null ? "latency missing" : `${hop.latency_ms}ms`}
+                  </span>
                 </li>
               ))}
             </ol>

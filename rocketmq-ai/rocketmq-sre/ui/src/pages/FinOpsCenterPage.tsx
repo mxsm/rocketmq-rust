@@ -95,7 +95,6 @@ export function FinOpsCenterPage() {
           </EnterpriseBoundary>
         }
         description="把 Provider/Model Token、基础设施成本、质量、结果、SLO 覆盖与节省工时放在同一 showback 视图；缺失归因不会被伪造成 0。"
-        eyebrow="PLATFORM / MODEL & FINOPS"
         title="模型成本与 FinOps"
       />
 

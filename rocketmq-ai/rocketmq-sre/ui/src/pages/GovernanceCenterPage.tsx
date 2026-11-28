@@ -128,7 +128,6 @@ export function GovernanceCenterPage() {
           </EnterpriseBoundary>
         }
         description="集中管理 Data、Prompt、Knowledge、Model、Pack、Policy、Action、Runbook 与 Integration 的签名版本、依赖、影响和生命周期。"
-        eyebrow="PLATFORM / GOVERNANCE CENTER"
         title="治理中心"
       />
 

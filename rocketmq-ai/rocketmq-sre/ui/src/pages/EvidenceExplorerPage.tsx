@@ -98,7 +98,6 @@ export function EvidenceExplorerPage() {
   return (
     <div className="page evidence-explorer-page">
       <PageHeader
-        eyebrow="CANONICAL EVIDENCE"
         title={m.explorer}
         description={m.description}
         actions={

@@ -186,7 +186,6 @@ function InvestigationWorkspace({
   return (
     <>
       <PageHeader
-        eyebrow="INVESTIGATION"
         title={object.title}
         description={m.investigationDescription}
         actions={

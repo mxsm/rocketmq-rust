@@ -1,19 +1,18 @@
 import {
+  ChevronDown,
+  ChevronRight,
+  ChevronsUpDown,
   LogOut,
   Moon,
-  Network,
-  ShieldCheck,
+  Share2,
   Sun,
   UserRound,
 } from "lucide-react";
+import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { useAuth } from "@/auth/AuthContext";
-import { Badge } from "@/components/ui/badge";
-import {
-  WorkspaceScopeProvider,
-  useWorkspaceScope,
-} from "@/context/WorkspaceScopeContext";
+import { WorkspaceScopeProvider, useWorkspaceScope } from "@/context/WorkspaceScopeContext";
 import { useSreData } from "@/data/SreDataContext";
 import { useWorkspaceMessages } from "@/i18n/workspaceMessages";
 import {
@@ -24,6 +23,8 @@ import {
 
 import { GlobalScopeBar } from "./GlobalScopeBar";
 import { navigationForPath, workspaceNavigation } from "./navigation";
+import { ShellDisclosure } from "./ShellDisclosure";
+import "./workspace-shell.css";
 
 export function AppLayout() {
   return (
@@ -34,7 +35,6 @@ export function AppLayout() {
 }
 
 function WorkspaceShell() {
-  const auth = useAuth();
   const { clusters, loading, error } = useSreData();
   const preferences = useOperatorPreferences();
   const scope = useWorkspaceScope();
@@ -42,156 +42,93 @@ function WorkspaceShell() {
   const m = useWorkspaceMessages();
   const activeGroup = navigationForPath(location.pathname);
   const english = preferences.locale === "en-US";
+  const [navigation, setNavigation] = useState({
+    path: location.pathname,
+    expanded: activeGroup.id,
+  });
+  const expandedGroup =
+    navigation.path === location.pathname ? navigation.expanded : activeGroup.id;
+  const today = new Intl.DateTimeFormat(preferences.locale, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: preferences.timeZone,
+  }).format(new Date());
 
   return (
-    <div className="app-shell investigation-shell">
+    <div className="app-shell investigation-shell workspace-shell">
       <a className="skip-link" href="#workspace-content">
         {english ? "Skip to workspace" : "跳到工作区"}
       </a>
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            <Network size={21} />
-          </span>
+      <aside className="shell-sidebar">
+        <div className="shell-brand">
+          <Share2 aria-hidden="true" size={36} strokeWidth={1.65} />
           <span>
             <strong>RocketMQ</strong>
             <small>Rust AI SRE</small>
           </span>
         </div>
-        <nav
-          aria-label={english ? "Workspaces" : "主导航"}
-          className="sidebar-navigation"
-        >
-          {workspaceNavigation.map(({ id, label, icon: Icon, to }) => (
-            <Link
-              aria-current={activeGroup.id === id ? "page" : undefined}
-              aria-label={m[label]}
-              className={`nav-item workspace-nav-item${activeGroup.id === id ? " active" : ""}`}
-              key={id}
-              title={m[label]}
-              to={{
-                pathname: to,
-                search: scope.invalid ? "" : scope.searchFor(),
-              }}
-            >
-              <Icon aria-hidden="true" size={18} />
-              <span>{m[label]}</span>
-            </Link>
-          ))}
+        <nav aria-label={english ? "Workspaces" : "主导航"} className="shell-sections">
+          {workspaceNavigation.map(({ id, label, icon: Icon, to, items }) => {
+            const expanded = expandedGroup === id;
+            return (
+              <div className="shell-section" key={id}>
+                <div
+                  className={`shell-section-heading${activeGroup.id === id ? " is-current" : ""}`}
+                >
+                  <Link
+                    aria-current={activeGroup.id === id ? "location" : undefined}
+                    onClick={() => setNavigation({ path: to, expanded: id })}
+                    to={{ pathname: to, search: scope.invalid ? "" : scope.searchFor() }}
+                  >
+                    <Icon aria-hidden="true" size={20} strokeWidth={1.7} />
+                    <span>{m[label]}</span>
+                  </Link>
+                  <button
+                    aria-controls={`section-${id}`}
+                    aria-expanded={expanded}
+                    aria-label={english ? `${m[label]} pages` : `${m[label]}二级导航`}
+                    onClick={() =>
+                      setNavigation({ path: location.pathname, expanded: expanded ? "" : id })
+                    }
+                    type="button"
+                  >
+                    {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                  </button>
+                </div>
+                <div className="shell-subnav" hidden={!expanded} id={`section-${id}`}>
+                  {items.map(({ to, label, ...rest }) => (
+                    <NavLink
+                      className={({ isActive }) =>
+                        `shell-subnav-link${isActive ? " is-active" : ""}`
+                      }
+                      end={"end" in rest ? rest.end : false}
+                      key={to}
+                      to={to}
+                    >
+                      {m[label]}
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </nav>
-        <div className="boundary-note">
-          <ShieldCheck aria-hidden="true" size={16} />
-          <div>
-            <strong>{english ? "Supervised changes" : "受监督变更"}</strong>
-            <span>
-              {english
-                ? "Diagnosis is read-only. Changes follow existing approval and fencing."
-                : "诊断保持只读；变更沿用审批与围栏。"}
-            </span>
-          </div>
-        </div>
-        <div className="sidebar-meta">
-          <span>v0.5.0 · SRE</span>
-        </div>
+        <OperatorControls />
       </aside>
       <div className="workspace">
-        <header className="utility-bar">
-          <div className="utility-product">
-            <Badge variant="outline">SRE</Badge>
-            <strong>{m[activeGroup.label]}</strong>
-          </div>
-          <div className="utility-actions">
-            <select
-              aria-label={english ? "Language" : "语言"}
-              className="utility-select"
-              onChange={(event) =>
-                preferences.setLocale(event.target.value as OperatorLocale)
-              }
-              value={preferences.locale}
-            >
-              <option value="zh-CN">中文</option>
-              <option value="en-US">EN</option>
-            </select>
-            <select
-              aria-label={english ? "Time zone" : "时区"}
-              className="utility-select utility-timezone"
-              onChange={(event) =>
-                preferences.setTimeZone(event.target.value as OperatorTimeZone)
-              }
-              value={preferences.timeZone}
-            >
-              <option value="Asia/Shanghai">UTC+8 · Shanghai</option>
-              <option value="Asia/Singapore">UTC+8 · Singapore</option>
-              <option value="UTC">UTC</option>
-            </select>
-            <button
-              aria-label={
-                preferences.theme === "dark" ? m.lightTheme : m.darkTheme
-              }
-              className="icon-button"
-              onClick={() =>
-                preferences.setTheme(
-                  preferences.theme === "dark" ? "light" : "dark",
-                )
-              }
-              type="button"
-            >
-              {preferences.theme === "dark" ? (
-                <Sun size={17} />
-              ) : (
-                <Moon size={17} />
-              )}
-            </button>
-            <span className="utility-identity">
-              <UserRound aria-hidden="true" size={15} />
-              <span>
-                <strong>
-                  {auth.session?.displayName ??
-                    (english ? "Signed out" : "未登录")}
-                </strong>
-                <small>
-                  {auth.mode === "development" ? "DEV" : "OIDC"} ·{" "}
-                  {auth.session?.clusterIds.length ?? 0} clusters
-                </small>
-              </span>
-            </span>
-            {auth.mode === "oidc" && (
-              <button
-                aria-label={english ? "Sign out" : "退出登录"}
-                className="icon-button"
-                onClick={() => void auth.signOut()}
-                type="button"
-              >
-                <LogOut size={16} />
-              </button>
-            )}
-          </div>
+        <header className="shell-toolbar">
+          <GlobalScopeBar key={scope.scopeKey} />
+          <span className="shell-today">
+            {english ? "Today" : "当前日期"}
+            <time>{today}</time>
+          </span>
         </header>
-        <GlobalScopeBar key={scope.scopeKey} />
-        <nav
-          aria-label={`${m[activeGroup.label]} · ${english ? "pages" : "二级导航"}`}
-          className="section-navigation"
-        >
-          {activeGroup.items.map(({ to, label, ...rest }) => (
-            <NavLink
-              className={({ isActive }) =>
-                `section-nav-item${isActive ? " active" : ""}`
-              }
-              end={"end" in rest ? rest.end : false}
-              key={to}
-              to={to}
-            >
-              {m[label]}
-            </NavLink>
-          ))}
-        </nav>
         <main className="main-content" id="workspace-content" tabIndex={-1}>
           {loading && !clusters.length ? (
             <div className="page">
               <div className="state-panel" role="status">
-                {english
-                  ? "Loading authorized workspace…"
-                  : "正在加载授权工作区…"}
+                {english ? "Loading authorized workspace…" : "正在加载授权工作区…"}
               </div>
             </div>
           ) : scope.invalid ? null : error && !scope.clusterId ? (
@@ -201,7 +138,7 @@ function WorkspaceShell() {
               </div>
             </div>
           ) : (
-            <WorkspaceOutlet key={`${scope.scopeKey}:${location.pathname}`} />
+            <Outlet key={`${scope.scopeKey}:${location.pathname}`} />
           )}
         </main>
       </div>
@@ -209,6 +146,70 @@ function WorkspaceShell() {
   );
 }
 
-function WorkspaceOutlet() {
-  return <Outlet />;
+function OperatorControls() {
+  const auth = useAuth();
+  const preferences = useOperatorPreferences();
+  const english = preferences.locale === "en-US";
+  const m = useWorkspaceMessages();
+  const identity = auth.session?.displayName ?? (english ? "Signed out" : "未登录");
+  return (
+    <div className="shell-operator">
+      <ShellDisclosure
+        className="shell-account"
+        label={english ? "Account and preferences" : "账号与偏好"}
+        summary={
+          <>
+            <UserRound aria-hidden="true" size={18} />
+            <span className="shell-identity">
+              <strong>{identity}</strong>
+              <small>
+                {auth.mode === "development" ? "DEV" : "OIDC"} ·{" "}
+                {auth.session?.clusterIds.length ?? 0} {english ? "clusters" : "个集群"}
+              </small>
+            </span>
+            <ChevronsUpDown aria-hidden="true" size={14} />
+          </>
+        }
+      >
+        <div className="shell-preferences">
+          <label>
+            {english ? "Language" : "语言"}
+            <select
+              aria-label={english ? "Language" : "语言"}
+              value={preferences.locale}
+              onChange={(event) => preferences.setLocale(event.target.value as OperatorLocale)}
+            >
+              <option value="zh-CN">中文</option>
+              <option value="en-US">EN</option>
+            </select>
+          </label>
+          <label>
+            {english ? "Time zone" : "时区"}
+            <select
+              aria-label={english ? "Time zone" : "时区"}
+              value={preferences.timeZone}
+              onChange={(event) => preferences.setTimeZone(event.target.value as OperatorTimeZone)}
+            >
+              <option value="Asia/Shanghai">UTC+8 · Shanghai</option>
+              <option value="Asia/Singapore">UTC+8 · Singapore</option>
+              <option value="UTC">UTC</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => preferences.setTheme(preferences.theme === "dark" ? "light" : "dark")}
+          >
+            {preferences.theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            {preferences.theme === "dark" ? m.lightTheme : m.darkTheme}
+          </button>
+          {auth.mode === "oidc" && (
+            <button onClick={() => void auth.signOut()} type="button">
+              <LogOut size={16} />
+              {english ? "Sign out" : "退出登录"}
+            </button>
+          )}
+        </div>
+      </ShellDisclosure>
+    </div>
+  );
 }

@@ -145,7 +145,6 @@ export function AutonomyOperationsPage() {
   return (
     <div className="page autonomy-operations-page">
       <PageHeader
-        eyebrow="Bounded autonomy / operations"
         title="自治运营与成本"
         description="用可追溯 Outcome 衡量自治质量、响应效率与模型成本；优化候选只能进入人工评审，不能在此直接发布。"
         actions={

@@ -30,7 +30,6 @@ import { useSreData } from "@/data/SreDataContext";
 import {
   ChangeClusterSelect,
   ChangeStatePanel,
-  ChangeWorkspaceNav,
 } from "@/features/change-management/ChangeWorkspace";
 import {
   changeWindowKindLabel,
@@ -105,7 +104,6 @@ export function ChangeCalendarPage() {
   return (
     <div className="page change-page">
       <PageHeader
-        eyebrow="P3-11 · CHANGE CALENDAR"
         title="维护窗口与变更日历"
         description="维护窗口允许受控排程；freeze 与 blackout 始终阻断。时间范围使用明确 IANA 时区，冲突由服务端重新校验。"
         actions={
@@ -116,7 +114,6 @@ export function ChangeCalendarPage() {
           />
         }
       />
-      <ChangeWorkspaceNav />
 
       <section className="calendar-toolbar">
         <label>
@@ -152,7 +149,6 @@ export function ChangeCalendarPage() {
         <section className="calendar-timeline-panel">
           <header>
             <div>
-              <span className="section-kicker">ABSOLUTE WINDOWS</span>
               <h2>当前时间范围</h2>
             </div>
             <Badge variant="outline">{windows.length} 个窗口</Badge>
@@ -313,7 +309,6 @@ function CreateWindowPanel({
           <CalendarPlus aria-hidden="true" size={18} />
         </span>
         <div>
-          <span className="section-kicker">NEW WINDOW</span>
           <h2>创建绝对窗口</h2>
           <p>创建后不可原地修改；调整时间需要新建窗口。</p>
         </div>

@@ -245,7 +245,6 @@ export function ModelsPage() {
   return (
     <div className="page model-governance-page">
       <PageHeader
-        eyebrow="MODEL GOVERNANCE"
         title="模型生命周期与 Provider Health"
         description="认证、提升、隔离、回滚和持续 smoke；不显示 credential、token 或完整 endpoint。"
       />

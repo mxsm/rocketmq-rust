@@ -1,0 +1,187 @@
+.operations-summary-grid,
+.operations-finding-section,
+.operations-report-toolbar,
+.action-item-card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.operations-summary-grid {
+  border-block-end: 1px solid var(--border);
+}
+
+.operations-summary-card,
+.operations-summary-card.warning {
+  min-height: auto;
+  padding: 0 1.35rem 1.15rem;
+  background: transparent;
+}
+
+.operations-summary-card:first-child { padding-inline-start: 0; }
+.operations-summary-card strong { font: 600 2.25rem/1.15 var(--font-editorial); }
+.operations-summary-card.warning strong { color: var(--warning); }
+
+.operations-finding-section > header,
+.operations-report-toolbar {
+  padding-inline: 0;
+  border-block-end: 1px solid var(--border);
+}
+
+.operations-finding-section h2,
+.action-item-heading h2 {
+  font: 600 1.4rem/1.3 var(--font-editorial);
+}
+
+.operations-finding-section header p,
+.operations-finding-list small,
+.operations-report-toolbar span {
+  font-size: 0.875rem;
+}
+
+.operations-finding-list article {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 1.15rem 0;
+}
+
+.operations-finding-list strong {
+  font: 600 1.23rem/1.35 var(--font-editorial);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.operations-finding-list p {
+  font-size: 1rem;
+  color: var(--foreground);
+}
+
+.operations-finding-list a {
+  align-self: center;
+  color: var(--primary);
+  font-size: 0.92rem;
+}
+
+.operations-finding-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.9rem;
+  margin-bottom: 0.5rem;
+  color: var(--muted-foreground);
+  font: 0.85rem var(--font-mono);
+}
+
+.operations-finding-meta .operations-severity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: auto;
+  height: auto;
+  margin: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.operations-severity::before {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.operations-severity.warning { color: var(--warning); }
+.operations-severity.error,
+.operations-severity.critical { color: var(--destructive); }
+
+.action-item-card { border-block-start: 1px solid var(--border); padding-inline: 0; }
+
+.fleet-stat-grid .health-fact > strong,
+.asset-kind-grid span {
+  font: 600 1.5rem var(--font-editorial);
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-stat-grid .health-fact.warning > strong { color: var(--warning); }
+.asset-kind-grid strong, .fleet-cluster-row { font-size: 1rem; }
+.fleet-stat-grid .health-fact > span, .fleet-cluster-header { font-size: 0.875rem; }
+
+.ask-layout .form-field textarea,
+.conversation-composer .form-field textarea {
+  font-size: 1.07rem;
+  line-height: 1.6;
+}
+
+.ask-layout .compact-activity strong,
+.conversation-question-row strong {
+  font: 600 1.14rem/1.45 var(--font-editorial);
+}
+
+.ask-layout .compact-activity small,
+.conversation-question-row span,
+.conversation-intent {
+  font-size: 0.875rem;
+}
+
+.conversation-page .conversation-live-progress { background: transparent; }
+.conversation-progress-step { border-radius: 4px; background: var(--secondary); }
+.conversation-progress-step:last-child { border-color: var(--primary); }
+.conversation-answer {
+  background: transparent;
+  border: 0;
+  border-inline-start: 2px solid var(--primary);
+  border-radius: 0;
+}
+
+/* Each message hop shares a time column, with latency at the far edge. */
+.journey-timeline {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+}
+
+.journey-timeline > li {
+  display: grid;
+  grid-template-columns: minmax(7rem, 15%) 1.6rem minmax(0, 1fr) minmax(7rem, auto);
+  align-items: start;
+  gap: 1rem;
+  padding: 0 1rem;
+  border-block-end: 1px solid var(--border);
+}
+
+.journey-timeline > li:last-child { border-block-end: 0; }
+.journey-timeline time,
+.journey-latency {
+  padding-block: 1.3rem;
+  font: 0.9rem/1.55 var(--font-mono);
+  color: var(--muted-foreground);
+}
+
+.journey-timeline .journey-marker {
+  align-self: stretch;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding-top: 1.3rem;
+  place-items: start center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.journey-marker::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  border-inline-start: 1px solid var(--border);
+}
+
+.journey-marker > svg { position: relative; background: var(--background); }
+.journey-marker.missing { color: var(--destructive); }
+.journey-hop { padding-block: 1.15rem; }
+.journey-hop header { justify-content: flex-start; gap: 0.75rem; }
+.journey-hop strong { font: 600 1.4rem/1.3 var(--font-editorial); }
+.journey-hop > span { font: 0.875rem var(--font-mono); }
+.journey-hop p { min-height: 0; font-size: 1rem; color: var(--foreground); }
+.journey-latency { text-align: end; }

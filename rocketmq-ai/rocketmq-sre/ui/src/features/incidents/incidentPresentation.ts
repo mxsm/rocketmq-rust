@@ -21,6 +21,29 @@ export interface IncidentFilters {
   query: string;
 }
 
+export function incidentDateKey(
+  updatedAt: string,
+  formatter: Intl.DateTimeFormat,
+) {
+  const time = Date.parse(updatedAt);
+  return Number.isFinite(time) ? formatter.format(time) : "";
+}
+
+export function filterIncidentInbox(
+  items: IncidentView[],
+  filters: IncidentFilters,
+  day: string,
+  formatter: Intl.DateTimeFormat,
+) {
+  const sorted = filterAndSortIncidents(items, filters);
+  return day
+    ? sorted.filter(
+        ({ incident }) =>
+          incidentDateKey(incident.updated_at, formatter) === day,
+      )
+    : sorted;
+}
+
 export interface DiagnosisAttribution {
   pack: string;
   version: string;
