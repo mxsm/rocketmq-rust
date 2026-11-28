@@ -3547,19 +3547,19 @@ mod tests {
         let harness =
             EmbeddedRequestHarness::new(dispatcher, service.task_group().clone(), Principal::new("broker-proxy"));
 
-        let response = harness
+        let forwarded_result = harness
             .dispatch(
                 None,
                 RemotingCommand::create_remoting_command(RequestCode::ConsumerSendMsgBack).set_opaque(9_701),
             )
             .await
             .expect("embedded Proxy reply");
-        let EmbeddedDispatchResult::Reply(plan) = response else {
+        let EmbeddedDispatchResult::Reply(forwarded_response) = forwarded_result else {
             panic!("forward backend must produce a reply")
         };
-        assert_eq!(plan.response_code(), ResponseCode::Success.to_i32());
+        assert_eq!(forwarded_response.response_code(), ResponseCode::Success.to_i32());
 
-        let local_response = harness
+        let local_result = harness
             .dispatch(
                 None,
                 RemotingCommand::new_request(
@@ -3575,10 +3575,10 @@ mod tests {
             )
             .await
             .expect("embedded non-backend reply");
-        let EmbeddedDispatchResult::Reply(plan) = local_response else {
+        let EmbeddedDispatchResult::Reply(local_response) = local_result else {
             panic!("original CheckClientConfig route must produce a reply")
         };
-        assert_eq!(plan.response_code(), ResponseCode::Success.to_i32());
+        assert_eq!(local_response.response_code(), ResponseCode::Success.to_i32());
         assert_eq!(drain.phase(), ProxyDrainPhase::Accepting);
 
         let mut one_way = RemotingCommand::create_remoting_command(RequestCode::ConsumerSendMsgBack).set_opaque(9_702);
