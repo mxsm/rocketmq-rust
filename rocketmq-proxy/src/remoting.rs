@@ -1050,7 +1050,7 @@ where
                 .process_for_client(broker_remoting_command, context.remote_socket_addr())
                 .await
             {
-                Ok(EmbeddedDispatchResult::Reply(plan)) => Ok(ResponseAction::Reply(plan)),
+                Ok(EmbeddedDispatchResult::Reply(response)) => Ok(ResponseAction::Reply(response)),
                 Ok(EmbeddedDispatchResult::OneWay { .. }) => Ok(ResponseAction::Reply(
                     RemotingResponse::empty_response(ResponseCode::Success as i32),
                 )),
