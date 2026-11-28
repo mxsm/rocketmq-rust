@@ -68,7 +68,7 @@ impl RequestProcessor for ClientRequestProcessor {
     #[inline]
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<ResponseAction> {
         let response = self.handle_request(request.command_mut()).await?;
-        crate::processor::response_outcome(response)
+        crate::processor::try_into_reply_action(response)
     }
 }
 

@@ -89,7 +89,7 @@ impl RequestProcessor for NameServerRequestProcessorWrapper {
                 processor.handle_request(request).await
             }
         }?;
-        response_outcome(response)
+        try_into_reply_action(response)
     }
 }
 
@@ -405,7 +405,7 @@ impl RequestProcessor for NameServerRequestProcessor {
         let response = self
             .process_command(&auth_context, original_code, request.command_mut(), broker_session)
             .await?;
-        response_outcome(response)
+        try_into_reply_action(response)
     }
 
     fn observe_response(&self, observation: ResponseObservation) {
@@ -438,7 +438,7 @@ async fn processor_response(
     }
 }
 
-pub(crate) fn response_outcome(response: Option<RemotingCommand>) -> crate::NameServerResult<ResponseAction> {
+pub(crate) fn try_into_reply_action(response: Option<RemotingCommand>) -> crate::NameServerResult<ResponseAction> {
     let Some(response) = response else {
         return Err(crate::namesrv_error::invariant("namesrv.processor.response_missing"));
     };
