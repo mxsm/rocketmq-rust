@@ -3877,10 +3877,10 @@ mod tests {
             )
             .await
             .expect("request should be rejected with a remoting response");
-        let EmbeddedDispatchResult::Reply(plan) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("drain authentication rejection must be a reply")
         };
-        assert_eq!(plan.response_code(), ResponseCode::NoPermission.to_i32());
+        assert_eq!(response.response_code(), ResponseCode::NoPermission.to_i32());
 
         let shutdown = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(shutdown.is_healthy(), "{}", shutdown.to_json());
