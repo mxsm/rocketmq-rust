@@ -250,15 +250,11 @@ impl TransactionMQProducerBuilder {
         self
     }
 
-    /// Set maximum size of transaction check thread pool
+    /// Sets the maximum number of broker-initiated transaction checks this producer
+    /// can execute concurrently.
     ///
-    /// Note: When using default Tokio Runtime with spawn_blocking, this serves as a reference.
-    /// To control actual thread count, configure the Runtime:
-    /// ```ignore
-    /// tokio::runtime::Builder::new_multi_thread()
-    ///     .max_blocking_threads(100)
-    ///     .build()
-    /// ```
+    /// The default is `1`. At startup, the minimum and maximum must both be positive,
+    /// and the maximum must be at least the minimum set by [`Self::check_thread_pool_min_size`].
     pub fn check_thread_pool_max_size(mut self, size: u32) -> Self {
         self.check_thread_pool_max_size = Some(size);
         self
