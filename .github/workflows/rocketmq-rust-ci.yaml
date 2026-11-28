@@ -611,8 +611,16 @@ jobs:
 
       # ---------- Windows ----------
       - name: Install system dependencies (Windows)
+        shell: bash
         run: |
-          choco install cmake ninja protoc -y
+          install_build_tools() {
+            choco install cmake ninja protoc -y &&
+              cmake --version && ninja --version && protoc --version
+          }
+          if ! install_build_tools; then
+            sleep 10
+            install_build_tools
+          fi
 
       - name: Use repository Rust 1.95 toolchain
         run: rustup show active-toolchain
