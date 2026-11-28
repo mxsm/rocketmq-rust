@@ -64,6 +64,10 @@ fn message_frame(magic: i32, body_crc: u32, sys_flag: i32, body: &[u8], topic: &
 fn canonical_and_legacy_decoders_match_frozen_frame() {
     let frame = frozen_message_frame();
     let canonical = message_codec::decode_message_frame(&mut frame.clone()).unwrap();
+    assert_eq!(
+        message_decoder::decode_properties(&mut frame.clone()).as_ref(),
+        Some(&canonical.properties)
+    );
     let legacy = message_decoder::decode(&mut frame.clone(), true, false, false, false, false).unwrap();
 
     assert_eq!(canonical.topic.as_str(), legacy.topic().as_str());
@@ -134,6 +138,10 @@ fn v2_topic_and_properties_string_match_canonical_frame() {
         properties,
     );
     let canonical = message_codec::decode_message_frame(&mut frame.clone()).unwrap();
+    assert_eq!(
+        message_decoder::decode_properties(&mut frame.clone()).as_ref(),
+        Some(&canonical.properties)
+    );
     let legacy = message_decoder::decode(&mut frame.clone(), true, false, false, true, true).unwrap();
 
     assert_eq!(canonical.topic.as_str(), legacy.topic().as_str());

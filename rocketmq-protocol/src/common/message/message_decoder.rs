@@ -14,7 +14,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
@@ -960,48 +959,22 @@ pub fn decode_properties(bytes: &mut Bytes) -> Option<HashMap<CheetahString, Che
     }
 
     // Read the body size stored as an int.
-    let body_size = BigEndian::read_i32(&bytes[body_size_position..body_size_position + 4]) as usize;
-
-    // Compute the topic length position.
+    let body_size = usize::try_from(BigEndian::read_i32(&bytes[body_size_position..body_size_position + 4])).ok()?;
     let topic_length_position = body_size_position + 4 + body_size;
-    if bytes.len() < topic_length_position {
+    if bytes.len() < topic_length_position + version.get_topic_length_size() {
         return None;
     }
-
-    // Create a Cursor over the slice starting at the topic length position.
-    let slice = &bytes[topic_length_position..];
-    let _cursor = Cursor::new(slice);
-    let topic_length_size = version.get_topic_length_size();
     bytes.advance(topic_length_position);
     let topic_length = version.get_topic_length(bytes);
 
-    // Calculate the properties position.
-    let properties_position = topic_length_position + topic_length_size + topic_length;
-    if bytes.len() < properties_position + 2 {
+    // The cursor now points to the topic, followed by the properties length and payload.
+    let (length, properties) = bytes.get(topic_length..)?.split_first_chunk::<2>()?;
+    let length = usize::try_from(i16::from_be_bytes(*length)).ok()?;
+    if length == 0 {
         return None;
     }
-
-    // Read a short (2 bytes) as propertiesLength.
-    let properties_length = BigEndian::read_i16(&bytes[properties_position..properties_position + 2]);
-
-    // Advance past the short value.
-    let properties_start = properties_position + 2;
-    if properties_length > 0 {
-        let end = properties_start + (properties_length as usize);
-        if bytes.len() < end {
-            return None;
-        }
-        let properties_bytes = &bytes[properties_start..end];
-        if let Ok(properties_string) = String::from_utf8(properties_bytes.to_vec()) {
-            Some(string_to_message_properties(Some(&CheetahString::from_string(
-                properties_string,
-            ))))
-        } else {
-            None
-        }
-    } else {
-        None
-    }
+    let text = str::from_utf8(properties.get(..length)?).ok()?;
+    Some(str_to_message_properties(Some(text)))
 }
 
 #[cfg(test)]
