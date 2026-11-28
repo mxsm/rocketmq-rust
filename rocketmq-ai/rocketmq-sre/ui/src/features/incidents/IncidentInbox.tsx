@@ -1,175 +1,242 @@
-import { ChevronRight, SearchCheck } from "lucide-react";
+import { ArrowRight, Search } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import type { IncidentView } from "@/api/types";
-import { formatTime } from "@/components/Phase1Primitives";
-import { Badge } from "@/components/ui/badge";
+import { useIncidentInboxMessages } from "@/i18n/incidentInboxMessages";
+import { useOperatorPreferences } from "@/preferences/OperatorPreferences";
 
 import {
   incidentIsStale,
-  incidentStatusLabels,
   latestDiagnosisIsPartial,
+  type IncidentFilters,
 } from "./incidentPresentation";
+import "./incidentInbox.css";
 
-export interface IncidentInboxFiltersProps {
-  severity: string;
-  status: string;
-  owner: string;
-  query: string;
+interface FiltersProps {
+  filters: IncidentFilters;
+  change: (key: keyof IncidentFilters, value: string) => void;
   owners: string[];
-  onSeverityChange: (value: string) => void;
-  onStatusChange: (value: string) => void;
-  onOwnerChange: (value: string) => void;
-  onQueryChange: (value: string) => void;
+  day: string;
+  days: string[];
+  setDay: (value: string) => void;
+  clusterSelect: ReactNode;
+  meta: ReactNode;
 }
 
 export function IncidentInboxFilters({
-  severity,
-  status,
-  owner,
-  query,
+  filters,
+  change,
   owners,
-  onSeverityChange,
-  onStatusChange,
-  onOwnerChange,
-  onQueryChange,
-}: IncidentInboxFiltersProps) {
+  day,
+  days,
+  setDay,
+  clusterSelect,
+  meta,
+}: FiltersProps) {
+  const m = useIncidentInboxMessages();
+  const { timeZone } = useOperatorPreferences();
   return (
-    <div
-      aria-label="Incident Inbox 筛选"
-      className="operator-filter-bar incident-filter-bar"
-    >
-      <label className="operator-filter">
-        <span>严重度</span>
-        <select
-          aria-label="严重度筛选"
-          className="native-select"
-          onChange={(event) => onSeverityChange(event.target.value)}
-          value={severity}
-        >
-          <option value="all">全部严重度</option>
-          <option value="critical">critical</option>
-          <option value="error">error</option>
-          <option value="warning">warning</option>
-          <option value="info">info</option>
-        </select>
-      </label>
-      <label className="operator-filter">
-        <span>状态</span>
-        <select
-          aria-label="Incident 状态筛选"
-          className="native-select"
-          onChange={(event) => onStatusChange(event.target.value)}
-          value={status}
-        >
-          <option value="all">全部状态</option>
-          {Object.entries(incidentStatusLabels).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="operator-filter">
-        <span>Owner</span>
-        <select
-          aria-label="Owner 筛选"
-          className="native-select"
-          onChange={(event) => onOwnerChange(event.target.value)}
-          value={owner}
-        >
-          <option value="all">全部 Owner</option>
-          <option value="unassigned">未分派</option>
-          {owners.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="operator-search">
-        <SearchCheck aria-hidden="true" size={15} />
-        <input
-          aria-label="搜索 Incident"
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="cluster / resource / symptom"
-          type="search"
-          value={query}
-        />
-      </label>
-    </div>
+    <section className="incident-inbox-filters" aria-label={m.incidents}>
+      <div className="incident-inbox-fields">
+        <div className="incident-inbox-field">
+          <span>{m.scope}</span>
+          {clusterSelect}
+        </div>
+        <label className="incident-inbox-field">
+          <span>{m.status}</span>
+          <select
+            className="native-select"
+            value={filters.status}
+            onChange={(event) => change("status", event.target.value)}
+          >
+            <option value="all">{m.allStatus}</option>
+            {Object.entries(m.statusLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="incident-inbox-field">
+          <span>{m.severity}</span>
+          <select
+            className="native-select"
+            value={filters.severity}
+            onChange={(event) => change("severity", event.target.value)}
+          >
+            <option value="all">{m.allSeverity}</option>
+            {Object.entries(m.severityLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="incident-inbox-field">
+          <span>{m.owner}</span>
+          <select
+            className="native-select"
+            value={filters.owner}
+            onChange={(event) => change("owner", event.target.value)}
+          >
+            <option value="all">{m.allOwners}</option>
+            <option value="unassigned">{m.unassigned}</option>
+            {owners.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="incident-inbox-field incident-inbox-date-field">
+          <span>
+            {m.dates} · {timeZone}
+          </span>
+          <select
+            className="native-select"
+            value={day}
+            onChange={(event) => setDay(event.target.value)}
+          >
+            <option value="">{m.anyDate}</option>
+            {day && !days.includes(day) && <option>{day}</option>}
+            {days.map((item) => (
+              <option key={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="incident-inbox-controls">
+        <label className="incident-inbox-search">
+          <Search size={15} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label={m.search}
+            placeholder={m.searchHint}
+            value={filters.query}
+            onChange={(event) => change("query", event.target.value)}
+          />
+        </label>
+        <div className="incident-inbox-controls-meta">{meta}</div>
+      </div>
+    </section>
   );
 }
 
-export function IncidentInboxCards({
+export function IncidentInboxTimeline({
   incidents,
   now,
 }: {
   incidents: IncidentView[];
   now: Date;
 }) {
+  const m = useIncidentInboxMessages();
+  const { locale, timeZone, formatDateTime } = useOperatorPreferences();
+  const clock = useMemo(
+    () =>
+      new Intl.DateTimeFormat(locale, {
+        minute: "2-digit",
+        hour: "2-digit",
+        hourCycle: "h23",
+        timeZone,
+      }),
+    [locale, timeZone],
+  );
+  const date = useMemo(
+    () =>
+      new Intl.DateTimeFormat(locale, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        timeZone,
+      }),
+    [locale, timeZone],
+  );
   return (
-    <div className="record-grid">
+    <ol className="incident-inbox-timeline" aria-label={m.incidents}>
       {incidents.map((view) => {
-        const partial = latestDiagnosisIsPartial(view);
-        const stale = incidentIsStale(view, now);
+        const { incident } = view;
+        const severity = incident.severity;
+        const timestamp = Date.parse(incident.updated_at);
+        const valid = Number.isFinite(timestamp);
         return (
-          <Link
-            className="record-card incident-inbox-card"
-            key={view.incident.id}
-            to={`/incidents/${view.incident.id}`}
+          <li
+            key={incident.id}
+            className="incident-inbox-entry"
+            data-severity={severity ?? "unknown"}
           >
-            <header>
-              <div className="incident-badge-row">
-                <Badge
-                  variant={
-                    view.incident.severity === "critical"
-                      ? "destructive"
-                      : view.incident.severity === "error"
-                        ? "warning"
-                        : "outline"
-                  }
+            <div className="incident-inbox-clock">
+              {valid ? (
+                <time
+                  dateTime={incident.updated_at}
+                  title={formatDateTime(incident.updated_at)}
                 >
-                  {view.incident.severity ?? "warning"}
-                </Badge>
-                <Badge variant="outline">
-                  {incidentStatusLabels[view.incident.status]}
-                </Badge>
-                {partial && <Badge variant="warning">partial</Badge>}
-                {stale && <Badge variant="secondary">stale</Badge>}
+                  <b>{clock.format(timestamp)}</b>
+                  <small>{date.format(timestamp)}</small>
+                </time>
+              ) : (
+                <span>{m.unknown}</span>
+              )}
+            </div>
+            <div className="incident-inbox-body">
+              <h2>
+                <span className="incident-inbox-severity">
+                  {severity ? m.severityLabels[severity] : m.unknown}
+                </span>
+                {incident.title}
+              </h2>
+              <div className="incident-inbox-flags">
+                <span>{m.statusLabels[incident.status]}</span>
+                {latestDiagnosisIsPartial(view) && (
+                  <span className="incident-inbox-caution">{m.partial}</span>
+                )}
+                {incidentIsStale(view, now) && (
+                  <span className="incident-inbox-caution">{m.stale}</span>
+                )}
               </div>
-              <ChevronRight size={15} />
-            </header>
-            <h3>{view.incident.title}</h3>
-            <p>{view.incident.summary ?? "等待诊断摘要。"}</p>
-            <dl className="incident-inbox-meta">
-              <div>
-                <dt>Cluster</dt>
-                <dd>{view.incident.cluster_id}</dd>
+              <div className="incident-inbox-counts">
+                <span>
+                  {m.alerts} <b>{incident.occurrence_count}</b>
+                </span>
+                <span>
+                  {m.revisions} <b>{view.diagnosis_revisions.length}</b>
+                </span>
               </div>
-              <div>
-                <dt>Resource</dt>
-                <dd>{view.incident.resource ?? "未绑定"}</dd>
-              </div>
-              <div>
-                <dt>Symptom</dt>
-                <dd>{view.incident.symptom_family ?? "未分类"}</dd>
-              </div>
-              <div>
-                <dt>Owner</dt>
-                <dd>{view.incident.owner ?? "未分派"}</dd>
-              </div>
-            </dl>
-            <footer>
-              <span>
-                合并告警 {view.incident.occurrence_count} ·{" "}
-                {view.diagnosis_revisions.length} revisions
-              </span>
-              <span>{formatTime(view.incident.updated_at)}</span>
-            </footer>
-          </Link>
+              <p>{incident.summary ?? m.noSummary}</p>
+              {(incident.resource || incident.symptom_family) && (
+                <div className="incident-inbox-resources">
+                  {incident.resource && (
+                    <span>
+                      {m.resource} <b>{incident.resource}</b>
+                    </span>
+                  )}
+                  {incident.symptom_family && (
+                    <span>
+                      {m.symptom} <b>{incident.symptom_family}</b>
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="incident-inbox-owner">
+              <span>{m.owner}</span>
+              <strong>{incident.owner || m.unassigned}</strong>
+              <small>
+                {m.updated} · {valid ? clock.format(timestamp) : m.unknown}{" "}
+                {timeZone}
+              </small>
+              <Link
+                className="incident-inbox-detail"
+                to={`/incidents/${encodeURIComponent(incident.id)}`}
+                aria-label={`${m.details} · ${incident.title}`}
+              >
+                {m.details}
+                <ArrowRight size={16} aria-hidden="true" />
+              </Link>
+            </div>
+          </li>
         );
       })}
-    </div>
+    </ol>
   );
 }

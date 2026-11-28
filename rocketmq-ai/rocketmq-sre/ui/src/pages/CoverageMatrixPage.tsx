@@ -103,7 +103,6 @@ function CoverageContent({
   return (
     <div className="page coverage-page">
       <PageHeader
-        eyebrow="CAPABILITY & EVIDENCE QUALITY"
         title={m.title}
         description={m.description}
         actions={

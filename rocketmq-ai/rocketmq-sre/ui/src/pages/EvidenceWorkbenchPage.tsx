@@ -82,7 +82,6 @@ export function EvidenceWorkbenchPage() {
   return (
     <div className="page evidence-page">
       <PageHeader
-        eyebrow="CANONICAL EVIDENCE"
         title="集群证据链"
         description="按来源顺序展示只读查询结果；兼容性由最薄弱证据决定。"
         actions={

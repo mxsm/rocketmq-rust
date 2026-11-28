@@ -39,7 +39,7 @@ export function KnowledgePage() {
   const focus = focusOwner.current.active ? rawFocus : "";
   const authorized = !!session && session.clusterIds.includes(scope.clusterId);
   return <div className="page knowledge-page">
-    <PageHeader eyebrow="REVIEWED RETRIEVAL" title={t("title")} description={t("description")} actions={
+    <PageHeader title={t("title")} description={t("description")} actions={
       <ClusterScopeSelect clusters={scope.clusters} value={scope.clusterId} onChange={scope.setClusterId} />
     } />
     {!authorized ? <p role="status">{t("noScope")}</p> : <KnowledgeWorkspace key={`${owner}:${focus}`} api={api} cluster={scope.clusterId} tenant={session.tenantId} roles={session.roles} allowedClusters={session.clusterIds} focus={focus} onSwitchCluster={(cluster) => {
@@ -108,9 +108,13 @@ function KnowledgeWorkspace({ api, tenant, cluster, roles, allowedClusters, focu
         {(list.data?.next_cursor || list.data?.partial) && <p className="knowledge-notice">{t("listBound")}</p>}
         {list.data?.next_cursor === undefined && <p className="knowledge-notice">{t("listUnknown")}</p>}
         {rows.length === 0 && <p>{t("empty")}</p>}
-        <div className="knowledge-cards">{rows.map((item) => <article key={item.id} className="knowledge-card">
-          <KnowledgeStatus item={item} /><h3>{item.title}</h3><KnowledgeMetadata item={item} />
-          <Button variant="outline" onClick={() => setSelected(item.id)}>{t("detail")}</Button>
+        <div className="knowledge-records">{rows.map((item) => <article key={item.id} className="knowledge-record">
+          <div className="knowledge-record-heading">
+            <KnowledgeStatus item={item} />
+            <h3>{item.title}</h3>
+            <Button variant="outline" onClick={() => setSelected(item.id)}>{t("detail")}</Button>
+          </div>
+          <KnowledgeMetadata item={item} />
         </article>)}</div>
       </>}
     </section>

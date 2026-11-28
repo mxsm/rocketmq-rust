@@ -30,7 +30,6 @@ import { resourcePath } from "@/context/workspaceScope";
 import { useOptionalWorkspaceScope } from "@/context/WorkspaceScopeContext";
 import { ApprovalPanel } from "@/features/approvals/ApprovalPanel";
 import { AuditTimeline } from "@/features/audit/AuditTimeline";
-import { ChangeWorkspaceNav } from "@/features/change-management/ChangeWorkspace";
 import { SubmissionRecoveryPanel } from "@/features/executions/SubmissionRecoveryPanel";
 import { useExecutionSubmission } from "@/features/executions/useExecutionSubmission";
 import { PlanDetail } from "@/features/plans/PlanDetail";
@@ -78,10 +77,8 @@ export function ChangeCenterPage() {
     <div className="page">
       <PageHeader
         description="从不可变计划开始，完成异构 Critic、人工审批、受围栏执行、验证回滚和审计追踪。"
-        eyebrow="SUPERVISED CHANGE CONTROL"
         title="变更中心"
       />
-      <ChangeWorkspaceNav />
       <section className="change-guardrail">
         <ShieldAlert size={18} />
         <div>
@@ -91,7 +88,7 @@ export function ChangeCenterPage() {
         <code>R1/R2 · HUMAN APPROVAL</code>
       </section>
       <section className="change-entry-grid">
-        <article className="change-entry-card workspace-entry">
+        <article className="change-entry-card">
           <header>
             <BookOpenCheck size={18} />
             <div>
@@ -103,7 +100,7 @@ export function ChangeCenterPage() {
             打开 Runbook
           </Button>
         </article>
-        <article className="change-entry-card workspace-entry">
+        <article className="change-entry-card">
           <header>
             <CalendarRange size={18} />
             <div>
@@ -115,7 +112,7 @@ export function ChangeCenterPage() {
             打开变更日历
           </Button>
         </article>
-        <article className="change-entry-card workspace-entry">
+        <article className="change-entry-card">
           <header>
             <Route size={18} />
             <div>
@@ -278,7 +275,6 @@ function PlanPageSession({ planId, auth, api, identityKey }: ReturnType<typeof u
           </Button>
         }
         description={`Plan ${shortDigest(view.plan.id)} · 绑定 Incident ${shortDigest(view.plan.incident_id)}`}
-        eyebrow="PLAN / APPROVAL"
         title="变更计划详情"
       />
       {api && <PlanActionReadiness view={view} api={api} subject={auth.session?.subject ?? ""}
@@ -376,7 +372,6 @@ export function AuditPageView() {
     <div className="page">
       <PageHeader
         description="完整展示人、策略、计划、Evidence、执行结果与人工隔离操作，不显示凭据或目标配置全文。"
-        eyebrow="IMMUTABLE AUDIT"
         title="审计详情"
       />
       {filtered && <p className="inline-alert warning" role="status">仅展示当前授权租户和集群内的审计记录；其他范围的记录已过滤。</p>}
@@ -485,7 +480,6 @@ export function QuarantinePageView() {
           </select>
         }
         description="Quarantine 独立于临时锁持久化；解除必须提交原因和验证 Evidence。"
-        eyebrow="MANUAL TAKEOVER"
         title="资源隔离与人工接管"
       />
       {invalidLegacyCluster && <p className="inline-alert warning" role="alert">旧链接中的集群范围无效或未授权，请选择授权集群。</p>}
@@ -648,7 +642,6 @@ function LoadState({
     <div className="page">
       <PageHeader
         description="正在从 Control Plane 读取受 scope 保护的数据。"
-        eyebrow="SUPERVISED CHANGE CONTROL"
         title={title}
       />
       <div className="state-panel">

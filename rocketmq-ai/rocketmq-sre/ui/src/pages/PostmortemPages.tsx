@@ -93,7 +93,6 @@ export function IncidentPostmortemPage() {
         </Link>
       </Button>
       <PageHeader
-        eyebrow="POSTMORTEM"
         title="生成证据化复盘草稿"
         description="AI 只整理 Incident、Evidence、诊断 Revision 和时间线；草稿必须经人工确认才能发布为知识。"
       />
@@ -239,7 +238,6 @@ export function PostmortemDetailPage() {
         </Link>
       </Button>
       <PageHeader
-        eyebrow="POSTMORTEM WORKSPACE"
         title={latest?.summary ?? "复盘工作区"}
         description="AI 草稿、人工 Revision、Action Item、复发关联和知识发布位于独立 SRE 元数据边界。"
         actions={
@@ -463,7 +461,6 @@ export function ActionItemsPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="CONTINUOUS IMPROVEMENT"
         title="Action Items"
         description="分派、开始、阻塞、完成和重新打开均记录为 SRE 元数据事件；完成必须提供验证或 Evidence。"
         actions={

@@ -22,7 +22,6 @@ import { useSreData } from "@/data/SreDataContext";
 import {
   ChangeClusterSelect,
   ChangeStatePanel,
-  ChangeWorkspaceNav,
   RunbookDiff,
 } from "@/features/change-management/ChangeWorkspace";
 import { formatChangeTimestamp } from "@/features/change-management/changePresentation";
@@ -115,7 +114,6 @@ export function RunbooksPage() {
   return (
     <div className="page change-page">
       <PageHeader
-        eyebrow="P3-11 · COMPOSITE RUNBOOKS"
         title="Runbook 库与版本差异"
         description="审阅组合风险、类型化动作、依赖、人工门与补偿边。Runbook 不能包含 shell、raw RequestCode 或任意 patch。"
         actions={
@@ -126,7 +124,6 @@ export function RunbooksPage() {
           />
         }
       />
-      <ChangeWorkspaceNav />
 
       {loading && runbooks.length === 0 ? (
         <ChangeStatePanel state="loading" title="正在加载 Runbook 库" />
@@ -142,7 +139,6 @@ export function RunbooksPage() {
         <div className="runbook-workspace">
           <aside className="runbook-library">
             <header>
-              <span className="section-kicker">LIBRARY</span>
               <strong>{families.size} 个 Runbook</strong>
             </header>
             <div className="runbook-library-list">
@@ -172,7 +168,6 @@ export function RunbooksPage() {
           <section className="runbook-inspector">
             <header className="runbook-inspector-header">
               <div>
-                <span className="section-kicker">VERSION REVIEW</span>
                 <h2>{after?.name}</h2>
                 <p>{after?.description}</p>
               </div>
@@ -269,7 +264,6 @@ function RunbookSteps({ runbook }: { runbook: RunbookDefinition }) {
     <section className="runbook-steps-panel">
       <header>
         <div>
-          <span className="section-kicker">TYPED STEPS</span>
           <h2>串行步骤与人工门</h2>
         </div>
         <Badge variant="outline">默认串行</Badge>

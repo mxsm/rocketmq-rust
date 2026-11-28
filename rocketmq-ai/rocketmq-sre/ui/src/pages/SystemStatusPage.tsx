@@ -45,7 +45,6 @@ export function SystemStatusPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="SYSTEM STATUS"
         title="系统状态"
         description="查看 Control Plane、持久化、协议边界，以及 Model Gateway 的真实运行配置和健康状态。"
       />

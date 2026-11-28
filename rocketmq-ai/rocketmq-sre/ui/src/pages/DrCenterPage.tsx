@@ -104,7 +104,6 @@ export function DrCenterPage() {
           </EnterpriseBoundary>
         }
         description="统一查看 AI SRE 自身与 RocketMQ 的恢复计划、RTO/RPO、人工确认点、清理状态、Evidence 和跟进 Action Item。"
-        eyebrow="RESILIENCE / DR CENTER"
         title="灾备与恢复中心"
       />
 

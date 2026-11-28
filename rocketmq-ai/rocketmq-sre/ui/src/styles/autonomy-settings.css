@@ -20,7 +20,7 @@
   color: var(--muted-foreground);
   border: 1px dashed var(--border);
   border-radius: var(--radius);
-  background: #0b0b0b;
+  background: var(--card);
 }
 
 .autonomy-settings-select-cluster > svg {
@@ -39,7 +39,7 @@
 }
 
 .autonomy-settings-select-cluster span {
-  font-size: 10px;
+  font-size: 0.93rem;
   line-height: 1.6;
 }
 
@@ -61,12 +61,8 @@
   min-height: 66px;
   justify-content: space-between;
   gap: 20px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background:
-    linear-gradient(120deg, rgb(36 63 44 / 18%), transparent 40%),
-    var(--card);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .autonomy-settings-header > div {
@@ -87,13 +83,14 @@
 
 .autonomy-settings-header strong {
   color: var(--foreground);
-  font-size: 13px;
+  font-family: var(--font-editorial);
+  font-size: 1.45rem;
 }
 
 .autonomy-settings-header p {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: 0.93rem;
   line-height: 1.5;
 }
 
@@ -103,10 +100,7 @@
   height: 34px;
   flex: 0 0 34px;
   place-items: center;
-  color: var(--success);
-  border: 1px solid #214c27;
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--success-muted);
+  color: var(--muted-foreground);
 }
 
 .autonomy-settings-success,
@@ -118,19 +112,19 @@
   min-height: 38px;
   padding: 8px 12px;
   border-radius: var(--radius);
-  font-size: 10px;
+  font-size: 0.93rem;
 }
 
 .autonomy-settings-success {
   color: var(--success);
-  border: 1px solid #214c27;
+  border: 1px solid var(--success-border);
   background: var(--success-muted);
 }
 
 .autonomy-settings-warning,
 .autonomy-editor-error {
   color: var(--warning);
-  border: 1px solid #4b4118;
+  border: 1px solid var(--warning-border);
   background: var(--warning-muted);
 }
 
@@ -145,10 +139,8 @@
   display: grid;
   min-width: 0;
   gap: 12px;
-  padding: 15px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--border);
 }
 
 .autonomy-scope-card > header,
@@ -177,7 +169,7 @@
 .autonomy-editor > header strong {
   overflow: hidden;
   color: var(--foreground);
-  font-size: 11px;
+  font-size: 1rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -186,7 +178,7 @@
 .autonomy-editor > header span {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 0.85rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -200,16 +192,16 @@
   padding: 9px 11px;
   border: 1px solid var(--border-subtle);
   border-radius: calc(var(--radius) - 2px);
-  background: #0b0b0b;
+  background: var(--card);
 }
 
 .autonomy-scope-status strong {
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .autonomy-scope-status span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -228,12 +220,12 @@
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 2px);
   background: var(--secondary);
-  font-size: 8px;
+  font-size: 0.85rem;
 }
 
 .autonomy-scope-safety > .safe {
   color: var(--success);
-  border-color: #214c27;
+  border-color: var(--success-border);
   background: var(--success-muted);
 }
 
@@ -244,7 +236,7 @@
 
 .autonomy-scope-safety > .blocked {
   color: var(--warning);
-  border-color: #4b4118;
+  border-color: var(--warning-border);
   background: var(--warning-muted);
 }
 
@@ -262,7 +254,7 @@
   gap: 4px;
   padding: 9px;
   border-right: 1px solid var(--border-subtle);
-  background: #0c0c0c;
+  background: var(--card);
 }
 
 .autonomy-qualification-grid > div:last-child {
@@ -272,13 +264,13 @@
 .autonomy-qualification-grid span {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 0.85rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .autonomy-qualification-grid strong {
-  font-size: 11px;
+  font-size: 1rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -299,10 +291,10 @@
   overflow: auto;
   gap: 14px;
   padding: 16px;
-  border: 1px solid #3c3c3c;
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #101010;
-  box-shadow: 0 22px 70px rgb(0 0 0 / 65%);
+  background: var(--popover);
+  box-shadow: var(--shadow-sm);
 }
 
 .autonomy-editor > header {
@@ -324,7 +316,7 @@
   display: grid;
   gap: 6px;
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 0.85rem;
 }
 
 .autonomy-editor .input,
@@ -335,9 +327,9 @@
   border: 1px solid var(--input);
   border-radius: calc(var(--radius) - 2px);
   outline: none;
-  background: #090909;
+  background: var(--background);
   font: inherit;
-  font-size: 10px;
+  font-size: 0.93rem;
 }
 
 .autonomy-editor .input,
@@ -355,12 +347,13 @@
 .autonomy-editor .input:focus-visible,
 .autonomy-editor textarea:focus-visible {
   border-color: var(--ring);
-  box-shadow: 0 0 0 2px rgb(212 212 212 / 10%);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .autonomy-editor label small {
-  color: #707070;
-  font-size: 8px;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
 }
 
 .autonomy-editor-reason small {
@@ -373,8 +366,8 @@
   align-items: start;
   gap: 8px !important;
   padding: 10px;
-  color: #c9b973 !important;
-  border: 1px solid #4b4118;
+  color: var(--warning) !important;
+  border: 1px solid var(--warning-border);
   border-radius: calc(var(--radius) - 2px);
   background: var(--warning-muted);
   line-height: 1.55;
@@ -382,7 +375,7 @@
 
 .autonomy-owner-confirmation input {
   margin-top: 2px;
-  accent-color: var(--success);
+  accent-color: var(--action-fill);
 }
 
 .autonomy-editor > footer {

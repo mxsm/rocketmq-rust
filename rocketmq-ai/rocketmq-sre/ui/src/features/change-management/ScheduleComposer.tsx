@@ -207,7 +207,6 @@ export function ScheduleComposer({
           <Plus aria-hidden="true" size={18} />
         </span>
         <div>
-          <span className="section-kicker">SCHEDULE COMPOSER</span>
           <h2>创建受控排程</h2>
           <p>先预演，再创建；两次都由服务端执行同一冲突校验。</p>
         </div>

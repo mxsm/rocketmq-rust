@@ -1,0 +1,299 @@
+.incident-inbox-page {
+  --inbox-rule: var(--border);
+  gap: 0;
+  min-width: 0;
+  color: var(--foreground);
+}
+
+.incident-inbox-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem 2rem;
+  padding-block: 0.35rem 1.45rem;
+  border-bottom: 1px solid var(--inbox-rule);
+}
+
+.incident-inbox-heading h1,
+.incident-inbox-entry h2,
+.incident-inbox-owner strong,
+.incident-inbox-heading-date strong {
+  font-family: var(--font-editorial, Georgia, "Songti SC", SimSun, serif);
+}
+
+.incident-inbox-heading h1 {
+  font-size: var(--page-title-size);
+  line-height: 1.1;
+  margin: 0;
+  letter-spacing: -0.045em;
+}
+
+.incident-inbox-heading-date {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 0.35rem 0.7rem;
+}
+
+.incident-inbox-heading-date small,
+.incident-inbox-field > span,
+.incident-inbox-owner > span,
+.incident-inbox-owner small,
+.incident-inbox-clock small,
+.incident-inbox-controls-meta,
+.incident-inbox-resources {
+  color: var(--muted-foreground);
+}
+
+.incident-inbox-heading-date strong {
+  font-size: clamp(1.05rem, 1.85vw, 1.7rem);
+}
+.incident-inbox-heading-date span {
+  color: var(--primary);
+  font-size: 0.92rem;
+}
+
+.incident-inbox-filters {
+  padding-block: 1.15rem 0.8rem;
+  border-bottom: 1px solid var(--inbox-rule);
+}
+.incident-inbox-fields {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+.incident-inbox-field {
+  display: grid;
+  min-width: 0;
+  gap: 0.45rem;
+}
+.incident-inbox-field > span {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.incident-inbox-field .native-select,
+.incident-inbox-field .cluster-select {
+  width: 100%;
+  min-width: 0;
+  height: 2.65rem;
+}
+.incident-inbox-date-field {
+  border-left: 1px solid var(--inbox-rule);
+  padding-left: 0.8rem;
+}
+.incident-inbox-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.95rem;
+}
+.incident-inbox-search {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted-foreground);
+  min-width: 0;
+}
+.incident-inbox-search input {
+  color: var(--foreground);
+  background: transparent;
+  border: 0;
+  min-width: 0;
+  max-width: 100%;
+  font: inherit;
+}
+.incident-inbox-search input::placeholder {
+  color: var(--muted-foreground);
+}
+.incident-inbox-search:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.incident-inbox-search input:focus {
+  outline: none;
+}
+.incident-inbox-controls-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  font-size: 0.82rem;
+}
+.incident-inbox-timeline {
+  padding: 0;
+  margin: 0.5rem 0 0;
+  list-style: none;
+}
+.incident-inbox-entry {
+  --severity-color: var(--info);
+  display: grid;
+  grid-template-columns: minmax(5.6rem, 0.65fr) minmax(0, 4.6fr) minmax(
+      12rem,
+      1.5fr
+    );
+  border-bottom: 1px solid var(--inbox-rule);
+}
+.incident-inbox-entry[data-severity="critical"],
+.incident-inbox-entry[data-severity="error"] {
+  --severity-color: var(--destructive);
+}
+.incident-inbox-entry[data-severity="warning"] {
+  --severity-color: var(--warning);
+}
+.incident-inbox-entry[data-severity="unknown"] {
+  --severity-color: var(--muted-foreground);
+}
+.incident-inbox-clock {
+  padding: 2.75rem 0.9rem 1rem 0;
+}
+.incident-inbox-clock time {
+  display: grid;
+  gap: 0.3rem;
+}
+.incident-inbox-clock b {
+  font-family: var(--font-mono, Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(1.18rem, 1.8vw, 1.7rem);
+  line-height: 1.25;
+}
+.incident-inbox-clock small {
+  font-size: 0.87rem;
+  overflow-wrap: anywhere;
+}
+.incident-inbox-body {
+  position: relative;
+  min-width: 0;
+  border-left: 1px solid var(--inbox-rule);
+  padding: 2.6rem clamp(1rem, 2.4vw, 2.5rem);
+}
+.incident-inbox-body::before {
+  content: "";
+  position: absolute;
+  left: -0.36rem;
+  top: 3.2rem;
+  width: 0.64rem;
+  height: 0.64rem;
+  background: var(--severity-color);
+  border-radius: 50%;
+}
+.incident-inbox-entry h2 {
+  font-size: clamp(1.25rem, 1.8vw, 1.85rem);
+  line-height: 1.35;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.incident-inbox-severity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.83em;
+  color: var(--severity-color);
+  padding-right: 0.65rem;
+  margin-right: 0.65rem;
+  border-right: 1px solid var(--inbox-rule);
+}
+.incident-inbox-severity::before {
+  content: "";
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 2px;
+  background: currentColor;
+}
+.incident-inbox-flags,
+.incident-inbox-counts,
+.incident-inbox-resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.85rem;
+}
+.incident-inbox-flags {
+  margin-top: 0.75rem;
+}
+.incident-inbox-flags > span {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+.incident-inbox-flags > .incident-inbox-caution {
+  background: var(--warning-muted);
+  color: var(--warning);
+}
+.incident-inbox-counts {
+  margin-top: 1rem;
+  font-size: 1.08rem;
+}
+.incident-inbox-counts > span + span {
+  border-left: 1px solid var(--inbox-rule);
+  padding-left: 0.85rem;
+}
+.incident-inbox-body p {
+  font-size: clamp(1.08rem, 1.15vw, 1.14rem);
+  line-height: 1.65;
+  margin: 0.55rem 0 0;
+  overflow-wrap: anywhere;
+}
+.incident-inbox-resources {
+  font-size: 0.9rem;
+  margin-top: 0.55rem;
+  overflow-wrap: anywhere;
+}
+.incident-inbox-resources b {
+  font-weight: 500;
+}
+.incident-inbox-owner {
+  align-self: start;
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+  gap: 0.42rem;
+  margin: 2.65rem 0;
+  padding-left: clamp(0.85rem, 1.8vw, 1.65rem);
+  border-left: 1px solid var(--inbox-rule);
+}
+.incident-inbox-owner strong {
+  font-size: 1.16rem;
+  overflow-wrap: anywhere;
+}
+.incident-inbox-owner > span,
+.incident-inbox-owner small {
+  font-size: 0.9rem;
+}
+.incident-inbox-detail {
+  display: inline-flex;
+  width: min(100%, 13rem);
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  text-decoration: none;
+  border-radius: var(--radius);
+  padding: 0.55rem 0.9rem;
+  margin-top: 0.35rem;
+  font-weight: 650;
+  color: var(--action-ink, var(--primary-foreground));
+  background: var(--action-fill, var(--primary));
+}
+.incident-inbox-detail:hover {
+  background: var(--action-hover, var(--action-fill));
+  text-decoration: underline;
+}
+.incident-inbox-detail:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+@media (max-width: 1100px) {
+  .incident-inbox-fields {
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  }
+  .incident-inbox-entry {
+    grid-template-columns: 5rem minmax(0, 1fr) minmax(9.5rem, 25%);
+  }
+}

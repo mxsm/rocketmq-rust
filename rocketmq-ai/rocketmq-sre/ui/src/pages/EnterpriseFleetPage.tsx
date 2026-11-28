@@ -100,7 +100,6 @@ export function EnterpriseFleetPage() {
   return (
     <div className="page enterprise-page fleet-command-page">
       <PageHeader
-        eyebrow="ENTERPRISE FLEET / COMMAND DECK"
         title="Fleet 全局态势"
         description="按 Tenant、Region 与 Cluster 汇总 100 集群状态；查询条件可通过 URL 分享，批量操作继续受配额、审批和 Agent 围栏约束。"
         actions={

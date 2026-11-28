@@ -107,7 +107,6 @@ export function FleetCompliancePage() {
           </EnterpriseBoundary>
         }
         description="把组件版本、Feature/Config digest、健康状态与模板偏差放在同一只读视图，明确 missing、exception 与待处置项。"
-        eyebrow="FLEET / ASSET & COMPLIANCE"
         title="资产与合规"
       />
 

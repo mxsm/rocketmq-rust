@@ -59,7 +59,7 @@ function ExecutionSession({ executionId, auth, api }: ReturnType<typeof useSuper
   const error = resource.error instanceof ExecutionScopeError ? m.mismatch :
     resource.error instanceof ApiError && [401, 403, 404].includes(resource.error.status) ? m.forbidden : resource.error ? m.readError : undefined;
   if (!view) return <div className="page">
-    <PageHeader eyebrow="EXECUTION / OBSERVATION" title={m.title} description={m.introduction} />
+    <PageHeader title={m.title} description={m.introduction} />
     {error ? <p role="alert" className="inline-alert warning">{error}</p> : <p role="status">{m.loading}</p>}
     <Button disabled={resource.loading} variant="outline" onClick={() => void refresh()}>{m.refresh}</Button>
   </div>;
@@ -68,7 +68,7 @@ function ExecutionSession({ executionId, auth, api }: ReturnType<typeof useSuper
     : `?cluster_id=${encodeURIComponent(view.binding.cluster_id)}`;
   return <ObjectScopeBoundary object={observationScopeObject(view)}>
     <div className="page execution-observation-workspace">
-      <PageHeader eyebrow="EXECUTION / OBSERVATION" title={m.title} description={m.introduction}
+      <PageHeader title={m.title} description={m.introduction}
         actions={<Button disabled={resource.loading} variant="outline" onClick={() => void refresh()}>{m.refresh}</Button>} />
       {error && <p role="alert" className="inline-alert warning">{error}</p>}
       {!current && !resource.loading && !error && <p className="inline-alert warning" role="status">{m.expired}</p>}

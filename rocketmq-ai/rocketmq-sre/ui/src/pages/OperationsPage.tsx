@@ -2,11 +2,8 @@ import {
   AlarmClockCheck,
   AlertTriangle,
   ArrowUpRight,
-  CalendarDays,
   CheckCircle2,
-  ClipboardCheck,
   Download,
-  FileClock,
   GitMerge,
   LoaderCircle,
   RotateCcw,
@@ -41,6 +38,8 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useSreData } from "@/data/SreDataContext";
+import { useIncidentInboxMessages } from "@/i18n/incidentInboxMessages";
+import { useOperatorPreferences } from "@/preferences/OperatorPreferences";
 
 type Finding = ShiftHandoffSummary["unresolved_incidents"][number];
 type OperationKind = IncidentOperationRequest["action"];
@@ -127,7 +126,6 @@ export function OperationsPage() {
   return (
     <div className="page operations-page">
       <PageHeader
-        eyebrow="P2-11 · DAILY OPERATIONS"
         title="值班运营与预防性工作台"
         description="汇总交接班风险、日报/周报和 Incident 元数据操作。集群资源始终只读；确认、分派、抑制、合并与拆分只写入 SRE 审计域。"
         actions={
@@ -235,7 +233,6 @@ function OperationsSummary({
       label: "未解决 Incident",
       value: handoff.unresolved_incidents.length,
       detail: `${handoff.new_incidents.length} 条本班次新增`,
-      icon: FileClock,
       warning: handoff.unresolved_incidents.length > 0,
     },
     {
@@ -244,14 +241,12 @@ function OperationsSummary({
         handoff.capacity_risks.length +
         handoff.expiring_certificates.length,
       detail: "未来 30 天阈值",
-      icon: AlarmClockCheck,
       warning: handoff.capacity_risks.length > 0,
     },
     {
       label: "逾期 Action Item",
       value: handoff.overdue_action_items.length,
       detail: "需明确 Owner 与到期时间",
-      icon: ClipboardCheck,
       warning: handoff.overdue_action_items.length > 0,
     },
     {
@@ -261,22 +256,18 @@ function OperationsSummary({
           ? "N/A"
           : report.forecast_mean_absolute_error.toFixed(3),
       detail: `${report?.forecast_errors.length ?? 0} 个回测样本`,
-      icon: CalendarDays,
       warning: false,
     },
   ];
   return (
     <section className="operations-summary-grid" aria-label="运营摘要">
-      {cards.map(({ icon: Icon, ...card }) => (
+      {cards.map((card) => (
         <article
           className={`operations-summary-card${
             card.warning ? " warning" : ""
           }`}
           key={card.label}
         >
-          <span className="operations-summary-icon">
-            <Icon size={17} />
-          </span>
           <div>
             <span>{card.label}</span>
             <strong>{card.value}</strong>
@@ -334,6 +325,7 @@ function ReportWorkspace({
   onWindowChange: (value: OperationsReportWindow) => void;
   onDownload: (format: "markdown" | "html") => Promise<void>;
 }) {
+  const { formatDateTime } = useOperatorPreferences();
   if (!report) {
     return <div className="state-panel">正在生成运营报告…</div>;
   }
@@ -343,8 +335,8 @@ function ReportWorkspace({
         <div>
           <strong>运营报告</strong>
           <span>
-            {formatTime(report.window_start)} →{" "}
-            {formatTime(report.window_end)}
+            {formatDateTime(report.window_start)} →{" "}
+            {formatDateTime(report.window_end)}
           </span>
         </div>
         <div>
@@ -416,6 +408,8 @@ function FindingSection({
   description?: string;
   findings: Finding[];
 }) {
+  const { formatDateTime } = useOperatorPreferences();
+  const severityLabels = new Map(Object.entries(useIncidentInboxMessages().severityLabels));
   return (
     <section className="operations-finding-section">
       <header>
@@ -436,17 +430,16 @@ function FindingSection({
             <article
               key={`${finding.category}-${finding.cluster_id}-${finding.incident_id ?? index}`}
             >
-              <span
-                className={`operations-severity ${finding.severity}`}
-                aria-hidden="true"
-              />
               <div>
+                <div className="operations-finding-meta">
+                  <span className={`operations-severity ${finding.severity}`}>
+                    {severityLabels.get(finding.severity) ?? finding.severity}
+                  </span>
+                  <time dateTime={finding.observed_at}>{formatDateTime(finding.observed_at)}</time>
+                </div>
                 <strong>{finding.title}</strong>
                 <p>{finding.detail}</p>
-                <small>
-                  {finding.category} · {finding.suggested_owner} ·{" "}
-                  {formatTime(finding.observed_at)}
-                </small>
+                <small>{finding.category} · {finding.suggested_owner}</small>
               </div>
               <Link to={finding.deep_link}>
                 查看
@@ -680,6 +673,7 @@ function IncidentStateCard({
 }: {
   state?: IncidentOperationsState;
 }) {
+  const { formatDateTime } = useOperatorPreferences();
   return (
     <section className="operations-finding-section incident-state-card">
       <header>
@@ -709,21 +703,21 @@ function IncidentStateCard({
             <dt>Ack SLA</dt>
             <dd className={state.sla.acknowledgement_breached ? "risk" : ""}>
               {state.sla.acknowledgement_breached ? "已超时" : "正常"} ·{" "}
-              {formatTime(state.sla.acknowledgement_due_at)}
+              {formatDateTime(state.sla.acknowledgement_due_at)}
             </dd>
           </div>
           <div>
             <dt>Resolve SLA</dt>
             <dd className={state.sla.resolution_breached ? "risk" : ""}>
               {state.sla.resolution_breached ? "已超时" : "正常"} ·{" "}
-              {formatTime(state.sla.resolution_due_at)}
+              {formatDateTime(state.sla.resolution_due_at)}
             </dd>
           </div>
           <div>
             <dt>Suppressed until</dt>
             <dd>
               {state.suppressed_until
-                ? formatTime(state.suppressed_until)
+                ? formatDateTime(state.suppressed_until)
                 : "未抑制"}
             </dd>
           </div>
@@ -739,7 +733,7 @@ function IncidentStateCard({
           </div>
           <div>
             <dt>Updated</dt>
-            <dd>{formatTime(state.updated_at)}</dd>
+            <dd>{formatDateTime(state.updated_at)}</dd>
           </div>
         </dl>
       )}
@@ -762,11 +756,4 @@ function operationIcon(operation: OperationKind) {
     case "reopen":
       return <RotateCcw size={15} />;
   }
-}
-
-function formatTime(value: string) {
-  return new Date(value).toLocaleString("zh-CN", {
-    hour12: false,
-    timeZone: "Asia/Shanghai",
-  });
 }

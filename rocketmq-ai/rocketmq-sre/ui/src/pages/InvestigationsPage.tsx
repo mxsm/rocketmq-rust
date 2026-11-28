@@ -105,7 +105,6 @@ export function InvestigationsPage() {
   return (
     <div className="page investigations-page">
       <PageHeader
-        eyebrow="INVESTIGATIONS"
         title={m.investigationTitle}
         description={m.investigationDescription}
         actions={

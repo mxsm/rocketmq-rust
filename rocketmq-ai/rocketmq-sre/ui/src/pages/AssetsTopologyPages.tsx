@@ -104,7 +104,6 @@ export function AssetsPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="ASSET INVENTORY"
         title="资产视图"
         description="将 RocketMQ 与 Kubernetes 资产归一化为带版本、来源、新鲜度和 partial 语义的只读快照。"
         actions={
@@ -232,7 +231,6 @@ export function TopologyPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="VERSIONED TOPOLOGY"
         title="拓扑关系"
         description="按来源展示路由、运行、存储、生产与消费关系；缺边和旧快照不会被推断补齐。"
         actions={
@@ -408,7 +406,6 @@ export function OnboardingPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="READ-ONLY ONBOARDING"
         title="登记只读集群"
         description="仅登记 Control Plane 元数据并启动 capability handshake，不创建 Topic、不修改 Broker 配置。"
       />

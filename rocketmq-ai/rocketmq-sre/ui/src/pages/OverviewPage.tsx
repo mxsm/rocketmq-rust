@@ -125,7 +125,6 @@ export function OverviewPage() {
   return (
     <div className="page command-center-page">
       <PageHeader
-        eyebrow="CLUSTER COMMAND CENTER"
         title="集群战情台"
         description="汇总只读接入、安全握手和证据覆盖状态，缺失数据始终显式标记。"
         actions={

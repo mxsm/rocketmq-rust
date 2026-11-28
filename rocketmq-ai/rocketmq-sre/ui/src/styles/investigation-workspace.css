@@ -1,3 +1,5 @@
+@import "./duty-investigation.css";
+
 .investigation-shell {
   font-size: 14px;
 }
@@ -155,10 +157,8 @@
   flex-wrap: wrap;
   gap: 10px;
   margin: 0 0 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
+  padding: 8px 0 8px 14px;
+  border-inline-start: 2px solid var(--primary);
   font-size: 14px;
   line-height: 1.6;
 }
@@ -213,7 +213,8 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 14px;
+  font-family: var(--font-editorial);
+  font-size: 1.4rem;
 }
 .investigation-workspace-grid .surface-heading p,
 .investigation-workspace-grid .surface-heading > span {
@@ -225,7 +226,8 @@
   padding: 18px 16px;
 }
 .investigation-assessment > strong {
-  font-size: 18px;
+  font-family: var(--font-editorial);
+  font-size: 1.6rem;
 }
 .investigation-assessment > span {
   color: var(--muted-foreground);
@@ -314,7 +316,8 @@
 }
 .investigation-hypotheses h3 {
   margin: 0;
-  font-size: 14px;
+  font-family: var(--font-editorial);
+  font-size: 1.2rem;
 }
 .investigation-hypotheses header span,
 .investigation-hypotheses p {
@@ -414,7 +417,8 @@
   margin-bottom: 20px;
 }
 .duty-queue .surface-heading h2 {
-  font-size: 16px;
+  font-family: var(--font-editorial);
+  font-size: 1.5rem;
 }
 .duty-queue .surface-heading p {
   font-size: 12px;
@@ -432,7 +436,8 @@
 .duty-queue-summary strong {
   margin-left: 8px;
   color: var(--foreground);
-  font-size: 20px;
+  font: 600 1.6rem var(--font-editorial);
+  font-variant-numeric: tabular-nums;
 }
 .duty-queue-list {
   margin: 0;
@@ -442,15 +447,17 @@
 .duty-queue-list li {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: baseline;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 16px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .duty-queue-list li a {
   color: var(--foreground);
   text-decoration: none;
-  font-size: 14px;
+  font-family: var(--font-editorial);
+  font-weight: 600;
+  font-size: 1.18rem;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }

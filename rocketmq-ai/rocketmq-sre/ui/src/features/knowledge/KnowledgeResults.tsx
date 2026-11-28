@@ -36,21 +36,24 @@ export function KnowledgeResults({ page, onSelect }: { page: KnowledgeSearchPage
     {page.bounds.results_truncated && <p role="status" className="knowledge-notice">{t("truncated")}</p>}
     {page.partial && <p className="knowledge-notice">{t("partial")}</p>}
     {page.items.length === 0 && <p>{t("noResults")}</p>}
-    <div className="knowledge-cards">{page.items.map((chunk) => <KnowledgeChunk key={chunk.id} chunk={chunk} onSelect={onSelect} />)}</div>
+    <div className="knowledge-records">{page.items.map((chunk) => <KnowledgeChunk key={chunk.id} chunk={chunk} onSelect={onSelect} />)}</div>
   </section>;
 }
 
 function KnowledgeChunk({ chunk, onSelect }: { chunk: KnowledgeChunkView; onSelect: (id: string) => void }) {
   const { t, label, time } = useKnowledgeMessages();
   const source = safeSource(chunk.source_uri_display);
-  return <article className="knowledge-card">
-    <KnowledgeStatus item={chunk} />
-    <h3>{chunk.title}</h3>{chunk.heading && <h4>{chunk.heading}</h4>}
-    <Badge variant={chunk.eligible_for_diagnosis ? "info" : "warning"}>{t(chunk.eligible_for_diagnosis ? "eligible" : "ineligible")}</Badge>
-    <ul>{chunk.validity.map((reason) => <li key={reason}>{label(reason)}</li>)}
-      {chunk.exclusion_reasons.map((reason) => <li key={reason}>{label(reason)}</li>)}</ul>
-    <p className="knowledge-content">{chunk.content}</p>
-    {(chunk.content_truncated || chunk.metadata_truncated) && <p>{t("shortened")}</p>}
+  return <article className="knowledge-record knowledge-result">
+    <div className="knowledge-record-heading">
+      <KnowledgeStatus item={chunk} />
+      <h3>{chunk.title}</h3>{chunk.heading && <h4>{chunk.heading}</h4>}
+      <Badge variant={chunk.eligible_for_diagnosis ? "info" : "warning"}>{t(chunk.eligible_for_diagnosis ? "eligible" : "ineligible")}</Badge>
+      <ul>{chunk.validity.map((reason) => <li key={reason}>{label(reason)}</li>)}
+        {chunk.exclusion_reasons.map((reason) => <li key={reason}>{label(reason)}</li>)}</ul>
+      <p className="knowledge-content">{chunk.content}</p>
+      {(chunk.content_truncated || chunk.metadata_truncated) && <p>{t("shortened")}</p>}
+      <Button variant="outline" onClick={() => onSelect(chunk.knowledge_item_id)}>{t("detail")}</Button>
+    </div>
     <dl className="knowledge-definitions">
       <dt>{t("component")}</dt><dd>{chunk.component}</dd>
       <dt>{t("range")}</dt><dd>{chunk.rocketmq_version_range}</dd>
@@ -62,6 +65,5 @@ function KnowledgeChunk({ chunk, onSelect }: { chunk: KnowledgeChunkView; onSele
       <dt>{t("hash")}</dt><dd><code>{chunk.item_hash}</code></dd>
       <dt>{t("chunkHash")}</dt><dd><code>{chunk.chunk_hash}</code></dd>
     </dl>
-    <Button variant="outline" onClick={() => onSelect(chunk.knowledge_item_id)}>{t("detail")}</Button>
   </article>;
 }

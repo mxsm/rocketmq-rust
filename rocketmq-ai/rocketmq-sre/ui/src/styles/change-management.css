@@ -7,69 +7,54 @@
   max-width: none;
 }
 
-.change-workspace-nav {
-  display: flex;
-  align-items: center;
-  min-height: 42px;
-  gap: 3px;
-  margin: -7px 0 14px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-}
-
-.change-workspace-link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-  gap: 7px;
-  padding: 0 12px;
-  color: var(--muted-foreground);
-  border: 1px solid transparent;
-  border-radius: calc(var(--radius) - 2px);
-  font-size: 11px;
-  font-weight: 550;
-  text-decoration: none;
-}
-
-.change-workspace-link:hover {
-  color: var(--foreground);
-  background: var(--accent);
-}
-
-.change-workspace-link.active {
-  color: var(--foreground);
-  border-color: var(--border);
-  background: var(--secondary);
-  box-shadow: 0 1px 0 rgb(255 255 255 / 4%) inset;
-}
-
-.change-entry-card.workspace-entry {
-  min-height: 178px;
-  border-color: #353535;
-  background:
-    linear-gradient(145deg, rgb(255 255 255 / 2%), transparent 55%),
-    var(--card);
-}
-
-.change-entry-card.workspace-entry > header > svg {
-  color: var(--foreground);
-}
-
-.section-kicker {
-  display: block;
-  margin-bottom: 5px;
-  color: #8b8b8b;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-}
-
 .change-page h2 {
   margin: 0;
-  font-size: 14px;
+  font-family: var(--font-editorial);
+  font-size: 1.35rem;
+  line-height: 1.25;
   letter-spacing: -0.01em;
+}
+
+.change-entry-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+
+.change-entry-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 34%);
+  align-items: center;
+  gap: 2rem;
+  min-height: 0;
+  padding: 1.4rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.change-entry-card > header {
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.change-entry-card h2 {
+  font-family: var(--font-editorial);
+  font-size: 1.4rem;
+}
+
+.change-entry-card p {
+  font-size: 1rem;
+}
+
+.change-entry-card > button {
+  justify-self: end;
+  min-width: 10rem;
+}
+
+.change-entry-card > form input {
+  min-width: 0;
 }
 
 .change-page input,
@@ -102,7 +87,7 @@
 
 .change-page input::placeholder,
 .change-page textarea::placeholder {
-  color: #626262;
+  color: var(--muted-foreground);
 }
 
 .change-page input:disabled,
@@ -154,7 +139,7 @@
 }
 
 .runbook-library > header strong {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -184,8 +169,8 @@
 
 .runbook-library-list button.active {
   color: var(--foreground);
-  background: var(--secondary);
-  box-shadow: 2px 0 0 var(--foreground) inset;
+  background: var(--accent);
+  box-shadow: 3px 0 0 var(--primary) inset;
 }
 
 .runbook-library-list button > span {
@@ -202,13 +187,13 @@
 }
 
 .runbook-library-list button strong {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .runbook-library-list button small,
 .runbook-library-list button code {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .runbook-inspector {
@@ -226,7 +211,7 @@
   max-width: 720px;
   margin: 4px 0 0;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -253,7 +238,7 @@
 .change-form label > span,
 .control-reason > span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -284,12 +269,12 @@
 
 .runbook-summary-strip span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .runbook-summary-strip strong {
   overflow: hidden;
-  font-size: 11px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -314,7 +299,7 @@
   color: var(--muted-foreground);
   border-bottom: 1px solid var(--border);
   background: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -347,12 +332,12 @@
 }
 
 .runbook-diff-row strong {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .runbook-diff-row small {
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .runbook-diff-row code {
@@ -360,7 +345,7 @@
   align-items: center;
   overflow-wrap: anywhere;
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -382,12 +367,12 @@
 }
 
 .runbook-diff-row.removed code:nth-child(2) {
-  color: #fb7185;
+  color: var(--destructive);
   background: var(--danger-muted);
 }
 
 .runbook-diff-row.changed code:last-child {
-  color: #facc15;
+  color: var(--warning);
   background: var(--warning-muted);
 }
 
@@ -427,7 +412,7 @@
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 50%;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .runbook-steps-panel li > div {
@@ -438,14 +423,14 @@
 }
 
 .runbook-steps-panel li strong {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .runbook-steps-panel li code,
 .runbook-steps-panel li span,
 .runbook-steps-panel li small {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .calendar-toolbar {
@@ -453,10 +438,8 @@
   align-items: flex-end;
   gap: 10px;
   margin-bottom: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
+  padding: 0 0 1rem;
+  border-bottom: 1px solid var(--border);
 }
 
 .calendar-toolbar label {
@@ -501,7 +484,7 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 12px;
-  padding: 14px 16px;
+  padding: 1.35rem 1.15rem;
   border-bottom: 1px solid var(--border);
 }
 
@@ -553,20 +536,25 @@
   gap: 4px;
 }
 
-.calendar-window-copy strong {
-  font-size: 11px;
+.calendar-window-copy header strong,
+.schedule-row-primary header strong {
+  font-family: var(--font-editorial);
+  font-size: 1.25rem;
 }
 
 .calendar-window-copy span,
 .calendar-window-copy footer {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .calendar-window-time {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .calendar-window-time svg,
@@ -577,7 +565,7 @@
 .calendar-window-time code {
   margin-left: auto;
   color: var(--info);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .calendar-window-copy footer {
@@ -625,14 +613,14 @@
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 2px);
   background: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
 .change-composer-panel > .inline-alert {
   margin: 12px 14px 0;
   color: var(--warning);
-  border-color: #4b4118;
+  border-color: var(--warning-border);
   background: var(--warning-muted);
 }
 
@@ -643,7 +631,7 @@
   gap: 11px;
   margin-bottom: 12px;
   padding: 11px 14px;
-  border: 1px solid #214c27;
+  border: 1px solid var(--success-border);
   border-radius: var(--radius);
   background: var(--success-muted);
 }
@@ -658,13 +646,13 @@
 }
 
 .schedule-safety-banner strong {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .schedule-safety-banner span,
 .schedule-safety-banner code {
-  color: #96ca9c;
-  font-size: 9px;
+  color: var(--success);
+  font-size: 12px;
 }
 
 .schedule-workspace {
@@ -681,7 +669,7 @@
 
 .schedule-row {
   display: grid;
-  grid-template-columns: auto minmax(220px, 1fr) minmax(190px, 0.55fr) 92px auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(8rem, 0.6fr) auto auto;
   align-items: center;
   min-height: 82px;
   gap: 12px;
@@ -723,7 +711,7 @@
 }
 
 .schedule-row-primary strong {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .schedule-row-primary > span,
@@ -731,7 +719,7 @@
 .schedule-row-time small,
 .schedule-row-progress span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .schedule-row-time {
@@ -786,7 +774,7 @@
 }
 
 .plan-binding-editor > header strong {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .plan-binding-editor > article {
@@ -816,7 +804,7 @@
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 50%;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .binding-step > div {
@@ -833,12 +821,12 @@
 }
 
 .binding-step strong {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .binding-step code {
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .schedule-form-actions {
@@ -870,16 +858,16 @@
 }
 
 .conflict-panel > header strong {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .conflict-panel > header span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .conflict-panel.clear {
-  border-color: #214c27;
+  border-color: var(--success-border);
   background: var(--success-muted);
 }
 
@@ -888,12 +876,12 @@
 }
 
 .conflict-panel.blocked {
-  border-color: #552128;
+  border-color: var(--danger-border);
   background: var(--danger-muted);
 }
 
 .conflict-panel.blocked > header > svg {
-  color: #fb7185;
+  color: var(--destructive);
 }
 
 .conflict-list {
@@ -921,12 +909,12 @@
 }
 
 .conflict-list strong {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .conflict-list span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .schedule-detail-summary {
@@ -954,12 +942,12 @@
 
 .schedule-detail-summary span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .schedule-detail-summary strong {
   overflow: hidden;
-  font-size: 11px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1011,17 +999,17 @@
 
 .schedule-step-rail > li.completed .schedule-step-state {
   color: var(--success);
-  border-color: #214c27;
+  border-color: var(--success-border);
 }
 
 .schedule-step-rail > li.waiting .schedule-step-state {
   color: var(--warning);
-  border-color: #4b4118;
+  border-color: var(--warning-border);
 }
 
 .schedule-step-rail > li.current .schedule-step-state {
   color: var(--info);
-  border-color: #244871;
+  border-color: var(--info-border);
 }
 
 .schedule-step-rail > li > div {
@@ -1039,14 +1027,14 @@
 }
 
 .schedule-step-rail strong {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .schedule-step-rail code,
 .schedule-step-rail span,
 .schedule-step-rail small {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .schedule-control-panel {
@@ -1072,7 +1060,7 @@
 .manual-gate-panel {
   margin: 0 14px 12px;
   overflow: hidden;
-  border: 1px solid #4b4118;
+  border: 1px solid var(--warning-border);
   border-radius: calc(var(--radius) - 1px);
   background: var(--warning-muted);
 }
@@ -1082,7 +1070,7 @@
   align-items: center;
   gap: 9px;
   padding: 10px 11px;
-  border-bottom: 1px solid #4b4118;
+  border-bottom: 1px solid var(--warning-border);
 }
 
 .manual-gate-panel > header > svg {
@@ -1095,18 +1083,18 @@
 }
 
 .manual-gate-panel > header strong {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .manual-gate-panel > header span {
-  color: #cabd80;
-  font-size: 9px;
+  color: var(--warning);
+  font-size: 12px;
 }
 
 .manual-gate-panel > .inline-alert {
   margin: 10px;
-  color: #cabd80;
-  border-color: #4b4118;
+  color: var(--warning);
+  border-color: var(--warning-border);
 }
 
 .manual-gate-panel > div:last-child {
@@ -1140,7 +1128,7 @@
 .schedule-control-metadata dt,
 .schedule-control-metadata dd {
   margin: 0;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .schedule-control-metadata dt {
@@ -1155,5 +1143,5 @@
 }
 
 .schedule-control-metadata code {
-  font-size: 8px;
+  font-size: 11px;
 }

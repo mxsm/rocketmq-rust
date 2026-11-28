@@ -38,7 +38,6 @@ import { createMockReleaseManagementApi } from "@/data/phase3ReleaseDemo";
 import {
   ChangeClusterSelect,
   ChangeStatePanel,
-  ChangeWorkspaceNav,
 } from "@/features/change-management/ChangeWorkspace";
 import {
   ReadinessGateGrid,
@@ -211,7 +210,6 @@ export function ReleaseEscortPage() {
   return (
     <div className="page change-page release-page">
       <PageHeader
-        eyebrow="P3-12 · RELEASE ESCORT"
         title="发布护航"
         description="把升级准备、what-if、PDB/容量/Quorum/Store 门禁、Canary SLO、Synthetic Probe、验证与类型化回滚放在同一审计链。"
         actions={
@@ -254,7 +252,6 @@ export function ReleaseEscortPage() {
           </div>
         }
       />
-      <ChangeWorkspaceNav />
       <ReleaseSafetyBanner />
 
       <section className="release-summary-strip">
@@ -311,7 +308,6 @@ export function ReleaseEscortPage() {
         <section className="release-list-panel">
           <header>
             <div>
-              <span className="section-kicker">RELEASE WORKFLOWS</span>
               <h2>护航队列</h2>
               <p>回归会自动暂停；没有有效 rollback approval 时只能进入人工接管。</p>
             </div>
@@ -370,7 +366,6 @@ export function ReleaseEscortPage() {
               <Plus aria-hidden="true" size={17} />
             </span>
             <div>
-              <span className="section-kicker">PLAN-BOUND RELEASE</span>
               <h2>创建发布护航</h2>
               <p>只绑定不可变对象，不接受 shell、raw request 或任意 patch。</p>
             </div>

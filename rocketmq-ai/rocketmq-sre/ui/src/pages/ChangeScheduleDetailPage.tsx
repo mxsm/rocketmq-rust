@@ -29,7 +29,6 @@ import { useSreData } from "@/data/SreDataContext";
 import { createMockChangeManagementApi } from "@/data/phase3ChangeDemo";
 import {
   ChangeStatePanel,
-  ChangeWorkspaceNav,
   ScheduleStatusBadge,
 } from "@/features/change-management/ChangeWorkspace";
 import { formatChangeTimestamp } from "@/features/change-management/changePresentation";
@@ -151,7 +150,6 @@ export function ChangeScheduleDetailPage() {
     <ObjectScopeBoundary object={schedule}>
     <div className="page change-page schedule-detail-page">
       <PageHeader
-        eyebrow="P3-11 · SCHEDULE DETAIL"
         title={runbook.name}
         description={`${runbook.version} · ${schedule.resource_keys.join(" · ")}`}
         actions={
@@ -165,7 +163,6 @@ export function ChangeScheduleDetailPage() {
           </>
         }
       />
-      <ChangeWorkspaceNav />
 
       <section className="schedule-detail-summary">
         <SummaryFact label="计划开始" value={formatChangeTimestamp(schedule.scheduled_start)} />
@@ -186,7 +183,6 @@ export function ChangeScheduleDetailPage() {
         <section className="schedule-step-panel">
           <header>
             <div>
-              <span className="section-kicker">RUNBOOK PROGRESS</span>
               <h2>类型化步骤</h2>
             </div>
             {schedule.active_execution_id && (
@@ -221,7 +217,6 @@ export function ChangeScheduleDetailPage() {
               <ShieldAlert aria-hidden="true" size={18} />
             </span>
             <div>
-              <span className="section-kicker">OPERATOR CONTROL</span>
               <h2>暂停、取消与人工门</h2>
               <p>暂停只阻止下一步；Intent 后取消会进入安全停止与对账。</p>
             </div>
